@@ -1,5 +1,5 @@
+import type { VerifiedRuntimeConnection } from "../../../../runtime/connection/runtime-connection.ts";
 import { writeExistingFile } from "../../../../storage/files/output-file.ts";
-import type { VerifiedRuntimeConnection } from "../../../../storage/runtime-installation-store.ts";
 
 export interface SavedPairSummary {
     readonly appId: string;

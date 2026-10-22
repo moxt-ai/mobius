@@ -1,6 +1,8 @@
 import { setTimeout } from "node:timers/promises";
 import { MobiusRuntimeEngine } from "../../runtime/engine.ts";
-import { acquireManagerLock, isNodeError, sendLocalRequest } from "../control/local-client.ts";
+import { acquireManagerLock } from "../../storage/daemon/manager-lock.ts";
+import { isNodeError } from "../../util/node-error.ts";
+import { sendLocalRequest } from "../control/local-client.ts";
 import { serveLocalControl } from "../control/local-server.ts";
 import {
     openMobiusCliInstallation,

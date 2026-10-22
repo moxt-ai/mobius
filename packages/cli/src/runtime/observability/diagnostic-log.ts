@@ -1,7 +1,7 @@
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { BoundedLineLog } from "../../storage/logs/bounded-log.ts";
+import { DAEMON_LOG_FILENAME, logDirectory, processLogPaths, readLogText } from "../../storage/logs/log-files.ts";
 
 const MAXIMUM_RUNTIME_LOG_BYTES = 1 * 1_024 * 1_024;
 const MAXIMUM_ENTRIES = 200;
@@ -44,13 +44,6 @@ const REMOTE_DIAGNOSTIC_FIELDS = [
 
 const FIELD_VALUE_PATTERN = /^[a-zA-Z0-9_.: -]{1,256}$/u;
 
-/** The daemon process logs a Runtime does not own, but must read to explain its own deaths. */
-const PROCESS_LOG_FILENAMES = [
-    "worker-lifecycle.log",
-    "unhandled-rejections-manager.log",
-    "unhandled-rejections-worker.log",
-] as const;
-
 interface DiagnosticSource {
     readonly path: string;
     /** This log's own rotation bound, or null when another owner rotates it. */
@@ -75,18 +68,16 @@ export class RuntimeDiagnosticLog {
 
     constructor(stateDirectory: string, options: RuntimeDiagnosticLogOptions = {}) {
         const maximumBytes = options.maximumBytes ?? MAXIMUM_RUNTIME_LOG_BYTES;
-        const path = join(stateDirectory, "logs", "daemon.log");
-        this.#log = new BoundedLineLog(join(stateDirectory, "logs"), "daemon.log", maximumBytes);
+        const directory = logDirectory(stateDirectory);
+        this.#log = new BoundedLineLog(directory, DAEMON_LOG_FILENAME, maximumBytes);
         this.#maximumBytes = maximumBytes;
         const processLogsDirectory = options.processLogsDirectory;
         this.#sources = [
-            { maximumBytes, path },
+            { maximumBytes, path: join(directory, DAEMON_LOG_FILENAME) },
+            // The process logs a Runtime does not own, but must read to explain its own deaths.
             ...(processLogsDirectory === undefined
                 ? []
-                : PROCESS_LOG_FILENAMES.map((filename) => ({
-                      maximumBytes: null,
-                      path: join(processLogsDirectory, "logs", filename),
-                  }))),
+                : processLogPaths(processLogsDirectory).map((path) => ({ maximumBytes: null, path }))),
         ];
     }
 
@@ -122,12 +113,9 @@ export class RuntimeDiagnosticLog {
         readonly entries: Record<string, string>[];
         readonly truncated: boolean;
     } => {
-        let content: string;
-        try {
-            content = readFileSync(source.path, "utf8");
-        } catch {
-            // Absent, mid-rotation, or owned by another process and unreadable:
-            // a bug report degrades to the sources it can read.
+        const content = readLogText(source.path);
+        if (content === null) {
+            // A bug report degrades to the sources it can read.
             return { entries: [], truncated: false };
         }
         const lines = content.split("\n").filter((line) => line.length > 0);

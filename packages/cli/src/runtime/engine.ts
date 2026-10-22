@@ -195,14 +195,6 @@ export {
     pairMobiusRuntime,
     resumeMobiusRuntime,
 } from "../daemon/pairing/pair-local-machine.ts";
-export {
-    openRuntimeInstallationStore,
-    type RuntimeConnectionInput,
-    RuntimeInstallationStore,
-    RuntimeInstallationStoreError,
-    type RuntimeInstallationStoreOptions,
-    VerifiedRuntimeConnection,
-} from "../storage/runtime-installation-store.ts";
 export type { RuntimeConfig, RuntimeConnectionConfig } from "./config.ts";
 export {
     createRuntimeConfig,
@@ -211,4 +203,11 @@ export {
     RuntimeLocalContext,
     RuntimeReconnectTarget,
 } from "./config.ts";
+export { type RuntimeConnectionInput, VerifiedRuntimeConnection } from "./connection/runtime-connection.ts";
+export {
+    openRuntimeInstallationStore,
+    RuntimeInstallationStore,
+    RuntimeInstallationStoreError,
+    type RuntimeInstallationStoreOptions,
+} from "./connection/runtime-installation-store.ts";
 export { RuntimeRelayRevokedError } from "./relay/runtime-revocation.ts";

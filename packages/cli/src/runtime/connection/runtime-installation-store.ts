@@ -1,14 +1,32 @@
-import { createHash, randomUUID } from "node:crypto";
-import { type FileHandle, mkdir, open, readdir, rename, unlink, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
 import { isIdentifier } from "@moxt-ai/mobius-sdk/protocol";
-import { validateLocalPath } from "../util/filesystem/private-path.ts";
+import { ensurePrivateDirectory } from "../../storage/files/local-files.ts";
+import {
+    applicationDirectory as applicationDirectoryPath,
+    channelIndexFilePath,
+    connectionDirectory,
+    connectionFilePath,
+    createInstallationFile,
+    installationDirectory,
+    installationPointerPath,
+    listInstallationFiles,
+    readInstallationFile,
+    removeInstallationFile,
+    writeInstallationFile,
+} from "../../storage/installation/installation-files.ts";
+import { validateLocalPath } from "../../util/filesystem/private-path.ts";
+import { isNodeError } from "../../util/node-error.ts";
+import {
+    type RuntimeConnectionActivation,
+    type RuntimeConnectionInput,
+    VerifiedRuntimeConnection,
+} from "./runtime-connection.ts";
 
 const APPLICATION_ID_PATTERN = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+){1,31}$/;
 const CONNECTION_ID_PATTERN = /^mcn_[a-f0-9]{32}$/;
 const INSTALLATION_ID_PATTERN = /^min_[a-f0-9]{32}$/;
 const RUNTIME_CREDENTIAL_PATTERN = /^[a-zA-Z0-9_-]{32,256}$/;
-const MAX_FILE_LENGTH = 16 * 1024;
 const INSTALLATION_POINTER_KEYS: readonly string[] = ["installationId", "version"];
 const CHANNEL_INDEX_KEYS: readonly string[] = [
     "applicationId",
@@ -38,18 +56,6 @@ export interface RuntimeInstallationStoreOptions {
     readonly stateDirectory: string;
 }
 
-export interface RuntimeConnectionInput {
-    readonly appId: string;
-    readonly channelId: string;
-    readonly defaultWorkspace: string;
-    readonly pairingId: string;
-    readonly relayOrigin: URL;
-    readonly runtimeCredential: string;
-    readonly runtimeId: string;
-}
-
-export type RuntimeConnectionActivation = "active" | "stopped";
-
 export class RuntimeInstallationStoreError extends Error {
     readonly code: string;
 
@@ -57,48 +63,6 @@ export class RuntimeInstallationStoreError extends Error {
         super(message, options);
         this.code = code;
         this.name = "RuntimeInstallationStoreError";
-    }
-}
-
-export class VerifiedRuntimeConnection {
-    readonly kind = "verified";
-    readonly activation: RuntimeConnectionActivation;
-    readonly appId: string;
-    readonly applicationId: string;
-    readonly channelId: string;
-    readonly connectionId: string;
-    readonly defaultWorkspace: string;
-    readonly installationId: string;
-    readonly pairingId: string;
-    readonly relayOrigin: URL;
-    readonly runtimeCredential: string;
-
-    readonly runtimeId: string;
-
-    constructor(
-        activation: RuntimeConnectionActivation,
-        applicationId: string,
-        appId: string,
-        installationId: string,
-        connectionId: string,
-        channelId: string,
-        defaultWorkspace: string,
-        pairingId: string,
-        relayOrigin: URL,
-        runtimeCredential: string,
-        runtimeId: string,
-    ) {
-        this.activation = activation;
-        this.applicationId = applicationId;
-        this.appId = appId;
-        this.channelId = channelId;
-        this.connectionId = connectionId;
-        this.defaultWorkspace = defaultWorkspace;
-        this.installationId = installationId;
-        this.pairingId = pairingId;
-        this.relayOrigin = relayOrigin;
-        this.runtimeCredential = runtimeCredential;
-        this.runtimeId = runtimeId;
     }
 }
 
@@ -120,10 +84,6 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 function hasExactKeys(value: Readonly<Record<string, unknown>>, expectedKeys: readonly string[]): boolean {
     const keys = Object.keys(value);
     return keys.length === expectedKeys.length && expectedKeys.every((key) => Object.hasOwn(value, key));
-}
-
-function isNodeError(error: unknown, code: string): boolean {
-    return typeof error === "object" && error !== null && "code" in error && error.code === code;
 }
 
 function validateApplicationId(value: string): string {
@@ -197,10 +157,6 @@ function connectionId(): string {
 
 function installationId(): string {
     return `min_${randomUUID().replaceAll("-", "")}`;
-}
-
-function channelIndexFileName(channelId: string): string {
-    return `mci_${createHash("sha256").update(channelId).digest("hex")}.json`;
 }
 
 function decodeInstallationPointer(value: unknown): InstallationPointer {
@@ -292,36 +248,28 @@ function decodeConnection(value: unknown): VerifiedRuntimeConnection {
 
 async function readJsonFile(path: string, signal: AbortSignal, missingCode: string): Promise<unknown> {
     signal.throwIfAborted();
-    let handle: FileHandle;
-    try {
-        handle = await open(path, "r");
-    } catch (cause) {
-        if (isNodeError(cause, "ENOENT")) {
+    const read = await readInstallationFile(path);
+    switch (read.kind) {
+        case "missing":
             throw new RuntimeInstallationStoreError(missingCode, "The saved Runtime connection was not found", {
-                cause,
+                cause: read.cause,
             });
-        }
-        throw new RuntimeInstallationStoreError(
-            "connection_unavailable",
-            "The saved Runtime connection cannot be read",
-            {
-                cause,
-            },
-        );
-    }
-    let encoded = "";
-    try {
-        const metadata = await handle.stat();
-        if (!metadata.isFile() || metadata.size > MAX_FILE_LENGTH) {
+        case "unopenable":
+            throw new RuntimeInstallationStoreError(
+                "connection_unavailable",
+                "The saved Runtime connection cannot be read",
+                {
+                    cause: read.cause,
+                },
+            );
+        case "not-a-small-file":
             throw new RuntimeInstallationStoreError("invalid_connection", "The saved Runtime connection is invalid");
-        }
-        encoded = await handle.readFile({ encoding: "utf8" });
-    } finally {
-        await handle.close();
+        case "read":
+            break;
     }
     signal.throwIfAborted();
     try {
-        return JSON.parse(encoded);
+        return JSON.parse(read.text);
     } catch (cause) {
         throw new RuntimeInstallationStoreError("invalid_connection", "The saved Runtime connection is invalid", {
             cause,
@@ -334,17 +282,9 @@ async function writeJsonAtomically(
     value: Readonly<Record<string, unknown>>,
     signal: AbortSignal,
 ): Promise<void> {
-    signal.throwIfAborted();
-    const directory = dirname(path);
-    const temporaryPath = join(directory, `.${randomUUID()}.tmp`);
     try {
-        await mkdir(directory, { mode: 0o700, recursive: true });
-        signal.throwIfAborted();
-        await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, { flag: "wx", mode: 0o600 });
-        signal.throwIfAborted();
-        await rename(temporaryPath, path);
+        await writeInstallationFile(path, `${JSON.stringify(value, null, 2)}\n`, signal);
     } catch (cause) {
-        await unlink(temporaryPath).catch(() => undefined);
         signal.throwIfAborted();
         throw new RuntimeInstallationStoreError("connection_unavailable", "The local Runtime state cannot be written", {
             cause,
@@ -356,15 +296,13 @@ export class RuntimeInstallationStore {
     readonly applicationId: string;
     readonly installationId: string;
     readonly stateDirectory: string;
-    readonly #channelDirectory: string;
     readonly #connectionDirectory: string;
 
     private constructor(applicationId: string, installationId: string, stateDirectory: string) {
         this.applicationId = applicationId;
         this.installationId = installationId;
         this.stateDirectory = stateDirectory;
-        this.#channelDirectory = join(stateDirectory, "channels");
-        this.#connectionDirectory = join(stateDirectory, "connections");
+        this.#connectionDirectory = connectionDirectory(stateDirectory);
     }
 
     static readonly open = async (
@@ -374,11 +312,11 @@ export class RuntimeInstallationStore {
         signal.throwIfAborted();
         const applicationId = validateApplicationId(options.applicationId);
         const rootDirectory = resolve(options.stateDirectory);
-        const applicationDirectory = join(rootDirectory, "installations", applicationId);
+        const applicationDirectory = applicationDirectoryPath(rootDirectory, applicationId);
         try {
-            await mkdir(rootDirectory, { mode: 0o700, recursive: true });
+            await ensurePrivateDirectory(rootDirectory);
             await validateLocalPath(rootDirectory, true, true, signal);
-            await mkdir(applicationDirectory, { mode: 0o700, recursive: true });
+            await ensurePrivateDirectory(applicationDirectory);
         } catch (cause) {
             throw new RuntimeInstallationStoreError(
                 "installation_unavailable",
@@ -389,9 +327,9 @@ export class RuntimeInstallationStore {
             );
         }
         const storedInstallationId = await readOrCreateInstallationId(applicationDirectory, signal);
-        const stateDirectory = join(applicationDirectory, storedInstallationId);
+        const stateDirectory = installationDirectory(applicationDirectory, storedInstallationId);
         try {
-            await mkdir(stateDirectory, { mode: 0o700, recursive: true });
+            await ensurePrivateDirectory(stateDirectory);
         } catch (cause) {
             throw new RuntimeInstallationStoreError(
                 "installation_unavailable",
@@ -406,10 +344,10 @@ export class RuntimeInstallationStore {
     };
 
     readonly connectionPath = (connectionId: string): string =>
-        join(this.#connectionDirectory, `${validateConnectionId(connectionId)}.json`);
+        connectionFilePath(this.#connectionDirectory, validateConnectionId(connectionId));
 
     private readonly channelIndexPath = (channelId: string): string =>
-        join(this.#channelDirectory, channelIndexFileName(validateIdentifier(channelId, "invalid_channel_id")));
+        channelIndexFilePath(this.stateDirectory, validateIdentifier(channelId, "invalid_channel_id"));
 
     readonly readConnection = async (connectionId: string, signal: AbortSignal): Promise<VerifiedRuntimeConnection> => {
         const stored = decodeConnection(
@@ -500,7 +438,7 @@ export class RuntimeInstallationStore {
         signal.throwIfAborted();
         let entries: readonly string[];
         try {
-            entries = await readdir(this.#connectionDirectory);
+            entries = await listInstallationFiles(this.#connectionDirectory);
         } catch (cause) {
             if (isNodeError(cause, "ENOENT")) {
                 return [];
@@ -560,9 +498,9 @@ export class RuntimeInstallationStore {
         const connection = await this.readConnection(connectionId, signal);
         signal.throwIfAborted();
         try {
-            await unlink(this.connectionPath(connection.connectionId));
+            await removeInstallationFile(this.connectionPath(connection.connectionId));
             signal.throwIfAborted();
-            await unlink(this.channelIndexPath(connection.channelId));
+            await removeInstallationFile(this.channelIndexPath(connection.channelId));
         } catch (cause) {
             signal.throwIfAborted();
             if (isNodeError(cause, "ENOENT")) {
@@ -604,7 +542,7 @@ export class RuntimeInstallationStore {
 }
 
 async function readOrCreateInstallationId(applicationDirectory: string, signal: AbortSignal): Promise<string> {
-    const pointerPath = join(applicationDirectory, "current.json");
+    const pointerPath = installationPointerPath(applicationDirectory);
     try {
         return decodeInstallationPointer(await readJsonFile(pointerPath, signal, "installation_not_found"))
             .installationId;
@@ -616,10 +554,7 @@ async function readOrCreateInstallationId(applicationDirectory: string, signal: 
 
     const candidate = installationId();
     try {
-        await writeFile(pointerPath, `${JSON.stringify({ installationId: candidate, version: 1 })}\n`, {
-            flag: "wx",
-            mode: 0o600,
-        });
+        await createInstallationFile(pointerPath, `${JSON.stringify({ installationId: candidate, version: 1 })}\n`);
         return candidate;
     } catch (cause) {
         if (!isNodeError(cause, "EEXIST")) {

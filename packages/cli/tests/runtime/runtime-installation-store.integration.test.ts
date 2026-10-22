@@ -3,12 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
-
+import { VerifiedRuntimeConnection } from "../../src/runtime/connection/runtime-connection.ts";
 import {
     openRuntimeInstallationStore,
     type RuntimeInstallationStoreError,
-    VerifiedRuntimeConnection,
-} from "../../src/storage/runtime-installation-store.ts";
+} from "../../src/runtime/connection/runtime-installation-store.ts";
 
 describe("Runtime installation storage", () => {
     it("Given an obsolete pairing record, When the Runtime restores it, Then it rejects the record without a compatibility fallback", async () => {

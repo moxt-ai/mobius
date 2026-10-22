@@ -14,12 +14,12 @@ import {
     type RuntimeConfig,
     RuntimeLocalContext,
 } from "../../runtime/config.ts";
-import { ensureCanonicalDirectory } from "../../storage/files/local-files.ts";
+import type { VerifiedRuntimeConnection } from "../../runtime/connection/runtime-connection.ts";
 import {
     openRuntimeInstallationStore,
     type RuntimeInstallationStore,
-    type VerifiedRuntimeConnection,
-} from "../../storage/runtime-installation-store.ts";
+} from "../../runtime/connection/runtime-installation-store.ts";
+import { ensureCanonicalDirectory } from "../../storage/files/local-files.ts";
 import { readStateDirectory } from "../../storage/state-directory.ts";
 import { environmentProxyDispatcher } from "../../util/network/environment-proxy.ts";
 import { prepareVersionData } from "../upgrades/data.ts";
