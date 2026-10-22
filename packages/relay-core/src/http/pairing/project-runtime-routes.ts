@@ -32,6 +32,7 @@ import { assertRequiredKeys, bearerToken, readString } from "../../infra/relay-h
 import { bodyParser } from "../middleware/body-parser.ts";
 import { errorMiddleware, rethrowHonoError } from "../middleware/error-middleware.ts";
 import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
+import { createProjectRuntimeSessionControlRoutes } from "./project-runtime-session-control-routes.ts";
 
 const identifier = v.custom<Identifier>(isIdentifier);
 const sessionIdentitySchema = v.strictObject({
@@ -110,6 +111,7 @@ export function createProjectRuntimeRoutes() {
     return new Hono<RelayHttpEnvironment>()
         .onError(rethrowHonoError)
         .use("*", errorMiddleware)
+        .route("/", createProjectRuntimeSessionControlRoutes())
         .post("/projects/:projectId/browser-credentials", bodyParser<RelayHttpEnvironment>(), async (context) => {
             const body = validated(browserCredentialSchema, context.req.valid("json"));
             return context.json(

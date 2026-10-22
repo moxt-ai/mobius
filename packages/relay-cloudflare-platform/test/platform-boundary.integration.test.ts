@@ -26,6 +26,7 @@ import {
     encodeSessionPromptCommand,
     encodeSessionRenamedEvent,
     encodeSessionStatusChangedEvent,
+    type LifecycleMetadata,
     MOBIUS_API_PREFIX,
     RUNTIME_HEARTBEAT_ACK_MESSAGE,
     RUNTIME_HEARTBEAT_MESSAGE,
@@ -2039,6 +2040,47 @@ async function connectRuntimeDaemon(slug: string, options: { readonly anchorCloc
         201,
     );
     return {
+        projectId,
+        sessionId,
+        appSessionRequest: async (
+            path: string,
+            init: {
+                readonly method: string;
+                readonly body?: unknown;
+                readonly credential?: string;
+                readonly projectId?: string;
+                readonly runtimeId?: string;
+            },
+        ) =>
+            await worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${init.projectId ?? projectId}/runtimes/${init.runtimeId ?? runtimeId}/sessions/${sessionId}${path}`,
+                    {
+                        method: init.method,
+                        headers: credentialHeaders(init.credential ?? appCredential),
+                        ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
+                    },
+                ),
+                environment,
+            ),
+        issueAppCredential: async (permissions: readonly string[]) =>
+            text(
+                await responseJson(
+                    await worker.fetch(
+                        new Request(
+                            `${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${text(app, "appId")}/credentials`,
+                            {
+                                method: "POST",
+                                headers: developerHeaders(),
+                                body: JSON.stringify({ permissions, projectIds: [projectId] }),
+                            },
+                        ),
+                        environment,
+                    ),
+                    201,
+                ),
+                "credential",
+            ),
         rewriteCredentialLifetime: async (lifetimeMilliseconds: number) => {
             // Sign adversarial claims outside the SDK issuer, which refuses invalid lifetimes.
             const decoded = decodeSessionAccessCredential(text(sessionAccess, "credential"));
@@ -2185,6 +2227,212 @@ async function connectRuntimeDaemon(slug: string, options: { readonly anchorCloc
 }
 
 describe.sequential("Platform Turn submission", () => {
+    // @no-uc: Compatibility; trusted backends must control a Runtime Session without delegated Session access.
+    it.each([
+        {
+            label: "cancels the selected message",
+            path: "/turns/app-command/cancel",
+            method: "POST",
+            body: { idempotencyKey: "cancel-app-command" },
+            command: { commandId: "app-command", kind: "session.cancel" },
+            payload: { commandId: "app-command", kind: "prompt.completed", stopReason: "cancelled" },
+            expected: { turnId: "app-command", idempotencyKey: "cancel-app-command", state: { kind: "cancelled" } },
+        },
+        {
+            label: "steers the selected queued message",
+            path: "/turns/app-command/disposition",
+            method: "PUT",
+            body: { disposition: "steer" },
+            command: { commandId: "app-command", disposition: "steer", kind: "session.prompt.disposition" },
+            payload: { commandId: "app-command", attemptId: "app-attempt", epoch: "app-epoch", kind: "prompt.started" },
+            expected: { turnId: "app-command" },
+        },
+        {
+            label: "answers a pending permission request",
+            path: "/interactions/app-interaction/responses",
+            method: "POST",
+            body: { kind: "permission", responderId: "member-1", outcome: "selected", optionId: "allow_once" },
+            command: {
+                interactionId: "app-interaction",
+                kind: "session.permission.respond",
+                outcome: "selected",
+                optionId: "allow_once",
+            },
+            payload: {
+                kind: "session.permission.resolved",
+                event: {
+                    interactionId: "app-interaction",
+                    kind: "session.permission.resolved",
+                    outcome: "selected",
+                    optionId: "allow_once",
+                    sessionId: "SESSION",
+                },
+            },
+            expected: { accepted: true },
+        },
+        {
+            label: "answers a pending elicitation request",
+            path: "/interactions/app-interaction/responses",
+            method: "POST",
+            body: { kind: "elicitation", responderId: "member-1", action: "accept", content: '{"answer":"continue"}' },
+            command: {
+                interactionId: "app-interaction",
+                kind: "session.elicitation.respond",
+                action: "accept",
+                content: '{"answer":"continue"}',
+            },
+            payload: {
+                kind: "session.elicitation.resolved",
+                event: {
+                    interactionId: "app-interaction",
+                    kind: "session.elicitation.resolved",
+                    action: "accept",
+                    sessionId: "SESSION",
+                },
+            },
+            expected: { accepted: true },
+        },
+    ] as const)("App access $label", async (operation) => {
+        const runtime = await connectRuntimeDaemon(`app-control-${operation.command.kind.replaceAll(".", "-")}`);
+        try {
+            const response = runtime.appSessionRequest(operation.path, operation);
+            const first = await Promise.race([
+                runtime.daemonMessages.next().then((message) => ({ kind: "command", message })),
+                response.then((result) => ({ kind: "response", message: String(result.status) })),
+            ]);
+            expect(first).toMatchObject({ kind: "command" });
+            expect(decodeServiceToDaemonMessage(first.message)).toMatchObject({
+                ...operation.command,
+                sessionId: runtime.sessionId,
+            });
+            const payload: LifecycleMetadata =
+                operation.payload.kind === "session.permission.resolved"
+                    ? {
+                          kind: operation.payload.kind,
+                          event: { ...operation.payload.event, sessionId: runtime.sessionId },
+                      }
+                    : operation.payload.kind === "session.elicitation.resolved"
+                      ? {
+                            kind: operation.payload.kind,
+                            event: { ...operation.payload.event, sessionId: runtime.sessionId },
+                        }
+                      : operation.payload;
+            runtime.daemon.send(
+                encodeSessionEventEnvelope({
+                    kind: "session.event.v2",
+                    events: [
+                        {
+                            eventId: "app-operation-resolved",
+                            position: "1",
+                            recordedAt: new Date().toISOString(),
+                            sessionGenerationId: "session-generation-1",
+                            sessionId: runtime.sessionId,
+                            type: "lifecycle-metadata",
+                            payload,
+                        },
+                    ],
+                }),
+            );
+            expect(await responseJson(await response, 200)).toMatchObject(operation.expected);
+        } finally {
+            runtime.daemon.close(1000, "Test complete");
+        }
+    });
+
+    // @no-uc: Compatibility; execution recovery must retain event identities, generation, cursor, and omissions under App access.
+    it("App access restores a Runtime event page with read permission", async () => {
+        const runtime = await connectRuntimeDaemon("app-history");
+        try {
+            const readOnly = await runtime.issueAppCredential(["session:read"]);
+            const response = runtime.appSessionRequest(
+                "/events-v2?limit=2&cursor=previous-event&omit=agent-reasoning",
+                { method: "GET", credential: readOnly },
+            );
+            const first = await Promise.race([
+                runtime.daemonMessages.next().then((message) => ({ kind: "command", message })),
+                response.then((result) => ({ kind: "response", message: String(result.status) })),
+            ]);
+            expect(first).toMatchObject({ kind: "command" });
+            const command = decodeServiceToDaemonMessage(first.message);
+            expect(command).toMatchObject({
+                kind: "session.live-history.v2.page.load",
+                sessionId: runtime.sessionId,
+                eventLimit: 2,
+                cursor: "previous-event",
+                omit: ["agent-reasoning"],
+            });
+            if (command.kind !== "session.live-history.v2.page.load") {
+                throw new Error("Expected a history request");
+            }
+            const page = {
+                events: [],
+                nextCursor: "next-event",
+                sessionGenerationId: "session-generation-1",
+                tailCursor: "tail-event",
+                truncated: true,
+                version: 2 as const,
+            };
+            runtime.daemon.send(
+                encodeSessionHistoryPageLoaded({
+                    kind: "session.live-history.v2.page.loaded",
+                    requestId: command.requestId,
+                    sessionId: runtime.sessionId,
+                    events: { events: page, queuedPromptRequests: [] },
+                }),
+            );
+            expect(await responseJson(await response, 200)).toEqual(page);
+        } finally {
+            runtime.daemon.close(1000, "Test complete");
+        }
+    });
+
+    // @no-uc: Technical regression; explicit Runtime targets must preserve credential permissions and project isolation.
+    it("App access rejects unavailable permissions and targets before dispatch", async () => {
+        const runtime = await connectRuntimeDaemon("app-permissions");
+        const other = await connectRuntimeDaemon("app-permissions-other");
+        try {
+            const readOnly = await runtime.issueAppCredential(["session:read"]);
+            for (const operation of [
+                { path: "/turns/app-command/cancel", method: "POST", body: { idempotencyKey: "cancel-app-command" } },
+                { path: "/turns/app-command/disposition", method: "PUT", body: { disposition: "steer" } },
+                {
+                    path: "/interactions/app-interaction/responses",
+                    method: "POST",
+                    body: { kind: "permission", responderId: "member-1", outcome: "cancelled", optionId: "" },
+                },
+            ]) {
+                expect(
+                    await responseJson(
+                        await runtime.appSessionRequest(operation.path, { ...operation, credential: readOnly }),
+                        403,
+                    ),
+                ).toMatchObject({ error: { code: "project_permission_denied" } });
+            }
+            const writeOnly = await runtime.issueAppCredential(["session:write"]);
+            expect(
+                await responseJson(
+                    await runtime.appSessionRequest("/events-v2", { method: "GET", credential: writeOnly }),
+                    403,
+                ),
+            ).toMatchObject({ error: { code: "project_permission_denied" } });
+            expect(
+                await responseJson(
+                    await runtime.appSessionRequest("/events-v2", { method: "GET", projectId: other.projectId }),
+                    403,
+                ),
+            ).toMatchObject({ error: { code: "project_access_denied" } });
+            expect(
+                await responseJson(
+                    await runtime.appSessionRequest("/events-v2", { method: "GET", runtimeId: other.runtimeId }),
+                    403,
+                ),
+            ).toMatchObject({ error: { code: "runtime_access_denied" } });
+        } finally {
+            runtime.daemon.close(1000, "Test complete");
+            other.daemon.close(1000, "Test complete");
+        }
+    });
+
     // @no-uc: Technical regression; independent Durable Object clocks must not reject newly issued credentials.
     it.each([900, 30_000])(
         "accepts a Session credential issued %i milliseconds ahead of RuntimeRelay",
