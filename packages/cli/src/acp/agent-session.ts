@@ -23,22 +23,26 @@ import {
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
 import type { AcpAgentDefinition } from "../runtime/config.ts";
 import { revalidateExecutable } from "../util/process/executable.ts";
+import { isRecord, truncate } from "../util/value-utils.ts";
 import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-error.ts";
-import { AgentConnection } from "./agent-connection.ts";
 import { type AcpTurnState, IdleAcpTurn, RunningAcpTurn } from "./agent-turn.ts";
-import { AgentUpdateStream } from "./agent-update-stream.ts";
-import type { AcpClientHandler } from "./create-client.ts";
-import type { AcpContentExternalizer } from "./external-content/acp-content-externalizer.ts";
+import { AgentConnection } from "./connection/agent-connection.ts";
+import { AgentUpdateStream } from "./connection/agent-update-stream.ts";
+import type { AcpClientHandler } from "./connection/create-client.ts";
+import type { AcpContentExternalizer } from "./content/content-externalizer.ts";
 import {
     type NativeSessionOrigin,
     type NativeSessionPage,
     nativeSessionIdSchema,
     nativeSessionPageSchema,
-} from "./native-session.ts";
+} from "./protocol/native-session.ts";
+import { normalizeAcpCapabilities, unsupportedSessionCapabilities } from "./protocol/session-capabilities.ts";
+import {
+    type SessionConfigProtocol,
+    SessionConfigProtocolError,
+    sessionConfigProtocolForAgent,
+} from "./protocol/session-config-protocol.ts";
 import { waitForSharedOperation } from "./runtime-operations.ts";
-import { normalizeAcpCapabilities, unsupportedSessionCapabilities } from "./session-capabilities.ts";
-import { type SessionConfigProtocol, SessionConfigProtocolError } from "./session-config/session-config-protocol.ts";
-import { sessionConfigProtocolForAgent } from "./session-config/session-config-registry.ts";
 import { AcpSessionConfigurations } from "./session-configuration.ts";
 import {
     type AcpConfigureOptions,
@@ -57,7 +61,6 @@ import {
 import { AcpHistoryReplay } from "./session-history.ts";
 import { AcpSessionInteractions } from "./session-interactions.ts";
 import { type AcpSessionStore, AcpStoredSession, FoundAcpStoredSession } from "./session-store.ts";
-import { isRecord, truncate } from "./value-utils.ts";
 
 const PROCESS_STOP_TIMEOUT_MILLISECONDS = 1_000;
 

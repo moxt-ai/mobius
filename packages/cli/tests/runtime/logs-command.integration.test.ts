@@ -19,7 +19,7 @@ async function runCli(
 ): Promise<{ readonly code: number | null; readonly stderr: string; readonly stdout: string }> {
     const child = spawn(
         process.execPath,
-        [resolve(import.meta.dirname, "../../src/entrypoint/cli.ts"), ...arguments_],
+        [resolve(import.meta.dirname, "../../src/cli/entrypoint.ts"), ...arguments_],
         {
             env: environment,
             signal,

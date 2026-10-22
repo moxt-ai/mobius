@@ -19,11 +19,11 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { listen, port, sendText } from "@moxt-ai/mobius-test/websocket";
 import { expect, test } from "vitest";
-import type { LocalAgentSpecification } from "../../src/runtime/agent-catalog/agent-specification.ts";
-import { DirectAcpAgentDefinition } from "../../src/runtime/agent-catalog/agent-specification.ts";
-import { discoverLocalAgentInventory } from "../../src/runtime/agent-catalog/discover-local-agents.ts";
-import { publishAgentCatalog } from "../../src/runtime/agent-catalog/publish-agent-catalog.ts";
-import { createCatalogAgentResolver } from "../../src/runtime/agent-catalog/resolve-catalog-agent.ts";
+import { discoverLocalAgentInventory } from "../../src/agent/discovery/discover-local-agents.ts";
+import type { LocalAgentSpecification } from "../../src/agent/specification/agent-specification.ts";
+import { DirectAcpAgentDefinition } from "../../src/agent/specification/agent-specification.ts";
+import { publishAgentCatalog } from "../../src/runtime/catalog/publish-agent-catalog.ts";
+import { createCatalogAgentResolver } from "../../src/runtime/catalog/resolve-catalog-agent.ts";
 import { createRuntimeConfig, RuntimeLocalContext } from "../../src/runtime/config.ts";
 import { runRuntime } from "../../src/runtime/run.ts";
 

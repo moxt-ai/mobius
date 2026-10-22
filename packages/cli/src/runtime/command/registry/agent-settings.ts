@@ -1,5 +1,5 @@
 import { AGENT_SETTINGS_DISCOVER_KIND } from "@moxt-ai/mobius-sdk/protocol";
-import { createAgentSettingsDiscoveryHandler } from "../../agent-catalog/handle-agent-settings-discovery.ts";
+import { createAgentSettingsDiscoveryHandler } from "../agent-settings-discovery.ts";
 import type { CommandContext } from "../context.ts";
 import type { RuntimeCommand } from "../definition.ts";
 

@@ -4,7 +4,7 @@ import { AgentSession } from "./agent-session.ts";
 import { RetainedAgentProcesses } from "./retained-agent-processes.ts";
 import { RuntimeOperations, waitForSharedOperation } from "./runtime-operations.ts";
 
-export { createWritableAcpStream } from "./agent-connection.ts";
+export { createWritableAcpStream } from "./connection/agent-connection.ts";
 
 import {
     SESSION_CLOSE_NOTICE_KIND,
@@ -17,11 +17,11 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
 import { isNativeChatSessionId } from "../runtime/native-sessions/chat-agent.ts";
-import type { Timer } from "../runtime/relay/timer.ts";
+import type { Timer } from "../util/timer.ts";
 import { AcpExecutionError } from "./acp-error.ts";
 import { AgentProcessPool, type AgentProcessRetention } from "./agent-process-pool.ts";
-import type { AcpContentExternalizer } from "./external-content/acp-content-externalizer.ts";
-import type { NativeSessionOrigin, NativeSessionPage } from "./native-session.ts";
+import type { AcpContentExternalizer } from "./content/content-externalizer.ts";
+import type { NativeSessionOrigin, NativeSessionPage } from "./protocol/native-session.ts";
 import {
     type AcpSessionStore,
     AcpStoredSession,

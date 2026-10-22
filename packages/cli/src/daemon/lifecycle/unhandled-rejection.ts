@@ -1,6 +1,6 @@
 import { join } from "node:path";
 
-import { BoundedLineLog } from "../../runtime/observability/bounded-log.ts";
+import { BoundedLineLog } from "../../storage/logs/bounded-log.ts";
 
 const MAXIMUM_REJECTION_LOG_BYTES = 512 * 1_024;
 const MAXIMUM_REJECTION_TEXT_BYTES = 2_048;

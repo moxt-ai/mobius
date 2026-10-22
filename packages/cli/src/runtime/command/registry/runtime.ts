@@ -1,7 +1,7 @@
 import { RUNTIME_PING_KIND, RUNTIME_PONG_KIND } from "@moxt-ai/mobius-sdk/protocol";
 import packageMetadata from "../../../../package.json" with { type: "json" };
 import type { RuntimeCommand } from "../definition.ts";
-import { send } from "../dispatcher.ts";
+import { send } from "../transport.ts";
 
 export const runtimeDiagnosticsCommand: RuntimeCommand = {
     kind: "runtime.diagnostics.read",

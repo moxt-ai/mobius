@@ -10,7 +10,7 @@ import { SESSION_CLOSED_ERROR_CODE, type SessionStatusChangedEvent } from "@moxt
 import { describe, expect, it, vi } from "vitest";
 
 import { AgentRuntimeManager, createWritableAcpStream } from "../../src/acp/agent-runtime-manager.ts";
-import { AcpContentExternalizer } from "../../src/acp/external-content/acp-content-externalizer.ts";
+import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
 import { NullAcpSessionObserver } from "../../src/acp/session-contracts.ts";
 import { CachedAcpSessionEventStore } from "../../src/acp/session-event-store.ts";
 import { SqliteSessionLiveEventPosition } from "../../src/acp/session-live-event-position.ts";
@@ -18,8 +18,8 @@ import { FoundAcpStoredSession, MemoryAcpSessionStore, SqliteAcpSessionStore } f
 import { acpSessionStoreMigrations } from "../../src/generated/acp-session-store-migrations.ts";
 import { AccumulatingOperationMetrics } from "../../src/infra/operation-metrics.ts";
 import { LocalAgentDefinition } from "../../src/runtime/config.ts";
-import { systemTimer } from "../../src/runtime/relay/timer.ts";
-import { openAcpSessionDatabase, openSessionEventCacheDatabase } from "../../src/storage/local-databases.ts";
+import { openAcpSessionDatabase, openSessionEventCacheDatabase } from "../../src/storage/sqlite/local-databases.ts";
+import { systemTimer } from "../../src/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
 import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
 import { RecordingObserver } from "./acp-feature-fixture.ts";

@@ -19,7 +19,7 @@ import type { RuntimeSessionEventProjection } from "../../session/session-event-
 import { resolveSessionDirectories } from "../../workspace/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "../../workspace/workspace-directory.ts";
 import type { RuntimeCommand } from "../definition.ts";
-import { operationErrorCode, reportOperationFailure, send } from "../dispatcher.ts";
+import { operationErrorCode, reportOperationFailure, send } from "../transport.ts";
 import { resolveCatalogAgent } from "./session.ts";
 
 function isAgentReasoning(event: SessionEvent | undefined): boolean {

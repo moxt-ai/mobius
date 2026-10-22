@@ -105,7 +105,7 @@ async function run(): Promise<void> {
         let arguments_ = [...(session.arguments ?? []), ...agentArguments];
         if (target === "daemon") {
             executable = process.execPath;
-            arguments_ = [resolve(import.meta.dirname, "../packages/cli/src/entrypoint/cli.ts"), ...agentArguments];
+            arguments_ = [resolve(import.meta.dirname, "../packages/cli/src/cli/entrypoint.ts"), ...agentArguments];
         }
         const environment = { ...process.env, ...session.fixture.environment };
         if (target === "daemon") {

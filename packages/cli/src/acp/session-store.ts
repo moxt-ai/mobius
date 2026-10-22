@@ -1,8 +1,8 @@
 import { and, desc, eq } from "drizzle-orm";
 import type { NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 import { z } from "zod";
-import type { LocalSqliteDatabase } from "../infra/local-sqlite-database.ts";
 import { acpSession } from "../schema/acp-session-store/index.ts";
+import type { LocalSqliteDatabase } from "../storage/sqlite/local-sqlite-database.ts";
 import { type AcpStoredSessionConfiguration, decodeStoredSessionConfigurations } from "./session-configuration.ts";
 import { type AcpSessionEventStore, MemoryAcpSessionEventStore } from "./session-event-store.ts";
 

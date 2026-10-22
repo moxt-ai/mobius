@@ -10,7 +10,7 @@ import type {
     AcpEndpointTermination,
     InProcessAcpEndpoint,
     InProcessAcpEndpointFactory,
-} from "../../../src/acp/in-process/acp-endpoint.ts";
+} from "../../../src/acp/agent/in-process-endpoint.ts";
 
 export interface AgentOperation {
     readonly endpoint: number;

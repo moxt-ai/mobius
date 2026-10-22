@@ -2,10 +2,12 @@ import type {
     ContentBlock,
     PromptExecutionContext,
     QueuedPromptRequestEventLog,
+    SessionCancelCommand,
     SessionEventPayload,
     SessionLiveEvent,
     SessionPromptCommand,
 } from "@moxt-ai/mobius-sdk/protocol";
+import type { RuntimeOperationState } from "../admission.ts";
 import type { RuntimeSessionEventPublisher } from "../relay/session-event-publisher.ts";
 
 interface QueuedPromptRequest {
@@ -215,4 +217,24 @@ export class RuntimeSessionEventProjection {
                 ...(targetCommandId === undefined ? {} : { targetCommandId }),
             })),
     });
+}
+
+export async function settleAbandonedTurn(
+    projection: RuntimeSessionEventProjection,
+    operations: RuntimeOperationState,
+    cancellation: SessionCancelCommand,
+): Promise<void> {
+    const attemptId = operations.findUnsettledAttemptId(cancellation.commandId, cancellation.sessionId);
+    if (attemptId === null) {
+        console.warn("Mobius daemon ignored cancellation for an inactive turn");
+        return;
+    }
+    await projection.failed(
+        cancellation.sessionId,
+        cancellation.commandId,
+        "agent_execution_abandoned",
+        "The local Agent execution was abandoned before it completed",
+    );
+    operations.transitionExecution(cancellation.commandId, "failed");
+    projection.publishTerminal(cancellation.sessionId, cancellation.commandId);
 }

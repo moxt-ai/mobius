@@ -1,5 +1,5 @@
 import type { PromptResponse } from "@agentclientprotocol/sdk";
-import type { AcpEndpointTermination } from "../../in-process/acp-endpoint.ts";
+import type { AcpEndpointTermination } from "../../agent/in-process-endpoint.ts";
 import type { CodexAppServerServerRequest } from "./app-server-client.ts";
 
 /** Session behavior selected after opening; transport ownership stays with the ACP endpoint. */

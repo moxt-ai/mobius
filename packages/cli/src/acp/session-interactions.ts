@@ -17,16 +17,16 @@ import {
     type SessionPermissionRequestedEvent,
     type SessionPermissionResolvedEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
+import { readString, truncate } from "../util/value-utils.ts";
 import { AcpExecutionError } from "./acp-error.ts";
-import { normalizeElicitationFields, validateElicitationContent } from "./elicitation.ts";
 import { PendingElicitation, PendingPermission } from "./pending-interactions.ts";
+import { normalizeElicitationFields, validateElicitationContent } from "./protocol/elicitation.ts";
 import type {
     AcpElicitationResponseOptions,
     AcpPermissionResponseOptions,
     AcpSessionObserver,
 } from "./session-contracts.ts";
 import type { ProjectedToolCall } from "./tool-call-projection.ts";
-import { readString, truncate } from "./value-utils.ts";
 
 interface SessionInteractionContext {
     readonly sessionId: () => string;

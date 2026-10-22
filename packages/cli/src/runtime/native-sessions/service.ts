@@ -14,8 +14,8 @@ import {
     type AcpPrepareOptions,
     type AgentRuntimeManager,
 } from "../../acp/agent-runtime-manager.ts";
-import type { NativeSessionInfo } from "../../acp/native-session.ts";
-import { nativeSessionIdSchema } from "../../acp/native-session.ts";
+import type { NativeSessionInfo } from "../../acp/protocol/native-session.ts";
+import { nativeSessionIdSchema } from "../../acp/protocol/native-session.ts";
 import type { AcpStoredSession } from "../../acp/session-store.ts";
 import type { RuntimeConfig } from "../config.ts";
 import { LocalAuthorizationError } from "../workspace/local-authorization-error.ts";

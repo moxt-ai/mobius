@@ -4,12 +4,9 @@ import { basename, join, resolve } from "node:path";
 import { isIdentifier, mobiusApiUrl } from "@moxt-ai/mobius-sdk/protocol";
 import { fetch, type Response } from "undici";
 import packageMetadata from "../../../package.json" with { type: "json" };
-import {
-    discoverLocalAgentInventory,
-    type LocalAgentInventory,
-} from "../../runtime/agent-catalog/discover-local-agents.ts";
-import { publishAgentCatalog } from "../../runtime/agent-catalog/publish-agent-catalog.ts";
-import { createCatalogAgentResolver } from "../../runtime/agent-catalog/resolve-catalog-agent.ts";
+import { discoverLocalAgentInventory, type LocalAgentInventory } from "../../agent/discovery/discover-local-agents.ts";
+import { publishAgentCatalog } from "../../runtime/catalog/publish-agent-catalog.ts";
+import { createCatalogAgentResolver } from "../../runtime/catalog/resolve-catalog-agent.ts";
 import {
     type AcpAgentDefinition,
     createRuntimeConfig,

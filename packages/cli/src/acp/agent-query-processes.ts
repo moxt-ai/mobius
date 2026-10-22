@@ -1,7 +1,7 @@
 import { AcpExecutionError } from "./acp-error.ts";
 import type { AgentProcessPool } from "./agent-process-pool.ts";
 import { AgentSession } from "./agent-session.ts";
-import type { AcpContentExternalizer } from "./external-content/acp-content-externalizer.ts";
+import type { AcpContentExternalizer } from "./content/content-externalizer.ts";
 import { RetainedAgentProcesses } from "./retained-agent-processes.ts";
 import { waitForSharedOperation } from "./runtime-operations.ts";
 import {

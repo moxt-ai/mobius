@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 
 const [state, channelId, relay, control, sourceRoot] = process.argv.slice(2);
 const { LocalAgentDefinition } = await import(
-    pathToFileURL(join(sourceRoot, "packages/cli/src/agent-catalog/local-agent.ts"))
+    pathToFileURL(join(sourceRoot, "packages/cli/src/acp/agent/agent-definition.ts"))
 );
 const { createRuntimeConfig, MobiusRuntimeEngine, RuntimeLocalContext } = await import(
     pathToFileURL(join(sourceRoot, "packages/cli/src/runtime/engine.ts"))
