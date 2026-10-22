@@ -19,6 +19,7 @@ import {
     decodeNativeSessionRequest,
     decodeRuntimeStatusEvent,
     decodeSessionCancelCommand,
+    decodeSessionConfigReadCommand,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
     decodeSessionEventEnvelope,
@@ -347,6 +348,39 @@ export function createPlatformApplication(
             }
             context.header("Cache-Control", "no-store");
             return context.json(result.events);
+        })
+        .get("/:sessionId/configuration", sessionAccessTargetMiddleware, async (context) => {
+            const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];
+            if (credential === undefined) {
+                return context.json(
+                    { error: { code: "session_access_required", message: "A Session credential is required" } },
+                    401,
+                );
+            }
+            const access = await context.var.sessionAccess.authorizeSession(
+                context.var.sessionAccessTarget,
+                credential,
+                ProjectPermission.SessionRead,
+                context.req.raw.signal,
+            );
+            const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
+            const result = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
+                new ProjectScope(access.projectId),
+                access.runtimeId,
+                decodeSessionConfigReadCommand(
+                    JSON.stringify({
+                        kind: "session.config.read",
+                        requestId: crypto.randomUUID(),
+                        sessionId,
+                    }),
+                ),
+                context.req.raw.signal,
+            );
+            if (result.kind !== "session.config.read.result") {
+                throw new PairingDirectoryError("invalid_request", "The Runtime returned invalid Session settings");
+            }
+            context.header("Cache-Control", "no-store");
+            return context.json(result);
         })
         .get("/:sessionId/active-turn", sessionAccessTargetMiddleware, async (context) => {
             const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];

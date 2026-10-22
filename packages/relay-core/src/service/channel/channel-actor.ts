@@ -13,6 +13,7 @@ import {
     decodeRuntimePingCommand,
     decodeSessionCancelCommand,
     decodeSessionCloseCommand,
+    decodeSessionConfigReadCommand,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
     decodeSessionHistoryPageLoad,
@@ -47,6 +48,8 @@ import {
     SESSION_CANCEL_KIND,
     SESSION_CLOSE_KIND,
     SESSION_CLOSED_KIND,
+    SESSION_CONFIG_READ_KIND,
+    SESSION_CONFIG_READ_RESULT_KIND,
     SESSION_CONFIG_UPDATED_KIND,
     SESSION_CONFIGURE_KIND,
     SESSION_ELICITATION_RESPOND_KIND,
@@ -346,6 +349,8 @@ export class ChannelActor {
                 return;
             case SESSION_CONFIG_UPDATED_KIND:
                 return;
+            case SESSION_CONFIG_READ_RESULT_KIND:
+                return;
             case SESSION_RENAMED_KIND:
                 return;
             case SESSION_STATUS_CHANGED_KIND:
@@ -415,6 +420,10 @@ export class ChannelActor {
             }
             case SESSION_CONFIGURE_KIND: {
                 const command = decodeSessionConfigureCommand(message);
+                return { message: command, requestId: command.requestId, sessionId: command.sessionId };
+            }
+            case SESSION_CONFIG_READ_KIND: {
+                const command = decodeSessionConfigReadCommand(message);
                 return { message: command, requestId: command.requestId, sessionId: command.sessionId };
             }
             case SESSION_RENAME_KIND: {

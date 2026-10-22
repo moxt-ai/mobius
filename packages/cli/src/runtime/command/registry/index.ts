@@ -15,6 +15,7 @@ import { createNativeSessionCommands } from "./native-sessions.ts";
 import { sessionPromptCommand } from "./prompt.ts";
 import { runtimeDiagnosticsCommand, runtimePingCommand } from "./runtime.ts";
 import {
+    sessionConfigReadCommand,
     sessionConfigureCommand,
     sessionPrepareCommand,
     sessionRenameCommand,
@@ -40,6 +41,7 @@ export function createCommandRegistry(context: CommandContext): {
         workspaceListCommand,
         sessionPrepareCommand,
         sessionConfigureCommand,
+        sessionConfigReadCommand,
         sessionRenameCommand,
         sessionRestoreCommand,
         permissionRespondCommand,

@@ -1,4 +1,5 @@
 import type {
+    SessionConfigReadCommand,
     SessionConfigureCommand,
     SessionPrepareCommand,
     SessionReadyEvent,
@@ -7,6 +8,8 @@ import type {
     WorkspaceListCommand,
 } from "@moxt-ai/mobius-sdk/protocol";
 import {
+    SESSION_CONFIG_READ_KIND,
+    SESSION_CONFIG_READ_RESULT_KIND,
     SESSION_CONFIGURE_KIND,
     SESSION_PREPARE_KIND,
     SESSION_RENAME_KIND,
@@ -361,5 +364,84 @@ export const sessionRenameCommand: RuntimeCommand = {
             throw new Error("Command kind mismatch");
         }
         void executeSessionRename(context.socket, message, context.sessions, context.signal);
+    },
+};
+
+export async function executeSessionConfigRead(
+    socket: WebSocket,
+    command: SessionConfigReadCommand,
+    config: RuntimeConfig,
+    directories: WorkspaceDirectoryService,
+    sessions: AgentRuntimeManager,
+    nativeSessions: NativeSessionService,
+    diagnostics: RelayConnectionDiagnostics,
+    signal: AbortSignal,
+): Promise<void> {
+    const metrics = new AccumulatingOperationMetrics();
+    try {
+        const entry = await metrics.measure("session-lookup", async () => {
+            const [found] = await nativeSessions.querySessions([command.sessionId], signal);
+            if (found === undefined) {
+                throw new AcpExecutionError("The Session was not found", {}, "session_not_found");
+            }
+            return found;
+        });
+        const ready = await prepareSession(
+            {
+                additionalDirectoryIds: entry.additionalDirectories.map((directory) => directory.directoryId),
+                agentId: entry.agentId,
+                bindingId: config.bindingId,
+                directoryId: entry.directoryId,
+                kind: "session.prepare",
+                requestId: command.requestId,
+                sessionId: command.sessionId,
+                sessionState: "provisioned",
+            },
+            // A settings read must not force history loading: Agents without
+            // load support would fail even with a live process whose config is
+            // already readable, and prepare reuses the current configuration.
+            { kind: "interactive-only" },
+            config,
+            directories,
+            sessions,
+            metrics,
+            signal,
+        );
+        send(socket, {
+            configOptions: ready.configOptions,
+            kind: SESSION_CONFIG_READ_RESULT_KIND,
+            requestId: command.requestId,
+            sessionId: command.sessionId,
+        });
+    } catch (error) {
+        diagnostics.daemonDiagnostic(
+            "session_config_read_failed",
+            command.requestId,
+            {
+                code: operationErrorCode(error),
+                sessionId: command.sessionId,
+            },
+            error,
+        );
+        reportOperationFailure(socket, command.requestId, command.sessionId, error, metrics.snapshot());
+    }
+}
+
+export const sessionConfigReadCommand: RuntimeCommand = {
+    kind: SESSION_CONFIG_READ_KIND,
+    handle: (context, message): void => {
+        if (message.kind !== SESSION_CONFIG_READ_KIND) {
+            throw new Error("Command kind mismatch");
+        }
+        void executeSessionConfigRead(
+            context.socket,
+            message,
+            context.config,
+            context.directories,
+            context.sessions,
+            context.nativeSessions,
+            context.diagnostics,
+            context.signal,
+        );
     },
 };

@@ -104,6 +104,7 @@ export class PairingService {
                     (command.kind === "native.session.request" && command.action === "list") ||
                         command.kind === "session.list" ||
                         command.kind === "session.query" ||
+                        command.kind === "session.config.read" ||
                         command.kind === "session.preview-history.page.load" ||
                         command.kind === "session.live-history.v2.page.load"
                         ? ProjectPermission.RuntimeRead

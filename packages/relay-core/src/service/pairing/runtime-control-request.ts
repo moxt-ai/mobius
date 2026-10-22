@@ -13,6 +13,7 @@ import {
     decodeRuntimePongEvent,
     decodeRuntimeStatusEvent,
     decodeSessionClosedEvent,
+    decodeSessionConfigReadResult,
     decodeSessionConfigUpdatedEvent,
     decodeSessionElicitationResolvedEvent,
     decodeSessionEventEnvelope,
@@ -44,6 +45,8 @@ import {
     type SessionCancelCommand,
     type SessionCloseCommand,
     type SessionClosedEvent,
+    type SessionConfigReadCommand,
+    type SessionConfigReadResult,
     type SessionConfigUpdatedEvent,
     type SessionConfigureCommand,
     type SessionElicitationResolvedEvent,
@@ -77,6 +80,7 @@ export type RuntimeControlCommand =
     | NativeSessionRequest
     | SessionPrepareCommand
     | SessionConfigureCommand
+    | SessionConfigReadCommand
     | SessionRenameCommand
     | SessionCloseCommand
     | SessionCancelCommand
@@ -120,6 +124,7 @@ export type RuntimeControlResult =
     | NativeSessionResult
     | SessionReadyEvent
     | SessionConfigUpdatedEvent
+    | SessionConfigReadResult
     | SessionRenamedEvent
     | SessionClosedEvent
     | TurnCompleted
@@ -564,9 +569,12 @@ export async function requestRuntimeControl(
                                           ? decodeSessionReadyEvent(event.data)
                                           : command.kind === "session.configure" && kind === "session.config.updated"
                                             ? decodeSessionConfigUpdatedEvent(event.data)
-                                            : command.kind === "session.rename" && kind === "session.renamed"
-                                              ? decodeSessionRenamedEvent(event.data)
-                                              : null;
+                                            : command.kind === "session.config.read" &&
+                                                kind === "session.config.read.result"
+                                              ? decodeSessionConfigReadResult(event.data)
+                                              : command.kind === "session.rename" && kind === "session.renamed"
+                                                ? decodeSessionRenamedEvent(event.data)
+                                                : null;
                     const resolved =
                         result ??
                         (command.kind === "session.preview-history.page.load" &&

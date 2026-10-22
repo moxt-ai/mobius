@@ -34,10 +34,16 @@ import {
     encodeAgentSettingsDiscoveryFailedEvent,
 } from "../session/agent/settings.ts";
 import {
+    decodeSessionConfigReadCommand,
+    decodeSessionConfigReadResult,
     decodeSessionConfigUpdatedEvent,
     decodeSessionConfigureCommand,
+    encodeSessionConfigReadCommand,
+    encodeSessionConfigReadResult,
     encodeSessionConfigUpdatedEvent,
     encodeSessionConfigureCommand,
+    SESSION_CONFIG_READ_KIND,
+    SESSION_CONFIG_READ_RESULT_KIND,
     SESSION_CONFIG_UPDATED_KIND,
     SESSION_CONFIGURE_KIND,
 } from "../session/configuration/index.ts";
@@ -251,6 +257,11 @@ const serviceToDaemonSignatures = {
         encodeSessionConfigureCommand,
         decodeSessionConfigureCommand,
     ),
+    [SESSION_CONFIG_READ_KIND]: defineMessageSignature(
+        SESSION_CONFIG_READ_KIND,
+        encodeSessionConfigReadCommand,
+        decodeSessionConfigReadCommand,
+    ),
     [SESSION_RENAME_KIND]: defineMessageSignature(
         SESSION_RENAME_KIND,
         encodeSessionRenameCommand,
@@ -328,6 +339,11 @@ const daemonToServiceSignatures = {
         SESSION_CONFIG_UPDATED_KIND,
         encodeSessionConfigUpdatedEvent,
         decodeSessionConfigUpdatedEvent,
+    ),
+    [SESSION_CONFIG_READ_RESULT_KIND]: defineMessageSignature(
+        SESSION_CONFIG_READ_RESULT_KIND,
+        encodeSessionConfigReadResult,
+        decodeSessionConfigReadResult,
     ),
     [SESSION_RENAMED_KIND]: defineMessageSignature(
         SESSION_RENAMED_KIND,

@@ -17,6 +17,7 @@ export type {
     SessionCommand,
     SessionCommandsUpdatedEvent,
     SessionConfigOption,
+    SessionConfigReadResult,
     SessionConfigUpdatedEvent,
     SessionConfigurationSelection,
     SessionElicitationField,
