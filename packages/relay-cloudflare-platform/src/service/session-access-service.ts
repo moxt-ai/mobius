@@ -3,6 +3,8 @@ import {
     decodeSessionAccessCredential,
     isIdentifier,
     issueSessionAccessCredential,
+    ProtocolMessageError,
+    SessionAccessCredentialExpiredError,
     verifySessionAccessCredential,
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { AppCredentialAuthenticationService } from "./app-credential-authentication-service.ts";
@@ -101,9 +103,21 @@ export class SessionAccessService {
         try {
             claims = await verifySessionAccessCredential(credentialValue, application.secret_digest, Date.now());
         } catch (cause) {
-            throw new ProjectAuthenticationError("credential_expired", "The Session credential is unavailable", {
-                cause,
-            });
+            if (cause instanceof SessionAccessCredentialExpiredError) {
+                throw new ProjectAuthenticationError("credential_expired", "The Session credential has expired", {
+                    cause,
+                });
+            }
+            if (cause instanceof ProtocolMessageError) {
+                throw new ProjectAuthenticationError(
+                    "project_credential_invalid",
+                    "The Session credential is invalid",
+                    {
+                        cause,
+                    },
+                );
+            }
+            throw cause;
         }
         if (claims.projectId !== target.projectId || claims.sessionId !== target.sessionId) {
             throw new ProjectAuthenticationError(
