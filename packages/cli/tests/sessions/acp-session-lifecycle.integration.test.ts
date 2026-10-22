@@ -74,7 +74,16 @@ describe("ACP conversation sessions", () => {
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -106,7 +115,16 @@ describe("ACP conversation sessions", () => {
                 adapters: acpAdapters,
                 sessionIdentity: "assigned",
                 onSessionStatusChanged: () => undefined,
-                contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+                contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                    new UnretainedExternalContentStore().put({
+                        bytes: content.bytes,
+                        kind: content.kind,
+                        mediaType: content.mediaType,
+                        name: content.name,
+                        sessionId,
+                        signal,
+                    }),
+                ),
                 timer: systemTimer,
                 maxProcesses: null,
             });
@@ -576,7 +594,16 @@ describe("ACP conversation sessions", () => {
             adapters: acpAdapters,
             sessionIdentity: "native",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -605,7 +632,16 @@ describe("ACP conversation sessions", () => {
             adapters: acpAdapters,
             sessionIdentity: "native",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -653,7 +689,16 @@ child.once("exit", (code) => process.exit(code ?? 84));
                 adapters: acpAdapters,
                 sessionIdentity: "assigned",
                 onSessionStatusChanged: () => undefined,
-                contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+                contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                    new UnretainedExternalContentStore().put({
+                        bytes: content.bytes,
+                        kind: content.kind,
+                        mediaType: content.mediaType,
+                        name: content.name,
+                        sessionId,
+                        signal,
+                    }),
+                ),
                 timer: systemTimer,
                 maxProcesses: null,
             });
@@ -736,7 +781,16 @@ child.once("exit", (code) => process.exit(code ?? 84));
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -806,7 +860,16 @@ child.once("exit", (code) => process.exit(code ?? 84));
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: (event) => statuses.push(event),
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -849,7 +912,16 @@ child.once("exit", (code) => process.exit(code ?? 84));
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -919,7 +991,16 @@ child.once("exit", (code) => process.exit(code ?? 84));
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: 10,
         });
@@ -999,7 +1080,16 @@ child.once("exit", (code) => process.exit(code ?? 84));
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -1033,7 +1123,16 @@ child.once("exit", (code) => process.exit(code ?? 84));
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -1064,7 +1163,16 @@ child.once("exit", (code) => process.exit(code ?? 84));
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -1103,7 +1211,16 @@ child.once("exit", (code) => process.exit(code ?? 84));
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -1144,7 +1261,16 @@ child.once("exit", (code) => process.exit(code ?? 84));
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -1239,7 +1365,16 @@ agent.once("exit", (code) => process.exit(code ?? 84));
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -1283,7 +1418,16 @@ agent.once("exit", (code) => process.exit(code ?? 84));
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });

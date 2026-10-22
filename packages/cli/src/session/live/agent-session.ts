@@ -22,6 +22,7 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "../../acp/acp-error.ts";
 import type { AcpAgentDefinition } from "../../acp/agent/agent-definition.ts";
+import { buildPromptContent } from "../../acp/client/prompt-content.ts";
 import { AgentConnection } from "../../acp/connection/agent-connection.ts";
 import { AgentUpdateStream } from "../../acp/connection/agent-update-stream.ts";
 import type { AcpClientHandler } from "../../acp/connection/create-client.ts";
@@ -29,7 +30,6 @@ import type { AcpContentExternalizer } from "../../acp/content/content-externali
 import {
     type NativeSessionOrigin,
     type NativeSessionPage,
-    nativeSessionIdSchema,
     nativeSessionPageSchema,
 } from "../../acp/protocol/native-session.ts";
 import { normalizeAcpCapabilities, unsupportedSessionCapabilities } from "../../acp/protocol/session-capabilities.ts";
@@ -40,7 +40,7 @@ import {
 } from "../../acp/protocol/session-config-protocol.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../../infra/operation-metrics.ts";
 import { revalidateExecutable } from "../../util/process/executable.ts";
-import { isRecord, truncate } from "../../util/value-utils.ts";
+import { arraysEqual, isRecord, recordsEqual, truncate } from "../../util/value-utils.ts";
 import {
     type ElicitationResponseOptions,
     type PermissionResponseOptions,
@@ -58,9 +58,11 @@ import type { SessionEventPage } from "../history/session-event-store.ts";
 import { HistoryReplayCapture } from "../history/session-history.ts";
 import { SessionInteractions } from "../interaction/session-interactions.ts";
 import { waitForSharedOperation } from "../manager/operation-drain.ts";
-import { FoundStoredSession, type SessionStore, StoredSession } from "../record/session-store.ts";
+import { type SessionStore, StoredSession } from "../record/session-store.ts";
+import type { AgentSessionRestore } from "./agent-session-restore.ts";
 import { type AgentTurnState, IdleAgentTurn, RunningAgentTurn } from "./agent-turn.ts";
 import { SessionConfigurations } from "./session-configurations.ts";
+import { restoreSession } from "./session-restore.ts";
 
 const PROCESS_STOP_TIMEOUT_MILLISECONDS = 1_000;
 
@@ -93,17 +95,37 @@ interface LoadedSession {
     readonly response: unknown;
 }
 
-export function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
-    return left.length === right.length && left.every((value, index) => value === right[index]);
-}
+export class AgentSession implements AcpClientHandler, AgentSessionRestore {
+    // The restore surface: AgentSessionRestore members expose private state to
+    // session-restore.ts only. The class keeps the fields private.
+    get additionalDirectories(): readonly string[] {
+        return this.#additionalDirectories;
+    }
+    get agentId(): string {
+        return this.#agentId;
+    }
+    get capabilities(): SessionCapabilities {
+        return this.#capabilities;
+    }
+    get cwd(): string {
+        return this.#cwd;
+    }
+    get metrics(): OperationMetrics {
+        return this.#metrics;
+    }
+    get restored(): boolean {
+        return this.#restored;
+    }
+    get sessionId(): string {
+        return this.#mobiusSessionId;
+    }
+    get sessionConfigProtocol(): SessionConfigProtocol {
+        return this.#sessionConfigProtocol;
+    }
+    get store(): SessionStore {
+        return this.#store;
+    }
 
-export function recordsEqual(left: Readonly<Record<string, string>>, right: Readonly<Record<string, string>>): boolean {
-    const leftEntries = Object.entries(left);
-    const rightEntries = Object.entries(right);
-    return leftEntries.length === rightEntries.length && leftEntries.every(([name, value]) => right[name] === value);
-}
-
-export class AgentSession implements AcpClientHandler {
     readonly #connection: AgentConnection;
     readonly #contentExternalizer: AcpContentExternalizer;
     readonly #interactions: SessionInteractions;
@@ -277,7 +299,7 @@ export class AgentSession implements AcpClientHandler {
 
     readonly hasRunningTurn = (): boolean => this.#turn.running;
 
-    readonly #writeStoredSession = (updatedAt: string): void => {
+    readonly writeStoredSession = (updatedAt: string): void => {
         this.#store.write(
             new StoredSession(
                 this.#mobiusSessionId,
@@ -343,11 +365,11 @@ export class AgentSession implements AcpClientHandler {
     readonly #captureSelectedConfigurationValues = (): void => {
         this.#sessionConfigurations.capture(this.#configOptions);
         if (this.#updates.sessionId().length > 0) {
-            this.#writeStoredSession(new Date().toISOString());
+            this.writeStoredSession(new Date().toISOString());
         }
     };
 
-    readonly #restoreStoredConfigurations = async (session: StoredSession, signal: AbortSignal): Promise<void> => {
+    readonly restoreStoredConfigurations = async (session: StoredSession, signal: AbortSignal): Promise<void> => {
         await this.#sessionConfigurations.restore(
             session.configurations,
             this.#configOptions,
@@ -513,176 +535,7 @@ export class AgentSession implements AcpClientHandler {
         signal: AbortSignal,
         recovery: SessionRecovery,
         origin?: NativeSessionOrigin,
-    ): Promise<void> => {
-        if (origin !== undefined) {
-            this.#sessionTitle = origin.title;
-        }
-        await this.#initializeAgent(signal);
-        let stored = this.#metrics.measureSync("session-state-read", () =>
-            origin?.kind === "import"
-                ? new FoundStoredSession(
-                      new StoredSession(
-                          this.#mobiusSessionId,
-                          this.#agentId,
-                          nativeSessionIdSchema.parse(origin.nativeSessionId),
-                          this.#cwd,
-                          this.#additionalDirectories,
-                          true,
-                          origin.title,
-                      ),
-                  )
-                : this.#store.read(this.#mobiusSessionId),
-        );
-        if (stored instanceof FoundStoredSession && !stored.session.prompted) {
-            this.#store.remove(this.#mobiusSessionId);
-            stored = this.#metrics.measureSync("session-state-read", () => this.#store.read(this.#mobiusSessionId));
-        }
-
-        let lifecycleResponse: unknown;
-        if (origin?.kind === "fork") {
-            if (!this.#capabilities.unstableForkSession) {
-                throw new AcpExecutionError(
-                    "This Agent does not support session forking",
-                    {},
-                    "native_session_unsupported",
-                );
-            }
-            if (this.#additionalDirectories.length > 0 && !this.#capabilities.additionalDirectories) {
-                throw new AcpExecutionError(
-                    "This Agent cannot restore additional working directories",
-                    {},
-                    "native_session_unsupported",
-                );
-            }
-            const forked = await this.#metrics.measure(
-                "session-fork",
-                async () =>
-                    await this.race(
-                        this.#connection.connection.agent.request(
-                            methods.agent.session.fork,
-                            {
-                                sessionId: nativeSessionIdSchema.parse(origin.nativeSessionId),
-                                cwd: this.#cwd,
-                                additionalDirectories: [...this.#additionalDirectories],
-                                mcpServers: [],
-                            },
-                            { cancellationSignal: signal },
-                        ),
-                        "ACP agent exited while forking a session",
-                        signal,
-                    ),
-            );
-            this.selectNativeSession(forked.sessionId);
-            if (
-                this.#updates.sessionId() === origin.nativeSessionId ||
-                this.#store.findNative(this.#agentId, this.#updates.sessionId()).length > 0
-            ) {
-                throw new AcpExecutionError(
-                    "The Agent did not create an independent fork",
-                    {},
-                    "invalid_native_session_response",
-                );
-            }
-            this.#prompted = true;
-            this.#restored = true;
-            lifecycleResponse = forked;
-        } else if (
-            stored instanceof FoundStoredSession &&
-            stored.session.agentId === this.#agentId &&
-            stored.session.cwd === this.#cwd &&
-            arraysEqual(stored.session.additionalDirectories, this.#additionalDirectories)
-        ) {
-            this.selectNativeSession(stored.session.nativeSessionId);
-            this.#prompted = stored.session.prompted;
-            this.#sessionTitle = stored.session.title;
-            this.#restored = true;
-            if (recovery.kind === "history-required") {
-                if (!this.#capabilities.loadSession) {
-                    throw new AcpExecutionError(
-                        "This Agent restores context but does not provide message history.",
-                        {},
-                        "native_history_unsupported",
-                    );
-                }
-                lifecycleResponse = await this.#metrics.measure(
-                    "session-load",
-                    async () => (await this.#loadSession(signal, "ACP agent exited while loading a session")).response,
-                );
-            } else if (this.#capabilities.resumeSession) {
-                lifecycleResponse = await this.#metrics.measure(
-                    "session-resume",
-                    async () =>
-                        await this.race(
-                            this.#connection.connection.agent.request(
-                                methods.agent.session.resume,
-                                {
-                                    additionalDirectories: [...this.#additionalDirectories],
-                                    cwd: this.#cwd,
-                                    mcpServers: [],
-                                    sessionId: this.#updates.sessionId(),
-                                },
-                                { cancellationSignal: signal },
-                            ),
-                            "ACP agent exited while resuming a session",
-                            signal,
-                        ),
-                );
-            } else if (this.#capabilities.loadSession) {
-                lifecycleResponse = await this.#metrics.measure(
-                    "session-load",
-                    async () => (await this.#loadSession(signal, "ACP agent exited while loading a session")).response,
-                );
-            } else {
-                throw new AcpExecutionError(
-                    "The ACP agent cannot restore its persisted session",
-                    {},
-                    "session_restore_unsupported",
-                );
-            }
-        } else {
-            if (stored instanceof FoundStoredSession) {
-                if (stored.session.prompted) {
-                    throw new AcpExecutionError(
-                        "The agent or workspace cannot change after a conversation has started",
-                        {},
-                        "session_identity_mismatch",
-                    );
-                }
-                this.#store.remove(this.#mobiusSessionId);
-            }
-            const created = await this.#metrics.measure(
-                "session-new",
-                async () =>
-                    await this.race(
-                        this.#connection.connection.agent.request(
-                            methods.agent.session.new,
-                            {
-                                additionalDirectories: [...this.#additionalDirectories],
-                                cwd: this.#cwd,
-                                mcpServers: [],
-                            },
-                            { cancellationSignal: signal },
-                        ),
-                        "ACP agent exited while starting a session",
-                        signal,
-                    ),
-            );
-            this.selectNativeSession(created.sessionId);
-            this.#nativeHistoryOwnership = { kind: "fresh-session" };
-            lifecycleResponse = created;
-        }
-        this.#configOptions = this.#sessionConfigProtocol.normalizeLifecycle(lifecycleResponse);
-        if (stored instanceof FoundStoredSession && this.#restored) {
-            await this.#restoreStoredConfigurations(stored.session, signal);
-        }
-        await this.#updates.drained();
-        signal.throwIfAborted();
-        this.#writeStoredSession(
-            stored instanceof FoundStoredSession && this.#restored
-                ? stored.session.updatedAt
-                : new Date().toISOString(),
-        );
-    };
+    ): Promise<void> => await restoreSession(this, signal, recovery, origin);
 
     readonly listNativeSessions = async (cursor: string | null, signal: AbortSignal): Promise<NativeSessionPage> => {
         if (!this.#capabilities.listSessions) {
@@ -820,64 +673,12 @@ export class AgentSession implements AcpClientHandler {
             throw new AcpExecutionError("The requested ACP configuration option is unavailable");
         }
         this.#sessionConfigurations.select(applied);
-        this.#writeStoredSession(new Date().toISOString());
+        this.writeStoredSession(new Date().toISOString());
         return this.#configOptions;
     };
 
-    readonly buildPrompt = (options: PromptContentOptions): ContentBlock[] => {
-        if (options.images.length > 0 && !this.#capabilities.imagePrompt) {
-            throw new AcpExecutionError(
-                "The selected agent does not accept image prompts",
-                {},
-                "unsupported_prompt_content",
-            );
-        }
-        if (
-            options.resources.some((resource) => resource.type === "embedded") &&
-            !this.#capabilities.embeddedContextPrompt
-        ) {
-            throw new AcpExecutionError(
-                "The selected agent does not accept embedded context",
-                {},
-                "unsupported_prompt_content",
-            );
-        }
-        const prompt: ContentBlock[] = [];
-        if (options.prompt.length > 0) {
-            prompt.push({ text: options.prompt, type: "text" });
-        }
-        for (const image of options.images) {
-            prompt.push({
-                _meta: { mobius: { name: image.name } },
-                data: image.data,
-                mimeType: image.mimeType,
-                type: "image",
-            });
-        }
-        for (const resource of options.resources) {
-            if (resource.type === "embedded") {
-                prompt.push({
-                    resource: {
-                        mimeType: resource.mimeType,
-                        text: resource.text,
-                        uri: resource.uri,
-                    },
-                    type: "resource",
-                });
-            } else {
-                prompt.push({
-                    mimeType: resource.mimeType,
-                    name: resource.name,
-                    type: "resource_link",
-                    uri: resource.uri,
-                });
-            }
-        }
-        if (prompt.length === 0) {
-            throw new AcpExecutionError("A prompt must contain text or an attachment", {}, "empty_prompt");
-        }
-        return prompt;
-    };
+    readonly buildPrompt = (options: PromptContentOptions): ContentBlock[] =>
+        buildPromptContent(options, this.#capabilities);
 
     readonly nativeHistoryTurn = (): { readonly commandId: string; readonly nativeTurnId: string } | null => {
         const prompt = this.#nativePrompt;
@@ -906,7 +707,7 @@ export class AgentSession implements AcpClientHandler {
             this.#sessionTitle = truncate(options.prompt, 500);
         }
         this.#prompted = true;
-        this.#writeStoredSession(new Date().toISOString());
+        this.writeStoredSession(new Date().toISOString());
         const running = new RunningAgentTurn(options.commandId);
         this.#turn = running;
         const lifecycle = options.lifecycle;
@@ -957,7 +758,7 @@ export class AgentSession implements AcpClientHandler {
                     "acp_invalid_prompt_response",
                 );
             }
-            this.#writeStoredSession(new Date().toISOString());
+            this.writeStoredSession(new Date().toISOString());
             if (lifecycle !== undefined) {
                 await this.recordLifecycleEvent({
                     payload: { commandId: options.commandId, kind: "prompt.completed", stopReason: result.stopReason },
@@ -1219,7 +1020,7 @@ export class AgentSession implements AcpClientHandler {
                 this.#sessionUpdatedAt = truncate(update.updatedAt ?? "", 128);
             }
             if (this.#updates.sessionId().length > 0) {
-                this.#writeStoredSession(new Date().toISOString());
+                this.writeStoredSession(new Date().toISOString());
             }
             await this.#getObserver().onInfo({
                 kind: SESSION_INFO_UPDATED_KIND,
@@ -1257,6 +1058,50 @@ export class AgentSession implements AcpClientHandler {
     readonly agentSettingsModelEffort = () => this.#connection.inProcessAgent?.agentSettingsModelEffort?.() ?? null;
     readonly race = <T>(operation: Promise<T>, exitMessage: string, signal: AbortSignal): Promise<T> =>
         this.#connection.race(operation, exitMessage, signal);
+
+    agentRequest<Params, Result>(
+        method: string,
+        params: Params,
+        options?: { cancellationSignal?: AbortSignal },
+    ): Promise<Result> {
+        return this.#connection.connection.agent.request(
+            method as never,
+            params as never,
+            options as never,
+        ) as Promise<Result>;
+    }
+
+    drained(): Promise<void> {
+        return this.#updates.drained();
+    }
+
+    initializeAgent(signal: AbortSignal): Promise<void> {
+        return this.#initializeAgent(signal);
+    }
+
+    async loadSession(signal: AbortSignal, exitMessage: string): Promise<{ response: unknown }> {
+        return await this.#loadSession(signal, exitMessage);
+    }
+
+    setConfigOptions(options: readonly SessionConfigOption[]): void {
+        this.#configOptions = options;
+    }
+
+    setNativeHistoryOwnership(ownership: NativeHistoryOwnership): void {
+        this.#nativeHistoryOwnership = ownership;
+    }
+
+    setPrompted(prompted: boolean): void {
+        this.#prompted = prompted;
+    }
+
+    setRestored(restored: boolean): void {
+        this.#restored = restored;
+    }
+
+    setSessionTitle(title: string): void {
+        this.#sessionTitle = title;
+    }
 
     readonly assertNativeSession = (sessionId: string): void => {
         if (sessionId !== this.#updates.sessionId()) {

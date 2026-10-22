@@ -9,3 +9,13 @@ export function isRecord(value: unknown): value is Readonly<Record<string, unkno
 export function readString(value: unknown, fallback = ""): string {
     return typeof value === "string" ? value : fallback;
 }
+
+export function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
+    return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+export function recordsEqual(left: Readonly<Record<string, string>>, right: Readonly<Record<string, string>>): boolean {
+    const leftEntries = Object.entries(left);
+    const rightEntries = Object.entries(right);
+    return leftEntries.length === rightEntries.length && leftEntries.every(([name, value]) => right[name] === value);
+}
