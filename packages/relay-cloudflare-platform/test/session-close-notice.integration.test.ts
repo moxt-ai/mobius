@@ -98,14 +98,32 @@ it("Given hosts watching every Session and a single Session, When the Runtime re
         expect(await sessionEight.inbox.next()).toMatchObject({ kind: "runtime.status", online: true });
 
         for (const sessionId of ["session-7", "session-8"]) {
-            daemon.socket.send(encodeSessionCloseNoticeEvent({ kind: "session.close.notice", sessionId }));
+            daemon.socket.send(
+                encodeSessionCloseNoticeEvent({ kind: "session.close.notice", reason: "requested", sessionId }),
+            );
         }
 
-        expect(await everySession.inbox.next()).toEqual({ kind: "session.close.notice", sessionId: "session-7" });
-        expect(await everySession.inbox.next()).toEqual({ kind: "session.close.notice", sessionId: "session-8" });
-        expect(await sessionSeven.inbox.next()).toEqual({ kind: "session.close.notice", sessionId: "session-7" });
+        expect(await everySession.inbox.next()).toEqual({
+            kind: "session.close.notice",
+            reason: "requested",
+            sessionId: "session-7",
+        });
+        expect(await everySession.inbox.next()).toEqual({
+            kind: "session.close.notice",
+            reason: "requested",
+            sessionId: "session-8",
+        });
+        expect(await sessionSeven.inbox.next()).toEqual({
+            kind: "session.close.notice",
+            reason: "requested",
+            sessionId: "session-7",
+        });
         // The first message this host receives is the second notice, so the first never reached it.
-        expect(await sessionEight.inbox.next()).toEqual({ kind: "session.close.notice", sessionId: "session-8" });
+        expect(await sessionEight.inbox.next()).toEqual({
+            kind: "session.close.notice",
+            reason: "requested",
+            sessionId: "session-8",
+        });
     });
 });
 
@@ -122,8 +140,18 @@ it("Given a Relay that does not recognize a Runtime message kind, as an older Re
             heartbeatId: "after-unknown",
             kind: "runtime.heartbeat.ack",
         });
-        daemon.socket.send(encodeSessionCloseNoticeEvent({ kind: "session.close.notice", sessionId: "session-7" }));
+        daemon.socket.send(
+            encodeSessionCloseNoticeEvent({
+                kind: "session.close.notice",
+                reason: "requested",
+                sessionId: "session-7",
+            }),
+        );
 
-        expect(await host.inbox.next()).toEqual({ kind: "session.close.notice", sessionId: "session-7" });
+        expect(await host.inbox.next()).toEqual({
+            kind: "session.close.notice",
+            reason: "requested",
+            sessionId: "session-7",
+        });
     });
 });

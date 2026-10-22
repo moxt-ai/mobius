@@ -33,6 +33,9 @@ import {
 const SESSION_CONTROL_TIMEOUT_MILLISECONDS = 30_000;
 const SESSION_CLOSE_TIMEOUT_MILLISECONDS = 30_000;
 
+/** Why the Runtime closed a Session, as its close notice tells clients. */
+type SessionCloseReason = "requested";
+
 export { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-error.ts";
 export type { Adapter, AdapterResolver } from "./adapter/context.ts";
 export {
@@ -193,13 +196,13 @@ export class AgentRuntimeManager {
         );
     }
 
-    /** Marks a Session closed and tells every client, once for each closing. Unknown Sessions have nothing to close. */
-    #announceClosed(sessionId: string): void {
+    /** Marks a Session closed and tells every client why, once for each closing. Unknown Sessions have nothing to close. */
+    #announceClosed(sessionId: string, reason: SessionCloseReason): void {
         if (this.#closedSessions.has(sessionId) || !this.#isKnownSession(sessionId)) {
             return;
         }
         this.#closedSessions.add(sessionId);
-        this.#onSessionClosed({ kind: SESSION_CLOSE_NOTICE_KIND, sessionId });
+        this.#onSessionClosed({ kind: SESSION_CLOSE_NOTICE_KIND, reason, sessionId });
     }
 
     /** A closed Session fails the operations that would silently reopen it, so a client learns that its view is stale. */
@@ -728,7 +731,7 @@ export class AgentRuntimeManager {
                 return;
             }
             // Announce first: clients must learn of the closing while its process is still going down.
-            this.#announceClosed(options.sessionId);
+            this.#announceClosed(options.sessionId, "requested");
             const release = (async (): Promise<void> => {
                 const pending = this.#executionProcesses.pending(options.sessionId);
                 const runtime = pending === undefined ? this.#executionProcesses.get(options.sessionId) : await pending;

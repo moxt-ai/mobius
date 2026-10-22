@@ -204,10 +204,13 @@ export type SessionClosedEvent = z.infer<typeof sessionClosedEventSchema>;
 /**
  * Tells every observer that the Runtime closed a Session. Unlike `session.closed`, which answers one
  * `session.close` request, a notice is not tied to a request, so it also reaches clients that did not ask.
+ * `reason` says why, such as `requested` when a client sent `session.close`. Newer Runtimes may send
+ * reasons a receiver does not know, so receivers must accept any reason.
  */
 const sessionCloseNoticeEventSchema = z
     .object({
         kind: z.literal(SESSION_CLOSE_NOTICE_KIND),
+        reason: z.string().min(1).max(128),
         sessionId: IDENTIFIER,
     })
     .readonly();
