@@ -1,5 +1,6 @@
 import type { SessionNotification } from "@agentclientprotocol/sdk";
 import type { AcpSessionUpdate, SessionEventPayload, SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
+import type { AcpNativeEventReplay } from "./session-contracts.ts";
 import type { AcpSessionEventStore } from "./session-event-store.ts";
 
 /**
@@ -31,8 +32,6 @@ export class AcpHistoryReplay {
         return this.#events.append(this.#sessionId, event);
     };
 
-    readonly eventPage = (
-        eventLimit: number,
-        cursor: string | null,
-    ): import("./session-contracts.ts").AcpNativeEventReplay => this.#events.page(this.#sessionId, eventLimit, cursor);
+    readonly eventPage = (eventLimit: number, cursor: string | null): AcpNativeEventReplay =>
+        this.#events.page(this.#sessionId, eventLimit, cursor);
 }

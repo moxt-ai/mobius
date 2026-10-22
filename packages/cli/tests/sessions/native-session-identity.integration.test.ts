@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { AgentRuntimeManager, acpAdapters, NullAcpSessionObserver } from "../../src/acp/agent-runtime-manager.ts";
+import { AgentRuntimeManager, NullAcpSessionObserver } from "../../src/acp/agent-runtime-manager.ts";
 import { AcpContentExternalizer } from "../../src/acp/external-content/acp-content-externalizer.ts";
-import { UnretainedExternalContentStore } from "../../src/acp/external-content/local-external-content-store.ts";
 import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
 import { systemTimer } from "../../src/runtime/relay/timer.ts";
+import { acpAdapters } from "../support/acp-adapters.ts";
+import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
 
 import { fixture } from "./native-session-fixture.ts";
 
@@ -124,6 +125,41 @@ describe("native session identity", () => {
             }
         },
     );
+
+    it("Given an imported native conversation that the Runtime closed, When it is imported again, Then the same Session reopens", async () => {
+        const f = await fixture("Claude Code", "supported", "native");
+        const signal = new AbortController().signal;
+        try {
+            await f.seed("Reopen by importing");
+            const entry = (await f.list()).entries[0];
+            if (entry === undefined) {
+                throw new Error("Missing native conversation");
+            }
+            const first = await f.service.execute(
+                { ...f.identity, action: "import", entryId: entry.entryId, targetSessionId: crypto.randomUUID() },
+                signal,
+            );
+            if (first.action !== "import") {
+                throw new Error("Expected a native import");
+            }
+            await f.sessions.closeSession(first.ready.sessionId, signal);
+
+            const repeated = await f.service.execute(
+                {
+                    ...f.identity,
+                    action: "import",
+                    entryId: entry.entryId,
+                    requestId: "import-after-close",
+                    targetSessionId: crypto.randomUUID(),
+                },
+                signal,
+            );
+
+            expect(repeated).toMatchObject({ action: "import", ready: { sessionId: first.ready.sessionId } });
+        } finally {
+            await f.close();
+        }
+    });
 
     it.each(["import", "fork"] satisfies readonly ("import" | "fork")[])(
         "Given a %s assigned a UUID distinct from its native identity, When the Runtime restarts, Then that conversation remains discoverable and can continue",

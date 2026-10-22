@@ -6,11 +6,11 @@ import { DatabaseSync } from "node:sqlite";
 import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
+import { SESSION_CLOSED_ERROR_CODE, type SessionStatusChangedEvent } from "@moxt-ai/mobius-sdk/protocol";
 import { describe, expect, it, vi } from "vitest";
 
-import { AgentRuntimeManager, acpAdapters, createWritableAcpStream } from "../../src/acp/agent-runtime-manager.ts";
+import { AgentRuntimeManager, createWritableAcpStream } from "../../src/acp/agent-runtime-manager.ts";
 import { AcpContentExternalizer } from "../../src/acp/external-content/acp-content-externalizer.ts";
-import { UnretainedExternalContentStore } from "../../src/acp/external-content/local-external-content-store.ts";
 import { NullAcpSessionObserver } from "../../src/acp/session-contracts.ts";
 import { CachedAcpSessionEventStore } from "../../src/acp/session-event-store.ts";
 import { SqliteSessionLiveEventPosition } from "../../src/acp/session-live-event-position.ts";
@@ -20,6 +20,8 @@ import { AccumulatingOperationMetrics } from "../../src/infra/operation-metrics.
 import { LocalAgentDefinition } from "../../src/runtime/config.ts";
 import { systemTimer } from "../../src/runtime/relay/timer.ts";
 import { openAcpSessionDatabase, openSessionEventCacheDatabase } from "../../src/storage/local-databases.ts";
+import { acpAdapters } from "../support/acp-adapters.ts";
+import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
 import { RecordingObserver } from "./acp-feature-fixture.ts";
 
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
@@ -788,6 +790,49 @@ child.once("exit", (code) => process.exit(code ?? 84));
                 signal: new AbortController().signal,
             });
             expect(observer.agentText()).toBe("Claude Code turn 1: selected agent");
+        } finally {
+            await manager.close();
+        }
+    });
+
+    it("Given a conversation closed after its prompt was prepared, When the prompt runs, Then the Runtime reports session_closed without reporting the conversation working", async () => {
+        const statuses: SessionStatusChangedEvent[] = [];
+        const manager = new AgentRuntimeManager({
+            observer: new NullAcpSessionObserver(),
+            store: new MemoryAcpSessionStore(),
+            adapters: acpAdapters,
+            sessionIdentity: "assigned",
+            onSessionStatusChanged: (event) => statuses.push(event),
+            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            timer: systemTimer,
+            maxProcesses: null,
+        });
+        const preparation = {
+            additionalDirectories: [],
+            agent: new LocalAgentDefinition("codex", "Codex", process.execPath, [
+                fakeAgentPath,
+                "--agent-name",
+                "Codex",
+            ]),
+            cwd: process.cwd(),
+            sessionId: "closed-conversation",
+            signal: new AbortController().signal,
+        };
+
+        try {
+            await manager.prepareExecutionSession(preparation);
+            await manager.closeSession(preparation.sessionId, preparation.signal);
+
+            await expect(
+                manager.runPrompt({
+                    ...preparation,
+                    commandId: "command-after-close",
+                    images: [],
+                    prompt: "Too late",
+                    resources: [],
+                }),
+            ).rejects.toMatchObject({ code: SESSION_CLOSED_ERROR_CODE });
+            expect(statuses).toEqual([]);
         } finally {
             await manager.close();
         }

@@ -154,3 +154,36 @@ export const decodeSessionConfigUpdatedEvent = (encoded: string): SessionConfigU
     decodeZodMessage(encoded, sessionConfigUpdatedEventSchema);
 export const encodeSessionConfigUpdatedEvent = (message: SessionConfigUpdatedEvent): string =>
     encodeZodMessage(message, sessionConfigUpdatedEventSchema);
+
+export const SESSION_CONFIG_READ_KIND = "session.config.read";
+export const SESSION_CONFIG_READ_RESULT_KIND = "session.config.read.result";
+
+const sessionConfigReadCommandSchema = z
+    .object({
+        kind: z.literal(SESSION_CONFIG_READ_KIND),
+        requestId: IDENTIFIER,
+        sessionId: IDENTIFIER,
+    })
+    .readonly();
+
+export type SessionConfigReadCommand = z.infer<typeof sessionConfigReadCommandSchema>;
+
+const sessionConfigReadResultSchema = z
+    .object({
+        configOptions: sessionConfigOptionsSchema,
+        kind: z.literal(SESSION_CONFIG_READ_RESULT_KIND),
+        requestId: IDENTIFIER,
+        sessionId: IDENTIFIER,
+    })
+    .readonly();
+
+export type SessionConfigReadResult = z.infer<typeof sessionConfigReadResultSchema>;
+
+export const decodeSessionConfigReadCommand = (encoded: string): SessionConfigReadCommand =>
+    decodeZodMessage(encoded, sessionConfigReadCommandSchema);
+export const encodeSessionConfigReadCommand = (message: SessionConfigReadCommand): string =>
+    encodeZodMessage(message, sessionConfigReadCommandSchema);
+export const decodeSessionConfigReadResult = (encoded: string): SessionConfigReadResult =>
+    decodeZodMessage(encoded, sessionConfigReadResultSchema);
+export const encodeSessionConfigReadResult = (message: SessionConfigReadResult): string =>
+    encodeZodMessage(message, sessionConfigReadResultSchema);

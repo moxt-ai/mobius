@@ -12,6 +12,7 @@ import {
     UnsupportedProtocolMessageKindError,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { ProjectScope } from "../../entity/do/session.ts";
+import { PairingDirectoryError } from "../../entity/pairing/pairing.ts";
 import { logger } from "../../infra/logger.ts";
 import type { ChannelActor, ChannelPeers, ChannelSocket } from "./channel-actor.ts";
 import type { ChannelCredentialService } from "./channel-credential-service.ts";
@@ -20,7 +21,25 @@ import { RuntimeMessageScheduler, RuntimeMessageSchedulerCapacityError } from ".
 
 const DAEMON_ATTACHMENT_TIMEOUT_MILLISECONDS = 30_000;
 
+const DAEMON_DETACH_TIMEOUT_MILLISECONDS = 30_000;
+
+// A live daemon heartbeats every 20 seconds and abandons a connection whose acknowledgement takes
+// longer than 10 seconds. A daemon silent past both, plus delivery slack, has lost this connection
+// even though the Relay never saw it close, so commands sent into it would never be answered.
+const DAEMON_HEARTBEAT_SILENCE_LIMIT_MILLISECONDS = 35_000;
+
+/** Whether a daemon connection has proven its liveness with a heartbeat, and when it last did. */
+export type DaemonHeartbeat = { readonly kind: "none" } | { readonly kind: "received"; readonly at: number };
+
 export type RuntimeSocketIdentity =
+    | {
+          readonly role: "viewer";
+          readonly expiresAt: number;
+          readonly eventFormat: "events" | "envelope";
+          readonly projectId: string;
+          readonly runtimeId: string;
+          readonly sessionFilter: string;
+      }
     | {
           readonly role: "relay";
           readonly channelId: string;
@@ -45,6 +64,8 @@ export type RuntimeSocketIdentity =
       };
 
 export interface RuntimeSocket extends ChannelSocket {
+    readonly lastHeartbeat: () => DaemonHeartbeat;
+    readonly recordHeartbeat: (at: number) => void;
     readonly replaceDaemon: () => void;
 }
 
@@ -55,6 +76,8 @@ export interface RuntimePeers extends ChannelPeers {
         readonly response: Response;
     };
 }
+
+type RuntimePeer = ReturnType<RuntimePeers["sockets"]>[number];
 
 interface RuntimeContext {
     readonly services: {
@@ -288,7 +311,7 @@ export class RuntimeService {
             }
             if (identity.role === "daemon") {
                 socket.close(1008, "Runtime revoked");
-            } else if (identity.role === "host" && identity.channelId === channelId) {
+            } else if (identity.role === "viewer" || (identity.role === "host" && identity.channelId === channelId)) {
                 socket.close(1008, "Runtime revoked");
             }
         }
@@ -297,6 +320,11 @@ export class RuntimeService {
             this.#cx.services.connections.disconnected(current, Date.now());
             this.notifyOffline(runtimeId);
         }
+    };
+
+    /** Closes daemon connections that stopped heartbeating, so presence reads report them offline. */
+    readonly expireSilentDaemons = async (): Promise<void> => {
+        await this.detachDaemons(this.closeSilentDaemons());
     };
 
     readonly isOnline = (runtimeId: string): boolean => {
@@ -321,6 +349,37 @@ export class RuntimeService {
     readonly attachHost = (runtimeId: string, scope: ProjectScope, socket: ChannelSocket, signal: AbortSignal) =>
         this.channel(runtimeId, scope).attachHost(socket, signal);
 
+    /** The public HTTP handler already authorized this operation; no host credential is involved. */
+    readonly receiveOperation = async (
+        scope: ProjectScope,
+        runtimeId: string,
+        socket: ChannelSocket,
+        message: string,
+        signal: AbortSignal,
+    ): Promise<void> => {
+        signal.throwIfAborted();
+        const silent = this.closeSilentDaemons();
+        try {
+            const daemon = this.#cx.gateways.peers
+                .sockets()
+                .find(
+                    ({ identity, socket: peer }) =>
+                        identity.role === "daemon" &&
+                        peer.isOpen() &&
+                        this.#cx.services.connections.isCurrent(identity),
+                );
+            if (
+                daemon !== undefined &&
+                (daemon.identity.projectId !== scope.projectId || daemon.identity.runtimeId !== runtimeId)
+            ) {
+                throw new PairingDirectoryError("runtime_access_denied", "The selected Runtime is unavailable");
+            }
+            await this.channel(runtimeId, scope).receiveHostMessage(socket, message, signal);
+        } finally {
+            await this.detachDaemons(silent);
+        }
+    };
+
     readonly receiveMessage = async (
         identity: RuntimeSocketIdentity,
         socket: RuntimeSocket,
@@ -329,19 +388,30 @@ export class RuntimeService {
     ): Promise<void> => {
         signal.throwIfAborted();
         const scope = new ProjectScope(identity.projectId);
-        if (identity.role === "host" || identity.role === "relay") {
-            if (identity.role === "relay") {
+        if (identity.role === "host" || identity.role === "relay" || identity.role === "viewer") {
+            // Closing first makes this command see the Runtime as offline and fail at once; detaching
+            // afterwards releases commands already sent into the silent connection.
+            const silentDaemons = this.closeSilentDaemons();
+            try {
+                if (identity.role === "relay") {
+                    const channel = this.channel(identity.runtimeId, scope);
+                    await channel.receiveHostMessage(socket, message, signal);
+                    return;
+                }
+                if (identity.role === "viewer") {
+                    socket.close(1008, "A live subscription cannot send commands");
+                    return;
+                }
+                if (!(await this.#cx.services.credentials.isActive(identity, signal))) {
+                    socket.close(1008, "Channel access revoked");
+                    return;
+                }
                 const channel = this.channel(identity.runtimeId, scope);
                 await channel.receiveHostMessage(socket, message, signal);
                 return;
+            } finally {
+                await this.detachDaemons(silentDaemons);
             }
-            if (!(await this.#cx.services.credentials.isActive(identity, signal))) {
-                socket.close(1008, "Channel access revoked");
-                return;
-            }
-            const channel = this.channel(identity.runtimeId, scope);
-            await channel.receiveHostMessage(socket, message, signal);
-            return;
         }
         if (typeof message !== "string" || message.length > 8 * 1024 * 1024) {
             socket.close(1003, "Bounded text message required");
@@ -368,6 +438,7 @@ export class RuntimeService {
                 socket.replaceDaemon();
                 return;
             }
+            socket.recordHeartbeat(Date.now());
             socket.send(
                 encodeServiceToDaemonMessage({
                     heartbeatId: daemonMessage.heartbeatId,
@@ -451,9 +522,46 @@ export class RuntimeService {
         await this.channel(identity.runtimeId, new ProjectScope(identity.projectId)).detachDaemon(socket, signal);
     };
 
+    private readonly closeSilentDaemons = (): readonly RuntimePeer[] => {
+        const now = Date.now();
+        const silent: RuntimePeer[] = [];
+        for (const { identity, socket } of this.#cx.gateways.peers.sockets()) {
+            if (identity.role !== "daemon" || !socket.isOpen()) {
+                continue;
+            }
+            // A daemon that never heartbeated predates liveness or has just connected; only the
+            // connection's own close tells the Relay it has gone.
+            const heartbeat = socket.lastHeartbeat();
+            if (heartbeat.kind === "none" || now - heartbeat.at <= DAEMON_HEARTBEAT_SILENCE_LIMIT_MILLISECONDS) {
+                continue;
+            }
+            logger.warn(
+                {
+                    ...identity,
+                    closeCode: 4001,
+                    event: "runtime_heartbeat_silence",
+                    silenceMilliseconds: now - heartbeat.at,
+                },
+                "Runtime daemon stopped heartbeating",
+            );
+            socket.close(4001, "Runtime heartbeat timed out");
+            silent.push({ identity, socket });
+        }
+        return silent;
+    };
+
+    // The connection may never report its close, so the Relay detaches it itself. The command or
+    // read that noticed the silence may end first, so the detach does not share its cancellation.
+    private readonly detachDaemons = async (daemons: readonly RuntimePeer[]): Promise<void> => {
+        for (const { identity, socket } of daemons) {
+            await this.detach(identity, socket, AbortSignal.timeout(DAEMON_DETACH_TIMEOUT_MILLISECONDS));
+        }
+    };
+
     private readonly notifyOffline = (runtimeId: string): void => {
         for (const host of [
             ...this.#cx.gateways.peers.hosts(),
+            ...this.#cx.gateways.peers.operations().map(({ socket }) => socket),
             ...this.#cx.gateways.peers.nativeRequests().map(({ socket }) => socket),
         ]) {
             if (host.isOpen()) {

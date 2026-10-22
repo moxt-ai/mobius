@@ -5,7 +5,7 @@ import type { PlatformRelayBindings } from "../../../relay-cloudflare-platform/s
 import { errorMiddleware, rethrowHonoError } from "../../../relay-core/src/http/middleware/error-middleware.ts";
 import platform from "../../src/platform-worker-entry.ts";
 
-export { ProjectRelay } from "../../../relay-cloudflare-platform/src/durable-objects/project-relay.ts";
+export { ProjectDO } from "../../../relay-cloudflare-platform/src/durable-objects/project-do.ts";
 
 function failure(kind: string): unknown {
     if (kind === "primitive") {

@@ -46,6 +46,47 @@ export class SessionLiveEventRelay {
                 host.close(1013, "Runtime channel backpressure");
             }
         }
+        for (const viewer of this.#peers.viewers()) {
+            if (viewer.expiresAt <= Date.now()) {
+                viewer.socket.close(1000, "Session access expired");
+                continue;
+            }
+            const events = eventsBySession.get(viewer.sessionId);
+            if (events === undefined) {
+                continue;
+            }
+            try {
+                viewer.socket.send(
+                    viewer.eventFormat === "events"
+                        ? JSON.stringify(events)
+                        : encodeSessionEventEnvelope({ kind: envelope.kind, events }),
+                );
+            } catch {
+                viewer.socket.close(1013, "Session subscription backpressure");
+            }
+        }
+        for (const route of this.#peers.operations()) {
+            const events = envelope.events.filter((event) => {
+                if (event.type !== "lifecycle-metadata" || event.sessionId !== route.sessionId) {
+                    return false;
+                }
+                const payload = event.payload;
+                if ("commandId" in payload) {
+                    return payload.commandId === route.requestId;
+                }
+                if (payload.kind === "session.permission.resolved" || payload.kind === "session.elicitation.resolved") {
+                    return payload.event.interactionId === route.requestId;
+                }
+                return route.queueAcknowledgement && payload.kind === "session.queue.changed";
+            });
+            if (events.length > 0) {
+                try {
+                    route.socket.send(encodeSessionEventEnvelope({ kind: envelope.kind, events }));
+                } catch {
+                    route.socket.close(1013, "Runtime request backpressure");
+                }
+            }
+        }
         // Recording is another consumer, including when no browsers are watching.
         this.#recording.publish({ projectId: this.#projectId, runtimeId: this.#runtimeId }, envelope);
     };

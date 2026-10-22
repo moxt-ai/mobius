@@ -166,6 +166,9 @@ export class MobiusRuntimeEngine {
                 ...(this.#options.onConnectionStatus === undefined
                     ? {}
                     : { onConnectionStatus: this.#options.onConnectionStatus }),
+                ...(this.#options.processLogsDirectory === undefined
+                    ? {}
+                    : { processLogsDirectory: this.#options.processLogsDirectory }),
             });
         } finally {
             this.#state = new FinishedMobiusRuntimeState();
@@ -175,6 +178,12 @@ export class MobiusRuntimeEngine {
 
 export interface MobiusRuntimeEngineOptions {
     readonly onConnectionStatus?: (status: "online" | "reconnecting") => void;
+    /**
+     * State directory of the daemon processes supervising this Runtime. Passed
+     * through to `runRuntime` so the local bug-report log can read the
+     * manager-written worker lifecycle and unhandled-rejection logs. Read-only.
+     */
+    readonly processLogsDirectory?: string;
 }
 
 export type {
@@ -206,3 +215,4 @@ export {
     RuntimeLocalContext,
     RuntimeReconnectTarget,
 } from "./config.ts";
+export { RuntimeRelayRevokedError } from "./relay/runtime-revocation.ts";

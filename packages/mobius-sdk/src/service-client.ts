@@ -4,7 +4,9 @@ import {
     decodeMobiusSessionExport,
     decodeNativeSessionEvents,
     decodeNativeSessionResult,
+    decodeRuntimeDiagnosticsResult,
     decodeSessionClosedEvent,
+    decodeSessionConfigReadResult,
     decodeSessionConfigUpdatedEvent,
     decodeSessionEventLogPage,
     decodeSessionLiveEventBatch,
@@ -24,6 +26,7 @@ import {
     type NativeSessionEvents,
     type NativeSessionRequest,
     type NativeSessionResult,
+    type RuntimeDiagnosticsResult,
     type SessionConfigureCommand,
     type SessionEventLogPage,
     type SessionEventOmission,
@@ -788,6 +791,27 @@ export class MobiusRuntimeResources {
             ),
         ).agents;
 
+    /**
+     * Read the Runtime's own bounded local diagnostic log through the Relay, for a
+     * bug report filed without shell access to the machine. Entries carry
+     * correlation identifiers and failure codes only; free text and local paths
+     * stay on that machine. Requires the Runtime to be online: an offline Runtime
+     * has no log reader to answer, so this reports `runtime_unavailable`.
+     */
+    readonly readDiagnostics = async (runtimeId: string, signal: AbortSignal): Promise<RuntimeDiagnosticsResult> => {
+        if (!isIdentifier(runtimeId)) {
+            throw new MobiusValidationError("The Runtime identifier is invalid");
+        }
+        return decodeRuntimeDiagnosticsResult(
+            JSON.stringify(
+                await this.#executor.get(
+                    projectPath(this.#projectId, `runtimes/${encodeURIComponent(runtimeId)}/diagnostics`),
+                    signal,
+                ),
+            ),
+        );
+    };
+
     readonly listWorkspace = async (
         runtimeId: string,
         directoryId: string,
@@ -1103,6 +1127,24 @@ export class MobiusSessionResources {
                       operation[3],
                   );
         return decodeSessionConfigUpdatedEvent(JSON.stringify(result));
+    };
+
+    readonly readConfiguration = async (
+        ...operation:
+            | readonly [sessionId: string, signal: AbortSignal]
+            | readonly [runtimeId: string, sessionId: string, signal: AbortSignal]
+    ) => {
+        const result =
+            operation.length === 2
+                ? await this.#executor.get(sessionPath(this.#projectId, operation[0], "configuration"), operation[1])
+                : await this.#executor.get(
+                      projectPath(
+                          this.#projectId,
+                          `runtimes/${encodeURIComponent(operation[0])}/sessions/${encodeURIComponent(operation[1])}/configuration`,
+                      ),
+                      operation[2],
+                  );
+        return decodeSessionConfigReadResult(JSON.stringify(result));
     };
 
     readonly rename = async (
@@ -1464,7 +1506,7 @@ export class MobiusLiveEventSubscription {
             return;
         }
         this.#closed = true;
-        this.#controller.abort(new Error("The live V2 Session event subscription closed"));
+        this.#controller.abort(new Error("The live session event subscription closed"));
     };
 
     private readonly run = async (
@@ -1488,13 +1530,13 @@ export class MobiusLiveEventSubscription {
                     while (!this.#closed) {
                         const result = await reader.read();
                         if (result.done) {
-                            throw new MobiusConnectionError("The live V2 Session event stream disconnected");
+                            throw new MobiusConnectionError("The live session event stream disconnected");
                         }
                         let value: unknown;
                         try {
                             value = JSON.parse(result.value.data);
                         } catch (cause) {
-                            throw new MobiusProtocolError("The live V2 Session event stream contains invalid JSON", {
+                            throw new MobiusProtocolError("The live session event stream contains invalid JSON", {
                                 cause,
                             });
                         }
@@ -1529,7 +1571,7 @@ export class MobiusLiveEventSubscription {
                 attempts += 1;
                 if (attempts > this.#maximumReconnectAttempts) {
                     const details = connectionCauseMessages(cause);
-                    const message = `The live V2 Session event stream could not recover${
+                    const message = `The live session event stream could not recover${
                         details.length > 0 ? `. Cause: ${details.join(". Caused by: ")}` : ""
                     }`;
                     const failure = new MobiusConnectionError(message, { cause });

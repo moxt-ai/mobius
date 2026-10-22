@@ -44,6 +44,7 @@ export {
 export { CloudflareChannelRuntime } from "./gateway/cloudflare-channel-runtime.ts";
 export type { ChannelGateway } from "./gateway/index.ts";
 export type { ProjectAccessAuthorizer } from "./gateway/project-access-authorizer.ts";
+export type { SessionRuntimeOperations } from "./gateway/session-runtime-operations.ts";
 export { errorMiddleware, rethrowHonoError } from "./http/middleware/error-middleware.ts";
 export { requestTimeoutMiddleware } from "./http/middleware/request-timeout-middleware.ts";
 export { acceptWebSocketHttpTransport } from "./http/transport/websocket-http-transport.ts";
@@ -83,5 +84,9 @@ export type {
     ChannelPeers,
     ChannelSocket,
 } from "./service/channel/channel-actor.ts";
+export {
+    createLocalSessionOperations,
+    type LocalSessionOperations,
+} from "./service/channel/local-session-operations.ts";
 export { RuntimeMessageScheduler } from "./service/channel/runtime-message-scheduler.ts";
 export type { RuntimePeers, RuntimeSocket, RuntimeSocketIdentity } from "./service/channel/runtime-service.ts";

@@ -31,6 +31,7 @@ export function createRuntimeRoutes(runtime: RuntimeService) {
             return new Response(null, { status: 204 });
         }
         if (request.method === "GET" && url.pathname.endsWith("/runtime-status")) {
+            await runtime.expireSilentDaemons();
             return Response.json({ online: runtime.isOnline(runtimeId) });
         }
         const revoked = () =>

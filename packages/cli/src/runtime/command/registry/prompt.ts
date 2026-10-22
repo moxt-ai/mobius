@@ -46,6 +46,7 @@ export const sessionPromptCommand: RuntimeCommand = {
             eventProjection: context.eventProjection,
             command: message,
             config: context.config,
+            diagnostics: context.diagnostics,
             directories: context.directories,
             sessions: context.sessions,
             attemptId: receipt.attemptId,

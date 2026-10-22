@@ -5,16 +5,16 @@ import type { AcpSessionUpdate, NativeSessionCommand, SessionLiveEvent } from "@
 import {
     type AdapterResolver,
     AgentRuntimeManager,
-    acpAdapters,
     NullAcpSessionObserver,
 } from "../../src/acp/agent-runtime-manager.ts";
 import { AcpContentExternalizer } from "../../src/acp/external-content/acp-content-externalizer.ts";
-import { UnretainedExternalContentStore } from "../../src/acp/external-content/local-external-content-store.ts";
 import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
 import { createRuntimeConfig, LocalAgentDefinition } from "../../src/runtime/config.ts";
 import { NativeSessionService } from "../../src/runtime/native-sessions/service.ts";
 import { systemTimer } from "../../src/runtime/relay/timer.ts";
 import { WorkspaceDirectoryService } from "../../src/runtime/workspace/workspace-directory.ts";
+import { acpAdapters } from "../support/acp-adapters.ts";
+import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
 
 const acpUrl = new URL("./fixtures/acp-peer.ts", import.meta.url).toString();
 

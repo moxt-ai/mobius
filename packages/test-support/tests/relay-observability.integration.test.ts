@@ -36,7 +36,7 @@ beforeAll(async () => {
             compatibilityDate: "2026-09-03",
             durableObjects: {
                 RUNTIME_RELAY: { className: "RuntimeRelay", useSQLite: true },
-                PROJECT_RELAY: { className: "ProjectRelay", useSQLite: true },
+                PROJECT_RELAY: { className: "ProjectDO", useSQLite: true },
                 UNAVAILABLE_PROJECT: { className: "UnavailableProject", useSQLite: true },
             },
             d1Databases: ["PLATFORM_DIRECTORY_DATABASE"],
@@ -271,7 +271,7 @@ it("identifies a Project Relay overload through the public HTTP API", async () =
     expect(logs.slice(start)).toContainEqual(
         expect.objectContaining({
             event: "project_relay_request_failed",
-            durableObjectClass: "ProjectRelay",
+            durableObjectClass: "ProjectDO",
             durableObjectId: expect.any(String),
             projectId,
             cfRay: "project-failure-ray",
@@ -306,7 +306,7 @@ it("identifies a Project database overload through the public project creation A
     const log = logs.slice(start).find((log) => log["event"] === "project_database_request_failed");
     expect(log).toMatchObject({
         event: "project_database_request_failed",
-        durableObjectClass: "ProjectRelay",
+        durableObjectClass: "ProjectDO",
         durableObjectId: expect.any(String),
         projectId: expect.any(String),
         operation: expect.any(String),

@@ -1,14 +1,12 @@
 {
     "name": "@moxt-ai/mobius",
-    "version": "0.0.274",
+    "version": "0.0.279",
     "description": "Mobius CLI for pairing and running local AI agent services.",
     "type": "module",
     "bin": {
         "mobius": "dist/cli.js"
     },
-    "types": "./src/index.ts",
     "exports": {
-        ".": "./src/index.ts",
         "./runtime": "./src/runtime/engine.ts",
         "./process": "./src/util/process/executable.ts",
         "./filesystem": "./src/util/filesystem/private-path.ts"
@@ -21,15 +19,9 @@
     },
     "publishConfig": {
         "access": "public",
-        "types": "./dist/index.d.ts",
         "exports": {
-            ".": {
-                "types": "./dist/index.d.ts",
-                "import": "./dist/index.js",
-                "default": "./dist/index.js"
-            },
             "./runtime": {
-                "types": "./dist/runtime.d.ts",
+                "types": "./dist/runtime/engine.d.ts",
                 "import": "./dist/runtime.js",
                 "default": "./dist/runtime.js"
             },
@@ -52,7 +44,7 @@
     },
     "scripts": {
         "prebuild": "tsc --project src/acp/harness/claude/upstream/tsconfig.json && tsc --project src/acp/harness/pi/upstream/tsconfig.json",
-        "build": "tsc --project tsconfig.build.json && esbuild cli=src/entrypoint/cli.ts src/index.ts runtime=src/runtime/engine.ts src/util/process/executable.ts src/util/filesystem/private-path.ts --bundle --platform=node --format=esm --sourcemap --outdir=dist --external:@agentclientprotocol/sdk --external:undici",
+        "build": "tsc --project tsconfig.build.json && esbuild cli=src/entrypoint/cli.ts runtime=src/runtime/engine.ts src/util/process/executable.ts src/util/filesystem/private-path.ts --bundle --platform=node --format=esm --sourcemap --outbase=src --outdir=dist --external:@agentclientprotocol/sdk --external:undici",
         "dev": "node --watch src/entrypoint/cli.ts",
         "pretypecheck": "tsc --project src/acp/harness/claude/upstream/tsconfig.json && tsc --project src/acp/harness/pi/upstream/tsconfig.json",
         "prepack": "pnpm build",
@@ -86,7 +78,6 @@
         "valibot": "1.5.0",
         "ws": "^8.21.3"
     },
-    "main": "dist/index.js",
     "keywords": [],
     "author": "",
     "license": "ISC",

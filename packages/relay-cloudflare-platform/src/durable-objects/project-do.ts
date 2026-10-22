@@ -8,7 +8,7 @@ import platformWorker, {
 import { executeProjectDatabaseRequest } from "../storage/project-durable-object-database.ts";
 import { initializeProjectDurableObjectSchema } from "../storage/project-durable-object-schema.ts";
 
-export class ProjectRelay {
+export class ProjectDO {
     readonly #database: DurableObjectDatabaseAdapter;
     readonly #sqlite: DurableObjectSqlDatabase;
     readonly #environment: ConfiguredPlatformRelayBindings;

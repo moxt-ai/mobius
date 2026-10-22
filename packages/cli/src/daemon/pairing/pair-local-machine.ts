@@ -159,17 +159,6 @@ function validatePairingId(value: string): string {
     return value;
 }
 
-function parseResumeConnectionId(arguments_: readonly string[]): string {
-    if (arguments_.length !== 2 || arguments_[0] !== "--connection") {
-        throw new PairingClientError("invalid_arguments", "Usage: mobius start --connection <connection-id>");
-    }
-    const value = arguments_[1] ?? "";
-    if (!/^mcn_[a-f0-9]{32}$/.test(value)) {
-        throw new PairingClientError("invalid_connection_id", "The saved Runtime connection ID is invalid");
-    }
-    return value;
-}
-
 async function resolveDefaultWorkspace(path: string): Promise<string> {
     const requestedWorkspace = resolve(path);
     try {
@@ -458,13 +447,4 @@ export async function pairLocalMachine(
         signal,
         process.env,
     );
-}
-
-export async function resumeLocalMachine(
-    arguments_: readonly string[],
-    signal: AbortSignal = new AbortController().signal,
-): Promise<PairedRuntime> {
-    const connectionId = parseResumeConnectionId(arguments_);
-    const installation = await openMobiusCliInstallation(signal, process.env);
-    return await resumeMobiusRuntime(installation, connectionId, signal, process.env);
 }

@@ -1,7 +1,12 @@
 import { isIdentifier, ProtocolMessageError } from "@moxt-ai/mobius-sdk/protocol";
 import * as v from "valibot";
 import type { ChannelSocket, HistoryRequestKind } from "../service/channel/channel-actor.ts";
-import type { RuntimePeers, RuntimeSocket, RuntimeSocketIdentity } from "../service/channel/runtime-service.ts";
+import type {
+    DaemonHeartbeat,
+    RuntimePeers,
+    RuntimeSocket,
+    RuntimeSocketIdentity,
+} from "../service/channel/runtime-service.ts";
 
 // Four maximum-length routes fit alongside connection identity within the attachment budget.
 const MAX_SETTINGS_DISCOVERY_ROUTES = 4;
@@ -16,6 +21,14 @@ const historyRequestSchema = v.object({
 });
 
 const attachmentSchema = v.union([
+    v.object({
+        role: v.literal("viewer"),
+        expiresAt: v.number(),
+        eventFormat: v.picklist(["events", "envelope"]),
+        projectId: v.string(),
+        runtimeId: v.string(),
+        sessionFilter: v.string(),
+    }),
     v.object({
         role: v.literal("host"),
         channelId: v.string(),
@@ -45,6 +58,7 @@ const attachmentSchema = v.union([
         connectionId: v.pipe(v.string(), v.minLength(1)),
         runtimeId: v.string(),
         projectId: v.string(),
+        heartbeatAt: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(0))),
     }),
 ]);
 
@@ -57,7 +71,7 @@ export class CloudflareChannelSocket implements RuntimeSocket {
 
     get sessionFilter(): string | undefined {
         const identity = this.identity();
-        return identity.role === "host" ? identity.sessionFilter : undefined;
+        return identity.role === "host" || identity.role === "viewer" ? identity.sessionFilter : undefined;
     }
 
     readonly identity = (): RuntimeSocketIdentity => {
@@ -73,10 +87,22 @@ export class CloudflareChannelSocket implements RuntimeSocket {
                 runtimeId: attachment.runtimeId,
             };
         }
+        if (attachment.role === "daemon" || attachment.role === "replaced-daemon") {
+            return {
+                connectionEpoch: attachment.connectionEpoch,
+                connectionId: attachment.connectionId,
+                projectId: attachment.projectId,
+                role: attachment.role,
+                runtimeId: attachment.runtimeId,
+            };
+        }
         return attachment;
     };
     readonly close = (code: number, reason: string): void => this.#socket.close(code, reason);
     readonly consumeAgentSettingsDiscovery = (requestId: string, agentId: string): boolean => {
+        if (this.identity().role === "viewer") {
+            return false;
+        }
         const attachment = this.hostAttachment();
         let consumed = false;
         const pendingAgentSettingsDiscoveries = attachment.pendingAgentSettingsDiscoveries.filter((pending) => {
@@ -92,6 +118,9 @@ export class CloudflareChannelSocket implements RuntimeSocket {
         return consumed;
     };
     readonly consumeAgentSettingsDiscoveryFailure = (requestId: string): boolean => {
+        if (this.identity().role === "viewer") {
+            return false;
+        }
         const attachment = this.hostAttachment();
         let consumed = false;
         const pendingAgentSettingsDiscoveries = attachment.pendingAgentSettingsDiscoveries.filter((pending) => {
@@ -107,6 +136,9 @@ export class CloudflareChannelSocket implements RuntimeSocket {
         return consumed;
     };
     readonly takeAgentSettingsDiscoveries = (): readonly string[] => {
+        if (this.identity().role === "viewer") {
+            return [];
+        }
         const attachment = this.hostAttachment();
         const requests = attachment.pendingAgentSettingsDiscoveries.map((pending) => pending.requestId);
         if (attachment.pendingAgentSettingsDiscoveries.length > 0) {
@@ -142,6 +174,13 @@ export class CloudflareChannelSocket implements RuntimeSocket {
     readonly isOpen = (): boolean => this.#socket.readyState === WebSocket.OPEN;
     readonly isSame = (socket: ChannelSocket): boolean =>
         socket instanceof CloudflareChannelSocket && socket.#socket === this.#socket;
+    readonly lastHeartbeat = (): DaemonHeartbeat => {
+        const { heartbeatAt } = this.daemonAttachment();
+        return heartbeatAt === undefined ? { kind: "none" } : { kind: "received", at: heartbeatAt };
+    };
+    readonly recordHeartbeat = (at: number): void => {
+        this.#socket.serializeAttachment({ ...this.daemonAttachment(), heartbeatAt: at });
+    };
     readonly permitsSessionHistory = (): boolean => {
         const identity = this.identity();
         return identity.role === "relay" || (identity.role === "host" && identity.credentialId.startsWith("ctl_"));
@@ -169,6 +208,14 @@ export class CloudflareChannelSocket implements RuntimeSocket {
         }
         this.#socket.serializeAttachment({ ...identity, role: "replaced-daemon" });
         this.#socket.close(1012, "Daemon connection replaced");
+    };
+
+    private readonly daemonAttachment = () => {
+        const attachment = v.parse(attachmentSchema, this.#socket.deserializeAttachment());
+        if (attachment.role !== "daemon" && attachment.role !== "replaced-daemon") {
+            throw new Error("Only a daemon socket carries heartbeats");
+        }
+        return attachment;
     };
 
     private readonly hostAttachment = () => {
@@ -200,6 +247,22 @@ export class CloudflareChannelPeers implements RuntimePeers {
 
     readonly hosts = (): readonly ChannelSocket[] =>
         this.#state.getWebSockets("host").map((socket) => new CloudflareChannelSocket(socket));
+
+    readonly viewers = () =>
+        this.sockets().flatMap(({ socket, identity }) =>
+            identity.role === "viewer"
+                ? [
+                      {
+                          socket,
+                          sessionId: identity.sessionFilter,
+                          expiresAt: identity.expiresAt,
+                          eventFormat: identity.eventFormat,
+                      },
+                  ]
+                : [],
+        );
+
+    readonly operations: RuntimePeers["operations"] = () => [];
 
     readonly nativeRequests = (): readonly { readonly requestId: string; readonly socket: ChannelSocket }[] =>
         this.#state.getWebSockets("native-request").map((webSocket) => {

@@ -76,6 +76,12 @@ async function publishAgentCatalogUntilAvailable(
 
 export interface RunRuntimeOptions {
     readonly onConnectionStatus?: (status: "online" | "reconnecting") => void;
+    /**
+     * State directory of the daemon processes supervising this Runtime. Their
+     * lifecycle and rejection logs are the only witness of a silent worker death,
+     * so the local bug-report log reads them too. Never written from here.
+     */
+    readonly processLogsDirectory?: string;
 }
 
 export async function runRuntime(
@@ -115,6 +121,7 @@ export async function runRuntime(
         adapters: harnessAdapters,
         sessionIdentity: "native",
         onSessionStatusChanged: publisher.publishStatus,
+        onSessionClosed: publisher.publishClosed,
         contentExternalizer: new AcpContentExternalizer(externalContent),
         timer,
         maxProcesses: resolveMaxAcpProcesses(config.localContext.environment),
@@ -123,7 +130,11 @@ export async function runRuntime(
     const diagnostics = new RelayConnectionDiagnostics(
         config.channelId,
         config.relayUrl,
-        new RuntimeDiagnosticLog(stateDirectory),
+        new RuntimeDiagnosticLog(stateDirectory, {
+            ...(options.processLogsDirectory === undefined
+                ? {}
+                : { processLogsDirectory: options.processLogsDirectory }),
+        }),
     );
     const nativeSessions = new NativeSessionService(config, directories, agentRuntime, async (request, options) => {
         return await activeSessions.executionSnapshot(async (command) => {

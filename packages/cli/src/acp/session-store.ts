@@ -9,8 +9,8 @@ import { type AcpSessionEventStore, MemoryAcpSessionEventStore } from "./session
 export class AcpStoredSession {
     readonly additionalDirectories: readonly string[];
     readonly agentId: string;
-    readonly cwd: string;
     readonly configurations: readonly AcpStoredSessionConfiguration[];
+    readonly cwd: string;
     readonly nativeSessionId: string;
     readonly prompted: boolean;
     readonly sessionId: string;

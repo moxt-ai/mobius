@@ -2,9 +2,8 @@ import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NativeSessionCommand } from "@moxt-ai/mobius-sdk/protocol";
-import { AgentRuntimeManager, acpAdapters, NullAcpSessionObserver } from "../../../src/acp/agent-runtime-manager.ts";
+import { AgentRuntimeManager, NullAcpSessionObserver } from "../../../src/acp/agent-runtime-manager.ts";
 import { AcpContentExternalizer } from "../../../src/acp/external-content/acp-content-externalizer.ts";
-import { UnretainedExternalContentStore } from "../../../src/acp/external-content/local-external-content-store.ts";
 import { CodexAcpAgent } from "../../../src/acp/harness/codex/agent.ts";
 import { MemoryAcpSessionStore } from "../../../src/acp/session-store.ts";
 import { InProcessAcpAgentDefinition } from "../../../src/runtime/agent-catalog/local-agent.ts";
@@ -12,7 +11,9 @@ import { createRuntimeConfig } from "../../../src/runtime/config.ts";
 import { NativeSessionService } from "../../../src/runtime/native-sessions/service.ts";
 import { systemTimer } from "../../../src/runtime/relay/timer.ts";
 import { WorkspaceDirectoryService } from "../../../src/runtime/workspace/workspace-directory.ts";
+import { acpAdapters } from "../acp-adapters.ts";
 import { FakeOpenAiProvider } from "../llm/openai.ts";
+import { UnretainedExternalContentStore } from "../unretained-external-content-store.ts";
 import { CodexFixture } from "./codex.ts";
 
 export async function codexFixture(

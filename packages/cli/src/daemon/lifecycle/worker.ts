@@ -113,7 +113,12 @@ async function runWorkerRuntime(
             try {
                 const paired = await resumeMobiusRuntime(installation, connection.connectionId, combined);
                 const controller = new AbortController();
-                const engine = new MobiusRuntimeEngine(paired.config);
+                // The manager writes the worker lifecycle and rejection logs beside
+                // the control directory, not beside this Runtime's own state, so a
+                // bug report taken through this Runtime reads them from there.
+                const engine = new MobiusRuntimeEngine(paired.config, {
+                    processLogsDirectory: control.stateDirectory,
+                });
                 const completion = engine
                     .run(AbortSignal.any([combined, controller.signal]))
                     .then(
