@@ -6,6 +6,7 @@ import type { ProjectApplicationResolver } from "../infra/project-application-re
 import type { ProjectStorageDirectory } from "../infra/project-storage-directory.ts";
 import type { SqlDatabase } from "../infra/sql-database.ts";
 import { ChannelService } from "../service/channel/channel-service.ts";
+import type { LocalSessionOperations } from "../service/channel/local-session-operations.ts";
 import { PairingDirectoryService } from "../service/pairing/pairing-directory-service.ts";
 import { PairingIdentityService } from "../service/pairing/pairing-identity-service.ts";
 import { PairingService } from "../service/pairing/pairing-service.ts";
@@ -24,7 +25,7 @@ export interface RelayInfrastructure extends PairingInfrastructure {
     readonly authentication: { readonly projects: ProjectAccessAuthorizer };
     readonly gateways: {
         readonly channelGateway: ChannelGateway;
-        readonly runtimeOperations?: import("../service/channel/local-session-operations.ts").LocalSessionOperations;
+        readonly runtimeOperations?: LocalSessionOperations;
         readonly nowEpochMilliseconds: () => number;
     };
     readonly config: { readonly apiPrefix: string };

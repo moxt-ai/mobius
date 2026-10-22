@@ -6,6 +6,7 @@ import { PairingDirectoryError, VerifiedChannelAccess } from "../../entity/pairi
 import type { ChannelGateway } from "../../gateway/channel-gateway.ts";
 import { type OperationTiming, unmeasuredOperationTiming } from "../../infra/operation-timing.ts";
 import { RuntimeDescriptor } from "../channel/channel.ts";
+import type { LocalSessionOperations } from "../channel/local-session-operations.ts";
 import type { PairingOperations } from "./pairing-operations.ts";
 import {
     type RuntimeControlCommand,
@@ -18,13 +19,13 @@ import {
 export class PairingService {
     readonly #channels: ChannelGateway;
     readonly #pairings: PairingOperations;
-    readonly #runtimeOperations: import("../channel/local-session-operations.ts").LocalSessionOperations | undefined;
+    readonly #runtimeOperations: LocalSessionOperations | undefined;
 
     constructor(cx: {
         readonly services: { readonly pairings: PairingOperations };
         readonly gateways: {
             readonly channelGateway: ChannelGateway;
-            readonly runtimeOperations?: import("../channel/local-session-operations.ts").LocalSessionOperations;
+            readonly runtimeOperations?: LocalSessionOperations;
         };
     }) {
         this.#channels = cx.gateways.channelGateway;

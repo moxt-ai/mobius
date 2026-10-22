@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { environmentHome } from "./environment.js";
@@ -49,10 +50,10 @@ export function getPiSessionsDir(environment: Readonly<NodeJS.ProcessEnv> = proc
 }
 
 function walkJsonlFiles(dir: string, out: string[]) {
-    let entries: import("node:fs").Dirent[];
+    let entries: Dirent[];
     try {
         // Force string names.
-        entries = readdirSync(dir, { withFileTypes: true, encoding: "utf8" }) as unknown as import("node:fs").Dirent[];
+        entries = readdirSync(dir, { withFileTypes: true, encoding: "utf8" }) as unknown as Dirent[];
     } catch {
         return;
     }

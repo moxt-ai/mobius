@@ -1,3 +1,9 @@
+import type {
+    AgentSettingsDiscoverCommand,
+    AgentSettingsDiscoveredEvent,
+    WorkspaceEntriesEvent,
+    WorkspaceListCommand,
+} from "@moxt-ai/mobius-sdk/protocol";
 import { decodeNativeSessionCancel } from "@moxt-ai/mobius-sdk/protocol";
 import type { DurableObjectContext } from "../../di/create-durable-object-dependencies.ts";
 import type { ProjectScope as Scope } from "../../entity/do/session.ts";
@@ -15,15 +21,15 @@ export interface LocalSessionOperations extends SessionRuntimeOperations {
     readonly requestWorkspace: (
         scope: Scope,
         runtimeId: string,
-        command: import("@moxt-ai/mobius-sdk/protocol").WorkspaceListCommand,
+        command: WorkspaceListCommand,
         signal: AbortSignal,
-    ) => Promise<import("@moxt-ai/mobius-sdk/protocol").WorkspaceEntriesEvent>;
+    ) => Promise<WorkspaceEntriesEvent>;
     readonly requestAgentSettings: (
         scope: Scope,
         runtimeId: string,
-        command: import("@moxt-ai/mobius-sdk/protocol").AgentSettingsDiscoverCommand,
+        command: AgentSettingsDiscoverCommand,
         signal: AbortSignal,
-    ) => Promise<import("@moxt-ai/mobius-sdk/protocol").AgentSettingsDiscoveredEvent>;
+    ) => Promise<AgentSettingsDiscoveredEvent>;
     readonly openPublicSessionEvents: (
         scope: Scope,
         runtimeId: string,

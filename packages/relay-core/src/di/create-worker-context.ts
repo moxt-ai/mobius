@@ -4,11 +4,12 @@ import type { ProjectApplicationResolver } from "../infra/project-application-re
 import type { ProjectDatabaseBindings } from "../infra/project-database-bindings.ts";
 import type { ProjectStorageDirectory } from "../infra/project-storage-directory.ts";
 import type { SqlDatabase } from "../infra/sql-database.ts";
+import type { LocalSessionOperations } from "../service/channel/local-session-operations.ts";
 import { createRelayDependencies } from "./create-relay-dependencies.ts";
 
 export interface WorkerRuntimeGateways {
     readonly channel: ChannelGateway;
-    readonly runtimeOperations?: import("../service/channel/local-session-operations.ts").LocalSessionOperations;
+    readonly runtimeOperations?: LocalSessionOperations;
 }
 
 export function createWorkerContext(options: {

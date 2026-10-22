@@ -1,3 +1,4 @@
+import type { LocalSessionOperations, SessionRuntimeOperations } from "@moxt-ai/mobius-relay-core";
 import {
     acceptWebSocketHttpTransport,
     CloudflareChannelRuntime,
@@ -13,6 +14,7 @@ import {
     requestTimeoutMiddleware,
     type WorkerRuntimeGateways,
 } from "@moxt-ai/mobius-relay-core";
+import type { SqlDatabase } from "@moxt-ai/mobius-relay-core/database";
 import {
     decodeFileReadCommand,
     decodeMessageKind,
@@ -97,7 +99,7 @@ export interface RuntimeExecutionBindings extends PlatformRelayBindings {
     readonly MOBIUS_RUNTIME_EXECUTION: {
         readonly projectId: string;
         readonly runtimeId: string;
-        readonly operations: import("@moxt-ai/mobius-relay-core").LocalSessionOperations;
+        readonly operations: LocalSessionOperations;
     };
 }
 type PlatformApplicationBindings = PlatformRelayBindings | ProjectPlatformRelayBindings | RuntimeExecutionBindings;
@@ -106,7 +108,7 @@ export interface ConfiguredPlatformRelayBindings extends PlatformRelayBindings, 
 
 function sessionOperations(context: {
     readonly env: PlatformApplicationBindings;
-    readonly var: { readonly relay: import("@moxt-ai/mobius-relay-core").RelayContext };
+    readonly var: { readonly relay: RelayContext };
 }) {
     return "MOBIUS_RUNTIME_EXECUTION" in context.env
         ? context.env.MOBIUS_RUNTIME_EXECUTION.operations
@@ -165,7 +167,7 @@ type DispatchEnvironment = {
         readonly appAuthentication: AppCredentialAuthenticationService;
         readonly databases: PlatformDatabaseResolver;
         readonly storageRegistry: PlatformStorageRegistry;
-        readonly projectDatabases: import("@moxt-ai/mobius-relay-core/database").SqlDatabase[];
+        readonly projectDatabases: SqlDatabase[];
         readonly relay: RelayContext;
         readonly recordingPolicies: RecordingPolicyService;
         readonly appSessionStatusWebhooks: AppSessionStatusWebhookService;
@@ -184,7 +186,7 @@ function optionalExecutionContext(context: Pick<Context, "executionCtx">): Conte
 }
 
 async function runtimeSessionIdentity(
-    relay: import("@moxt-ai/mobius-relay-core").SessionRuntimeOperations,
+    relay: SessionRuntimeOperations,
     target: { readonly projectId: string; readonly runtimeId: string; readonly sessionId: string },
     signal: AbortSignal,
 ) {
