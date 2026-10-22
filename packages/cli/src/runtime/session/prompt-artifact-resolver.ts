@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import { isIdentifier, type PromptImage, type PromptResource } from "@moxt-ai/mobius-sdk/protocol";
 import { fetch } from "undici";
+import { OperationError } from "../../infra/operation-error.ts";
 import { environmentProxyDispatcher } from "../../util/network/environment-proxy.ts";
 import type { RuntimeConfig } from "../config.ts";
 import { relayAuthorization, relayHttpEndpoint } from "../relay/relay-authentication.ts";
@@ -11,12 +12,9 @@ const ARTIFACT_DOWNLOAD_TIMEOUT_MILLISECONDS = 20_000;
 const MAX_AGENT_IMAGE_BASE64_LENGTH = 4_000_000;
 const MAX_AGENT_RESOURCE_BYTE_LENGTH = 1_000_000;
 
-export class PromptArtifactError extends Error {
-    readonly code: string;
-
+export class PromptArtifactError extends OperationError {
     constructor(code: string, message: string, options: ErrorOptions = {}) {
-        super(message, options);
-        this.code = code;
+        super(code, message, options);
         this.name = "PromptArtifactError";
     }
 }

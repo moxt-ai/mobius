@@ -12,6 +12,7 @@ import {
 import type { WebSocket } from "undici";
 import { AcpExecutionError, type AgentRuntimeManager } from "../../../acp/agent-runtime-manager.ts";
 import type { AcpSessionEventPage } from "../../../acp/session-event-store.ts";
+import { operationErrorCode } from "../../../infra/operation-error.ts";
 import type { RuntimeConfig } from "../../config.ts";
 import type { NativeSessionService } from "../../native-sessions/service.ts";
 import type { RelayConnectionDiagnostics } from "../../relay/diagnostics.ts";
@@ -19,7 +20,7 @@ import type { RuntimeSessionEventProjection } from "../../session/session-event-
 import { resolveSessionDirectories } from "../../workspace/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "../../workspace/workspace-directory.ts";
 import type { RuntimeCommand } from "../definition.ts";
-import { operationErrorCode, reportOperationFailure, send } from "../transport.ts";
+import { reportOperationFailure, send } from "../transport.ts";
 import { resolveCatalogAgent } from "./session.ts";
 
 function isAgentReasoning(event: SessionEvent | undefined): boolean {
