@@ -73,7 +73,7 @@ export class ControlledSessionEndpoint implements InProcessAcpEndpoint {
             .onRequest(methods.agent.initialize, () => ({
                 _meta: { renameSession: { supported: true } },
                 agentCapabilities: {
-                    loadSession: false,
+                    loadSession: agent.history,
                     promptCapabilities: { embeddedContext: false, image: false },
                     sessionCapabilities: { close: {}, resume: {} },
                 },
@@ -88,6 +88,11 @@ export class ControlledSessionEndpoint implements InProcessAcpEndpoint {
             })
             .onRequest(methods.agent.session.resume, (context) => {
                 record(methods.agent.session.resume, context.params.sessionId);
+                return {};
+            })
+            .onRequest(methods.agent.session.load, async (context) => {
+                record(methods.agent.session.load, context.params.sessionId);
+                await agent.loads.pass();
                 return {};
             })
             .onRequest(methods.agent.session.prompt, async (context) => {
@@ -131,13 +136,21 @@ export class ControlledSessionEndpoint implements InProcessAcpEndpoint {
  */
 export class ControlledSessionAgent {
     readonly operations: AgentOperation[] = [];
+    /** Whether the Agent can replay a Session's history with `session/load`. */
+    readonly history: boolean;
     /** Holds `session/prompt`, so a turn stays running. */
     readonly turns = new RequestGate();
     /** Holds `_session/rename`. */
     readonly renames = new RequestGate();
+    /** Holds `session/load`, so a history replay stays in flight. */
+    readonly loads = new RequestGate();
     /** Holds the end of process teardown, so a close stays in flight. */
     readonly closes = new RequestGate();
     readonly #endpoints: ControlledSessionEndpoint[] = [];
+
+    constructor({ history = false }: { readonly history?: boolean } = {}) {
+        this.history = history;
+    }
 
     readonly createEndpoint: InProcessAcpEndpointFactory = () => {
         const endpoint = new ControlledSessionEndpoint(this.#endpoints.length, this);
@@ -158,6 +171,7 @@ export class ControlledSessionAgent {
     readonly releaseAll = (): void => {
         this.turns.release();
         this.renames.release();
+        this.loads.release();
         this.closes.release();
     };
 }

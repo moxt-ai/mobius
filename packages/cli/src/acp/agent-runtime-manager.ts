@@ -357,10 +357,7 @@ export class AgentRuntimeManager {
                 if (runtime.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)) {
                     this.#executionProcesses.touch(options.sessionId, runtime);
                     if (recovery.kind === "history-required") {
-                        await metrics.measure(
-                            "session-load",
-                            async () => await runtime.ensureHistoryLoaded(options.signal),
-                        );
+                        await this.#loadRetainedHistory(options.sessionId, runtime, options.signal, metrics);
                     }
                     return runtime.prepared();
                 }
@@ -371,10 +368,7 @@ export class AgentRuntimeManager {
                 if (existing.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)) {
                     this.#executionProcesses.touch(options.sessionId, existing);
                     if (recovery.kind === "history-required") {
-                        await metrics.measure(
-                            "session-load",
-                            async () => await existing.ensureHistoryLoaded(options.signal),
-                        );
+                        await this.#loadRetainedHistory(options.sessionId, existing, options.signal, metrics);
                     }
                     return existing.prepared();
                 }
@@ -390,6 +384,18 @@ export class AgentRuntimeManager {
             }
             const runtime = await this.#startPreparation(options, recovery, metrics);
             return runtime.prepared();
+        });
+    }
+
+    /** Replays a retained process's history. The borrow keeps the process open until the replay has ended. */
+    async #loadRetainedHistory(
+        sessionId: string,
+        runtime: AgentSession,
+        signal: AbortSignal,
+        metrics: OperationMetrics,
+    ): Promise<void> {
+        await this.#executionProcesses.use(sessionId, async () => {
+            await metrics.measure("session-load", async () => await runtime.ensureHistoryLoaded(signal));
         });
     }
 
@@ -785,6 +791,7 @@ export class AgentRuntimeManager {
                 ),
                 ...this.#sessionClosures.values(),
                 this.#queryProcesses.close(),
+                this.#processes.settleExpirations(),
             ]);
         });
 

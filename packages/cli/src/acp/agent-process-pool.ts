@@ -65,6 +65,7 @@ export class AgentProcessPool {
     readonly #idleMilliseconds: number;
     readonly #timer: Timer;
     readonly #slots = new Map<symbol, ProcessSlot>();
+    readonly #expirations = new Set<Promise<void>>();
     readonly #lock = new AcpProcessCapacityLock();
     #starting = 0;
     #changed = Promise.withResolvers<void>();
@@ -108,9 +109,21 @@ export class AgentProcessPool {
             this.#slots.set(id, this.#retained(id, slot.runtime, slot.retention));
             return;
         }
-        void slot.retention.expire(slot.runtime).catch((error: unknown) => {
+        const expiration = slot.retention.expire(slot.runtime).catch((error: unknown) => {
             console.error("Mobius daemon could not close an idle Agent process", error);
         });
+        this.#expirations.add(expiration);
+        void expiration.finally(() => {
+            this.#expirations.delete(expiration);
+        });
+    };
+
+    /**
+     * An idle expiry starts outside any request, so shutdown has to wait for the processes it is still
+     * stopping; they are already detached from their owners.
+     */
+    readonly settleExpirations = async (): Promise<void> => {
+        await Promise.all(this.#expirations);
     };
 
     readonly notifyChanged = (): void => {

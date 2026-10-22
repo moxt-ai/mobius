@@ -77,9 +77,11 @@ interface IdleFixture {
  * Runs the Session manager the way the daemon builds it. Sessions use native identity, and the controlled
  * Agent takes a native chat Agent id, so a UUID Session id is the Agent's own Session id.
  */
-async function withIdleManager(scenario: (fixture: IdleFixture) => Promise<void>): Promise<void> {
+async function withIdleManager(
+    agent: ControlledSessionAgent,
+    scenario: (fixture: IdleFixture) => Promise<void>,
+): Promise<void> {
     const workspace = await mkdtemp(join(tmpdir(), "mobius-idle-expiry-"));
-    const agent = new ControlledSessionAgent();
     const timer = new ManualTimer();
     const store = new MemoryAcpSessionStore();
     const definition = new InProcessAcpAgentDefinition(
@@ -129,7 +131,8 @@ const operationsOf = (agent: ControlledSessionAgent): string[] =>
     agent.operations.map(({ endpoint, method }) => `${endpoint.toString()} ${method}`);
 
 test("Given a native Session that its first prompt titled, When its Agent process expires from idleness and the Session is prepared again, Then the stored Session keeps its title", async () => {
-    await withIdleManager(async ({ agent, manager, session, timer }) => {
+    const agent = new ControlledSessionAgent();
+    await withIdleManager(agent, async ({ manager, session, timer }) => {
         const sessionId = crypto.randomUUID();
         await manager.prepareSession(session(sessionId));
         await manager.runPrompt({
@@ -157,7 +160,8 @@ test("Given a native Session that its first prompt titled, When its Agent proces
 });
 
 test("Given an idle Agent process whose teardown has not finished, When a prompt is prepared and the close deadline passes, Then the preparation reports the typed close timeout and no second process starts", async () => {
-    await withIdleManager(async ({ agent, manager, session, timer }) => {
+    const agent = new ControlledSessionAgent();
+    await withIdleManager(agent, async ({ manager, session, timer }) => {
         const sessionId = crypto.randomUUID();
         await manager.prepareSession(session(sessionId));
         const teardown = agent.closes.hold();
@@ -179,7 +183,8 @@ test("Given an idle Agent process whose teardown has not finished, When a prompt
 });
 
 test("Given a Session rename that is waiting on its Agent, When the idle period passes, Then the Agent process stays open until the period passes after the rename", async () => {
-    await withIdleManager(async ({ agent, manager, session, timer }) => {
+    const agent = new ControlledSessionAgent();
+    await withIdleManager(agent, async ({ manager, session, timer }) => {
         const sessionId = crypto.randomUUID();
         await manager.prepareSession(session(sessionId));
         timer.advance(IDLE_MILLISECONDS / 2);
@@ -200,5 +205,51 @@ test("Given a Session rename that is waiting on its Agent, When the idle period 
         timer.advance(IDLE_MILLISECONDS);
         await agent.endpoint(0).terminated;
         expect(operationsOf(agent)).toEqual(["0 session/resume", "0 _session/rename", "0 session/close"]);
+    });
+});
+
+test("Given a restore that is replaying history on a retained process, When the idle period passes mid-replay, Then the process stays open until the period passes after the replay", async () => {
+    const agent = new ControlledSessionAgent({ history: true });
+    await withIdleManager(agent, async ({ manager, session, timer }) => {
+        const sessionId = crypto.randomUUID();
+        await manager.prepareSession(session(sessionId));
+        const replay = agent.loads.hold();
+
+        const restored = settle(manager.restoreSession(session(sessionId)));
+        await replay.entered;
+        timer.advance(IDLE_MILLISECONDS + IDLE_MILLISECONDS / 10);
+        await nextTurn();
+        expect(operationsOf(agent)).toEqual(["0 session/resume", "0 session/load"]);
+
+        replay.release();
+        expect(await restored).toEqual({
+            kind: "resolved",
+            value: expect.objectContaining({ restored: true }),
+        });
+
+        timer.advance(IDLE_MILLISECONDS);
+        await agent.endpoint(0).terminated;
+        expect(operationsOf(agent)).toEqual(["0 session/resume", "0 session/load", "0 session/close"]);
+    });
+});
+
+test("Given a native session browser process whose idle teardown has not finished, When the manager shuts down, Then shutdown waits for the teardown", async () => {
+    const agent = new ControlledSessionAgent();
+    await withIdleManager(agent, async ({ manager, session, timer }) => {
+        await manager.prepareNativeSessionBrowser(session("browser"));
+        const teardown = agent.closes.hold();
+
+        timer.advance(IDLE_MILLISECONDS);
+        await teardown.entered;
+        const shutdown = manager.close();
+        const first = await Promise.race([
+            shutdown.then(() => "shut down" as const),
+            nextTurn().then(() => "still stopping" as const),
+        ]);
+        expect(first).toBe("still stopping");
+
+        teardown.release();
+        await shutdown;
+        await agent.endpoint(0).terminated;
     });
 });
