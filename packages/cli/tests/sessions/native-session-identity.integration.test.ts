@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { AgentRuntimeManager, NullAcpSessionObserver } from "../../src/acp/agent-runtime-manager.ts";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
-import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
+import { NullSessionObserver } from "../../src/session/api/session-api.ts";
+import { SessionManager } from "../../src/session/manager/session-manager.ts";
+import { MemorySessionStore } from "../../src/session/record/session-store.ts";
 import { systemTimer } from "../../src/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
 import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
@@ -211,13 +212,22 @@ describe("native session identity", () => {
                 sessionId: f.identity.sessionId,
                 signal,
             });
-            const restarted = new AgentRuntimeManager({
-                observer: new NullAcpSessionObserver(),
-                store: new MemoryAcpSessionStore(),
+            const restarted = new SessionManager({
+                observer: new NullSessionObserver(),
+                store: new MemorySessionStore(),
                 adapters: acpAdapters,
                 sessionIdentity: "native",
                 onSessionStatusChanged: () => undefined,
-                contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+                contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                    new UnretainedExternalContentStore().put({
+                        bytes: content.bytes,
+                        kind: content.kind,
+                        mediaType: content.mediaType,
+                        name: content.name,
+                        sessionId,
+                        signal,
+                    }),
+                ),
                 timer: systemTimer,
                 maxProcesses: null,
             });

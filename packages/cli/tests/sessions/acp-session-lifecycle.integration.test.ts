@@ -8,16 +8,19 @@ import { fileURLToPath } from "node:url";
 
 import { SESSION_CLOSED_ERROR_CODE, type SessionStatusChangedEvent } from "@moxt-ai/mobius-sdk/protocol";
 import { describe, expect, it, vi } from "vitest";
-
-import { AgentRuntimeManager, createWritableAcpStream } from "../../src/acp/agent-runtime-manager.ts";
+import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
+import { createWritableAcpStream } from "../../src/acp/connection/agent-connection.ts";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
-import { NullAcpSessionObserver } from "../../src/acp/session-contracts.ts";
-import { CachedAcpSessionEventStore } from "../../src/acp/session-event-store.ts";
-import { SqliteSessionLiveEventPosition } from "../../src/acp/session-live-event-position.ts";
-import { FoundAcpStoredSession, MemoryAcpSessionStore, SqliteAcpSessionStore } from "../../src/acp/session-store.ts";
 import { acpSessionStoreMigrations } from "../../src/generated/acp-session-store-migrations.ts";
 import { AccumulatingOperationMetrics } from "../../src/infra/operation-metrics.ts";
-import { LocalAgentDefinition } from "../../src/runtime/config.ts";
+import { NullSessionObserver } from "../../src/session/api/session-api.ts";
+import { SqliteSessionLiveEventPosition } from "../../src/session/history/live-event-positions.ts";
+import { CachedSessionEventStore } from "../../src/session/history/session-event-store.ts";
+import { SessionManager } from "../../src/session/manager/session-manager.ts";
+import { FoundStoredSession, MemorySessionStore, SqliteSessionStore } from "../../src/session/record/session-store.ts";
+import { AcpSessionTable } from "../../src/storage/session/acp-session-table.ts";
+import { LiveEventPositionTable } from "../../src/storage/session/live-event-position-table.ts";
+import { SessionEventCacheTable } from "../../src/storage/session/session-event-cache-table.ts";
 import { openAcpSessionDatabase, openSessionEventCacheDatabase } from "../../src/storage/sqlite/local-databases.ts";
 import { systemTimer } from "../../src/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
@@ -56,7 +59,7 @@ function processExists(pid: number): boolean {
 describe("ACP conversation sessions", () => {
     it("Given an inactive existing conversation, When it is reopened, Then its directory activity time stays unchanged", async () => {
         vi.useFakeTimers({ toFake: ["Date"] });
-        const store = new MemoryAcpSessionStore();
+        const store = new MemorySessionStore();
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-activity-time-"));
         const agent = new LocalAgentDefinition(
             "codex",
@@ -65,13 +68,22 @@ describe("ACP conversation sessions", () => {
             [fakeAgentPath, "--agent-name", "Codex"],
             { MOBIUS_FAKE_ACP_STATE_DIRECTORY: temporaryDirectory },
         );
-        const firstManager = new AgentRuntimeManager({
-            observer: new NullAcpSessionObserver(),
+        const firstManager = new SessionManager({
+            observer: new NullSessionObserver(),
             store,
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -91,19 +103,28 @@ describe("ACP conversation sessions", () => {
                 signal,
             });
             const initial = store.read("existing-conversation");
-            if (!(initial instanceof FoundAcpStoredSession)) {
+            if (!(initial instanceof FoundStoredSession)) {
                 throw new Error("Expected the conversation to be stored");
             }
             await firstManager.close();
 
             vi.setSystemTime(new Date("2026-10-14T12:00:00.000Z"));
-            const reopenedManager = new AgentRuntimeManager({
-                observer: new NullAcpSessionObserver(),
+            const reopenedManager = new SessionManager({
+                observer: new NullSessionObserver(),
                 store,
                 adapters: acpAdapters,
                 sessionIdentity: "assigned",
                 onSessionStatusChanged: () => undefined,
-                contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+                contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                    new UnretainedExternalContentStore().put({
+                        bytes: content.bytes,
+                        kind: content.kind,
+                        mediaType: content.mediaType,
+                        name: content.name,
+                        sessionId,
+                        signal,
+                    }),
+                ),
                 timer: systemTimer,
                 maxProcesses: null,
             });
@@ -116,7 +137,7 @@ describe("ACP conversation sessions", () => {
                     signal,
                 });
                 const reopened = store.read("existing-conversation");
-                if (!(reopened instanceof FoundAcpStoredSession)) {
+                if (!(reopened instanceof FoundStoredSession)) {
                     throw new Error("Expected the reopened conversation to remain stored");
                 }
                 expect(reopened.session.updatedAt).toBe(initial.session.updatedAt);
@@ -133,7 +154,7 @@ describe("ACP conversation sessions", () => {
                     signal,
                 });
                 const active = store.read("existing-conversation");
-                if (!(active instanceof FoundAcpStoredSession)) {
+                if (!(active instanceof FoundStoredSession)) {
                     throw new Error("Expected the active conversation to remain stored");
                 }
                 expect(active.session.updatedAt).toBe("2026-10-14T12:00:00.000Z");
@@ -152,9 +173,9 @@ describe("ACP conversation sessions", () => {
         vi.setSystemTime(new Date("2026-10-12T00:00:00.000Z"));
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-tool-projection-"));
         const sessionDatabase = openAcpSessionDatabase(join(temporaryDirectory, "sessions.sqlite"));
-        const store = new CachedAcpSessionEventStore(
-            openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite")),
-            new SqliteSessionLiveEventPosition(sessionDatabase),
+        const store = new CachedSessionEventStore(
+            new SessionEventCacheTable(openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite"))),
+            new SqliteSessionLiveEventPosition(new LiveEventPositionTable(sessionDatabase)),
         );
         try {
             const liveEvents = [
@@ -229,9 +250,9 @@ describe("ACP conversation sessions", () => {
         vi.useFakeTimers({ toFake: ["clearImmediate", "setImmediate"] });
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-bounded-"));
         const sessionDatabase = openAcpSessionDatabase(join(temporaryDirectory, "sessions.sqlite"));
-        const store = new CachedAcpSessionEventStore(
-            openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite")),
-            new SqliteSessionLiveEventPosition(sessionDatabase),
+        const store = new CachedSessionEventStore(
+            new SessionEventCacheTable(openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite"))),
+            new SqliteSessionLiveEventPosition(new LiveEventPositionTable(sessionDatabase)),
         );
         try {
             for (let number = 1; number <= 3000; number += 1) {
@@ -288,9 +309,9 @@ describe("ACP conversation sessions", () => {
         const databasePath = join(temporaryDirectory, "events.sqlite");
         const sessionDatabasePath = join(temporaryDirectory, "sessions.sqlite");
         const firstSessionDatabase = openAcpSessionDatabase(sessionDatabasePath);
-        const first = new CachedAcpSessionEventStore(
-            openSessionEventCacheDatabase(databasePath),
-            new SqliteSessionLiveEventPosition(firstSessionDatabase),
+        const first = new CachedSessionEventStore(
+            new SessionEventCacheTable(openSessionEventCacheDatabase(databasePath)),
+            new SqliteSessionLiveEventPosition(new LiveEventPositionTable(firstSessionDatabase)),
         );
         try {
             for (let number = 1; number <= 2000; number += 1) {
@@ -310,9 +331,9 @@ describe("ACP conversation sessions", () => {
         expect((await stat(databasePath)).size).toBeGreaterThan(512 * 1024);
 
         const secondSessionDatabase = openAcpSessionDatabase(sessionDatabasePath);
-        const second = new CachedAcpSessionEventStore(
-            openSessionEventCacheDatabase(databasePath),
-            new SqliteSessionLiveEventPosition(secondSessionDatabase),
+        const second = new CachedSessionEventStore(
+            new SessionEventCacheTable(openSessionEventCacheDatabase(databasePath)),
+            new SqliteSessionLiveEventPosition(new LiveEventPositionTable(secondSessionDatabase)),
         );
         try {
             second.append("session-1", {
@@ -331,9 +352,9 @@ describe("ACP conversation sessions", () => {
         vi.useFakeTimers({ toFake: ["clearImmediate", "setImmediate"] });
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-shared-generation-"));
         const sessionDatabase = openAcpSessionDatabase(join(temporaryDirectory, "sessions.sqlite"));
-        const store = new CachedAcpSessionEventStore(
-            openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite")),
-            new SqliteSessionLiveEventPosition(sessionDatabase),
+        const store = new CachedSessionEventStore(
+            new SessionEventCacheTable(openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite"))),
+            new SqliteSessionLiveEventPosition(new LiveEventPositionTable(sessionDatabase)),
         );
         const sharedGeneration = "11111111-2222-3333-4444-555555555555";
         const history = Array.from(
@@ -373,9 +394,9 @@ describe("ACP conversation sessions", () => {
         vi.setSystemTime(new Date("2026-10-09T00:00:00.000Z"));
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-tiering-"));
         const sessionDatabase = openAcpSessionDatabase(join(temporaryDirectory, "sessions.sqlite"));
-        const store = new CachedAcpSessionEventStore(
-            openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite")),
-            new SqliteSessionLiveEventPosition(sessionDatabase),
+        const store = new CachedSessionEventStore(
+            new SessionEventCacheTable(openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite"))),
+            new SqliteSessionLiveEventPosition(new LiveEventPositionTable(sessionDatabase)),
         );
         try {
             for (let position = 1; position <= 300; position += 1) {
@@ -407,9 +428,9 @@ describe("ACP conversation sessions", () => {
         vi.setSystemTime(new Date("2026-10-14T00:00:00.000Z"));
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-cursor-"));
         const sessionDatabase = openAcpSessionDatabase(join(temporaryDirectory, "sessions.sqlite"));
-        const store = new CachedAcpSessionEventStore(
-            openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite")),
-            new SqliteSessionLiveEventPosition(sessionDatabase),
+        const store = new CachedSessionEventStore(
+            new SessionEventCacheTable(openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite"))),
+            new SqliteSessionLiveEventPosition(new LiveEventPositionTable(sessionDatabase)),
         );
         try {
             for (let eventNumber = 1; eventNumber <= 300; eventNumber += 1) {
@@ -455,9 +476,9 @@ describe("ACP conversation sessions", () => {
         const databasePath = join(temporaryDirectory, "events.sqlite");
         const sessionDatabasePath = join(temporaryDirectory, "sessions.sqlite");
         const firstSessionDatabase = openAcpSessionDatabase(sessionDatabasePath);
-        const first = new CachedAcpSessionEventStore(
-            openSessionEventCacheDatabase(databasePath),
-            new SqliteSessionLiveEventPosition(firstSessionDatabase),
+        const first = new CachedSessionEventStore(
+            new SessionEventCacheTable(openSessionEventCacheDatabase(databasePath)),
+            new SqliteSessionLiveEventPosition(new LiveEventPositionTable(firstSessionDatabase)),
         );
         let firstGeneration = "";
         try {
@@ -513,9 +534,9 @@ describe("ACP conversation sessions", () => {
         }
 
         const secondSessionDatabase = openAcpSessionDatabase(sessionDatabasePath);
-        const second = new CachedAcpSessionEventStore(
-            openSessionEventCacheDatabase(databasePath),
-            new SqliteSessionLiveEventPosition(secondSessionDatabase),
+        const second = new CachedSessionEventStore(
+            new SessionEventCacheTable(openSessionEventCacheDatabase(databasePath)),
+            new SqliteSessionLiveEventPosition(new LiveEventPositionTable(secondSessionDatabase)),
         );
         try {
             const page = second.page("session-1", 10, null);
@@ -541,7 +562,7 @@ describe("ACP conversation sessions", () => {
             legacyDatabase.close();
         }
 
-        const store = new SqliteAcpSessionStore(openAcpSessionDatabase(databasePath));
+        const store = new SqliteSessionStore(new AcpSessionTable(openAcpSessionDatabase(databasePath)));
         store.close();
         const migratedDatabase = new DatabaseSync(databasePath, { readOnly: true });
         try {
@@ -566,14 +587,23 @@ describe("ACP conversation sessions", () => {
             "Claude Code",
         ]);
         const signal = new AbortController().signal;
-        const firstStore = new SqliteAcpSessionStore(openAcpSessionDatabase(databasePath));
-        const firstRuntime = new AgentRuntimeManager({
-            observer: new NullAcpSessionObserver(),
+        const firstStore = new SqliteSessionStore(new AcpSessionTable(openAcpSessionDatabase(databasePath)));
+        const firstRuntime = new SessionManager({
+            observer: new NullSessionObserver(),
             store: firstStore,
             adapters: acpAdapters,
             sessionIdentity: "native",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -595,14 +625,23 @@ describe("ACP conversation sessions", () => {
             firstStore.close();
         }
 
-        const restartedStore = new SqliteAcpSessionStore(openAcpSessionDatabase(databasePath));
-        const restartedRuntime = new AgentRuntimeManager({
-            observer: new NullAcpSessionObserver(),
+        const restartedStore = new SqliteSessionStore(new AcpSessionTable(openAcpSessionDatabase(databasePath)));
+        const restartedRuntime = new SessionManager({
+            observer: new NullSessionObserver(),
             store: restartedStore,
             adapters: acpAdapters,
             sessionIdentity: "native",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -644,13 +683,22 @@ child.once("exit", (code) => process.exit(code ?? 84));
             );
             await chmod(adapterPath, 0o700);
             vi.useFakeTimers({ toFake: ["clearTimeout", "setTimeout"] });
-            const manager = new AgentRuntimeManager({
-                observer: new NullAcpSessionObserver(),
-                store: new MemoryAcpSessionStore(),
+            const manager = new SessionManager({
+                observer: new NullSessionObserver(),
+                store: new MemorySessionStore(),
                 adapters: acpAdapters,
                 sessionIdentity: "assigned",
                 onSessionStatusChanged: () => undefined,
-                contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+                contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                    new UnretainedExternalContentStore().put({
+                        bytes: content.bytes,
+                        kind: content.kind,
+                        mediaType: content.mediaType,
+                        name: content.name,
+                        sessionId,
+                        signal,
+                    }),
+                ),
                 timer: systemTimer,
                 maxProcesses: null,
             });
@@ -727,13 +775,22 @@ child.once("exit", (code) => process.exit(code ?? 84));
     );
 
     it("Given a prepared conversation has no turns, When its agent selection changes, Then the same Mobius session is rebound before the first prompt", async () => {
-        const manager = new AgentRuntimeManager({
-            observer: new NullAcpSessionObserver(),
-            store: new MemoryAcpSessionStore(),
+        const manager = new SessionManager({
+            observer: new NullSessionObserver(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -797,13 +854,22 @@ child.once("exit", (code) => process.exit(code ?? 84));
 
     it("Given a conversation closed after its prompt was prepared, When the prompt runs, Then the Runtime reports session_closed without reporting the conversation working", async () => {
         const statuses: SessionStatusChangedEvent[] = [];
-        const manager = new AgentRuntimeManager({
-            observer: new NullAcpSessionObserver(),
-            store: new MemoryAcpSessionStore(),
+        const manager = new SessionManager({
+            observer: new NullSessionObserver(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: (event) => statuses.push(event),
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -840,13 +906,22 @@ child.once("exit", (code) => process.exit(code ?? 84));
 
     it("Given Controlled ACP emits untagged messages before a tool call, When they arrive, Then each update is recorded live without waiting for the tool boundary", async () => {
         const observer = new RecordingObserver();
-        const manager = new AgentRuntimeManager({
+        const manager = new SessionManager({
             observer,
-            store: new MemoryAcpSessionStore(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -906,17 +981,26 @@ child.once("exit", (code) => process.exit(code ?? 84));
 
     it("Given the least recently used conversation has an active turn, When an eleventh conversation starts, Then the active process is retained and the oldest idle process is released", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-active-process-lru-"));
-        const store = new MemoryAcpSessionStore();
+        const store = new MemorySessionStore();
         // The scenario exercises retirement at the boundary, so it pins the
         // retained process budget instead of inheriting the production default.
         const observer = new RecordingObserver();
-        const manager = new AgentRuntimeManager({
+        const manager = new SessionManager({
             observer,
             store,
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: 10,
         });
@@ -959,7 +1043,7 @@ child.once("exit", (code) => process.exit(code ?? 84));
         };
         const writerName = (sessionId: string): string => {
             const stored = store.read(sessionId);
-            if (!(stored instanceof FoundAcpStoredSession)) {
+            if (!(stored instanceof FoundStoredSession)) {
                 throw new Error(`Expected ${sessionId} to have a persisted native session`);
             }
             return `${encodeURIComponent(stored.session.nativeSessionId)}.writer`;
@@ -990,13 +1074,22 @@ child.once("exit", (code) => process.exit(code ?? 84));
     });
 
     it("Given an ACP agent announces a different session while creating one, When Mobius receives the created session, Then the local boundary rejects the queued update", async () => {
-        const manager = new AgentRuntimeManager({
-            observer: new NullAcpSessionObserver(),
-            store: new MemoryAcpSessionStore(),
+        const manager = new SessionManager({
+            observer: new NullSessionObserver(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -1024,13 +1117,22 @@ child.once("exit", (code) => process.exit(code ?? 84));
     });
 
     it("Given an ACP agent returns the standard authentication error, When Mobius starts its session, Then the local boundary preserves an authentication-required code", async () => {
-        const manager = new AgentRuntimeManager({
-            observer: new NullAcpSessionObserver(),
-            store: new MemoryAcpSessionStore(),
+        const manager = new SessionManager({
+            observer: new NullSessionObserver(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -1055,13 +1157,22 @@ child.once("exit", (code) => process.exit(code ?? 84));
     });
 
     it("Given an ACP agent rejects a prompt with a non-authentication error, When Mobius runs that turn, Then the local boundary preserves the agent's real failure reason", async () => {
-        const manager = new AgentRuntimeManager({
-            observer: new NullAcpSessionObserver(),
-            store: new MemoryAcpSessionStore(),
+        const manager = new SessionManager({
+            observer: new NullSessionObserver(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -1094,13 +1205,22 @@ child.once("exit", (code) => process.exit(code ?? 84));
     });
 
     it("Given Codex includes an invalid-prompt detail in an internal ACP error, When Mobius runs that turn, Then the user receives the actionable detail", async () => {
-        const manager = new AgentRuntimeManager({
-            observer: new NullAcpSessionObserver(),
-            store: new MemoryAcpSessionStore(),
+        const manager = new SessionManager({
+            observer: new NullSessionObserver(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -1135,13 +1255,22 @@ child.once("exit", (code) => process.exit(code ?? 84));
     it("Given an ACP Agent has a tool subprocess, When the turn is cancelled, Then Mobius retains the process tree until Runtime shutdown", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-cancel-tree-"));
         const observer = new RecordingObserver();
-        const manager = new AgentRuntimeManager({
+        const manager = new SessionManager({
             observer,
-            store: new MemoryAcpSessionStore(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -1230,13 +1359,22 @@ agent.once("exit", (code) => process.exit(code ?? 84));
     });
 
     it("Given an existing Agent conversation, When a caller changes its Agent identity, Then the local boundary rejects the request", async () => {
-        const manager = new AgentRuntimeManager({
-            observer: new NullAcpSessionObserver(),
-            store: new MemoryAcpSessionStore(),
+        const manager = new SessionManager({
+            observer: new NullSessionObserver(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -1274,13 +1412,22 @@ agent.once("exit", (code) => process.exit(code ?? 84));
     });
 
     it("Given an ACP subprocess exits during shutdown, When its session manager closes, Then the stream failure is contained", async () => {
-        const manager = new AgentRuntimeManager({
-            observer: new NullAcpSessionObserver(),
-            store: new MemoryAcpSessionStore(),
+        const manager = new SessionManager({
+            observer: new NullSessionObserver(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });

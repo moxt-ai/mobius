@@ -2,15 +2,15 @@ import { existsSync, watch } from "node:fs";
 import { readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { Adapter } from "../../src/acp/adapter/context.ts";
 import { nativeHistoryEvents } from "../../src/acp/native-history/codex/native-history-events.ts";
+import type { Adapter } from "../../src/acp/native-history/preview-contract.ts";
 import { fixture } from "./native-session-fixture.ts";
 
 /** A direct-read adapter with canned history, standing in for the Codex app-server. */
 const cannedHistoryAdapter: Adapter = {
     previewSessionEvents: async (request, context) =>
         await nativeHistoryEvents(
-            context.options.sessionId,
+            request.sessionId,
             request.nativeSessionId,
             {
                 coveredCommandIds: [],

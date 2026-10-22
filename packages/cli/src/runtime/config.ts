@@ -1,11 +1,8 @@
 import { join, resolve } from "node:path";
 import { RUNTIME_WORKSPACE_BINDING_ID } from "@moxt-ai/mobius-sdk/protocol";
-import type { AcpAgentDefinition } from "../acp/agent/agent-definition.ts";
+import type { CatalogAgent } from "../agent/catalog.ts";
 import { LocalAgentCatalog } from "../agent/catalog.ts";
 import { readStateDirectory } from "../storage/state-directory.ts";
-
-export type { AcpAgentDefinition } from "../acp/agent/agent-definition.ts";
-export { InProcessAcpAgentDefinition, LocalAgentDefinition } from "../acp/agent/agent-definition.ts";
 
 export function loadDefaultWorkspace(environment: Readonly<NodeJS.ProcessEnv> = process.env): string {
     const { MOBIUS_DEFAULT_WORKSPACE: configuredWorkspace } = environment;
@@ -22,10 +19,7 @@ export class RuntimeLocalContext {
     }
 }
 
-export function withRuntimeEnvironment(
-    agent: AcpAgentDefinition,
-    environment: Readonly<NodeJS.ProcessEnv>,
-): AcpAgentDefinition {
+export function withRuntimeEnvironment(agent: CatalogAgent, environment: Readonly<NodeJS.ProcessEnv>): CatalogAgent {
     const launchEnvironment: Record<string, string> = {};
     for (const [name, value] of Object.entries(environment)) {
         if (typeof value === "string") {
@@ -51,7 +45,7 @@ export class OpaqueRuntimeReconnectTarget extends RuntimeReconnectTarget {
 }
 
 export interface RuntimeConfig {
-    readonly agents: readonly AcpAgentDefinition[];
+    readonly agents: readonly CatalogAgent[];
     readonly defaultWorkspace: string;
     readonly bindingId: string;
     readonly catalog: LocalAgentCatalog;
@@ -64,7 +58,7 @@ export interface RuntimeConfig {
      * executable changed since the catalog snapshot was taken. Undefined keeps the boot-time
      * snapshot: a changed executable fails the command instead of being re-discovered.
      */
-    readonly resolveAgent?: (agent: AcpAgentDefinition, signal: AbortSignal) => Promise<AcpAgentDefinition>;
+    readonly resolveAgent?: (agent: CatalogAgent, signal: AbortSignal) => Promise<CatalogAgent>;
 }
 
 export interface RuntimeConnectionConfig {
@@ -75,7 +69,7 @@ export interface RuntimeConnectionConfig {
 
 export function createRuntimeConfig(
     connection: RuntimeConnectionConfig,
-    agents: readonly AcpAgentDefinition[] = [],
+    agents: readonly CatalogAgent[] = [],
     localContext: RuntimeLocalContext = new RuntimeLocalContext(readStateDirectory(), process.env),
     reconnectTarget: RuntimeReconnectTarget | null = null,
     resolveAgent?: RuntimeConfig["resolveAgent"],

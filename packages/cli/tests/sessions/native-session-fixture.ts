@@ -2,16 +2,15 @@ import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AcpSessionUpdate, NativeSessionCommand, SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
-import {
-    type AdapterResolver,
-    AgentRuntimeManager,
-    NullAcpSessionObserver,
-} from "../../src/acp/agent-runtime-manager.ts";
+import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
-import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
-import { createRuntimeConfig, LocalAgentDefinition } from "../../src/runtime/config.ts";
-import { NativeSessionService } from "../../src/runtime/native-sessions/service.ts";
-import { WorkspaceDirectoryService } from "../../src/runtime/workspace/workspace-directory.ts";
+import type { AdapterResolver } from "../../src/acp/native-history/preview-contract.ts";
+import { createRuntimeConfig } from "../../src/runtime/config.ts";
+import { NullSessionObserver } from "../../src/session/api/session-api.ts";
+import { SessionManager } from "../../src/session/manager/session-manager.ts";
+import { NativeSessionService } from "../../src/session/native/native-session-browser.ts";
+import { MemorySessionStore } from "../../src/session/record/session-store.ts";
+import { WorkspaceDirectoryService } from "../../src/session/workspace/workspace-directory.ts";
 import { systemTimer } from "../../src/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
 import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
@@ -20,7 +19,7 @@ const acpUrl = new URL("./fixtures/acp-peer.ts", import.meta.url).toString();
 
 // Real providers cannot deterministically supply destructive test sessions or stalled
 // loads. These ACP subprocesses maintain their own disposable session files.
-class NativeSessionObserver extends NullAcpSessionObserver {
+class NativeSessionObserver extends NullSessionObserver {
     readonly updates: AcpSessionUpdate[] = [];
     readonly loading = Promise.withResolvers<void>();
     override readonly onSessionEvent = (event: SessionLiveEvent): Promise<void> => {
@@ -73,15 +72,24 @@ export async function fixture(
                   ? ["--persist-after-first-prompt"]
                   : []),
     ]);
-    const store = new MemoryAcpSessionStore();
+    const store = new MemorySessionStore();
     const observer = new NativeSessionObserver();
-    let sessions = new AgentRuntimeManager({
+    let sessions = new SessionManager({
         observer,
         store,
         adapters,
         sessionIdentity,
         onSessionStatusChanged: () => undefined,
-        contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+        contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+            new UnretainedExternalContentStore().put({
+                bytes: content.bytes,
+                kind: content.kind,
+                mediaType: content.mediaType,
+                name: content.name,
+                sessionId,
+                signal,
+            }),
+        ),
         timer: systemTimer,
         maxProcesses: null,
     });
@@ -94,10 +102,16 @@ export async function fixture(
         [agent],
     );
     const directories = new WorkspaceDirectoryService("workspace", workspace);
-    let service = new NativeSessionService(config, directories, sessions, async () => ({
-        turn: null,
-        queued: [],
-    }));
+    let service = new NativeSessionService(
+        config.bindingId,
+        (agentId) => Promise.resolve(config.catalog.find(agentId)),
+        directories,
+        sessions,
+        async () => ({
+            turn: null,
+            queued: [],
+        }),
+    );
     const identity = {
         additionalDirectoryIds: [],
         agentId: agent.id,
@@ -112,13 +126,22 @@ export async function fixture(
         additionalDirectories: readonly string[] = [],
         cwd = workspace,
     ): Promise<string> => {
-        const external = new AgentRuntimeManager({
-            observer: new NullAcpSessionObserver(),
-            store: new MemoryAcpSessionStore(),
+        const external = new SessionManager({
+            observer: new NullSessionObserver(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -178,20 +201,35 @@ export async function fixture(
         },
         restart: async () => {
             await sessions.close();
-            sessions = new AgentRuntimeManager({
+            sessions = new SessionManager({
                 observer,
                 store,
                 adapters,
                 sessionIdentity,
                 onSessionStatusChanged: () => undefined,
-                contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+                contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                    new UnretainedExternalContentStore().put({
+                        bytes: content.bytes,
+                        kind: content.kind,
+                        mediaType: content.mediaType,
+                        name: content.name,
+                        sessionId,
+                        signal,
+                    }),
+                ),
                 timer: systemTimer,
                 maxProcesses: null,
             });
-            service = new NativeSessionService(config, directories, sessions, async () => ({
-                turn: null,
-                queued: [],
-            }));
+            service = new NativeSessionService(
+                config.bindingId,
+                (agentId) => Promise.resolve(config.catalog.find(agentId)),
+                directories,
+                sessions,
+                async () => ({
+                    turn: null,
+                    queued: [],
+                }),
+            );
         },
         temporary,
         workspace,

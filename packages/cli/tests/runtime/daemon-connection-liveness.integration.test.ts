@@ -26,7 +26,8 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { listen, port as readPort, sendText as writeServerTextFrame } from "@moxt-ai/mobius-test/websocket";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createRuntimeConfig, LocalAgentDefinition } from "../../src/runtime/config.ts";
+import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
+import { createRuntimeConfig } from "../../src/runtime/config.ts";
 import { RuntimeRelayRevokedError } from "../../src/runtime/relay/runtime-revocation.ts";
 import { SESSION_EVENT_BATCH_WINDOW_MILLISECONDS } from "../../src/runtime/relay/session-event-publisher.ts";
 import { runRuntime } from "../../src/runtime/run.ts";

@@ -3,13 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NativeSessionCommand } from "@moxt-ai/mobius-sdk/protocol";
 import { InProcessAcpAgentDefinition } from "../../../src/acp/agent/agent-definition.ts";
-import { AgentRuntimeManager, NullAcpSessionObserver } from "../../../src/acp/agent-runtime-manager.ts";
 import { AcpContentExternalizer } from "../../../src/acp/content/content-externalizer.ts";
 import { CodexAcpAgent } from "../../../src/acp/harness/codex/agent.ts";
-import { MemoryAcpSessionStore } from "../../../src/acp/session-store.ts";
 import { createRuntimeConfig } from "../../../src/runtime/config.ts";
-import { NativeSessionService } from "../../../src/runtime/native-sessions/service.ts";
-import { WorkspaceDirectoryService } from "../../../src/runtime/workspace/workspace-directory.ts";
+import { NullSessionObserver } from "../../../src/session/api/session-api.ts";
+import { SessionManager } from "../../../src/session/manager/session-manager.ts";
+import { NativeSessionService } from "../../../src/session/native/native-session-browser.ts";
+import { MemorySessionStore } from "../../../src/session/record/session-store.ts";
+import { WorkspaceDirectoryService } from "../../../src/session/workspace/workspace-directory.ts";
 import { systemTimer } from "../../../src/util/timer.ts";
 import { acpAdapters } from "../acp-adapters.ts";
 import { FakeOpenAiProvider } from "../llm/openai.ts";
@@ -33,14 +34,23 @@ export async function codexFixture(
         (options) => new CodexAcpAgent(options),
         codex.environment,
     );
-    const store = new MemoryAcpSessionStore();
-    const sessions = new AgentRuntimeManager({
-        observer: new NullAcpSessionObserver(),
+    const store = new MemorySessionStore();
+    const sessions = new SessionManager({
+        observer: new NullSessionObserver(),
         store,
         adapters: acpAdapters,
         sessionIdentity,
         onSessionStatusChanged: () => undefined,
-        contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+        contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+            new UnretainedExternalContentStore().put({
+                bytes: content.bytes,
+                kind: content.kind,
+                mediaType: content.mediaType,
+                name: content.name,
+                sessionId,
+                signal,
+            }),
+        ),
         timer: systemTimer,
         maxProcesses: null,
     });
@@ -53,10 +63,16 @@ export async function codexFixture(
         [agent],
     );
     const directories = new WorkspaceDirectoryService("workspace", workspace);
-    const service = new NativeSessionService(config, directories, sessions, async () => ({
-        turn: null,
-        queued: [],
-    }));
+    const service = new NativeSessionService(
+        config.bindingId,
+        (agentId) => Promise.resolve(config.catalog.find(agentId)),
+        directories,
+        sessions,
+        async () => ({
+            turn: null,
+            queued: [],
+        }),
+    );
     const identity = {
         additionalDirectoryIds: [],
         agentId: agent.id,

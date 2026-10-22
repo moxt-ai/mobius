@@ -1,31 +1,18 @@
-import { createHash } from "node:crypto";
-import { join } from "node:path";
 import { styleText } from "node:util";
-import { harnessAdapters } from "../acp/adapter/registry.ts";
-import { resolveMaxAcpProcesses } from "../acp/agent-process-pool.ts";
-import { AgentRuntimeManager } from "../acp/agent-runtime-manager.ts";
-import { AcpContentExternalizer } from "../acp/content/content-externalizer.ts";
-import { LocalExternalContentStore } from "../acp/external-content/local-external-content-store.ts";
-import { CachedAcpSessionEventStore } from "../acp/session-event-store.ts";
-import { SqliteSessionLiveEventPosition } from "../acp/session-live-event-position.ts";
-import { SqliteAcpSessionStore } from "../acp/session-store.ts";
-import { openAcpSessionDatabase, openSessionEventCacheDatabase } from "../storage/sqlite/local-databases.ts";
+import type { RuntimeUpgradeResult } from "@moxt-ai/mobius-sdk/protocol";
+import { buildSessionLayer } from "../session/api/session-layer.ts";
 import { systemTimer, type Timer } from "../util/timer.ts";
-import { RuntimeAcpObserver } from "./acp-observer.ts";
-import { RuntimeOperationState } from "./admission.ts";
 import { publishAgentCatalog } from "./catalog/publish-agent-catalog.ts";
+import { resolveCatalogAgent } from "./catalog/resolve-catalog-agent.ts";
 import type { RuntimeConfig } from "./config.ts";
-import { NativeSessionService } from "./native-sessions/service.ts";
 import { RuntimeDiagnosticLog } from "./observability/diagnostic-log.ts";
 import { RelayConnectionDiagnostics } from "./relay/diagnostics.ts";
 import { runRelayConnection } from "./relay/run-relay-connection.ts";
 import { RuntimeRelayRevokedError } from "./relay/runtime-revocation.ts";
 import { RuntimeSessionEventPublisher } from "./relay/session-event-publisher.ts";
-import { RuntimeSessionEventProjection } from "./session/session-event-projection.ts";
-import { RuntimeSessions } from "./sessions.ts";
-import { WorkspaceDirectoryService } from "./workspace/workspace-directory.ts";
 
 const RELAY_RECONNECT_DELAY_MILLISECONDS = 500;
+const defaultReportUpgradeAvailability = (): Promise<void> => Promise.resolve();
 
 function waitForRelayRetry(signal: AbortSignal, timer: Timer): Promise<void> {
     if (signal.aborted) {
@@ -76,6 +63,11 @@ async function publishAgentCatalogUntilAvailable(
 
 export interface RunRuntimeOptions {
     readonly onConnectionStatus?: (status: "online" | "reconnecting") => void;
+    /** Reports a finished daemon upgrade to the relay. The daemon worker supplies it. */
+    readonly reportUpgradeAvailability?: (
+        send: (result: RuntimeUpgradeResult) => void,
+        signal: AbortSignal,
+    ) => Promise<void>;
     /**
      * State directory of the daemon processes supervising this Runtime. Their
      * lifecycle and rejection logs are the only witness of a silent worker death,
@@ -90,43 +82,10 @@ export async function runRuntime(
     timer: Timer = systemTimer,
     options: RunRuntimeOptions = {},
 ): Promise<void> {
+    const { reportUpgradeAvailability = defaultReportUpgradeAvailability } = options;
     const shutdown = new AbortController();
     const signal = AbortSignal.any([parentSignal, shutdown.signal]);
     const stateDirectory = config.localContext.stateDirectory;
-    const channelHash = createHash("sha256").update(config.channelId).digest("hex");
-    const sessionDatabase = openAcpSessionDatabase(join(stateDirectory, "sessions", `${channelHash}.sqlite`));
-    let events: CachedAcpSessionEventStore;
-    try {
-        events = new CachedAcpSessionEventStore(
-            openSessionEventCacheDatabase(join(stateDirectory, "sessions", `${channelHash}.events.sqlite`)),
-            new SqliteSessionLiveEventPosition(sessionDatabase),
-        );
-    } catch (error) {
-        sessionDatabase.close();
-        throw error;
-    }
-    const sessionStore = new SqliteAcpSessionStore(sessionDatabase, events);
-    await using externalContent = new LocalExternalContentStore(stateDirectory);
-    const operations = new RuntimeOperationState();
-    const publisher = new RuntimeSessionEventPublisher(timer);
-    const activeSessions = new RuntimeSessions(operations);
-    const eventProjection = new RuntimeSessionEventProjection(
-        publisher,
-        (sessionId, event) => agentRuntime.recordLifecycleEvent(sessionId, event),
-        activeSessions.recordSessionEvent,
-    );
-    const agentRuntime = new AgentRuntimeManager({
-        observer: new RuntimeAcpObserver(eventProjection.record, publisher.publishInfo),
-        store: sessionStore,
-        adapters: harnessAdapters,
-        sessionIdentity: "native",
-        onSessionStatusChanged: publisher.publishStatus,
-        onSessionClosed: publisher.publishClosed,
-        contentExternalizer: new AcpContentExternalizer(externalContent),
-        timer,
-        maxProcesses: resolveMaxAcpProcesses(config.localContext.environment),
-    });
-    const directories = new WorkspaceDirectoryService(config.bindingId, config.defaultWorkspace);
     const diagnostics = new RelayConnectionDiagnostics(
         config.channelId,
         config.relayUrl,
@@ -136,24 +95,29 @@ export async function runRuntime(
                 : { processLogsDirectory: options.processLogsDirectory }),
         }),
     );
-    const nativeSessions = new NativeSessionService(config, directories, agentRuntime, async (request, options) => {
-        return await activeSessions.executionSnapshot(async (command) => {
-            if (command.sessionId !== request.targetSessionId || command.agentId !== request.agentId) {
-                return false;
-            }
-            const cwd = await directories.resolve(command.bindingId, command.directoryId, options.signal);
-            const additionalDirectories = await directories.resolveMany(
-                command.bindingId,
-                command.additionalDirectoryIds,
-                options.signal,
-            );
-            return (
-                cwd === options.cwd &&
-                additionalDirectories.length === options.additionalDirectories.length &&
-                additionalDirectories.every((directory, index) => directory === options.additionalDirectories[index])
-            );
-        });
+    const publisher = new RuntimeSessionEventPublisher(timer);
+    const layer = buildSessionLayer({
+        bindingId: config.bindingId,
+        channelId: config.channelId,
+        defaultWorkspace: config.defaultWorkspace,
+        environment: config.localContext.environment,
+        resolveAgent: (agentId, resolveSignal) => resolveCatalogAgent(config, agentId, resolveSignal),
+        sink: publisher,
+        stateDirectory: config.localContext.stateDirectory,
+        timer,
     });
+    const {
+        activeSessions,
+        directories,
+        eventProjection,
+        manager: agentRuntime,
+        nativeSessions,
+        operations,
+        sessionStore,
+    } = layer;
+    // The media cache is owned by this scope: when runRuntime returns, its cleanup
+    // timer stops and its private directory is removed, after the other resources settle.
+    await using externalContent = layer.externalContent;
     let connectionEpoch = 0;
     let connectionAnnounced = false;
     let catalogPublished = false;
@@ -207,6 +171,7 @@ export async function runRuntime(
                     externalContent,
                     sessionTurns: activeSessions,
                     connectionEpoch,
+                    reportUpgradeAvailability,
                     diagnostics,
                     onConnected: () => {
                         if (catalogPublished) {

@@ -6,7 +6,7 @@ import {
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PROMPT_DISPOSITION_KIND,
 } from "@moxt-ai/mobius-sdk/protocol";
-import { settleAbandonedTurn } from "../../session/session-event-projection.ts";
+import { settleAbandonedTurn } from "../../../session/prompt/prompt-lifecycle.ts";
 import type { RuntimeCommand } from "../definition.ts";
 import { reportOperationFailure, send } from "../transport.ts";
 

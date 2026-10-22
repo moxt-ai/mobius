@@ -41,11 +41,39 @@ module.exports = {
             to: { path: "^packages/cli/src/(acp|agent|session|runtime|daemon|cli)/" },
         },
         {
+            // Only storage/ and util/ touch the disk; the layers above reach files through them.
+            name: "cli-disk-access-stays-in-storage",
+            severity: "error",
+            from: { path: "^packages/cli/src/", pathNot: "^packages/cli/src/(storage|util)/|/upstream/" },
+            to: { dependencyTypes: ["core"], path: "^(node:)?(fs|fs/promises|sqlite)$" },
+        },
+        {
+            // Queries live with the tables in storage/; schema/ only declares them.
+            name: "cli-database-access-stays-in-storage",
+            severity: "error",
+            from: { path: "^packages/cli/src/", pathNot: "^packages/cli/src/(storage|schema)/|/upstream/" },
+            to: { path: "/node_modules/drizzle-orm/" },
+        },
+        {
             // Agent discovery and the local catalog sit below the runtime that publishes them.
             name: "cli-agent-is-below-the-runtime",
             severity: "error",
             from: { path: "^packages/cli/src/agent/" },
             to: { path: "^packages/cli/src/(session|runtime|daemon|cli)/" },
+        },
+        {
+            // The runtime composes sessions; it never speaks the agent protocol itself.
+            name: "cli-runtime-does-not-import-acp",
+            severity: "error",
+            from: { path: "^packages/cli/src/runtime/" },
+            to: { path: "^packages/cli/src/(acp|daemon)/" },
+        },
+        {
+            // The session layer decides; the runtime only calls it.
+            name: "cli-session-does-not-import-upper-layers",
+            severity: "error",
+            from: { path: "^packages/cli/src/session/" },
+            to: { path: "^packages/cli/src/(runtime|daemon|cli)/" },
         },
         {
             name: "relay-core-does-not-depend-on-hosts",

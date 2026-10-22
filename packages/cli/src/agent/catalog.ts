@@ -1,4 +1,8 @@
 import type { AcpAgentDefinition } from "../acp/agent/agent-definition.ts";
+import { OperationError } from "../infra/operation-error.ts";
+
+/** The launch definition of a cataloged Agent, as the runtime names it. */
+export type CatalogAgent = AcpAgentDefinition;
 
 export class LocalAgentCatalogSnapshot {
     readonly agents: readonly AcpAgentDefinition[];
@@ -8,11 +12,9 @@ export class LocalAgentCatalogSnapshot {
     }
 }
 
-export class LocalAgentCatalogError extends Error {
-    readonly code = "agent_not_ready";
-
+export class LocalAgentCatalogError extends OperationError {
     constructor() {
-        super("The requested local Agent is not ready");
+        super("agent_not_ready", "The requested local Agent is not ready");
         this.name = "LocalAgentCatalogError";
     }
 }

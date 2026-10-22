@@ -1,10 +1,11 @@
 import type { NativeSessionCancel, NativeSessionCommand } from "@moxt-ai/mobius-sdk/protocol";
 import { WebSocket } from "undici";
-import { AcpExecutionError } from "../../acp/agent-runtime-manager.ts";
+import { operationErrorCode } from "../../infra/operation-error.ts";
+import { SessionError } from "../../session/api/session-error.ts";
+import type { NativeSessionService } from "../../session/native/native-session-browser.ts";
 import type { Timer } from "../../util/timer.ts";
-import type { NativeSessionService } from "../native-sessions/service.ts";
 import type { RelayConnectionDiagnostics } from "../relay/diagnostics.ts";
-import { operationErrorCode, reportOperationFailure, send } from "./transport.ts";
+import { reportOperationFailure, send } from "./transport.ts";
 
 type PendingRequest = Readonly<{
     agentId: string;
@@ -29,7 +30,7 @@ export function createNativeSessionRequestHandler(dependencies: NativeRequestDep
         const request = pending.get(command.requestId);
         if (request?.sessionId === command.sessionId) {
             request.controller.abort(
-                new AcpExecutionError("Native session operation cancelled", {}, "native_session_cancelled"),
+                new SessionError("native_session_cancelled", "Native session operation cancelled"),
             );
         }
     };
@@ -46,7 +47,7 @@ export function createNativeSessionRequestHandler(dependencies: NativeRequestDep
                 socket,
                 command.requestId,
                 command.sessionId,
-                new AcpExecutionError("Another native session operation is running", {}, "native_session_busy"),
+                new SessionError("native_session_busy", "Another native session operation is running"),
             );
             return;
         }
@@ -54,10 +55,7 @@ export function createNativeSessionRequestHandler(dependencies: NativeRequestDep
         const controller = new AbortController();
         const operationSignal = AbortSignal.any([signal, controller.signal]);
         const timeout = timer.schedule(
-            () =>
-                controller.abort(
-                    new AcpExecutionError("Native session operation timed out", {}, "native_session_timeout"),
-                ),
+            () => controller.abort(new SessionError("native_session_timeout", "Native session operation timed out")),
             90_000,
         );
         const completion = (async (): Promise<void> => {
@@ -88,7 +86,7 @@ export function createNativeSessionRequestHandler(dependencies: NativeRequestDep
             } catch (error) {
                 const failure: unknown = operationSignal.aborted
                     ? (controller.signal.reason ??
-                      new AcpExecutionError("Native session operation cancelled", {}, "native_session_cancelled"))
+                      new SessionError("native_session_cancelled", "Native session operation cancelled"))
                     : error;
                 const event = "native_session_operation_failed";
                 diagnostics.daemonDiagnostic(

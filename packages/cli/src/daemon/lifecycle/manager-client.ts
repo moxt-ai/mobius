@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { CONTROL_TIMEOUT_MILLISECONDS, isNodeError, sendLocalRequest } from "../control/local-client.ts";
+import { managerLockExists } from "../../storage/daemon/manager-lock.ts";
+import { isNodeError } from "../../util/node-error.ts";
+import { CONTROL_TIMEOUT_MILLISECONDS, sendLocalRequest } from "../control/local-client.ts";
 import { type LifecycleResponse, lifecycleResponse } from "../control/protocol.ts";
 import { currentWorkerLaunch } from "./worker-process.ts";
 
@@ -24,13 +24,8 @@ async function launchManager(managerVersion: string): Promise<void> {
 async function waitForManagerExit(stateDirectory: string, signal: AbortSignal): Promise<void> {
     const deadline = AbortSignal.any([signal, AbortSignal.timeout(30_000)]);
     while (!deadline.aborted) {
-        try {
-            await readFile(join(stateDirectory, "manager.lock"), "utf8");
-        } catch (cause) {
-            if (isNodeError(cause, "ENOENT")) {
-                return;
-            }
-            throw cause;
+        if (!(await managerLockExists(stateDirectory))) {
+            return;
         }
         await new Promise<void>((resolve, reject) => {
             const timeout = setTimeout(finish, 20);

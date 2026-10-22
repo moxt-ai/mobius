@@ -2,11 +2,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
+import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
-import { NullAcpSessionObserver } from "../../src/acp/session-contracts.ts";
-import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
-import { createRuntimeConfig, LocalAgentDefinition, RuntimeLocalContext } from "../../src/runtime/config.ts";
+import { createRuntimeConfig, RuntimeLocalContext } from "../../src/runtime/config.ts";
+import { NullSessionObserver } from "../../src/session/api/session-api.ts";
+import { SessionManager } from "../../src/session/manager/session-manager.ts";
+import { MemorySessionStore } from "../../src/session/record/session-store.ts";
 import { systemTimer } from "../../src/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
 import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
@@ -15,13 +16,22 @@ import { fakeAgent, fakeAgentPath, RecordingObserver } from "./acp-feature-fixtu
 
 describe("acp commands environment", () => {
     it("Given an ACP Agent has not advertised commands, When Mobius prepares a session, Then it does not invent compact", async () => {
-        const manager = new AgentRuntimeManager({
-            observer: new NullAcpSessionObserver(),
-            store: new MemoryAcpSessionStore(),
+        const manager = new SessionManager({
+            observer: new NullSessionObserver(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -49,13 +59,22 @@ describe("acp commands environment", () => {
     it("Given an ACP Agent advertises compact, When its commands update, Then Mobius preserves the ACP command", async () => {
         const agentId = "unknown-acp";
         const observer = new RecordingObserver();
-        const manager = new AgentRuntimeManager({
+        const manager = new SessionManager({
             observer,
-            store: new MemoryAcpSessionStore(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -95,13 +114,22 @@ describe("acp commands environment", () => {
         const workspace = await mkdtemp(join(tmpdir(), "mobius-login-shell-workspace-"));
         const generatedImages = await mkdtemp(join(tmpdir(), "mobius-login-shell-images-"));
         const observer = new RecordingObserver();
-        const manager = new AgentRuntimeManager({
+        const manager = new SessionManager({
             observer,
-            store: new MemoryAcpSessionStore(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });

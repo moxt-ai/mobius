@@ -1,8 +1,8 @@
-import type { AcpAgentDefinition } from "../../runtime/config.ts";
 import { AcpExecutionError } from "../acp-error.ts";
+import type { AcpAgentDefinition } from "../agent/agent-definition.ts";
+import type { Adapter, AdapterResolver } from "../native-history/preview-contract.ts";
 import { ClaudeAdapter } from "./claude/adapter.ts";
 import { CodexAdapter } from "./codex/adapter.ts";
-import type { Adapter, AdapterResolver } from "./context.ts";
 import { PiAdapter } from "./pi/adapter.ts";
 
 /** Daemon wiring: each known harness gets its own adapter; an unknown agent is an error. */

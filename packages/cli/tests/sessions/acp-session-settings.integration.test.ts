@@ -1,11 +1,11 @@
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
-import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
+import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
-import { NullAcpSessionObserver } from "../../src/acp/session-contracts.ts";
-import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
-import { LocalAgentDefinition } from "../../src/runtime/config.ts";
+import { NullSessionObserver } from "../../src/session/api/session-api.ts";
+import { SessionManager } from "../../src/session/manager/session-manager.ts";
+import { MemorySessionStore } from "../../src/session/record/session-store.ts";
 import { systemTimer } from "../../src/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
 import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
@@ -16,13 +16,22 @@ const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.met
 
 describe("Agent setting capabilities", () => {
     it("Given an Agent reports its reasoning effort as the provider default, When a session is prepared, Then Mobius keeps the effort setting with that current value", async () => {
-        const manager = new AgentRuntimeManager({
-            observer: new NullAcpSessionObserver(),
-            store: new MemoryAcpSessionStore(),
+        const manager = new SessionManager({
+            observer: new NullSessionObserver(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -76,13 +85,22 @@ describe("Agent setting capabilities", () => {
     });
 
     it("Given an Agent does not expose adjustable reasoning effort, When a session is prepared, Then Mobius does not invent an effort setting", async () => {
-        const manager = new AgentRuntimeManager({
-            observer: new NullAcpSessionObserver(),
-            store: new MemoryAcpSessionStore(),
+        const manager = new SessionManager({
+            observer: new NullSessionObserver(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -119,13 +137,22 @@ describe("Agent setting capabilities", () => {
     });
 
     it("Given Pi exposes no approval or sandbox setting, When its session is prepared, Then Mobius exposes no synthetic execution control", async () => {
-        const manager = new AgentRuntimeManager({
-            observer: new NullAcpSessionObserver(),
-            store: new MemoryAcpSessionStore(),
+        const manager = new SessionManager({
+            observer: new NullSessionObserver(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });
@@ -156,13 +183,22 @@ describe("Agent setting capabilities", () => {
     });
 
     it("Given an Agent acknowledges a setting without applying it, When Mobius configures the session, Then the Turn is rejected", async () => {
-        const manager = new AgentRuntimeManager({
-            observer: new NullAcpSessionObserver(),
-            store: new MemoryAcpSessionStore(),
+        const manager = new SessionManager({
+            observer: new NullSessionObserver(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
-            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({
+                    bytes: content.bytes,
+                    kind: content.kind,
+                    mediaType: content.mediaType,
+                    name: content.name,
+                    sessionId,
+                    signal,
+                }),
+            ),
             timer: systemTimer,
             maxProcesses: null,
         });

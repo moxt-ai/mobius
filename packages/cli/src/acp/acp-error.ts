@@ -1,14 +1,13 @@
+import { OperationError } from "../infra/operation-error.ts";
+
 /**
  * The typed error contract for the ACP execution boundary. It lives apart from the session manager so
  * that endpoint implementations can report failures without depending on the manager that drives
  * them.
  */
-export class AcpExecutionError extends Error {
-    readonly code: string;
-
+export class AcpExecutionError extends OperationError {
     constructor(message: string, options: ErrorOptions = {}, code = "acp_execution_failed") {
-        super(message, options);
-        this.code = code;
+        super(code, message, options);
         this.name = "AcpExecutionError";
     }
 }

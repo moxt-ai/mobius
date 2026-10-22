@@ -7,8 +7,8 @@ import {
 import { unsupportedSessionCapabilities } from "../../acp/protocol/session-capabilities.ts";
 import { ProcessExecutionError } from "../../util/process/executable.ts";
 import {
-    DirectAcpAgentDefinition,
-    InProcessAcpAgentDefinition,
+    DirectAcpAgentSpecification,
+    InProcessAcpAgentSpecification,
     type LocalAgentSpecification,
 } from "../specification/agent-specification.ts";
 import { probeAcpReadiness } from "./acp-readiness-probe.ts";
@@ -137,12 +137,12 @@ export async function discoverAgent(
         }
         // An in-process Agent is its own adapter: `resolveAdapterExecutables` already returned the
         // Agent executable, so an empty adapter list never means "install an adapter" here.
-        if (adapters.length === 0 && !(specification instanceof InProcessAcpAgentDefinition)) {
+        if (adapters.length === 0 && !(specification instanceof InProcessAcpAgentSpecification)) {
             return new MissingAdapter(specification);
         }
 
         for (const adapter of adapters) {
-            if (specification instanceof DirectAcpAgentDefinition && adapter.path !== agent.path) {
+            if (specification instanceof DirectAcpAgentSpecification && adapter.path !== agent.path) {
                 continue;
             }
             let adapterVersion = "";
@@ -179,7 +179,7 @@ export async function discoverAgent(
                 verifiedAdapterVersion: string,
                 capabilities: SessionCapabilities,
             ): AcpAgentDefinition =>
-                specification instanceof InProcessAcpAgentDefinition
+                specification instanceof InProcessAcpAgentSpecification
                     ? new InProcessAgentDefinition(
                           specification.id,
                           specification.label,

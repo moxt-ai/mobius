@@ -1,4 +1,5 @@
 import { BoundedLineLog } from "../../storage/logs/bounded-log.ts";
+import { logDirectory, WORKER_LIFECYCLE_LOG_FILENAME } from "../../storage/logs/log-files.ts";
 
 const MAXIMUM_LIFECYCLE_LOG_BYTES = 512 * 1_024;
 const MAXIMUM_TEXT_BYTES = 2_048;
@@ -27,8 +28,8 @@ export class WorkerLifecycleLog {
 
     constructor(stateDirectory: string) {
         this.#log = new BoundedLineLog(
-            `${stateDirectory}/logs`,
-            "worker-lifecycle.log",
+            logDirectory(stateDirectory),
+            WORKER_LIFECYCLE_LOG_FILENAME,
             MAXIMUM_LIFECYCLE_LOG_BYTES,
             (cause) => {
                 process.stderr.write(`The worker lifecycle log could not be written: ${String(cause)}\n`);

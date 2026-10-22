@@ -1,9 +1,9 @@
-import { mkdir, readFile, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative } from "node:path";
 import { runtimeUpgradeVersionSchema } from "@moxt-ai/mobius-sdk/protocol";
 import { gt } from "semver";
 import { z } from "zod";
-import { readStateDirectory } from "../../storage/state-directory.ts";
+import { readInstalledRelease, releasePrefix } from "../../storage/daemon/release-files.ts";
+import { canonicalPath, ensurePrivateDirectory } from "../../storage/files/local-files.ts";
 import { validateLocalPath } from "../../util/filesystem/private-path.ts";
 import { findExecutableOnPath, runBoundedProcess } from "../../util/process/executable.ts";
 import type { WorkerLaunch } from "../control/protocol.ts";
@@ -24,8 +24,8 @@ export async function installDaemonReleaseVersion(version: string, signal: Abort
         throw new DaemonReleaseUpgradeError("npm_unavailable", "npm is required to download the new daemon");
     }
     // npm owns the package installation; never overwrite the running release.
-    const prefix = join(readStateDirectory(), "npm", version);
-    await mkdir(prefix, { recursive: true, mode: 0o700 });
+    const prefix = releasePrefix(version);
+    await ensurePrivateDirectory(prefix);
     try {
         await validateLocalPath(prefix, true, true, signal);
         await runBoundedProcess({
@@ -47,16 +47,16 @@ export async function installDaemonReleaseVersion(version: string, signal: Abort
             timeoutMilliseconds: 300_000,
             outputLimitBytes: 64 * 1024,
         });
-        const packageRoot = await realpath(join(prefix, "node_modules", "@moxt-ai", "mobius"));
+        const installed = await readInstalledRelease(prefix);
         const metadata = z
             .object({
                 name: z.literal("@moxt-ai/mobius"),
                 version: z.literal(version),
                 bin: z.object({ mobius: z.literal("dist/cli.js") }),
             })
-            .parse(JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8")));
-        const entry = await realpath(join(packageRoot, metadata.bin.mobius));
-        const resolved = relative(await realpath(prefix), entry);
+            .parse(JSON.parse(installed.manifest));
+        const entry = await canonicalPath(join(installed.packageRoot, metadata.bin.mobius));
+        const resolved = relative(await canonicalPath(prefix), entry);
         if (resolved.startsWith("..") || isAbsolute(resolved)) {
             throw new Error("Installed entry escaped npm prefix");
         }

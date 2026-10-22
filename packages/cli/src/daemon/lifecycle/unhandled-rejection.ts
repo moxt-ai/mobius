@@ -1,6 +1,5 @@
-import { join } from "node:path";
-
 import { BoundedLineLog } from "../../storage/logs/bounded-log.ts";
+import { logDirectory, unhandledRejectionLogFilename } from "../../storage/logs/log-files.ts";
 
 const MAXIMUM_REJECTION_LOG_BYTES = 512 * 1_024;
 const MAXIMUM_REJECTION_TEXT_BYTES = 2_048;
@@ -75,8 +74,8 @@ export function surviveUnhandledRejections(role: DaemonProcessRole): UnhandledRe
                 return;
             }
             log = new BoundedLineLog(
-                join(stateDirectory, "logs"),
-                `unhandled-rejections-${role}.log`,
+                logDirectory(stateDirectory),
+                unhandledRejectionLogFilename(role),
                 MAXIMUM_REJECTION_LOG_BYTES,
                 (cause) => {
                     process.stderr.write(`The unhandled rejection log could not be written: ${String(cause)}\n`);

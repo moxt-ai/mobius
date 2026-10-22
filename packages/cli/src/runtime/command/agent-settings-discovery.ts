@@ -1,21 +1,20 @@
 import { AGENT_SETTINGS_DISCOVERY_FAILED_KIND, type AgentSettingsDiscoverCommand } from "@moxt-ai/mobius-sdk/protocol";
 import { WebSocket } from "undici";
-import {
-    AcpConfigurationValueUnavailableError,
-    AcpExecutionError,
-    type AgentRuntimeManager,
-} from "../../acp/agent-runtime-manager.ts";
+import { OperationError, operationErrorCode, operationErrorMessage } from "../../infra/operation-error.ts";
+import { SessionError } from "../../session/api/session-error.ts";
+import type { SessionManager } from "../../session/manager/session-manager.ts";
+import { agentSettingsFailureDetails, discoverAgentSettings } from "../../session/settings/discover-agent-settings.ts";
+import type { WorkspaceDirectoryService } from "../../session/workspace/workspace-directory.ts";
 import type { Timer } from "../../util/timer.ts";
-import { discoverAgentSettings } from "../agent-catalog/discover-agent-settings.ts";
+import { resolveCatalogAgent } from "../catalog/resolve-catalog-agent.ts";
 import type { RuntimeConfig } from "../config.ts";
 import type { RelayConnectionDiagnostics } from "../relay/diagnostics.ts";
-import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
-import { agentSettingsFailureDetails, operationErrorCode, operationErrorMessage, send } from "./transport.ts";
+import { send } from "./transport.ts";
 
 interface SettingsDiscoveryDependencies {
     readonly config: RuntimeConfig;
     readonly directories: WorkspaceDirectoryService;
-    readonly sessions: AgentRuntimeManager;
+    readonly sessions: SessionManager;
     readonly diagnostics: RelayConnectionDiagnostics;
     readonly socket: WebSocket;
     readonly signal: AbortSignal;
@@ -81,13 +80,20 @@ export function createAgentSettingsDiscoveryHandler(dependencies: SettingsDiscov
         const timeout = timer.schedule(
             () =>
                 controller.abort(
-                    new AcpExecutionError("Agent settings discovery timed out", {}, "agent_settings_discovery_timeout"),
+                    new SessionError("agent_settings_discovery_timeout", "Agent settings discovery timed out"),
                 ),
             90_000,
         );
         const completion = (async (): Promise<void> => {
             try {
-                const result = await discoverAgentSettings(command, config, directories, sessions, operationSignal);
+                const result = await discoverAgentSettings(
+                    command,
+                    (agentId, agentSignal) => resolveCatalogAgent(config, agentId, agentSignal),
+                    config.bindingId,
+                    directories,
+                    sessions,
+                    operationSignal,
+                );
                 for (const diagnostic of result.unsupportedModels) {
                     const details = agentSettingsFailureDetails(command.agentId, diagnostic);
                     diagnostics.daemonDiagnostic("agent_settings_model_unsupported", command.requestId, details);
@@ -103,15 +109,11 @@ export function createAgentSettingsDiscoveryHandler(dependencies: SettingsDiscov
             } catch (error) {
                 const failure: unknown = operationSignal.aborted
                     ? (controller.signal.reason ??
-                      new AcpExecutionError(
-                          "Agent settings discovery cancelled",
-                          {},
-                          "agent_settings_discovery_cancelled",
-                      ))
+                      new SessionError("agent_settings_discovery_cancelled", "Agent settings discovery cancelled"))
                     : error;
                 const details = agentSettingsFailureDetails(command.agentId, failure);
                 diagnostics.daemonDiagnostic("agent_settings_discovery_failed", command.requestId, details, failure);
-                if (failure instanceof AcpConfigurationValueUnavailableError) {
+                if (failure instanceof OperationError && failure.code === "invalid_session_configuration") {
                     process.stderr.write(
                         `Mobius daemon diagnostic ${JSON.stringify({ event: "agent_settings_discovery_failed", requestId: command.requestId, ...details })}\n`,
                     );

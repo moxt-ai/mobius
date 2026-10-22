@@ -1,9 +1,9 @@
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
-import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
+import { SessionManager } from "../../src/session/manager/session-manager.ts";
+import { MemorySessionStore } from "../../src/session/record/session-store.ts";
 import { systemTimer } from "../../src/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
 import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
@@ -13,13 +13,22 @@ import { fakeAgent, RecordingObserver } from "./acp-feature-fixture.ts";
 export async function createControlledSession() {
     const directory = await mkdtemp(join(tmpdir(), "mobius-acp-controls-"));
     const observer = new RecordingObserver();
-    const manager = new AgentRuntimeManager({
+    const manager = new SessionManager({
         observer,
-        store: new MemoryAcpSessionStore(),
+        store: new MemorySessionStore(),
         adapters: acpAdapters,
         sessionIdentity: "assigned",
         onSessionStatusChanged: () => undefined,
-        contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+        contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+            new UnretainedExternalContentStore().put({
+                bytes: content.bytes,
+                kind: content.kind,
+                mediaType: content.mediaType,
+                name: content.name,
+                sessionId,
+                signal,
+            }),
+        ),
         timer: systemTimer,
         maxProcesses: null,
     });

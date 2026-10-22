@@ -1,4 +1,4 @@
-import type { Adapter, AdapterContext, NativeSessionPreviewRequest } from "../context.ts";
+import type { Adapter, AdapterContext, NativeSessionPreviewRequest } from "../../native-history/preview-contract.ts";
 
 /**
  * Claude Code stores history that its harness replays as live ACP session updates
