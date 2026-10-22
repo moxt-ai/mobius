@@ -92,6 +92,7 @@ export function createDurableObjectDependencies(cx: {
     const peers: RuntimePeers = {
         accept: source.accept,
         sockets: source.sockets,
+        daemonConnections: source.daemonConnections,
         daemons: source.daemons,
         hosts: source.hosts,
         nativeRequests: source.nativeRequests,

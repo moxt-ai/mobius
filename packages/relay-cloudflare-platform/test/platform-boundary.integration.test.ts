@@ -12,7 +12,6 @@ import {
     decodeSessionEventEnvelope,
     decodeSessionPromptCommand,
     decodeSessionRecordingHistory,
-    encodeDaemonToServiceMessage,
     encodeNativeSessionRequest,
     encodeNativeSessionResult,
     encodeSessionClosedEvent,
@@ -27,6 +26,8 @@ import {
     encodeSessionRenamedEvent,
     encodeSessionStatusChangedEvent,
     MOBIUS_API_PREFIX,
+    RUNTIME_HEARTBEAT_ACK_MESSAGE,
+    RUNTIME_HEARTBEAT_MESSAGE,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDurableObjectDependencies } from "../../relay-core/src/di/create-durable-object-dependencies.ts";
@@ -1900,8 +1901,14 @@ describe.sequential("Platform Recording policy configuration", () => {
     });
 });
 
-/** Pairs a Runtime, connects its daemon with liveness, and grants Chat access to one Session. */
-async function connectRuntimeDaemon(slug: string) {
+/**
+ * Pairs a Runtime, connects its daemon with liveness, and grants Chat access to one Session.
+ *
+ * Cloudflare stamps heartbeat answers with its own clock, which fake timers cannot move. With
+ * `anchorClockToHeartbeat`, the daemon heartbeats once and the fake clock is set to that answer
+ * before the Session credential is issued, so later times are explicit offsets from it.
+ */
+async function connectRuntimeDaemon(slug: string, options: { readonly anchorClockToHeartbeat?: boolean } = {}) {
     const worker = createTestMobiusPlatformApp(
         new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
         createPlatformGateways,
@@ -1996,6 +2003,22 @@ async function connectRuntimeDaemon(slug: string) {
     });
     daemon.accept();
     expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("runtime.liveness.ready");
+    /** Heartbeats exactly as the daemon does and returns when Cloudflare answered, by its own clock. */
+    const heartbeat = async (): Promise<number> => {
+        daemon.send(RUNTIME_HEARTBEAT_MESSAGE);
+        expect(await daemonMessages.next()).toBe(RUNTIME_HEARTBEAT_ACK_MESSAGE);
+        return await runInDurableObject(environment.RUNTIME_RELAY.getByName(runtimeId), (_instance, state) => {
+            const socket = state.getWebSockets("daemon")[0];
+            const answeredAt = socket === undefined ? null : state.getWebSocketAutoResponseTimestamp(socket);
+            if (answeredAt === null) {
+                throw new Error("Expected Cloudflare to have answered the heartbeat");
+            }
+            return answeredAt.getTime();
+        });
+    };
+    if (options.anchorClockToHeartbeat === true) {
+        vi.setSystemTime(await heartbeat());
+    }
     const sessionAccess = await responseJson(
         await worker.fetch(
             new Request(
@@ -2014,13 +2037,7 @@ async function connectRuntimeDaemon(slug: string) {
         daemon,
         daemonClosed,
         daemonMessages,
-        heartbeat: async (heartbeatId: string) => {
-            daemon.send(encodeDaemonToServiceMessage({ heartbeatId, kind: "runtime.heartbeat" }));
-            expect(decodeServiceToDaemonMessage(await daemonMessages.next())).toMatchObject({
-                heartbeatId,
-                kind: "runtime.heartbeat.ack",
-            });
-        },
+        heartbeat,
         readOnline: async () =>
             (
                 await responseJson(
@@ -2912,15 +2929,11 @@ describe.sequential("Platform Turn submission", () => {
     });
 
     it("Given a daemon that heartbeats and then falls silent, When Chat submits Turns, Then they reach it while it heartbeats and are refused as runtime_offline once the silence outlasts the heartbeat deadline", async () => {
-        const runtime = await connectRuntimeDaemon("silent-daemon");
+        const runtime = await connectRuntimeDaemon("silent-daemon", { anchorClockToHeartbeat: true });
+        // The clock now reads when Cloudflare answered the daemon's heartbeat.
+        const heartbeatAt = Date.now();
         try {
-            const connectedAt = Date.now();
-            // Heartbeats 20 seconds apart keep the daemon live for longer than one silence deadline.
-            await runtime.heartbeat("heartbeat-1");
-            vi.setSystemTime(connectedAt + 20_000);
-            await runtime.heartbeat("heartbeat-2");
-            vi.setSystemTime(connectedAt + 40_000);
-            await runtime.heartbeat("heartbeat-3");
+            vi.setSystemTime(heartbeatAt + 20_000);
             const delivered = runtime.submitTurn("heartbeating-turn");
             expect(decodeServiceToDaemonMessage(await runtime.daemonMessages.next())).toMatchObject({
                 commandId: "heartbeating-turn",
@@ -2930,7 +2943,7 @@ describe.sequential("Platform Turn submission", () => {
             expect(await responseJson(await delivered, 200)).toMatchObject({ turnId: "heartbeating-turn" });
 
             // A Turn sent before the deadline still reaches the connection, which never answers it.
-            vi.setSystemTime(connectedAt + 60_000);
+            vi.setSystemTime(heartbeatAt + 30_000);
             const stranded = runtime.submitTurn("stranded-turn");
             expect(decodeServiceToDaemonMessage(await runtime.daemonMessages.next())).toMatchObject({
                 commandId: "stranded-turn",
@@ -2938,26 +2951,51 @@ describe.sequential("Platform Turn submission", () => {
             });
 
             // Once the silence outlasts the deadline, the next Turn is refused at once and releases the stranded one.
-            vi.setSystemTime(connectedAt + 76_000);
+            vi.setSystemTime(heartbeatAt + 36_000);
             expect(await responseJson(await runtime.submitTurn("after-silence-turn"), 503)).toMatchObject({
                 error: { code: "runtime_offline" },
             });
             expect(await responseJson(await stranded, 503)).toMatchObject({ error: { code: "runtime_offline" } });
             expect(await runtime.daemonClosed).toMatchObject({ code: 4001, reason: "Runtime heartbeat timed out" });
         } finally {
+            // Cloudflare's clock has not reached the times set above, and the run does not finish
+            // tearing down while the test clock is still ahead of it.
+            vi.setSystemTime(heartbeatAt);
             runtime.daemon.close();
         }
     });
 
     it("Given a daemon whose heartbeats stopped, When an app reads the Runtime, Then it is reported offline and its connection is closed", async () => {
-        const runtime = await connectRuntimeDaemon("silent-presence");
+        const runtime = await connectRuntimeDaemon("silent-presence", { anchorClockToHeartbeat: true });
+        // The clock now reads when Cloudflare answered the daemon's heartbeat.
+        const heartbeatAt = Date.now();
         try {
-            const connectedAt = Date.now();
-            await runtime.heartbeat("presence-heartbeat");
-            vi.setSystemTime(connectedAt + 30_000);
+            vi.setSystemTime(heartbeatAt + 30_000);
             expect(await runtime.readOnline()).toBe(true);
 
-            vi.setSystemTime(connectedAt + 36_000);
+            vi.setSystemTime(heartbeatAt + 36_000);
+            expect(await runtime.readOnline()).toBe(false);
+            expect(await runtime.daemonClosed).toMatchObject({ code: 4001, reason: "Runtime heartbeat timed out" });
+        } finally {
+            vi.setSystemTime(heartbeatAt);
+            runtime.daemon.close();
+        }
+    });
+
+    it("Given a daemon released before heartbeats became fixed text, When it heartbeats with an identifier and then falls silent, Then the Relay acknowledges that heartbeat and reports the Runtime offline once the silence outlasts the deadline", async () => {
+        const runtime = await connectRuntimeDaemon("identified-heartbeat");
+        try {
+            const heartbeatAt = Date.now();
+            // The exact text such a daemon sends; Cloudflare does not answer it, so the Relay must.
+            runtime.daemon.send(JSON.stringify({ heartbeatId: "identified-heartbeat", kind: "runtime.heartbeat" }));
+            expect(JSON.parse(await runtime.daemonMessages.next())).toEqual({
+                heartbeatId: "identified-heartbeat",
+                kind: "runtime.heartbeat.ack",
+            });
+            vi.setSystemTime(heartbeatAt + 30_000);
+            expect(await runtime.readOnline()).toBe(true);
+
+            vi.setSystemTime(heartbeatAt + 36_000);
             expect(await runtime.readOnline()).toBe(false);
             expect(await runtime.daemonClosed).toMatchObject({ code: 4001, reason: "Runtime heartbeat timed out" });
         } finally {

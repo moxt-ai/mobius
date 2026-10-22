@@ -7,16 +7,15 @@ import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 import {
     decodeMessageKind,
-    decodeRuntimeHeartbeatEvent,
     decodeSessionEventEnvelope,
     decodeSessionOperationFailedEvent,
-    encodeRuntimeHeartbeatAckEvent,
     encodeRuntimeLivenessReadyEvent,
     encodeSessionPromptCommand,
     encodeWorkspaceListCommand,
     MOBIUS_API_PREFIX,
-    RUNTIME_HEARTBEAT_ACK_KIND,
+    RUNTIME_HEARTBEAT_ACK_MESSAGE,
     RUNTIME_HEARTBEAT_KIND,
+    RUNTIME_HEARTBEAT_MESSAGE,
     RUNTIME_LIVENESS_READY_KIND,
     SESSION_EVENT_KIND,
     SESSION_OPERATION_FAILED_KIND,
@@ -329,20 +328,14 @@ describe("daemon relay connection liveness", () => {
             const heartbeatFrame = await firstFrame;
             expect(livenessRequested).toBe(true);
             expect(heartbeatFrame.opcode).toBe(1);
-            const firstHeartbeat = decodeRuntimeHeartbeatEvent(heartbeatFrame.text);
-            expect(firstHeartbeat.kind).toBe(RUNTIME_HEARTBEAT_KIND);
+            // The Relay's host answers only this exact text, without waking the Relay.
+            expect(heartbeatFrame.text).toBe(RUNTIME_HEARTBEAT_MESSAGE);
             const firstSocket = daemonSockets[0];
             if (firstSocket === undefined) {
                 throw new Error("Test relay did not retain the daemon connection");
             }
             const controlResponse = readClientFrame(firstSocket);
-            writeServerTextFrame(
-                firstSocket,
-                encodeRuntimeHeartbeatAckEvent({
-                    heartbeatId: firstHeartbeat.heartbeatId,
-                    kind: RUNTIME_HEARTBEAT_ACK_KIND,
-                }),
-            );
+            writeServerTextFrame(firstSocket, RUNTIME_HEARTBEAT_ACK_MESSAGE);
             writeServerTextFrame(
                 firstSocket,
                 encodeWorkspaceListCommand({
@@ -356,8 +349,7 @@ describe("daemon relay connection liveness", () => {
 
             const unacknowledgedHeartbeat = readClientFrame(firstSocket);
             await vi.advanceTimersByTimeAsync(20_000);
-            const secondHeartbeat = decodeRuntimeHeartbeatEvent((await unacknowledgedHeartbeat).text);
-            expect(secondHeartbeat.heartbeatId).not.toBe(firstHeartbeat.heartbeatId);
+            expect((await unacknowledgedHeartbeat).text).toBe(RUNTIME_HEARTBEAT_MESSAGE);
 
             const refreshedConnection = waitForUpgrade();
             await vi.advanceTimersByTimeAsync(10_000);
@@ -979,15 +971,8 @@ describe("daemon relay connection liveness", () => {
             ) {
                 (await timer.waitForTask(SESSION_EVENT_BATCH_WINDOW_MILLISECONDS)).run();
                 let frame = await firstFrame.next();
-                if (decodeMessageKind(frame.text) === RUNTIME_HEARTBEAT_KIND) {
-                    const heartbeat = decodeRuntimeHeartbeatEvent(frame.text);
-                    writeServerTextFrame(
-                        firstSocket,
-                        encodeRuntimeHeartbeatAckEvent({
-                            heartbeatId: heartbeat.heartbeatId,
-                            kind: RUNTIME_HEARTBEAT_ACK_KIND,
-                        }),
-                    );
+                if (frame.text === RUNTIME_HEARTBEAT_MESSAGE) {
+                    writeServerTextFrame(firstSocket, RUNTIME_HEARTBEAT_ACK_MESSAGE);
                     frame = await firstFrame.next();
                 }
                 while (decodeMessageKind(frame.text) !== SESSION_EVENT_KIND) {
@@ -1065,19 +1050,12 @@ describe("daemon relay connection liveness", () => {
                 throw new Error("Test relay did not observe resumed live events");
             }
             let replayedFrame = await resumedFrame.next();
-            if (decodeMessageKind(replayedFrame.text) === RUNTIME_HEARTBEAT_KIND) {
-                const heartbeat = decodeRuntimeHeartbeatEvent(replayedFrame.text);
+            if (replayedFrame.text === RUNTIME_HEARTBEAT_MESSAGE) {
                 const secondSocket = daemonSockets[1];
                 if (secondSocket === undefined) {
                     throw new Error("Test relay did not retain the replacement connection");
                 }
-                writeServerTextFrame(
-                    secondSocket,
-                    encodeRuntimeHeartbeatAckEvent({
-                        heartbeatId: heartbeat.heartbeatId,
-                        kind: RUNTIME_HEARTBEAT_ACK_KIND,
-                    }),
-                );
+                writeServerTextFrame(secondSocket, RUNTIME_HEARTBEAT_ACK_MESSAGE);
                 replayedFrame = await resumedFrame.next();
             }
             expect(decodeMessageKind(replayedFrame.text)).toBe(WORKSPACE_ENTRIES_KIND);

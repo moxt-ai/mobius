@@ -5,6 +5,7 @@ import {
     logger,
     RuntimeRelay as RuntimeRelayImplementation,
 } from "@moxt-ai/mobius-relay-core";
+import { RUNTIME_HEARTBEAT_ACK_MESSAGE, RUNTIME_HEARTBEAT_MESSAGE } from "@moxt-ai/mobius-sdk/protocol";
 import { runtimeRequestTarget } from "../gateway/runtime-session-routing.ts";
 import { type ConfiguredPlatformRelayBindings, createPlatformWorker } from "../platform-worker.ts";
 import { createPlatformDurableObjectContext } from "./platform-durable-object-context.ts";
@@ -20,6 +21,10 @@ export class RuntimeRelay extends DurableObject<ConfiguredPlatformRelayBindings>
         super(state, environment);
         this.#environment = environment;
         this.#state = state;
+        // Cloudflare answers daemon heartbeats itself, so an idle Runtime connection never wakes this object.
+        state.setWebSocketAutoResponse(
+            new WebSocketRequestResponsePair(RUNTIME_HEARTBEAT_MESSAGE, RUNTIME_HEARTBEAT_ACK_MESSAGE),
+        );
         this.#context = createPlatformDurableObjectContext(state, environment, {
             database: new DurableObjectSqlDatabase(state.storage),
         });

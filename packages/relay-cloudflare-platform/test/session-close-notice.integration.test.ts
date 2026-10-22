@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { encodeDaemonToServiceMessage, encodeSessionCloseNoticeEvent } from "@moxt-ai/mobius-sdk/protocol";
+import { encodeSessionCloseNoticeEvent } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, it } from "vitest";
 
 /** Messages a socket received, in order. Waiting fails once the Relay closes the socket. */
@@ -37,15 +37,6 @@ class Inbox {
         const pending = Promise.withResolvers<Record<string, unknown>>();
         this.#pending.push(pending);
         return pending.promise;
-    };
-
-    readonly nextOfKind = async (kind: string): Promise<Record<string, unknown>> => {
-        for (;;) {
-            const message = await this.next();
-            if (message["kind"] === kind) {
-                return message;
-            }
-        }
     };
 }
 
@@ -138,12 +129,7 @@ it("Given a Relay that does not recognize a Runtime message kind, as an older Re
         expect(await host.inbox.next()).toMatchObject({ kind: "runtime.status", online: true });
 
         daemon.socket.send(JSON.stringify({ kind: "session.future.notice", sessionId: "session-7" }));
-        // The Relay answers this heartbeat only if it kept the connection open after the unknown message.
-        daemon.socket.send(encodeDaemonToServiceMessage({ heartbeatId: "after-unknown", kind: "runtime.heartbeat" }));
-        expect(await daemon.inbox.nextOfKind("runtime.heartbeat.ack")).toEqual({
-            heartbeatId: "after-unknown",
-            kind: "runtime.heartbeat.ack",
-        });
+        // The host receives the next notice only if the Relay kept the connection open after the unknown message.
         daemon.socket.send(
             encodeSessionCloseNoticeEvent({
                 kind: "session.close.notice",

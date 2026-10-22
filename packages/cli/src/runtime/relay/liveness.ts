@@ -1,10 +1,4 @@
-import { randomUUID } from "node:crypto";
-
-import {
-    RUNTIME_HEARTBEAT_KIND,
-    type RuntimeHeartbeatAckEvent,
-    type RuntimeHeartbeatEvent,
-} from "@moxt-ai/mobius-sdk/protocol";
+import { RUNTIME_HEARTBEAT_KIND, type RuntimeHeartbeatEvent } from "@moxt-ai/mobius-sdk/protocol";
 
 import type { ScheduledTask, Timer } from "./timer.ts";
 
@@ -15,13 +9,13 @@ abstract class RelayLivenessState {}
 
 class UnsupportedRelayLivenessState extends RelayLivenessState {}
 
+// Heartbeats carry no identifier so the Relay's host can answer them without waking the Relay.
+// At most one is unacknowledged, so the next acknowledgement always answers it.
 class AwaitingHeartbeatAckState extends RelayLivenessState {
-    readonly heartbeatId: string;
     readonly timeout: ScheduledTask;
 
-    constructor(heartbeatId: string, timeout: ScheduledTask) {
+    constructor(timeout: ScheduledTask) {
         super();
-        this.heartbeatId = heartbeatId;
         this.timeout = timeout;
     }
 }
@@ -39,7 +33,7 @@ class FinishedRelayLivenessState extends RelayLivenessState {}
 
 export interface RelayLivenessTransport {
     readonly send: (message: RuntimeHeartbeatEvent) => boolean;
-    readonly unresponsive: (heartbeatId: string, timeoutMilliseconds: number) => void;
+    readonly unresponsive: (timeoutMilliseconds: number) => void;
 }
 
 export class RelayConnectionLiveness {
@@ -52,12 +46,9 @@ export class RelayConnectionLiveness {
         this.#transport = transport;
     }
 
-    readonly acknowledge = (event: RuntimeHeartbeatAckEvent): void => {
+    readonly acknowledge = (): void => {
         if (!(this.#state instanceof AwaitingHeartbeatAckState)) {
             throw new Error("Unexpected relay heartbeat acknowledgement");
-        }
-        if (event.heartbeatId !== this.#state.heartbeatId) {
-            throw new Error("Relay acknowledged the wrong heartbeat");
         }
         this.#state.timeout.cancel();
         this.#state = new WaitingForHeartbeatState(
@@ -100,10 +91,9 @@ export class RelayConnectionLiveness {
         if (!(this.#state instanceof AwaitingHeartbeatAckState)) {
             throw new Error("Heartbeat timeout occurred in an invalid state");
         }
-        const heartbeatId = this.#state.heartbeatId;
         this.#state.timeout.cancel();
         this.#state = new FinishedRelayLivenessState();
-        this.#transport.unresponsive(heartbeatId, HEARTBEAT_ACK_TIMEOUT_MILLISECONDS);
+        this.#transport.unresponsive(HEARTBEAT_ACK_TIMEOUT_MILLISECONDS);
     };
 
     readonly #sendHeartbeat = (): void => {
@@ -115,17 +105,13 @@ export class RelayConnectionLiveness {
             }
             throw new Error("Heartbeat was scheduled in an invalid state");
         }
-        const heartbeatId = randomUUID();
-        this.#state = new AwaitingHeartbeatAckState(
-            heartbeatId,
+        const awaiting = new AwaitingHeartbeatAckState(
             this.#timer.schedule(this.#handleTimeout, HEARTBEAT_ACK_TIMEOUT_MILLISECONDS),
         );
-        const sent = this.#transport.send({
-            heartbeatId,
-            kind: RUNTIME_HEARTBEAT_KIND,
-        });
-        if (!sent && this.#state instanceof AwaitingHeartbeatAckState && this.#state.heartbeatId === heartbeatId) {
-            this.#state.timeout.cancel();
+        this.#state = awaiting;
+        const sent = this.#transport.send({ kind: RUNTIME_HEARTBEAT_KIND });
+        if (!sent && this.#state === awaiting) {
+            awaiting.timeout.cancel();
             this.#state = new FinishedRelayLivenessState();
         }
     };

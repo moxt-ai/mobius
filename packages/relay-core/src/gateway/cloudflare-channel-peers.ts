@@ -174,13 +174,11 @@ export class CloudflareChannelSocket implements RuntimeSocket {
     readonly isOpen = (): boolean => this.#socket.readyState === WebSocket.OPEN;
     readonly isSame = (socket: ChannelSocket): boolean =>
         socket instanceof CloudflareChannelSocket && socket.#socket === this.#socket;
-    readonly lastHeartbeat = (): DaemonHeartbeat => {
-        const { heartbeatAt } = this.daemonAttachment();
-        return heartbeatAt === undefined ? { kind: "none" } : { kind: "received", at: heartbeatAt };
-    };
     readonly recordHeartbeat = (at: number): void => {
         this.#socket.serializeAttachment({ ...this.daemonAttachment(), heartbeatAt: at });
     };
+    /** When the Relay itself last answered this daemon's heartbeat, if it ever has. */
+    readonly recordedHeartbeatAt = (): number | undefined => this.daemonAttachment().heartbeatAt;
     readonly permitsSessionHistory = (): boolean => {
         const identity = this.identity();
         return identity.role === "relay" || (identity.role === "host" && identity.credentialId.startsWith("ctl_"));
@@ -238,6 +236,20 @@ export class CloudflareChannelPeers implements RuntimePeers {
         this.#state.getWebSockets().map((webSocket) => {
             const socket = new CloudflareChannelSocket(webSocket);
             return { socket, identity: socket.identity() };
+        });
+
+    readonly daemonConnections: RuntimePeers["daemonConnections"] = () =>
+        this.#state.getWebSockets("daemon").map((webSocket) => {
+            const socket = new CloudflareChannelSocket(webSocket);
+            // Cloudflare answers fixed-text heartbeats and records only when it last did so; the Relay
+            // records the identified heartbeats of older daemons itself.
+            const answered = [
+                this.#state.getWebSocketAutoResponseTimestamp(webSocket)?.getTime(),
+                socket.recordedHeartbeatAt(),
+            ].filter((at) => at !== undefined);
+            const heartbeat: DaemonHeartbeat =
+                answered.length === 0 ? { kind: "none" } : { kind: "received", at: Math.max(...answered) };
+            return { heartbeat, identity: socket.identity(), socket };
         });
 
     readonly daemons = (): readonly ChannelSocket[] =>
