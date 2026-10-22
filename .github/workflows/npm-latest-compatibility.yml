@@ -1,0 +1,33 @@
+name: npm latest compatibility
+
+# The daemon upgrades itself through whatever npm users install. Pull requests pin
+# the supported npm majors; this scheduled run catches a new npm release that changes
+# behavior the daemon relies on before users install it widely.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  npm-latest:
+    name: npm compatibility (npm latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install the latest npm
+        run: npm install --global npm@latest && npm --version
+      - run: pnpm test:npm-compatibility
