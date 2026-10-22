@@ -71,6 +71,13 @@ export async function installDaemonReleaseVersion(version: string, signal: Abort
     }
 }
 
+// `npm view <package> <field> --json` prints the field's value through npm 11 and
+// a one-element array from npm 12. Accept exactly those shapes; anything else is
+// not a version npm reported.
+const npmViewVersionSchema = z
+    .union([runtimeUpgradeVersionSchema, z.tuple([runtimeUpgradeVersionSchema])])
+    .transform((value) => (typeof value === "string" ? value : value[0]));
+
 export async function findNewDaemonReleaseVersion(currentVersion: string, signal: AbortSignal): Promise<string | null> {
     const npm = await findExecutableOnPath("npm", process.env);
     if (npm === null) {
@@ -86,7 +93,7 @@ export async function findNewDaemonReleaseVersion(currentVersion: string, signal
             timeoutMilliseconds: 30_000,
             outputLimitBytes: 4096,
         });
-        const version = runtimeUpgradeVersionSchema.parse(JSON.parse(result.stdout));
+        const version = npmViewVersionSchema.parse(JSON.parse(result.stdout));
         return gt(version, currentVersion) ? version : null;
     } catch (cause) {
         signal.throwIfAborted();
