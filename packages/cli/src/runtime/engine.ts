@@ -215,3 +215,4 @@ export {
     RuntimeLocalContext,
     RuntimeReconnectTarget,
 } from "./config.ts";
+export { RuntimeRelayRevokedError } from "./relay/runtime-revocation.ts";
