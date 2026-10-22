@@ -33,7 +33,7 @@ function readSessionDirFromSettings(agentDir: string): string | null {
             return null;
         }
 
-        const sessionDir = (data as Record<string, unknown>).sessionDir;
+        const sessionDir = (data as Record<string, unknown>)["sessionDir"];
         if (typeof sessionDir !== "string" || !sessionDir.trim()) {
             return null;
         }
@@ -47,6 +47,26 @@ function readSessionDirFromSettings(agentDir: string): string | null {
 export function getPiSessionsDir(environment: Readonly<NodeJS.ProcessEnv> = process.env): string {
     const agentDir = getPiAgentDir(environment);
     return readSessionDirFromSettings(agentDir) ?? join(agentDir, "sessions");
+}
+
+function getPiSessionDiscoveryDirs(environment: Readonly<NodeJS.ProcessEnv>): string[] {
+    const discoveryDirectories = [getPiSessionsDir(environment)];
+    const mobiusSessionDirectory = environment["MOBIUS_PI_SESSION_DIR"];
+    if (mobiusSessionDirectory !== undefined && mobiusSessionDirectory.trim().length > 0) {
+        // Discovery is not paired to the current default workspace: sibling hashed
+        // directories contain sessions created by other Mobius connections.
+        const mobiusSessionsRoot = resolve(mobiusSessionDirectory, "..");
+        for (const entry of readdirSync(mobiusSessionsRoot, { withFileTypes: true, encoding: "utf-8" })) {
+            if (!entry.isDirectory()) {
+                continue;
+            }
+            const directory = join(mobiusSessionsRoot, entry.name);
+            if (!discoveryDirectories.includes(directory)) {
+                discoveryDirectories.push(directory);
+            }
+        }
+    }
+    return discoveryDirectories;
 }
 
 function walkJsonlFiles(dir: string, out: string[]) {
@@ -132,8 +152,8 @@ function pickTitleFromTail(tail: string): string | null {
     // Try to find the *latest* session_info entry (stores the user-provided name).
     // We scan backwards line-by-line.
     const lines = tail.split(/\r?\n/);
-    for (let i = lines.length - 1; i >= 0; i--) {
-        const line = lines[i].trim();
+    for (let index = lines.length - 1; index >= 0; index--) {
+        const line = lines[index]?.trim() ?? "";
         if (!line) {
             continue;
         }
@@ -217,8 +237,8 @@ function pickUpdatedAtFromTail(tail: string): string | null {
     const lines = tail.split(/\r?\n/);
 
     // 1) Prefer the most recent message entry.
-    for (let i = lines.length - 1; i >= 0; i--) {
-        const line = lines[i].trim();
+    for (let index = lines.length - 1; index >= 0; index--) {
+        const line = lines[index]?.trim() ?? "";
         if (!line) {
             continue;
         }
@@ -241,8 +261,8 @@ function pickUpdatedAtFromTail(tail: string): string | null {
     }
 
     // 2) Fallback: any valid timestamp (covers sessions that somehow have no messages).
-    for (let i = lines.length - 1; i >= 0; i--) {
-        const line = lines[i].trim();
+    for (let index = lines.length - 1; index >= 0; index--) {
+        const line = lines[index]?.trim() ?? "";
         if (!line) {
             continue;
         }
@@ -308,9 +328,18 @@ function pickFallbackTitleFromHead(path: string): string | null {
 }
 
 export function listPiSessions(environment: Readonly<NodeJS.ProcessEnv> = process.env): PiSessionListItem[] {
-    const sessionsDir = getPiSessionsDir(environment);
     const files: string[] = [];
-    walkJsonlFiles(sessionsDir, files);
+    const seenFiles = new Set<string>();
+    for (const sessionsDirectory of getPiSessionDiscoveryDirs(environment)) {
+        const directoryFiles: string[] = [];
+        walkJsonlFiles(sessionsDirectory, directoryFiles);
+        for (const file of directoryFiles) {
+            if (!seenFiles.has(file)) {
+                seenFiles.add(file);
+                files.push(file);
+            }
+        }
+    }
 
     const items: PiSessionListItem[] = [];
 
