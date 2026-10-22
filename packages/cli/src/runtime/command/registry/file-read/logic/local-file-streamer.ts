@@ -1,5 +1,3 @@
-import { createReadStream } from "node:fs";
-import { realpath, stat } from "node:fs/promises";
 import { basename, extname, isAbsolute, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -11,6 +9,7 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { readLocalRaster } from "../../../../../acp/content/raster.ts";
 import type { ExternalContentStore } from "../../../../../acp/external-content/local-external-content-store.ts";
+import { canonicalPath, readFileChunks, readPathMetadata } from "../../../../../storage/files/local-files.ts";
 
 const CHUNK_BYTES = 192 * 1024;
 
@@ -63,7 +62,7 @@ async function resolveFile(
             continue;
         }
         try {
-            const target = await realpath(candidate);
+            const target = await canonicalPath(candidate);
             signal.throwIfAborted();
             if (isAbsolute(target) && normalize(target) === target) {
                 return target;
@@ -87,9 +86,9 @@ export async function streamLocalFile(
     if (target === null) {
         throw new Error("The local file is unavailable");
     }
-    const before = await stat(target);
+    const before = await readPathMetadata(target);
     signal.throwIfAborted();
-    if (!before.isFile() || before.size < 1 || before.size > command.maxBytes) {
+    if (before.kind !== "file" || before.size < 1 || before.size > command.maxBytes) {
         throw new Error("The local file is too large to read");
     }
     const raster = external === null ? await readLocalRaster(target, signal) : null;
@@ -100,15 +99,13 @@ export async function streamLocalFile(
             external?.mediaType ??
             raster?.mimeType ??
             (extname(target).toLowerCase() === ".svg" ? "image/svg+xml" : "application/octet-stream"),
-        modifiedAt: before.mtime.toISOString(),
+        modifiedAt: before.modifiedAt.toISOString(),
         name: external?.name ?? (basename(target) || "file"),
         requestId: command.requestId,
         sessionId: command.sessionId,
     });
     let sequence = 0;
-    const stream = createReadStream(target, { highWaterMark: CHUNK_BYTES, signal });
-    for await (const value of stream) {
-        const bytes = value instanceof Uint8Array ? value : new Uint8Array(value as ArrayBuffer);
+    for await (const bytes of readFileChunks(target, CHUNK_BYTES, signal)) {
         send({
             data: Buffer.from(bytes).toString("base64"),
             kind: FILE_CHUNK_KIND,
@@ -118,9 +115,9 @@ export async function streamLocalFile(
         });
         sequence += 1;
     }
-    const after = await stat(target);
+    const after = await readPathMetadata(target);
     signal.throwIfAborted();
-    if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
+    if (after.size !== before.size || after.modifiedMilliseconds !== before.modifiedMilliseconds) {
         throw new Error("The local file changed during transfer");
     }
     send({

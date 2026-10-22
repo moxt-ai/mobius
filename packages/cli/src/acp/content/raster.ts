@@ -1,6 +1,6 @@
-import { open, readFile, realpath, stat } from "node:fs/promises";
 import { basename, isAbsolute, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
+import { canonicalPath, readFileBytes, readFileStart, readPathMetadata } from "../../storage/files/local-files.ts";
 
 const MAX_LOCAL_RASTER_BYTES = 128 * 1024 * 1024;
 const PNG_SIGNATURE = Uint8Array.of(0x89, 0x50, 0x4e, 0x47);
@@ -24,7 +24,7 @@ export class LocalRasterImage {
         this.sourceUri = sourceUri;
     }
 
-    readonly base64 = async (): Promise<string> => Buffer.from(await readFile(this.sourceUri)).toString("base64");
+    readonly base64 = async (): Promise<string> => Buffer.from(await readFileBytes(this.sourceUri)).toString("base64");
 }
 
 function startsWith(bytes: Uint8Array, signature: Uint8Array, offset = 0): boolean {
@@ -56,7 +56,7 @@ async function resolveCanonicalPath(requested: string, signal: AbortSignal): Pro
         return null;
     }
     try {
-        const target = await realpath(requested);
+        const target = await canonicalPath(requested);
         signal.throwIfAborted();
         if (!isAbsolute(target) || normalize(target) !== target) {
             return null;
@@ -106,18 +106,12 @@ export async function readLocalRaster(uri: string, signal: AbortSignal): Promise
     if (target === null) {
         return null;
     }
-    const targetMetadata = await stat(target);
+    const targetMetadata = await readPathMetadata(target);
     signal.throwIfAborted();
-    if (!targetMetadata.isFile() || targetMetadata.size < 1 || targetMetadata.size > MAX_LOCAL_RASTER_BYTES) {
+    if (targetMetadata.kind !== "file" || targetMetadata.size < 1 || targetMetadata.size > MAX_LOCAL_RASTER_BYTES) {
         return null;
     }
-    const handle = await open(target, "r");
-    const header = new Uint8Array(12);
-    try {
-        await handle.read(header, 0, header.byteLength, 0);
-    } finally {
-        await handle.close();
-    }
+    const header = await readFileStart(target, 12);
     signal.throwIfAborted();
     const mimeType = sniffRasterMime(header);
     if (mimeType === null) {
