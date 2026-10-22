@@ -36,6 +36,9 @@ const SESSION_CLOSE_TIMEOUT_MILLISECONDS = 30_000;
 /** Why the Runtime closed a Session, as its close notice tells clients. */
 type SessionCloseReason = "requested";
 
+/** What preparing does with a closed Session: a prepare or restore reopens it, a read must keep it closed. */
+export type ClosedSessionHandling = "reopen" | "keep-closed";
+
 export { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-error.ts";
 export type { Adapter, AdapterResolver } from "./adapter/context.ts";
 export {
@@ -335,6 +338,7 @@ export class AgentRuntimeManager {
     async #prepareSession(
         options: AcpPrepareOptions,
         recovery: AcpSessionRecovery,
+        closed: ClosedSessionHandling,
         metrics: OperationMetrics = unmeasuredOperationMetrics,
     ): Promise<AcpPreparedSession> {
         return await this.#operations.run(options, async (options) => {
@@ -342,8 +346,12 @@ export class AgentRuntimeManager {
             if (closing !== undefined) {
                 await waitForSharedOperation(closing, options.signal);
             }
-            // Preparing or restoring a Session is how a client reopens it.
-            this.#closedSessions.delete(options.sessionId);
+            if (closed === "reopen") {
+                // Preparing or restoring a Session is how a client reopens it.
+                this.#closedSessions.delete(options.sessionId);
+            } else {
+                this.#assertOpen(options.sessionId);
+            }
             const stored = metrics.measureSync("session-state-read", () => this.#store.read(options.sessionId));
 
             if (
@@ -368,7 +376,7 @@ export class AgentRuntimeManager {
                     }
                     return runtime.prepared();
                 }
-                return await this.#prepareSession(options, recovery, metrics);
+                return await this.#prepareSession(options, recovery, closed, metrics);
             }
             const existing = this.#executionProcesses.get(options.sessionId);
             if (existing !== undefined) {
@@ -400,12 +408,16 @@ export class AgentRuntimeManager {
     readonly prepareSession = async (
         options: AcpPrepareOptions,
         metrics: OperationMetrics = unmeasuredOperationMetrics,
-    ): Promise<AcpPreparedSession> => await this.#prepareSession(options, { kind: "interactive-only" }, metrics);
+        closed: ClosedSessionHandling = "reopen",
+    ): Promise<AcpPreparedSession> =>
+        await this.#prepareSession(options, { kind: "interactive-only" }, closed, metrics);
 
     readonly restoreSession = async (
         options: AcpPrepareOptions,
         metrics: OperationMetrics = unmeasuredOperationMetrics,
-    ): Promise<AcpPreparedSession> => await this.#prepareSession(options, { kind: "history-required" }, metrics);
+        closed: ClosedSessionHandling = "reopen",
+    ): Promise<AcpPreparedSession> =>
+        await this.#prepareSession(options, { kind: "history-required" }, closed, metrics);
 
     /**
      * Opens a short-lived native ACP session only to read the local Agent's

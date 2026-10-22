@@ -2,12 +2,14 @@ import {
     decodeMessageKind,
     decodeSessionClosedEvent,
     decodeSessionCloseNoticeEvent,
+    decodeSessionConfigReadResult,
     decodeSessionOperationFailedEvent,
     decodeSessionReadyEvent,
     decodeSessionRenamedEvent,
     decodeSessionStatusChangedEvent,
     decodeSessionsQueriedEvent,
     encodeSessionCloseCommand,
+    encodeSessionConfigReadCommand,
     encodeSessionElicitationRespondCommand,
     encodeSessionHistoryPageLoad,
     encodeSessionPermissionRespondCommand,
@@ -85,6 +87,9 @@ async function nextFailure(peer: RealDaemonPeer, requestId: string): Promise<Ses
         }
         if (kind === "session.renamed" && decodeSessionRenamedEvent(message).requestId === requestId) {
             throw new Error("The rename succeeded instead of failing");
+        }
+        if (kind === "session.config.read.result" && decodeSessionConfigReadResult(message).requestId === requestId) {
+            throw new Error("The settings read succeeded instead of failing");
         }
         if (kind !== "session.operation.failed") {
             continue;
@@ -229,6 +234,19 @@ test("Given a closed Session, When a client renames it, Then the Runtime reports
         peer.send(encodeSessionRenameCommand({ kind: "session.rename", requestId, sessionId, title: "Release plan" }));
 
         expect(await nextFailure(peer, requestId)).toMatchObject({ code: SESSION_CLOSED_ERROR_CODE, sessionId });
+    });
+});
+
+test("Given a closed Session, When a client reads its settings, Then the Runtime reports session_closed and starts no Agent process", async () => {
+    const specification = new ClosableAgentSpecification();
+    await withClosableDaemon(specification, async (peer) => {
+        const sessionId = await closedSession(peer, "Plan the release");
+
+        const requestId = crypto.randomUUID();
+        peer.send(encodeSessionConfigReadCommand({ kind: "session.config.read", requestId, sessionId }));
+
+        expect(await nextFailure(peer, requestId)).toMatchObject({ code: SESSION_CLOSED_ERROR_CODE, sessionId });
+        expect(specification.sessions.endpointCount()).toBe(2);
     });
 });
 
