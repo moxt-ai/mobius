@@ -2475,6 +2475,49 @@ describe.sequential("Platform Turn submission", () => {
         }
     });
 
+    // @no-uc: Technical regression; the App Runtime Turn route carries base64 prompt images inline,
+    // so it must be parsed against the protocol attachment budget, not the default 256KB body cap.
+    it("App access delivers a Turn whose inline image exceeds the legacy 256KB body cap", async () => {
+        const runtime = await connectRuntimeDaemon("app-large-image");
+        try {
+            // A base64 payload well past the historical 256KB body cap, still within the 6MB
+            // prompt-attachment budget. "A" repeated is valid base64 and decodes cleanly.
+            const largeImageData = "A".repeat(400 * 1024);
+            expect(largeImageData.length).toBeGreaterThan(256 * 1024);
+            const submittedImage = { data: largeImageData, mimeType: "image/png", name: "screenshot.png" };
+            const idempotencyKey = "large-image-turn";
+            const response = runtime.appSessionRequest("/turns", {
+                method: "POST",
+                body: {
+                    additionalDirectoryIds: [],
+                    agentId: "codex",
+                    content: "Describe the pasted screenshot.",
+                    directoryId: "root",
+                    disposition: "reject",
+                    idempotencyKey,
+                    images: [submittedImage],
+                    resources: [],
+                    sessionConfigurations: [],
+                    targetCommandId: "",
+                },
+            });
+            const first = await Promise.race([
+                runtime.daemonMessages.next().then((message) => ({ kind: "command", message })),
+                response.then((result) => ({ kind: "response", message: String(result.status) })),
+            ]);
+            expect(first).toMatchObject({ kind: "command" });
+            expect(decodeServiceToDaemonMessage(first.message)).toMatchObject({
+                kind: "session.prompt",
+                commandId: idempotencyKey,
+                images: [submittedImage],
+            });
+            runtime.startTurn(idempotencyKey, "1");
+            expect(await responseJson(await response, 200)).toMatchObject({ turnId: idempotencyKey });
+        } finally {
+            runtime.daemon.close(1000, "Test complete");
+        }
+    });
+
     // @no-uc: Technical regression; independent Durable Object clocks must not reject newly issued credentials.
     it.each([900, 30_000])(
         "accepts a Session credential issued %i milliseconds ahead of RuntimeRelay",
