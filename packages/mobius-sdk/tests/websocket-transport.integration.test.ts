@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { afterEach, expect, it, vi } from "vitest";
-import { MobiusClient, StaticMobiusCredentialProvider } from "../src/index.ts";
+import { MobiusClient, MobiusConnectionError, StaticMobiusCredentialProvider } from "../src/index.ts";
 import { type MobiusWebSocketConnector, WsTransport } from "../src/platform.ts";
 
 class BrowserWebSocket extends EventTarget implements WebSocket {
@@ -295,6 +295,43 @@ it("Given caller-owned Session recovery, When its live stream disconnects, Then 
         }
         socket.dispatchEvent(new Event("error"));
         await failure;
+    } finally {
+        client.close();
+        transport.close();
+    }
+});
+
+it("Given caller-owned Session recovery, When its live stream receives nothing past the transport idle deadline, Then the stream fails so the caller can reconnect", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "clearTimeout", "setTimeout"] });
+    vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+    const connector = new BrowserWebSocketConnector();
+    const transport = new WsTransport({ connector, idleTimeoutMilliseconds: 1_000 });
+    const client = new MobiusClient({
+        credentialProvider: new StaticMobiusCredentialProvider("test-credential"),
+        endpoint: "https://relay.example.test",
+        maxStreamReconnectAttempts: 0,
+        projectId: "project-1",
+        transport,
+    });
+    try {
+        const subscription = await client.events.subscribeLive(
+            "session-1",
+            { receive: async () => true, reconcile: async () => undefined },
+            new AbortController().signal,
+        );
+        let outcome: unknown = "still subscribed";
+        void subscription.completed.then(
+            () => {
+                outcome = "completed";
+            },
+            (cause: unknown) => {
+                outcome = cause;
+            },
+        );
+
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(outcome).toBeInstanceOf(MobiusConnectionError);
     } finally {
         client.close();
         transport.close();

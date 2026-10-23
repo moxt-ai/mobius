@@ -498,9 +498,11 @@ export class WsTransport implements MobiusHttpTransport {
         kind: "connected",
         idleTimeoutId: globalThis.setTimeout(() => {
             if (this.#state.kind === "connected" && this.#state.socket === socket) {
-                this.#state = { kind: "disconnected" };
+                // The server heartbeats every open subscription, so a socket that stays silent has stopped
+                // delivering. Live streams fail with it: the next request opens a replacement socket that
+                // never carries their subscription, and their owner must reconnect and reconcile.
+                this.#disconnected(socket, new MobiusConnectionError("The Mobius WebSocket transport became inactive"));
                 socket.close(4000, "Mobius transport idle timeout");
-                this.#failPending(new MobiusConnectionError("The Mobius WebSocket transport became inactive"));
             }
         }, this.#idleTimeoutMilliseconds),
         socket,
