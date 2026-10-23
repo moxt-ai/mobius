@@ -117,10 +117,15 @@ See the workflows for exact environment bindings and failure gates.
 ## Persistence and recovery constraints
 
 Pairing credentials, connection preferences and session metadata may be retained
-locally. Agents own their native history. Current-turn content, pending prompts and
-execution state must remain in daemon memory; a restart loses them by design and
-does not resume work. Local diagnostics may be retained for troubleshooting, but
-must not contain prompt text or become an event archive.
+locally. Agents own their native history. Current-turn content and pending prompt
+bodies remain in daemon memory. The daemon
+may persist bounded execution receipts without prompt content to distinguish work
+interrupted by a restart from work that completed before disconnecting. A restart
+does not resume work automatically: the application owns continuation policy and
+submits any continuation as a new command. Commands that already started must not
+execute again when their identifiers are replayed after a restart; commands that
+never started may be resubmitted. Local diagnostics must not contain prompt text
+or become an event archive.
 
 Live delivery must not depend on acknowledgements, persistent delivery queues or
 retries. Optional cloud Recording is best effort and must never block live output.
