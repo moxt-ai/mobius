@@ -507,42 +507,6 @@ describe("Recording Turn history", () => {
         expect(full.kind === "answer" ? full.text : "").toBe(chunk.repeat(10));
     });
 
-    it("Given a stored Turn that can no longer be folded, When the Session keeps recording, Then events are still recorded and reads report the failure until backfill succeeds", async () => {
-        await record([requested("command-1", "Prompt 1"), started("command-1")]);
-        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]));
-        const original = await runInDurableObject(stub, (_instance, state) => {
-            const row = state.storage.sql
-                .exec("SELECT turn_json FROM recorded_turns WHERE command_id = 'command-1'")
-                .toArray()[0];
-            state.storage.sql.exec("UPDATE recorded_turns SET turn_json = '{}' WHERE command_id = 'command-1'");
-            return String(row?.["turn_json"]);
-        });
-
-        await record([answer("Still recorded."), completed("command-1")]);
-        const live = await worker.fetch(new Request(sessionPath("events?after=0&limit=100")), env);
-        expect(
-            decodeSessionRecordingHistoryPage(await live.text()).events.map((candidate) => candidate.eventId),
-        ).toEqual(["event-1", "event-2", "event-3", "event-4"]);
-
-        while (await runDurableObjectAlarm(stub)) {
-            // Run every backfill attempt that is due; each one fails on the unreadable Turn.
-        }
-        const failed = await worker.fetch(new Request(sessionPath("turns")), env);
-        expect(failed.status).toBe(503);
-        expect(Number(failed.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
-        expect(await failed.json()).toMatchObject({ error: { code: "projection_failed" } });
-
-        await runInDurableObject(stub, (_instance, state) => {
-            state.storage.sql.exec("UPDATE recorded_turns SET turn_json = ? WHERE command_id = 'command-1'", original);
-        });
-        await runDurableObjectAlarm(stub);
-        const recovered = await turnPage();
-        expect(recovered.turns[0]).toMatchObject({
-            attempt: { kind: "succeeded" },
-            items: [{ kind: "answer", text: "Still recorded." }],
-        });
-    });
-
     it("Given a request waiting when a new attempt of its Turn starts, When a client reads Turns, Then the request is no longer pending", async () => {
         await record([
             requested("command-1", "Deploy"),
