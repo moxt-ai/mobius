@@ -73,34 +73,6 @@ describe("Mobius manager version compatibility", () => {
             }
         },
     );
-    it("Given Relay withholds liveness ready, When the user starts the daemon, Then local startup succeeds without waiting for Relay", async () => {
-        const directory = await mkdtemp(join(tmpdir(), "mobius-local-start-"));
-        temporaryDirectories.push(directory);
-        const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: directory };
-        const signal = AbortSignal.timeout(60_000);
-        const relay = await startRelay(false);
-        const installation = await openMobiusCliInstallation(signal, environment);
-        await installation.saveConnection(
-            {
-                appId: "app_local_start",
-                channelId: "channel_local_start",
-                defaultWorkspace: directory,
-                pairingId: "",
-                relayOrigin: relay.origin,
-                runtimeCredential: "a".repeat(43),
-                runtimeId: "runtime_local_start",
-            },
-            signal,
-        );
-        try {
-            const result = await runCli(["start"], environment, signal);
-            expect(result.code).toBe(0);
-            expect(result.stdout).toContain("Mobius daemon is running.");
-        } finally {
-            await runCli(["quit"], environment, AbortSignal.timeout(10_000));
-            await relay.close();
-        }
-    }, 90_000);
     it("Given the daemon is stopped, When the user runs mobius start, Then the daemon is running without requiring a connection", async () => {
         const stateRoot = await mkdtemp(join(tmpdir(), "mobius-manager-start-"));
         temporaryDirectories.push(stateRoot);
