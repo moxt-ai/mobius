@@ -159,7 +159,27 @@ export class AgentConnection {
             });
         });
         const stream = ndJsonStream(createWritableAcpStream(stdin), readableWebStream(stdout));
-        this.connection = createAcpClient(client).connect(stream);
+        let pendingUpdates = 0;
+        this.connection = createAcpClient({
+            onElicitation: client.onElicitation,
+            onElicitationComplete: client.onElicitationComplete,
+            onPermission: client.onPermission,
+            // ACP notifications acknowledge transport writes, not their consumption.
+            // Stop reading the child while updates from the current chunk drain;
+            // the OS pipe then backpressures history replay instead of filling our queue.
+            onUpdate: async (notification) => {
+                pendingUpdates += 1;
+                stdout.pause();
+                try {
+                    await client.onUpdate(notification);
+                } finally {
+                    pendingUpdates -= 1;
+                    if (pendingUpdates === 0) {
+                        stdout.resume();
+                    }
+                }
+            },
+        }).connect(stream);
     }
     get inProcessAgent(): InProcessAcpEndpoint | null {
         return this.#process.kind === "in-process" ? this.#process.endpoint : null;
