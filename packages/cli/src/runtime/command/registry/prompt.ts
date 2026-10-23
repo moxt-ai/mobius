@@ -41,7 +41,7 @@ export const sessionPromptCommand: RuntimeCommand = {
             return;
         }
         if (receipt.kind === "duplicate") {
-            const outcome = context.operations.outcome(message.commandId);
+            const outcome = receipt.outcome;
             if (outcome !== undefined) {
                 void context.eventProjection.replayOutcome(message.sessionId, outcome).catch((cause: unknown) => {
                     console.error("Could not replay the persisted execution outcome", cause);

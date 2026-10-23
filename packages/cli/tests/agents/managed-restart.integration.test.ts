@@ -161,106 +161,117 @@ async function interruptedJourney(
     release: () => void,
     disconnected: Promise<void>,
 ): Promise<void> {
-    const sessionId = await prepareNewRealSession(peer, agentId);
-    const identity = { agentId, bindingId: peer.bindingId, directoryId: "default", additionalDirectoryIds: [] };
-    const commandId = randomUUID();
-    const sendPrompt = (id: string, prompt: string): void =>
+    let stage = "preparing the original session";
+    try {
+        const sessionId = await prepareNewRealSession(peer, agentId);
+        const identity = { agentId, bindingId: peer.bindingId, directoryId: "default", additionalDirectoryIds: [] };
+        const commandId = randomUUID();
+        const sendPrompt = (id: string, prompt: string): void =>
+            peer.send(
+                encodeSessionPromptCommand({
+                    ...identity,
+                    kind: "session.prompt",
+                    commandId: id,
+                    sessionId,
+                    images: [],
+                    resources: [],
+                    prompt,
+                    disposition: SessionPromptDisposition.Reject,
+                    targetCommandId: "",
+                }),
+            );
+        sendPrompt(commandId, "Begin work that will be interrupted by the runtime restart");
+        stage = "waiting for the original provider request";
+        await awaitPeerOperation(entered, peer.signal);
+        stage = "restarting the managed runtime";
+        await peer.restart("crash");
+        stage = "waiting for the old Agent request to disconnect";
+        await awaitPeerOperation(disconnected, peer.signal);
+        release();
+        for (;;) {
+            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            if (
+                event.type === "lifecycle-metadata" &&
+                event.payload.kind === "prompt.failed" &&
+                event.payload.commandId === commandId
+            ) {
+                expect(event.payload.code).toBe("runtime_restarted");
+                break;
+            }
+        }
+        stage = "restoring the native session";
+        const requestId = randomUUID();
+        peer.send(encodeSessionPrepareCommand({ ...identity, kind: "session.prepare", requestId, sessionId }));
+        for (;;) {
+            const message = await peer.nextMessage();
+            const kind = decodeMessageKind(message);
+            if (kind === "session.operation.failed") {
+                throw new Error(message);
+            }
+            if (kind === "session.ready" && decodeSessionReadyEvent(message).requestId === requestId) {
+                expect(decodeSessionReadyEvent(message).restored).toBe(true);
+                break;
+            }
+        }
+        stage = "reading restored execution facts";
+        const historyId = randomUUID();
         peer.send(
-            encodeSessionPromptCommand({
-                ...identity,
-                kind: "session.prompt",
-                commandId: id,
+            encodeSessionHistoryPageLoad({
+                kind: "session.live-history.v2.page.load",
+                requestId: historyId,
                 sessionId,
-                images: [],
-                resources: [],
-                prompt,
-                disposition: SessionPromptDisposition.Reject,
-                targetCommandId: "",
+                cursor: null,
+                eventLimit: 100,
             }),
         );
-    sendPrompt(commandId, "Begin work that will be interrupted by the runtime restart");
-    await awaitPeerOperation(entered, peer.signal);
-    await peer.restart("crash");
-    await awaitPeerOperation(disconnected, peer.signal);
-    release();
-    for (;;) {
-        const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
-        if (
-            event.type === "lifecycle-metadata" &&
-            event.payload.kind === "prompt.failed" &&
-            event.payload.commandId === commandId
-        ) {
-            expect(event.payload.code).toBe("runtime_restarted");
+        for (;;) {
+            const message = await peer.nextMessage();
+            if (decodeMessageKind(message) === "session.operation.failed") {
+                throw new Error(message);
+            }
+            if (decodeMessageKind(message) !== "session.live-history.v2.page.loaded") {
+                continue;
+            }
+            const history = decodeSessionHistoryPageLoaded(message);
+            if (history.requestId !== historyId) {
+                continue;
+            }
+            expect(
+                history.events.events.events.some(
+                    (event) =>
+                        event.type === "lifecycle-metadata" &&
+                        event.payload.kind === "prompt.failed" &&
+                        event.payload.commandId === commandId &&
+                        event.payload.code === "runtime_restarted",
+                ),
+            ).toBe(true);
             break;
         }
-    }
-    const requestId = randomUUID();
-    peer.send(encodeSessionPrepareCommand({ ...identity, kind: "session.prepare", requestId, sessionId }));
-    for (;;) {
-        const message = await peer.nextMessage();
-        const kind = decodeMessageKind(message);
-        if (kind === "session.operation.failed") {
-            throw new Error(message);
+        stage = "completing the continuation";
+        const continuation = randomUUID();
+        sendPrompt(
+            continuation,
+            "The runtime restarted. Review the native conversation and continue unfinished work. Check before repeating side effects.",
+        );
+        for (;;) {
+            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            if (
+                event.type === "lifecycle-metadata" &&
+                (event.payload.kind === "prompt.failed" || event.payload.kind === "prompt.failed-before-start")
+            ) {
+                throw new Error(JSON.stringify(event.payload));
+            }
+            if (
+                event.type === "lifecycle-metadata" &&
+                event.payload.kind === "prompt.completed" &&
+                event.payload.commandId === continuation
+            ) {
+                expect(event.payload.stopReason).toBe("end_turn");
+                return;
+            }
         }
-        if (kind === "session.ready" && decodeSessionReadyEvent(message).requestId === requestId) {
-            expect(decodeSessionReadyEvent(message).restored).toBe(true);
-            break;
-        }
-    }
-    const historyId = randomUUID();
-    peer.send(
-        encodeSessionHistoryPageLoad({
-            kind: "session.live-history.v2.page.load",
-            requestId: historyId,
-            sessionId,
-            cursor: null,
-            eventLimit: 100,
-        }),
-    );
-    for (;;) {
-        const message = await peer.nextMessage();
-        if (decodeMessageKind(message) === "session.operation.failed") {
-            throw new Error(message);
-        }
-        if (decodeMessageKind(message) !== "session.live-history.v2.page.loaded") {
-            continue;
-        }
-        const history = decodeSessionHistoryPageLoaded(message);
-        if (history.requestId !== historyId) {
-            continue;
-        }
-        expect(
-            history.events.events.events.some(
-                (event) =>
-                    event.type === "lifecycle-metadata" &&
-                    event.payload.kind === "prompt.failed" &&
-                    event.payload.commandId === commandId &&
-                    event.payload.code === "runtime_restarted",
-            ),
-        ).toBe(true);
-        break;
-    }
-    const continuation = randomUUID();
-    sendPrompt(
-        continuation,
-        "The runtime restarted. Review the native conversation and continue unfinished work. Check before repeating side effects.",
-    );
-    for (;;) {
-        const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
-        if (
-            event.type === "lifecycle-metadata" &&
-            (event.payload.kind === "prompt.failed" || event.payload.kind === "prompt.failed-before-start")
-        ) {
-            throw new Error(JSON.stringify(event.payload));
-        }
-        if (
-            event.type === "lifecycle-metadata" &&
-            event.payload.kind === "prompt.completed" &&
-            event.payload.commandId === continuation
-        ) {
-            expect(event.payload.stopReason).toBe("end_turn");
-            return;
-        }
+    } catch (cause) {
+        throw new Error(`Could not continue ${agentId} while ${stage}`, { cause });
     }
 }
 

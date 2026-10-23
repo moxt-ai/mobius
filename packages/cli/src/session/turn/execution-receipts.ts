@@ -15,8 +15,15 @@ export type RuntimeExecutionReceipt =
     | Readonly<{
           attemptId: string;
           commandId: string;
-          kind: "accepted" | "duplicate";
+          kind: "accepted";
+          state: "dispatching";
+      }>
+    | Readonly<{
+          attemptId: string;
+          commandId: string;
+          kind: "duplicate";
           state: RuntimeExecutionState;
+          outcome: SessionEventPayload | undefined;
       }>
     | { readonly kind: "conflict" };
 
@@ -38,6 +45,7 @@ function isTerminal(state: RuntimeExecutionState): state is TerminalExecutionSta
 
 export class ExecutionReceipts {
     readonly #executions = new Map<string, StoredExecution>();
+    readonly #recoveredCommands = new Set<string>();
     readonly #terminalCountBySession = new Map<string, number>();
 
     readonly #table: ExecutionReceiptTable | undefined;
@@ -49,6 +57,7 @@ export class ExecutionReceipts {
         this.#table = table;
         for (const row of table?.list() ?? []) {
             this.#executions.set(row.commandId, row);
+            this.#recoveredCommands.add(row.commandId);
             if (!isTerminal(row.state)) {
                 this.#activeCount += 1;
             }
@@ -196,6 +205,7 @@ export class ExecutionReceipts {
             previous.payload.code === "runtime_restarted"
         ) {
             this.#executions.delete(commandId);
+            this.#recoveredCommands.delete(commandId);
             this.#table?.remove(commandId);
             this.#terminalCountBySession.set(
                 sessionId,
@@ -207,7 +217,13 @@ export class ExecutionReceipts {
             if (existing.sessionId !== sessionId || existing.commandHash !== commandHash) {
                 return { kind: "conflict" };
             }
-            return { attemptId: existing.attemptId, commandId, kind: "duplicate", state: existing.state };
+            return {
+                attemptId: existing.attemptId,
+                commandId,
+                kind: "duplicate",
+                state: existing.state,
+                outcome: this.#recoveredCommands.has(commandId) ? this.outcome(commandId) : undefined,
+            };
         }
         const attemptId = randomUUID();
         this.#save(commandId, {
@@ -255,6 +271,7 @@ export class ExecutionReceipts {
 
     readonly close = (): void => {
         this.#executions.clear();
+        this.#recoveredCommands.clear();
         this.#terminalCountBySession.clear();
         this.#activeCount = 0;
     };
@@ -266,6 +283,7 @@ export class ExecutionReceipts {
         for (const [commandId, receipt] of this.#executions) {
             if (receipt.sessionId === sessionId && isTerminal(receipt.state)) {
                 this.#executions.delete(commandId);
+                this.#recoveredCommands.delete(commandId);
                 this.#table?.remove(commandId);
                 const remaining = (this.#terminalCountBySession.get(sessionId) ?? 1) - 1;
                 if (remaining > 0) {

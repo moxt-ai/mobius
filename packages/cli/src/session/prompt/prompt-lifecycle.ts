@@ -7,6 +7,7 @@ import type {
     SessionLiveEvent,
     SessionPromptCommand,
 } from "@moxt-ai/mobius-sdk/protocol";
+import { SESSION_CLOSED_ERROR_CODE } from "@moxt-ai/mobius-sdk/protocol";
 import type { SessionEventSink } from "../api/session-api.ts";
 import type { ExecutionReceipts } from "../turn/execution-receipts.ts";
 
@@ -210,7 +211,7 @@ export class PromptLifecycle {
             type: "lifecycle-metadata",
             payload: { kind: "prompt.failed-before-start", commandId, code, message },
         });
-        if (!recorded) {
+        if (!recorded || code === SESSION_CLOSED_ERROR_CODE) {
             this.#sink.publishOperationFailure(sessionId, commandId, code, message);
         }
     };

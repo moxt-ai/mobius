@@ -6,10 +6,10 @@ import type { SpawnedProcess, SpawnOptions } from "@anthropic-ai/claude-agent-sd
 // distinguishes that from the owning daemon dying, including an uncatchable SIGKILL.
 const supervisor = `
 const { spawn, spawnSync } = require("node:child_process");
-const { createReadStream } = require("node:fs");
+const { Socket } = require("node:net");
 const [command, ...args] = process.argv.slice(1);
 const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"], detached: process.platform !== "win32", windowsHide: true });
-const lifeline = createReadStream(null, { fd: 3 });
+const lifeline = new Socket({ fd: 3, readable: true, writable: false });
 let exited = false;
 function terminate() {
     if (exited || child.pid === undefined) return;
