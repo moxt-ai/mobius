@@ -69,9 +69,17 @@ must distinguish queued work, running work and pending interactions. Rejoining m
 not resubmit a prompt or mistake history replay for new execution.
 
 Live delivery has no durable delivery queue, acknowledgement or retry guarantee.
-Daemon restart loses in-memory work by design. Optional Recording is best effort
-and cannot block broadcasting or promise reconstruction of missing events. History
-availability and execution completion are separate facts.
+Daemon restart interrupts in-memory work. Durable, bounded execution receipts
+distinguish commands interrupted by a restart from commands that completed and
+prevent replay of commands that already started. Commands that never started may
+be resubmitted. Restart outcomes use the existing prompt failure events with a
+stable restart reason and remain available after reconnecting. The daemon does
+not decide whether to continue interrupted work; applications apply their own
+policy and submit a new command to continue the native conversation.
+
+Optional Recording is best effort and cannot block broadcasting or promise
+reconstruction of missing output. History availability and execution completion
+are separate facts.
 
 ## Existing sessions and history
 
