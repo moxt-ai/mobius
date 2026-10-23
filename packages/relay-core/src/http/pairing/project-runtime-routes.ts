@@ -29,6 +29,7 @@ import {
     validateIdentifier,
 } from "../../entity/pairing/pairing.ts";
 import { assertRequiredKeys, bearerToken, readString } from "../../infra/relay-http.ts";
+import { MAX_TURN_REQUEST_BODY_LENGTH } from "../../infra/request-limits.ts";
 import { bodyParser } from "../middleware/body-parser.ts";
 import { errorMiddleware, rethrowHonoError } from "../middleware/error-middleware.ts";
 import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
@@ -456,7 +457,11 @@ export function createProjectRuntimeRoutes() {
         )
         .post(
             "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/turns",
-            bodyParser<RelayHttpEnvironment>(),
+            // A Turn carries prompt images and embedded resources inline as base64, unlike the
+            // small metadata bodies of every other runtime route. Parse it against the protocol
+            // attachment budget instead of the default body cap, or a pasted screenshot is
+            // rejected before the Runtime ever sees the prompt.
+            bodyParser<RelayHttpEnvironment>(undefined, MAX_TURN_REQUEST_BODY_LENGTH),
             async (context) => {
                 const body = validated(submitTurnSchema, context.req.valid("json"));
                 let command: SessionPromptCommand;
