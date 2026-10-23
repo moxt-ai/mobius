@@ -79,6 +79,11 @@ export class SessionManager {
      * unknown Session, a client can recover a dropped one transparently.
      */
     readonly #droppedSessions = new Set<string>();
+    /**
+     * Rows dropped by a release that is still tearing its process down, keyed for a close that arrives
+     * meanwhile: the client's close keeps the Session, so the release restores the row when it settles.
+     */
+    readonly #releasingDroppedSessions = new Map<string, StoredSession>();
     readonly #store: SessionStore;
     readonly #adapters: AdapterResolver;
     readonly #sessionIdentity: "assigned" | "native";
@@ -168,6 +173,15 @@ export class SessionManager {
         stored: "keep" | "forget",
     ): Promise<void> {
         const retained = this.#executionProcesses.detach(sessionId, runtime);
+        // The daemon holds only what a restart would from the moment the release begins, so the row
+        // goes now, not after teardown. A close the client requests while the process is still going
+        // down keeps the Session, so the dropped row is remembered until the release settles.
+        if (retained && stored === "forget") {
+            const dropped = this.#forgetStoredSession(sessionId);
+            if (dropped !== null) {
+                this.#releasingDroppedSessions.set(sessionId, dropped);
+            }
+        }
         const retirement = this.#processes.retire(runtime, close);
         // A replacement preparation waits for this retirement: the old process may hold the native writer.
         this.#sessionRetirements.set(sessionId, retirement);
@@ -177,28 +191,37 @@ export class SessionManager {
             if (this.#sessionRetirements.get(sessionId) === retirement) {
                 this.#sessionRetirements.delete(sessionId);
             }
-            // A close a client requested while the process was already going down keeps the stored
-            // Session, wherever the release started: the explicit close owns the keep decision.
-            if (retained && stored === "forget" && !this.#closedSessions.has(sessionId)) {
-                this.#forgetStoredSession(sessionId);
+            const dropped = this.#releasingDroppedSessions.get(sessionId);
+            if (dropped !== undefined) {
+                this.#releasingDroppedSessions.delete(sessionId);
+                if (this.#closedSessions.has(sessionId)) {
+                    // The client's close owns the keep decision: the closed Session stays queryable.
+                    this.#store.write(dropped);
+                    this.#droppedSessions.delete(sessionId);
+                }
             }
         }
     }
 
-    /** Drops the canonical stored Session and remembers the drop, so later reads can say why it is missing. */
-    #forgetStoredSession(sessionId: string): void {
+    /**
+     * Drops the canonical stored Session and remembers the drop, so later reads can say why it is
+     * missing. Returns the dropped row, or null when nothing canonical was stored.
+     */
+    #forgetStoredSession(sessionId: string): StoredSession | null {
         if (this.#sessionIdentity !== "native") {
-            return;
+            return null;
         }
         const row = this.#store.read(sessionId);
         if (
-            row instanceof FoundStoredSession &&
-            row.session.nativeSessionId === sessionId &&
-            isNativeChatSessionId(row.session.agentId, sessionId)
+            !(row instanceof FoundStoredSession) ||
+            row.session.nativeSessionId !== sessionId ||
+            !isNativeChatSessionId(row.session.agentId, sessionId)
         ) {
-            this.#store.remove(sessionId);
-            this.#droppedSessions.add(sessionId);
+            return null;
         }
+        this.#store.remove(sessionId);
+        this.#droppedSessions.add(sessionId);
+        return row.session;
     }
 
     async #retireSessionProcess(sessionId: string, runtime: AgentSession, close: () => Promise<void>): Promise<void> {
@@ -234,7 +257,8 @@ export class SessionManager {
         return (
             this.#executionProcesses.get(sessionId) !== undefined ||
             this.#executionProcesses.pending(sessionId) !== undefined ||
-            this.#store.read(sessionId) instanceof FoundStoredSession
+            this.#store.read(sessionId) instanceof FoundStoredSession ||
+            this.#releasingDroppedSessions.has(sessionId)
         );
     }
 
