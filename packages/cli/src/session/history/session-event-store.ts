@@ -168,7 +168,7 @@ export interface SessionEventPage {
 }
 
 export interface SessionEventStore {
-    readonly append: (sessionId: string, event: SessionEventPayload) => SessionLiveEvent;
+    readonly append: (sessionId: string, event: SessionEventPayload, recordedAt?: string) => SessionLiveEvent;
     readonly close: () => void;
     /**
      * The projected tool call announced with this identifier in its current
@@ -197,12 +197,13 @@ function liveEvent(
     eventId: string,
     position: number,
     event: SessionEventPayload,
+    recordedAt = new Date().toISOString(),
 ): SessionLiveEvent {
     return {
         eventId,
         ...event,
         position: position.toString(),
-        recordedAt: new Date().toISOString(),
+        recordedAt,
         sessionGenerationId,
         sessionId,
     };
@@ -254,7 +255,7 @@ export class MemorySessionEventStore implements SessionEventStore {
             return resolved;
         };
 
-    readonly append = (sessionId: string, event: SessionEventPayload): SessionLiveEvent => {
+    readonly append = (sessionId: string, event: SessionEventPayload, recordedAt?: string): SessionLiveEvent => {
         const session = this.#session(sessionId);
         const allocatedPosition = this.#allocatedPositionBySession.get(sessionId) ?? 9_999;
         if (allocatedPosition === Number.MAX_SAFE_INTEGER) {
@@ -268,6 +269,7 @@ export class MemorySessionEventStore implements SessionEventStore {
             this.#eventIds.allocate(sessionId, session.sessionGenerationId),
             position,
             event,
+            recordedAt,
         );
         session.apply(recorded, this.#resolver(session));
         return recorded;
@@ -369,7 +371,7 @@ export class CachedSessionEventStore implements SessionEventStore {
             return resolved;
         };
 
-    readonly append = (sessionId: string, event: SessionEventPayload): SessionLiveEvent => {
+    readonly append = (sessionId: string, event: SessionEventPayload, recordedAt?: string): SessionLiveEvent => {
         if (this.#flushSchedule.kind === "closed") {
             throw new Error("The V2 Session event store is closed");
         }
@@ -381,6 +383,7 @@ export class CachedSessionEventStore implements SessionEventStore {
             this.#eventIds.allocate(sessionId, session.sessionGenerationId),
             position,
             event,
+            recordedAt,
         );
         session.apply(recorded, this.#resolver(sessionId, session));
         this.#sessions.set(sessionId, session);

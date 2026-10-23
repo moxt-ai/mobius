@@ -41,6 +41,12 @@ export const sessionPromptCommand: RuntimeCommand = {
             return;
         }
         if (receipt.kind === "duplicate") {
+            const outcome = context.operations.outcome(message.commandId);
+            if (outcome !== undefined) {
+                void context.eventProjection.replayOutcome(message.sessionId, outcome).catch((cause: unknown) => {
+                    console.error("Could not replay the persisted execution outcome", cause);
+                });
+            }
             return;
         }
         const turn = context.sessionTurns.start(message, receipt.attemptId);

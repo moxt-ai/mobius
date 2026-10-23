@@ -4,6 +4,7 @@ import type {
     InProcessAcpEndpoint,
     InProcessAcpEndpointOptions,
 } from "../../agent/in-process-endpoint.ts";
+import { spawnClaudeWithParentLifeline } from "./parent-lifeline.ts";
 import { createClaudeAcpApp } from "./upstream/dist/lib.js";
 
 export class ClaudeAcpEndpoint implements InProcessAcpEndpoint {
@@ -19,6 +20,7 @@ export class ClaudeAcpEndpoint implements InProcessAcpEndpoint {
         this.terminated = termination.promise;
         this.#resolveTermination = termination.resolve;
         const claude = createClaudeAcpApp({
+            spawnClaudeCodeProcess: spawnClaudeWithParentLifeline,
             environment: Object.freeze({
                 ...process.env,
                 ...options.environment,

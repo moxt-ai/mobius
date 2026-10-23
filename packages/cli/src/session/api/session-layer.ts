@@ -2,6 +2,7 @@ import type { SessionInfoUpdatedEvent, SessionLiveEvent } from "@moxt-ai/mobius-
 import { harnessAdapters } from "../../acp/adapter/registry.ts";
 import { AcpContentExternalizer } from "../../acp/content/content-externalizer.ts";
 import { AcpSessionTable } from "../../storage/session/acp-session-table.ts";
+import { ExecutionReceiptTable } from "../../storage/session/execution-receipt-table.ts";
 import { LiveEventPositionTable } from "../../storage/session/live-event-position-table.ts";
 import { SessionEventCacheTable } from "../../storage/session/session-event-cache-table.ts";
 import {
@@ -50,6 +51,7 @@ export class SessionLayerObserver extends NullSessionObserver {
 /** What the session layer needs to wire itself: the runtime's identity, its agent source, and its sink. */
 export interface SessionLayerOptions {
     readonly turnActivity?: RuntimeTurnActivity;
+    readonly onExecutionCountChange?: (count: number) => void;
     readonly bindingId: string;
     readonly channelId: string;
     readonly defaultWorkspace: string;
@@ -77,11 +79,17 @@ export function buildSessionLayer(options: SessionLayerOptions) {
     }
     const sessionStore = new SqliteSessionStore(new AcpSessionTable(sessionDatabase), events);
     const externalContent = new LocalExternalContentStore(stateDirectory);
-    const operations = new ExecutionReceipts();
+    const operations = new ExecutionReceipts(
+        new ExecutionReceiptTable(sessionDatabase),
+        options.onExecutionCountChange,
+    );
     const activeSessions = new SessionTurns(operations, options.turnActivity);
     const directories = new WorkspaceDirectoryService(bindingId, defaultWorkspace);
     const manager = new SessionManager({
-        observer: new SessionLayerObserver((event) => eventProjection.record(event), sink.publishInfo),
+        observer: new SessionLayerObserver((event) => {
+            operations.recordOutcome(event);
+            eventProjection.record(event);
+        }, sink.publishInfo),
         store: sessionStore,
         adapters: harnessAdapters,
         sessionIdentity: "native",
@@ -102,7 +110,15 @@ export function buildSessionLayer(options: SessionLayerOptions) {
     });
     const eventProjection = new PromptLifecycle(
         sink,
-        (sessionId, event) => manager.recordLifecycleEvent(sessionId, event),
+        async (sessionId, event) => {
+            if (await manager.recordLifecycleEvent(sessionId, event)) {
+                return true;
+            }
+            const recorded = events.append(sessionId, event);
+            operations.recordOutcome(recorded);
+            eventProjection.record(recorded);
+            return true;
+        },
         activeSessions.recordSessionEvent,
     );
     const nativeSessions = new NativeSessionService(
@@ -130,7 +146,15 @@ export function buildSessionLayer(options: SessionLayerOptions) {
                 );
             }),
     );
+    const recoveredEvents = operations
+        .recover()
+        .map(({ sessionId, event, recordedAt }) => events.append(sessionId, event, recordedAt));
     return {
+        publishRecoveredOutcomes: () => {
+            for (const event of recoveredEvents) {
+                sink.publish(event);
+            }
+        },
         activeSessions,
         directories,
         eventProjection,

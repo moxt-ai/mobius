@@ -1577,7 +1577,12 @@ export class ClaudeAcpAgent {
      *  tests can shrink it. */
     forceCancelGraceMs: number = DEFAULT_FORCE_CANCEL_GRACE_MS;
 
-    constructor(client: AcpClient, logger?: Logger, environment: Readonly<NodeJS.ProcessEnv> = process.env) {
+    constructor(
+        client: AcpClient,
+        logger?: Logger,
+        environment: Readonly<NodeJS.ProcessEnv> = process.env,
+        private readonly spawnClaudeCodeProcess?: Options["spawnClaudeCodeProcess"],
+    ) {
         this.sessions = {};
         this.client = client;
         this.logger = logger ?? console;
@@ -6175,6 +6180,9 @@ export class ClaudeAcpAgent {
                   }
                 : {}),
             pathToClaudeCodeExecutable: this.environment.CLAUDE_CODE_EXECUTABLE ?? (await claudeCliPath()),
+            ...(this.spawnClaudeCodeProcess === undefined
+                ? {}
+                : { spawnClaudeCodeProcess: this.spawnClaudeCodeProcess }),
             extraArgs: {
                 ...userProvidedOptions?.extraArgs,
                 "replay-user-messages": "",
@@ -8565,6 +8573,7 @@ export interface ClaudeAcpApp {
 }
 
 export interface ClaudeAcpAppOptions {
+    readonly spawnClaudeCodeProcess?: Options["spawnClaudeCodeProcess"];
     readonly environment?: Readonly<NodeJS.ProcessEnv>;
     readonly logger?: Logger;
     readonly onConnect?: (connection: AgentConnection) => void;
@@ -8580,6 +8589,7 @@ export function createClaudeAcpApp(options: ClaudeAcpAppOptions = {}): ClaudeAcp
                 new ClientConnection(connection.client, options.onSessionUpdate),
                 options.logger,
                 options.environment,
+                options.spawnClaudeCodeProcess,
             );
             options.onConnect?.(connection);
         })

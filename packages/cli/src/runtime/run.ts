@@ -64,6 +64,7 @@ async function publishAgentCatalogUntilAvailable(
 
 export interface RunRuntimeOptions {
     readonly turnActivity?: RuntimeTurnActivity;
+    readonly onExecutionCountChange?: (count: number) => void;
     readonly onConnectionStatus?: (status: "online" | "reconnecting") => void;
     /** Reports a finished daemon upgrade to the relay. The daemon worker supplies it. */
     readonly reportUpgradeAvailability?: (
@@ -108,6 +109,7 @@ export async function runRuntime(
         sink: publisher,
         stateDirectory: config.localContext.stateDirectory,
         timer,
+        onExecutionCountChange: options.onExecutionCountChange ?? (() => undefined),
     });
     const {
         activeSessions,
@@ -177,6 +179,7 @@ export async function runRuntime(
                     reportUpgradeAvailability,
                     diagnostics,
                     onConnected: () => {
+                        layer.publishRecoveredOutcomes();
                         if (catalogPublished) {
                             options.onConnectionStatus?.("online");
                         }
@@ -200,6 +203,7 @@ export async function runRuntime(
         }
     } finally {
         shutdown.abort();
+        operations.beginShutdown();
         await activeSessions.close();
         try {
             await catalogPublication;

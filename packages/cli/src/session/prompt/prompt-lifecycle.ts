@@ -167,6 +167,14 @@ export class PromptLifecycle {
         this.#queued.delete(commandId);
     };
 
+    readonly replayOutcome = async (sessionId: string, event: SessionEventPayload): Promise<void> => {
+        if (event.type !== "lifecycle-metadata" || !("commandId" in event.payload)) {
+            return;
+        }
+        await this.#recordLifecycle(sessionId, event);
+        this.publishTerminal(sessionId, event.payload.commandId);
+    };
+
     readonly queueChanged = async (sessionId: string): Promise<void> => {
         await this.#recordLifecycle(sessionId, {
             type: "lifecycle-metadata",
