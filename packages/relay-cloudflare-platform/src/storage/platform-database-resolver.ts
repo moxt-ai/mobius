@@ -31,6 +31,21 @@ export interface PlatformProjectDatabase {
     ) => Promise<readonly PlatformProjectDatabaseResult[]>;
 }
 
+// Durable Objects call the Project database too. An uncancellable AbortSignal.timeout would keep the caller
+// awake for the whole deadline after a fast query, so each statement clears its own timer.
+async function withStatementDeadline<Value>(operation: (signal: AbortSignal) => Promise<Value>): Promise<Value> {
+    const timeout = new AbortController();
+    const timer = setTimeout(
+        () => timeout.abort(new DOMException("The Project database operation timed out", "TimeoutError")),
+        15_000,
+    );
+    try {
+        return await operation(timeout.signal);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 class ProjectStatementAdapter implements PlatformProjectPreparedStatement {
     readonly owner: ProjectDatabaseAdapter;
     readonly statement: ReturnType<SqlDatabase["prepare"]>;
@@ -44,15 +59,15 @@ class ProjectStatementAdapter implements PlatformProjectPreparedStatement {
         new ProjectStatementAdapter(this.owner, this.statement.bind(...values));
 
     readonly first: PlatformProjectPreparedStatement["first"] = async <Row>() =>
-        await this.statement.first<Row>(AbortSignal.timeout(15_000));
+        await withStatementDeadline((signal) => this.statement.first<Row>(signal));
 
     readonly all: PlatformProjectPreparedStatement["all"] = async <Row>() => {
-        const result = await this.statement.all<Row>(AbortSignal.timeout(15_000));
+        const result = await withStatementDeadline((signal) => this.statement.all<Row>(signal));
         return { ...result, success: true };
     };
 
     readonly run: PlatformProjectPreparedStatement["run"] = async () => {
-        const result = await this.statement.run(AbortSignal.timeout(15_000));
+        const result = await withStatementDeadline((signal) => this.statement.run(signal));
         return { ...result, success: true };
     };
 }
@@ -68,14 +83,14 @@ class ProjectDatabaseAdapter implements PlatformProjectDatabase {
         new ProjectStatementAdapter(this, this.database.prepare(sql));
 
     readonly batch: PlatformProjectDatabase["batch"] = async (statements) => {
-        const prepared = [];
+        const prepared: ReturnType<SqlDatabase["prepare"]>[] = [];
         for (const statement of statements) {
             if (!(statement instanceof ProjectStatementAdapter) || statement.owner !== this) {
                 throw new Error("SQL statements must belong to one Project database");
             }
             prepared.push(statement.statement);
         }
-        return (await this.database.batch(prepared, AbortSignal.timeout(15_000))).map((result) => ({
+        return (await withStatementDeadline((signal) => this.database.batch(prepared, signal))).map((result) => ({
             ...result,
             success: true,
         }));

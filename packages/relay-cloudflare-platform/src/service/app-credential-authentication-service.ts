@@ -133,8 +133,15 @@ export class AppCredentialAuthenticationService {
     };
 
     private readonly touchLater = (credentialId: string): void => {
+        // Authorization runs in RuntimeRelay too; an uncancellable AbortSignal.timeout would keep it awake
+        // for the whole deadline after a fast update.
+        const timeout = new AbortController();
+        const timer = setTimeout(
+            () => timeout.abort(new DOMException("The last-used update timed out", "TimeoutError")),
+            15_000,
+        );
         const operation = this.#storage
-            .touchCredential(credentialId, Date.now(), AbortSignal.timeout(15_000))
+            .touchCredential(credentialId, Date.now(), timeout.signal)
             .then((updated) => {
                 if (!updated) {
                     console.warn("App credential last-used update skipped", {
@@ -149,7 +156,8 @@ export class AppCredentialAuthenticationService {
                     credentialId,
                     cause,
                 });
-            });
+            })
+            .finally(() => clearTimeout(timer));
         this.#backgroundTasks.waitUntil(operation);
     };
 }
