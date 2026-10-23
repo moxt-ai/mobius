@@ -207,6 +207,39 @@ async function interruptedJourney(
             break;
         }
     }
+    const historyId = randomUUID();
+    peer.send(
+        encodeSessionHistoryPageLoad({
+            kind: "session.live-history.v2.page.load",
+            requestId: historyId,
+            sessionId,
+            cursor: null,
+            eventLimit: 100,
+        }),
+    );
+    for (;;) {
+        const message = await peer.nextMessage();
+        if (decodeMessageKind(message) === "session.operation.failed") {
+            throw new Error(message);
+        }
+        if (decodeMessageKind(message) !== "session.live-history.v2.page.loaded") {
+            continue;
+        }
+        const history = decodeSessionHistoryPageLoaded(message);
+        if (history.requestId !== historyId) {
+            continue;
+        }
+        expect(
+            history.events.events.events.some(
+                (event) =>
+                    event.type === "lifecycle-metadata" &&
+                    event.payload.kind === "prompt.failed" &&
+                    event.payload.commandId === commandId &&
+                    event.payload.code === "runtime_restarted",
+            ),
+        ).toBe(true);
+        break;
+    }
     const continuation = randomUUID();
     sendPrompt(
         continuation,

@@ -165,6 +165,25 @@ export class ExecutionReceipts {
         return recovered;
     };
 
+    readonly terminalOutcomes = (
+        sessionId: string,
+    ): readonly {
+        readonly event: SessionEventPayload;
+        readonly recordedAt: string;
+    }[] =>
+        [...this.#executions.values()].flatMap((receipt) => {
+            if (receipt.sessionId !== sessionId || receipt.outcome === null) {
+                return [];
+            }
+            const decoded: unknown = JSON.parse(receipt.outcome);
+            return [
+                {
+                    event: sessionEventPayloadSchema.parse(decoded),
+                    recordedAt: z.object({ recordedAt: z.string() }).parse(decoded).recordedAt,
+                },
+            ];
+        });
+
     readonly claimExecution = (commandId: string, sessionId: string, commandJson: string): RuntimeExecutionReceipt => {
         const commandHash = createHash("sha256").update(commandJson).digest("hex");
         let existing = this.#executions.get(commandId);

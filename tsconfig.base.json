@@ -12,6 +12,7 @@
         "noPropertyAccessFromIndexSignature": true,
         "noFallthroughCasesInSwitch": true,
         "noImplicitOverride": true,
-        "noImplicitReturns": true
+        "noImplicitReturns": true,
+        "customConditions": ["mobius-source"]
     }
 }

@@ -1,6 +1,7 @@
 import { configDefaults, coverageConfigDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
+    resolve: { conditions: ["mobius-source"] },
     test: {
         exclude: [...configDefaults.exclude, "packages/cli/tests/**"],
         fileParallelism: true,

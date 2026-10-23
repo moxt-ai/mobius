@@ -68,10 +68,14 @@ export function buildSessionLayer(options: SessionLayerOptions) {
     const databases = channelSessionDatabasePaths(stateDirectory, channelId);
     const sessionDatabase = openAcpSessionDatabase(databases.sessions);
     let events: CachedSessionEventStore;
+    let operations: ExecutionReceipts;
     try {
+        operations = new ExecutionReceipts(new ExecutionReceiptTable(sessionDatabase), options.onExecutionCountChange);
         events = new CachedSessionEventStore(
             new SessionEventCacheTable(openSessionEventCacheDatabase(databases.events)),
             new SqliteSessionLiveEventPosition(new LiveEventPositionTable(sessionDatabase)),
+            undefined,
+            (sessionId) => operations.terminalOutcomes(sessionId),
         );
     } catch (error) {
         sessionDatabase.close();
@@ -79,10 +83,6 @@ export function buildSessionLayer(options: SessionLayerOptions) {
     }
     const sessionStore = new SqliteSessionStore(new AcpSessionTable(sessionDatabase), events);
     const externalContent = new LocalExternalContentStore(stateDirectory);
-    const operations = new ExecutionReceipts(
-        new ExecutionReceiptTable(sessionDatabase),
-        options.onExecutionCountChange,
-    );
     const activeSessions = new SessionTurns(operations, options.turnActivity);
     const directories = new WorkspaceDirectoryService(bindingId, defaultWorkspace);
     const manager = new SessionManager({
