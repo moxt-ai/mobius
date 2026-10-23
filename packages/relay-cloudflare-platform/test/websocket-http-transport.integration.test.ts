@@ -285,12 +285,15 @@ it("Given an established event subscription is quiet, When the transport idle de
         });
 
         const heartbeat = nextMessage(socket);
-        await vi.advanceTimersByTimeAsync(60_001);
+        await vi.advanceTimersByTimeAsync(20_001);
 
         expect(JSON.parse(await heartbeat)).toEqual({
             kind: "session.events.heartbeat",
             subscriptionId: "subscription-1",
         });
+        // The heartbeats keep re-arming the idle deadline, so the connection
+        // outlives it even though the subscription itself stays quiet.
+        await vi.advanceTimersByTimeAsync(40_000);
         expect(socket.readyState).toBe(WebSocket.OPEN);
         socket.close(1000, "Test complete");
     } finally {

@@ -9,7 +9,7 @@ const EVENT_SUBSCRIBE_KIND = "session.events.subscribe";
 const EVENT_UNSUBSCRIBE_KIND = "session.events.unsubscribe";
 const MAX_BODY_BYTES = 12_582_912;
 const IDLE_TIMEOUT_MILLISECONDS = 60_000;
-const LIVE_EVENT_HEARTBEAT_MILLISECONDS = 30_000;
+const LIVE_EVENT_HEARTBEAT_MILLISECONDS = 20_000;
 const FORBIDDEN_HEADERS = new Set([
     "connection",
     "content-length",
