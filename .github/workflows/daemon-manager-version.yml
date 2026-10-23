@@ -1,0 +1,26 @@
+name: Daemon manager version compatibility
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  manager-version:
+    name: Daemon manager version compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @moxt-ai/mobius test:manager-version
