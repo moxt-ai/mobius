@@ -7,6 +7,7 @@ import {
 import type { RuntimeTurnActivity } from "../session/turn/runtime-turn-activity.ts";
 import { ensureCanonicalDirectory } from "../storage/files/local-files.ts";
 import { readStateDirectory } from "../storage/state-directory.ts";
+import { createCatalogUpdateLock } from "./catalog/catalog-update-lock.ts";
 import { publishAgentCatalog } from "./catalog/publish-agent-catalog.ts";
 import { createCatalogAgentResolver } from "./catalog/resolve-catalog-agent.ts";
 import { createRuntimeConfig, loadDefaultWorkspace, type RuntimeConfig, RuntimeLocalContext } from "./config.ts";
@@ -123,6 +124,9 @@ export async function createMobiusRuntimeEngine(
             specifications,
         });
     const inventory = await discover(signal);
+    // One lock serializes the resolver's per-Agent swaps and the full catalog discovery, so
+    // neither writer's failed-publication rollback can overwrite the other's committed update.
+    const withCatalogUpdate = createCatalogUpdateLock();
     const config: RuntimeConfig = createRuntimeConfig(
         {
             channelId: connection.channelId,
@@ -136,8 +140,10 @@ export async function createMobiusRuntimeEngine(
             (refreshSignal) => discover(refreshSignal),
             () => config,
             publishAgentCatalog,
+            withCatalogUpdate,
         ),
         (refreshSignal: AbortSignal) => discover(refreshSignal).then((inventory) => inventory.readyAgents()),
+        withCatalogUpdate,
     );
     return new MobiusRuntimeEngine(config);
 }

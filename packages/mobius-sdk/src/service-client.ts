@@ -91,6 +91,12 @@ import {
 } from "./transport/http-transport.ts";
 
 const DEFAULT_OPERATION_TIMEOUT_MILLISECONDS = 20_000;
+/**
+ * Agent catalog discovery probes real Agent processes on the Runtime: the daemon's operation
+ * budget is 90 s and the Relay's control deadline is 120 s, so the request must outlive the
+ * default operation timeout to receive a healthy-but-slow discovery result.
+ */
+const AGENT_CATALOG_DISCOVERY_TIMEOUT_MILLISECONDS = 120_000;
 const DEFAULT_STREAM_CONNECTION_TIMEOUT_MILLISECONDS = 15_000;
 const DEFAULT_STREAM_LIVENESS_TIMEOUT_MILLISECONDS = 45_000;
 const DEFAULT_STREAM_RECONNECT_ATTEMPTS = 7;
@@ -465,12 +471,17 @@ export class MobiusRequestExecutor {
         }
     };
 
-    readonly post = async (path: string, body: unknown, signal: AbortSignal): Promise<unknown> => {
+    readonly post = async (
+        path: string,
+        body: unknown,
+        signal: AbortSignal,
+        timeoutMilliseconds?: number,
+    ): Promise<unknown> => {
         const encoded = JSON.stringify(body);
         if (typeof encoded !== "string") {
             throw new MobiusValidationError("The Mobius request body is invalid");
         }
-        return await this.request(path, "POST", encoded, true, signal);
+        return await this.request(path, "POST", encoded, true, signal, timeoutMilliseconds);
     };
 
     readonly put = async (path: string, body: unknown, signal: AbortSignal): Promise<unknown> => {
@@ -531,8 +542,9 @@ export class MobiusRequestExecutor {
         body: string,
         hasBody: boolean,
         signal: AbortSignal,
+        timeoutMilliseconds: number = this.#operationTimeoutMilliseconds,
     ): Promise<unknown> => {
-        const deadline = new RequestDeadline(signal, this.#operationTimeoutMilliseconds);
+        const deadline = new RequestDeadline(signal, timeoutMilliseconds);
         try {
             const credential = validateCredential(await this.#credentialProvider.credential(deadline.signal));
             const headers = this.authenticationHeaders(credential, "application/json");
@@ -795,7 +807,8 @@ export class MobiusRuntimeResources {
 
     /**
      * Asks the Runtime to re-run local Agent discovery and republish its catalog. The Relay's
-     * stored directory is fresh once this resolves; the reply carries the discovered list.
+     * stored directory is fresh once this resolves; the reply carries the discovered list. The
+     * request uses a timeout that matches the server-side budgets instead of the client default.
      */
     readonly discoverAgents = async (
         runtimeId: string,
@@ -806,6 +819,7 @@ export class MobiusRuntimeResources {
                 projectPath(this.#projectId, `runtimes/${encodeURIComponent(runtimeId)}/agents/discovery`),
                 {},
                 signal,
+                AGENT_CATALOG_DISCOVERY_TIMEOUT_MILLISECONDS,
             ),
         ).agents;
 

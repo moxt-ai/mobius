@@ -4,17 +4,19 @@ import {
     type AgentCatalogDiscoveredEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { WebSocket } from "undici";
+import type { CatalogAgent } from "../../agent/catalog.ts";
 import { operationErrorCode, operationErrorMessage } from "../../infra/operation-error.ts";
 import type { Timer } from "../../util/timer.ts";
 import { send } from "../command/transport.ts";
-import { type AcpAgentDefinition, type RuntimeConfig, withRuntimeEnvironment } from "../config.ts";
+import { type RuntimeConfig, withRuntimeEnvironment } from "../config.ts";
 import type { RelayConnectionDiagnostics } from "../relay/diagnostics.ts";
 import { publishAgentCatalog } from "./publish-agent-catalog.ts";
+import { transitionAndPublishCatalog } from "./transition-and-publish-catalog.ts";
 
 interface CatalogDiscoveryDependencies {
     readonly config: RuntimeConfig;
     /** Re-runs the ready Agent inventory this daemon was started with. */
-    readonly discover: (signal: AbortSignal) => Promise<readonly AcpAgentDefinition[]>;
+    readonly discover: (signal: AbortSignal) => Promise<readonly CatalogAgent[]>;
     readonly diagnostics: RelayConnectionDiagnostics;
     readonly socket: WebSocket;
     readonly signal: AbortSignal;
@@ -41,9 +43,10 @@ function discoveredEvent(
 /**
  * Handles the Relay's request to re-read the local Agent inventory: discovery runs against the
  * filesystem now, the catalog transitions to what this daemon could currently spawn, and the
- * result is republished so the Relay's stored snapshot stops serving the boot-time set. A failed
- * publication rolls the transition back, keeping the Relay-facing catalog consistent with what
- * this daemon would actually spawn. Concurrent requests share one discovery.
+ * result is republished so the Relay's stored snapshot stops serving the boot-time set. The
+ * transition and publication commit through the same serialized critical section as the lazy
+ * per-Agent resolver, so a failed publication rolls back to the snapshot this operation read
+ * without overwriting a concurrent resolver swap. Concurrent requests share one discovery.
  */
 export function createAgentCatalogDiscoveryHandler(dependencies: CatalogDiscoveryDependencies) {
     const { config, discover, diagnostics, socket, signal, timer } = dependencies;
@@ -74,16 +77,14 @@ export function createAgentCatalogDiscoveryHandler(dependencies: CatalogDiscover
             try {
                 const readyAgents = await discover(operationSignal);
                 operationSignal.throwIfAborted();
-                const previous = config.catalog.read();
-                config.catalog.transition(
-                    readyAgents.map((agent) => withRuntimeEnvironment(agent, config.localContext.environment)),
+                await transitionAndPublishCatalog(
+                    config,
+                    () => readyAgents.map((agent) => withRuntimeEnvironment(agent, config.localContext.environment)),
+                    publishAgentCatalog,
+                    operationSignal,
+                    config.withCatalogUpdate,
                 );
-                try {
-                    await publishAgentCatalog(config, operationSignal);
-                } catch (error) {
-                    config.catalog.transition(previous.agents);
-                    throw error;
-                }
+                operationSignal.throwIfAborted();
                 if (socket.readyState === WebSocket.OPEN) {
                     send(
                         socket,

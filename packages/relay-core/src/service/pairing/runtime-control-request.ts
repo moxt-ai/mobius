@@ -533,6 +533,20 @@ export async function requestRuntimeAgentCatalog(
                         }
                         return;
                     }
+                    // A daemon that predates this command answers session.operation.failed with
+                    // its own code (for example unsupported_protocol_message_kind); rejecting on
+                    // that reply keeps the caller from waiting out the full deadline.
+                    if (kind === "session.operation.failed") {
+                        const failed = decodeSessionOperationFailedEvent(event.data);
+                        if (failed.requestId === command.requestId) {
+                            reject(
+                                new SessionRuntimeError(failed.code, failed.message, {
+                                    runtimeTimings: failed.runtimeTimings,
+                                }),
+                            );
+                        }
+                        return;
+                    }
                     if (kind !== AGENT_CATALOG_DISCOVERED_KIND) {
                         return;
                     }

@@ -7,6 +7,7 @@ import type { CatalogAgent } from "../../agent/catalog.ts";
 import { discoverLocalAgentInventory, type LocalAgentInventory } from "../../agent/discovery/discover-local-agents.ts";
 import { publishAgentCatalog } from "../../runtime/catalog/publish-agent-catalog.ts";
 import { createCatalogAgentResolver } from "../../runtime/catalog/resolve-catalog-agent.ts";
+import { createCatalogUpdateLock } from "../../runtime/catalog/catalog-update-lock.ts";
 import {
     createRuntimeConfig,
     loadDefaultWorkspace,
@@ -282,6 +283,9 @@ function buildPairedRuntime(
     relayUrl.protocol = relayUrl.protocol === "https:" ? "wss:" : "ws:";
     relayUrl.searchParams.set("token", connection.runtimeCredential);
 
+    // One lock serializes the resolver's per-Agent swaps and the full catalog discovery, so
+    // neither writer's failed-publication rollback can overwrite the other's committed update.
+    const withCatalogUpdate = createCatalogUpdateLock();
     const config: RuntimeConfig = createRuntimeConfig(
         {
             defaultWorkspace,
@@ -300,6 +304,7 @@ function buildPairedRuntime(
                 }),
             () => config,
             publishAgentCatalog,
+            withCatalogUpdate,
         ),
         (refreshSignal: AbortSignal) =>
             discoverLocalAgentInventory({
@@ -307,6 +312,7 @@ function buildPairedRuntime(
                 environment: localContext.environment,
                 signal: refreshSignal,
             }).then((inventory) => inventory.readyAgents()),
+        withCatalogUpdate,
     );
     return {
         channelUrl: new URL(`/channels/${encodeURIComponent(connection.channelId)}`, connection.relayOrigin).toString(),
