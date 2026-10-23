@@ -1411,6 +1411,36 @@ describe.sequential("Platform Session-only boundary", () => {
             expect(await responseJson(await closedHistoryResponse, 409)).toEqual({
                 error: { code: "session_closed", message: "The Session is closed" },
             });
+            // A Session the Runtime dropped — for example idle reclamation — answers that preparing
+            // restores it, so the refusal is the same typed conflict family as a closed Session.
+            const notPreparedHistoryResponse = worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/events-v2?limit=50`,
+                    { headers: { authorization: `Bearer ${text(browserAccess, "credential")}` } },
+                ),
+                environment,
+            );
+            const notPreparedHistoryLoad = decodeServiceToDaemonMessage(await daemonMessages.next());
+            if (notPreparedHistoryLoad.kind !== "session.live-history.v2.page.load") {
+                throw new Error("Expected a live Session history request");
+            }
+            daemon.send(
+                encodeSessionOperationFailedEvent({
+                    code: "session_not_prepared",
+                    kind: "session.operation.failed",
+                    message: "The Session was not found",
+                    requestId: notPreparedHistoryLoad.requestId,
+                    sessionId,
+                }),
+            );
+            expect(decodeDaemonToServiceMessage(await hostMessages.next())).toMatchObject({
+                code: "session_not_prepared",
+                kind: "session.operation.failed",
+                requestId: notPreparedHistoryLoad.requestId,
+            });
+            expect(await responseJson(await notPreparedHistoryResponse, 409)).toEqual({
+                error: { code: "session_not_prepared", message: "The Session was not found" },
+            });
             v2Socket.close(1000, "V2 browser test complete");
             const transportResponse = await worker.fetch(
                 new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/transport`, { headers: { Upgrade: "websocket" } }),

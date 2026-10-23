@@ -1,6 +1,7 @@
 import {
     SESSION_CLOSE_NOTICE_KIND,
     SESSION_CLOSED_ERROR_CODE,
+    SESSION_NOT_PREPARED_ERROR_CODE,
     type SessionCloseNoticeEvent,
     type SessionConfigOption,
     type SessionEventPayload,
@@ -72,6 +73,12 @@ export class SessionManager {
     readonly #sessionRetirements = new Map<string, Promise<void>>();
     /** Sessions that were closed and not reopened since. Only a prepare or restore of the Session reopens it. */
     readonly #closedSessions = new Set<string>();
+    /**
+     * Stored Sessions this Runtime dropped itself — idle reclamation, capacity retirement, replacement —
+     * whose row may still be missing. Preparing or prompting the Session restores the row, so unlike an
+     * unknown Session, a client can recover a dropped one transparently.
+     */
+    readonly #droppedSessions = new Set<string>();
     readonly #store: SessionStore;
     readonly #adapters: AdapterResolver;
     readonly #sessionIdentity: "assigned" | "native";
@@ -170,16 +177,27 @@ export class SessionManager {
             if (this.#sessionRetirements.get(sessionId) === retirement) {
                 this.#sessionRetirements.delete(sessionId);
             }
-            if (retained && stored === "forget" && this.#sessionIdentity === "native") {
-                const row = this.#store.read(sessionId);
-                if (
-                    row instanceof FoundStoredSession &&
-                    row.session.nativeSessionId === sessionId &&
-                    isNativeChatSessionId(row.session.agentId, sessionId)
-                ) {
-                    this.#store.remove(sessionId);
-                }
+            // A close a client requested while the process was already going down keeps the stored
+            // Session, wherever the release started: the explicit close owns the keep decision.
+            if (retained && stored === "forget" && !this.#closedSessions.has(sessionId)) {
+                this.#forgetStoredSession(sessionId);
             }
+        }
+    }
+
+    /** Drops the canonical stored Session and remembers the drop, so later reads can say why it is missing. */
+    #forgetStoredSession(sessionId: string): void {
+        if (this.#sessionIdentity !== "native") {
+            return;
+        }
+        const row = this.#store.read(sessionId);
+        if (
+            row instanceof FoundStoredSession &&
+            row.session.nativeSessionId === sessionId &&
+            isNativeChatSessionId(row.session.agentId, sessionId)
+        ) {
+            this.#store.remove(sessionId);
+            this.#droppedSessions.add(sessionId);
         }
     }
 
@@ -379,6 +397,7 @@ export class SessionManager {
                 if (closed === "reopen") {
                     // Preparing or restoring a Session is how a client reopens it.
                     this.#closedSessions.delete(options.sessionId);
+                    this.#droppedSessions.delete(options.sessionId);
                 } else {
                     this.#assertOpen(options.sessionId);
                 }
@@ -592,7 +611,13 @@ export class SessionManager {
                 }
                 const stored = this.#store.read(options.sessionId);
                 if (!(stored instanceof FoundStoredSession)) {
-                    throw new AcpExecutionError("The Session was not found", {}, "session_not_found");
+                    throw new AcpExecutionError(
+                        "The Session was not found",
+                        {},
+                        this.#droppedSessions.has(options.sessionId)
+                            ? SESSION_NOT_PREPARED_ERROR_CODE
+                            : "session_not_found",
+                    );
                 }
                 const normalized = title.slice(0, 500);
                 const updatedAt = new Date().toISOString();
@@ -829,6 +854,13 @@ export class SessionManager {
             return stored instanceof FoundStoredSession ? [stored.session] : [];
         });
 
+    /**
+     * Whether this Runtime dropped the stored Session itself — for example idle reclamation — and no
+     * client has prepared it since. Such a Session is known but unlocated: preparing or prompting it
+     * restores its row, so callers report it differently from a Session that was never imported.
+     */
+    readonly droppedSession = (sessionId: string): boolean => this.#droppedSessions.has(sessionId);
+
     readonly sessionStatus = (sessionId: string): SessionStatus => {
         const commandId = this.#executions.command(sessionId);
         return commandId === undefined ? { kind: "idle" } : { commandId, kind: "working" };
@@ -1011,6 +1043,7 @@ export class SessionManager {
                 return await this.#executionProcesses.use(existing.sessionId, async () => {
                     // Importing a Session the Runtime already tracks opens it again, even when it was closed.
                     this.#closedSessions.delete(existing.sessionId);
+                    this.#droppedSessions.delete(existing.sessionId);
                     const runtime = await this.ensureSession({
                         ...options,
                         sessionId: existing.sessionId,

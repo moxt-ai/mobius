@@ -7,10 +7,12 @@ import {
     decodeMessageKind,
     decodeSessionCloseNoticeEvent,
     decodeSessionEvent,
+    decodeSessionOperationFailedEvent,
     decodeSessionReadyEvent,
     decodeSessionsQueriedEvent,
     encodeNativeSessionCommand,
     encodeSessionCloseCommand,
+    encodeSessionConfigReadCommand,
     encodeSessionHistoryPageLoad,
     encodeSessionPrepareCommand,
     encodeSessionPromptCommand,
@@ -171,6 +173,15 @@ async function nextResponse(peer: RealDaemonPeer, kind: string): Promise<string>
         }
         if (received === "session.operation.failed") {
             throw new Error(message);
+        }
+    }
+}
+
+async function nextMessageOfKind(peer: RealDaemonPeer, kind: string): Promise<string> {
+    for (;;) {
+        const message = await peer.nextMessage();
+        if (decodeMessageKind(message) === kind) {
+            return message;
         }
     }
 }
@@ -403,6 +414,95 @@ test("Given a canonical native Session is idle, When its process is reclaimed, T
     });
 });
 
+test("Given a canonical native Session was reclaimed while idle, When a client reads it without preparing first, Then each read reports session_not_prepared and a prompt recovers the conversation", async () => {
+    await withIdleDaemon("resume", async (peer, native, timer) => {
+        const sessionId = crypto.randomUUID();
+        await writeFile(
+            join(native, `${sessionId}.json`),
+            JSON.stringify({
+                turnCount: 1,
+                model: "test-small",
+                reasoningEffort: "medium",
+                fastMode: false,
+                mode: "code",
+                cwd: peer.workspace,
+                additionalDirectories: [],
+                title: "Native title before idle",
+                history: [],
+            }),
+        );
+        peer.send(
+            encodeSessionPrepareCommand({
+                kind: "session.prepare",
+                requestId: crypto.randomUUID(),
+                sessionId,
+                agentId: "claude",
+                bindingId: peer.bindingId,
+                directoryId: "default",
+                additionalDirectoryIds: [],
+            }),
+        );
+        await nextResponse(peer, "session.ready");
+        const original = await processId(native);
+        timer.advance(twoHours - 1);
+        await expire(native, original, timer);
+
+        const requestIds = {
+            restore: crypto.randomUUID(),
+            history: crypto.randomUUID(),
+            config: crypto.randomUUID(),
+            rename: crypto.randomUUID(),
+        };
+        peer.send(encodeSessionRestoreCommand({ kind: "session.restore", requestId: requestIds.restore, sessionId }));
+        peer.send(
+            encodeSessionHistoryPageLoad({
+                kind: "session.live-history.v2.page.load",
+                requestId: requestIds.history,
+                sessionId,
+                cursor: null,
+                eventLimit: 200,
+            }),
+        );
+        peer.send(
+            encodeSessionConfigReadCommand({
+                kind: "session.config.read",
+                requestId: requestIds.config,
+                sessionId,
+            }),
+        );
+        peer.send(
+            encodeSessionRenameCommand({
+                kind: "session.rename",
+                requestId: requestIds.rename,
+                sessionId,
+                title: "Renamed after idle",
+            }),
+        );
+        for (let index = 0; index < Object.keys(requestIds).length; index += 1) {
+            const failure = decodeSessionOperationFailedEvent(
+                await nextMessageOfKind(peer, "session.operation.failed"),
+            );
+            expect(failure.code).toBe("session_not_prepared");
+            expect(failure.sessionId).toBe(sessionId);
+            expect(Object.values(requestIds)).toContain(failure.requestId);
+        }
+        expect((await readdir(native)).filter((file) => file.endsWith(".process"))).toEqual([]);
+        expect(await prompt(peer, sessionId, "Continue after failed reads")).toContain("turn 2:");
+        peer.send(
+            encodeSessionHistoryPageLoad({
+                kind: "session.live-history.v2.page.load",
+                requestId: crypto.randomUUID(),
+                sessionId,
+                cursor: null,
+                eventLimit: 200,
+            }),
+        );
+        expect(await nextResponse(peer, "session.live-history.v2.page.loaded")).toContain(
+            "Continue after failed reads",
+        );
+    });
+});
+
 class RetiringIdleAgentSpecification extends InProcessAcpAgentSpecification {
     readonly agentExecutable = "node";
     readonly id = "claude";
@@ -445,6 +545,77 @@ test("Given idle process teardown is still releasing the native writer, When a n
                 held.release();
                 await readTurn(peer);
                 expect(specification.sessions.endpointCount()).toBe(3);
+            } finally {
+                specification.sessions.releaseAll();
+            }
+        },
+        "embedded",
+        undefined,
+        timer,
+    );
+});
+
+test("Given idle teardown is still running, When a client closes the Session, Then the closed Session keeps its stored title for reopening", async () => {
+    const specification = new RetiringIdleAgentSpecification();
+    const timer = new IdleTimeoutTimer();
+    vi.useFakeTimers({ now: new Date("2026-10-22T00:00:00Z"), toFake: ["Date"] });
+    await withRealDaemon(
+        specification,
+        { MOBIUS_TEST_RETIRING_IDLE_PATH: process.execPath },
+        async (peer) => {
+            try {
+                // A UUID Session id of a native chat Agent is canonical, so idle reclamation drops its row.
+                const sessionId = crypto.randomUUID();
+                peer.send(
+                    encodeSessionPrepareCommand({
+                        kind: "session.prepare",
+                        requestId: crypto.randomUUID(),
+                        sessionId,
+                        agentId: "claude",
+                        bindingId: peer.bindingId,
+                        directoryId: "default",
+                        additionalDirectoryIds: [],
+                    }),
+                );
+                expect(decodeSessionReadyEvent(await nextResponse(peer, "session.ready")).sessionId).toBe(sessionId);
+                await prompt(peer, sessionId, "Before the raced close");
+                const held = specification.sessions.closes.hold();
+                timer.advance(twoHours);
+                await held.entered;
+                // The explicit close arrives while the idle teardown still holds the process.
+                peer.send(
+                    encodeSessionCloseCommand({ kind: "session.close", requestId: crypto.randomUUID(), sessionId }),
+                );
+                const reasons: string[] = [];
+                for (;;) {
+                    const message = await peer.nextMessage();
+                    if (decodeMessageKind(message) !== "session.close.notice") {
+                        continue;
+                    }
+                    reasons.push(decodeSessionCloseNoticeEvent(message).reason);
+                    if (reasons.length === 2) {
+                        break;
+                    }
+                }
+                // The idle announcement reaches every client first; the explicit close announces again.
+                expect(reasons).toEqual([
+                    "This Session was closed after two idle hours.",
+                    "This Session was closed on request.",
+                ]);
+                held.release();
+                await nextResponse(peer, "session.closed");
+                peer.send(
+                    encodeSessionQueryCommand({
+                        kind: "session.query",
+                        requestId: crypto.randomUUID(),
+                        sessionIds: [sessionId],
+                    }),
+                );
+                // The client asked for this Session to stay closed-and-reopenable, so its row survives
+                // even though the idle path had already chosen to drop it.
+                expect(decodeSessionsQueriedEvent(await nextResponse(peer, "session.queried")).entries).toEqual([
+                    expect.objectContaining({ sessionId, title: "Before the raced close" }),
+                ]);
             } finally {
                 specification.sessions.releaseAll();
             }

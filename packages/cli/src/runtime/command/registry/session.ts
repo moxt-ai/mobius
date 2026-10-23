@@ -11,6 +11,7 @@ import {
     SESSION_CONFIG_READ_KIND,
     SESSION_CONFIG_READ_RESULT_KIND,
     SESSION_CONFIGURE_KIND,
+    SESSION_NOT_PREPARED_ERROR_CODE,
     SESSION_PREPARE_KIND,
     SESSION_RENAME_KIND,
     SESSION_RESTORE_KIND,
@@ -182,7 +183,12 @@ export async function executeSessionRestore(
         const entry = await metrics.measure("session-lookup", async () => {
             const [found] = await nativeSessions.querySessions([command.sessionId], signal);
             if (found === undefined) {
-                throw new SessionError("session_not_found", "The Session was not found");
+                throw new SessionError(
+                    // A Session the Runtime dropped — for example idle reclamation — is known but unlocated;
+                    // preparing it restores the row, so say that instead of "never imported".
+                    sessions.droppedSession(command.sessionId) ? SESSION_NOT_PREPARED_ERROR_CODE : "session_not_found",
+                    "The Session was not found",
+                );
             }
             return found;
         });
@@ -379,7 +385,12 @@ export async function executeSessionConfigRead(
         const entry = await metrics.measure("session-lookup", async () => {
             const [found] = await nativeSessions.querySessions([command.sessionId], signal);
             if (found === undefined) {
-                throw new SessionError("session_not_found", "The Session was not found");
+                throw new SessionError(
+                    // A Session the Runtime dropped — for example idle reclamation — is known but unlocated;
+                    // preparing it restores the row, so say that instead of "never imported".
+                    sessions.droppedSession(command.sessionId) ? SESSION_NOT_PREPARED_ERROR_CODE : "session_not_found",
+                    "The Session was not found",
+                );
             }
             return found;
         });

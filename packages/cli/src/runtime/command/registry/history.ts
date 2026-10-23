@@ -5,6 +5,7 @@ import {
     type QueuedPromptRequestEventLog,
     SESSION_HISTORY_PAGE_LOAD_KIND,
     SESSION_HISTORY_PAGE_LOADED_KIND,
+    SESSION_NOT_PREPARED_ERROR_CODE,
     SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND,
     SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND,
     type SessionEvent,
@@ -139,7 +140,12 @@ export async function executeSessionHistoryPageLoad(
     try {
         const [entry] = await nativeSessions.querySessions([command.sessionId], signal);
         if (entry === undefined) {
-            throw new SessionError("session_not_found", "The Session was not found");
+            // A Session the Runtime dropped — for example idle reclamation — is known but unlocated;
+            // preparing it restores the row, so say that instead of "never imported".
+            throw new SessionError(
+                sessions.droppedSession(command.sessionId) ? SESSION_NOT_PREPARED_ERROR_CODE : "session_not_found",
+                "The Session was not found",
+            );
         }
         agentId = entry.agentId;
         const resolved = await resolveSessionDirectories(

@@ -26,6 +26,12 @@ export const SESSION_CLOSED_KIND = "session.closed";
 export const SESSION_CLOSE_NOTICE_KIND = "session.close.notice";
 /** Failure code of an operation that needs a Session the Runtime has closed and nobody has reopened. */
 export const SESSION_CLOSED_ERROR_CODE = "session_closed";
+/**
+ * Failure code of an operation that needs a stored Session the Runtime itself dropped — for example
+ * idle reclamation — and no client has prepared since. Preparing or prompting the Session restores
+ * it; unlike `session_not_found`, the Session was known, so a client can recover transparently.
+ */
+export const SESSION_NOT_PREPARED_ERROR_CODE = "session_not_prepared";
 export const SESSION_STATUS_CHANGED_KIND = "session.status.changed";
 export const SESSION_COMMANDS_UPDATED_KIND = "session.commands.updated";
 export const SESSION_INFO_UPDATED_KIND = "session.info.updated";
