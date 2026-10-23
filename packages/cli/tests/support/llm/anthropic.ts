@@ -290,7 +290,8 @@ export class FakeAnthropicProvider implements AsyncDisposable {
                     ? { type: "text", text: selectedAnswer }
                     : { type: "tool_use", id: tool.id, name: tool.name, input: tool.input };
             const stopReason = tool === undefined ? "end_turn" : "tool_use";
-            if (tool === undefined) {
+            // Startup probes such as /api/hello are not model requests.
+            if (tool === undefined && Array.isArray(payload["messages"])) {
                 await options.beforeFirstText?.(scenario, disconnected.signal);
             }
             if (payload["stream"] === true) {
