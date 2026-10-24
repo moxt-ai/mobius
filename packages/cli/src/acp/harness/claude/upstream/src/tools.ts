@@ -10,7 +10,6 @@ import type {
     FileEditInput,
     FileReadInput,
     FileReadOutput,
-    FileWriteInput,
     GlobInput,
     GrepInput,
     ReportFindingsInput,
@@ -57,6 +56,7 @@ import type {
     BetaWebFetchToolResultErrorBlock,
     BetaWebSearchToolResultBlockParam,
 } from "@anthropic-ai/sdk/resources/beta.mjs";
+import { z } from "zod";
 
 /**
  * Union of all possible content types that can appear in tool results from the Anthropic SDK.
@@ -82,6 +82,11 @@ type ToolResultContent =
     | BetaTextEditorCodeExecutionCreateResultBlock
     | BetaTextEditorCodeExecutionStrReplaceResultBlock
     | BetaTextEditorCodeExecutionToolResultError;
+
+const fileWritePreviewInputSchema = z.object({
+    file_path: z.string().optional(),
+    content: z.string().optional(),
+});
 
 interface ToolInfo {
     title: string;
@@ -191,9 +196,12 @@ export function toolInfoFromToolUse(toolUse: any, supportsTerminalOutput: boolea
         }
 
         case "Write": {
-            const input = toolUse.input as FileWriteInput | undefined;
+            const parsed = fileWritePreviewInputSchema.safeParse(toolUse.input);
+            const input = parsed.success ? parsed.data : undefined;
             let content: ToolCallContent[] = [];
-            if (input?.file_path) {
+            // Interrupted calls can persist a path before any content arrives.
+            // A missing body is not an empty-file write and cannot form a diff.
+            if (input?.file_path && typeof input.content === "string") {
                 content = [
                     {
                         type: "diff",
@@ -202,7 +210,7 @@ export function toolInfoFromToolUse(toolUse: any, supportsTerminalOutput: boolea
                         newText: input.content,
                     },
                 ];
-            } else if (input?.content) {
+            } else if (typeof input?.content === "string") {
                 content = [
                     {
                         type: "content",
