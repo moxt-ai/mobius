@@ -28,9 +28,13 @@ for (const operation of ["prompt", "compact"] as const) {
                             return { content: [{ type: "text", text: JSON.stringify(answer ?? null) }], details: {} };
                         },
                     });
-                    pi.on("session_before_compact", async (_event, ctx) => {
+                    pi.on("session_before_compact", async (event, ctx) => {
                         await ctx.ui.select("Compact", ["One", "Two"]);
-                        return { cancel: true };
+                        // Cooperate with native cancellation without vetoing compaction ourselves.
+                        if (!event.signal.aborted) {
+                            await new Promise(resolve => event.signal.addEventListener("abort", resolve, { once: true }));
+                        }
+                        ctx.ui.notify("PI_NATIVE_COMPACTION_STOPPED", "info");
                     });
                 }`,
             );
@@ -122,6 +126,7 @@ for (const operation of ["prompt", "compact"] as const) {
                 }
                 expect(JSON.stringify(updates)).not.toContain("PRIVATE_CLIENT_FAILURE");
                 if (operation === "compact") {
+                    expect(JSON.stringify(updates)).toContain("PI_NATIVE_COMPACTION_STOPPED");
                     expect(
                         updates.some(
                             ({ update }) => update.sessionUpdate === "compaction_update" && update.status === "failed",

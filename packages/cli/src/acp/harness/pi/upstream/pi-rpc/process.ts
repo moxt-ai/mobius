@@ -335,8 +335,8 @@ export class PiRpcProcess {
         }
     }
 
-    async abort(): Promise<void> {
-        const res = await this.request({ type: "abort" });
+    async abort(opts?: { readonly signal: AbortSignal; readonly timeoutMs: number }): Promise<void> {
+        const res = await this.request({ type: "abort" }, opts);
         if (!res.success) {
             throw new Error(`pi abort failed: ${res.error ?? JSON.stringify(res.data)}`);
         }

@@ -495,6 +495,15 @@ export class PiAcpSession {
             return result;
         } catch (cause) {
             if (signal.aborted && signal.reason instanceof RequestError) {
+                // Cancelling a local RPC wait does not stop native compaction.
+                // Pi's abort response acknowledges that the operation is idle.
+                try {
+                    await this.proc.abort({ signal: this.proc.signal, timeoutMs });
+                } catch (abortCause) {
+                    if (!this.proc.signal.aborted) {
+                        this.proc.terminateAfterFailure(abortCause);
+                    }
+                }
                 throw signal.reason;
             }
             throw cause;
