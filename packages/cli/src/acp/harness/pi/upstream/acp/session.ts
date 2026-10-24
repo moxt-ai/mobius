@@ -4,7 +4,6 @@ import { isAbsolute, resolve as resolvePath } from "node:path";
 import type {
     ContentBlock,
     McpServer,
-    PermissionOption,
     SessionUpdate,
     ToolCallContent,
     ToolCallLocation,
@@ -51,15 +50,6 @@ type QueuedTurn = {
 };
 
 type PiSteerOutcome = { readonly kind: "idle" } | { readonly kind: "injected" };
-
-type PermissionResponse = Awaited<ReturnType<PiAcpClient["requestPermission"]>>;
-
-const CONFIRM_PERMISSION_OPTIONS: PermissionOption[] = [
-    { optionId: "yes", name: "Yes", kind: "allow_once" },
-    { optionId: "no", name: "No", kind: "reject_once" },
-];
-const EXTENSION_UI_RAW_INPUT_KEYS = ["title", "message", "options", "placeholder", "prefill"] as const;
-const CHOICE_OPTION_PREFIX = "choice-";
 
 /**
  * Map pi's `stats.contextUsage` to an ACP `usage_update`. Returns null whenever pi
@@ -212,7 +202,7 @@ export class SessionManager {
             return;
         }
         try {
-            s.proc.dispose?.();
+            s.dispose();
         } catch {
             // ignore
         }
@@ -319,6 +309,7 @@ export class PiAcpSession {
 
     readonly proc: PiRpcProcess;
     private readonly conn: PiAcpClient;
+    private readonly uiRequests = new Map<string, AbortController>();
     private readonly fileCommands: FileSlashCommand[];
 
     // Used to map abort semantics to ACP stopReason.
@@ -473,6 +464,7 @@ export class PiAcpSession {
     async cancel(): Promise<void> {
         // Cancel current and clear any queued prompts.
         this.cancelRequested = true;
+        this.cancelUiRequests();
 
         if (this.turnQueue.length) {
             const queued = this.turnQueue.splice(0, this.turnQueue.length);
@@ -492,6 +484,18 @@ export class PiAcpSession {
 
         // Abort the currently running turn (if any). If nothing is running, this is a no-op.
         await this.proc.abort();
+    }
+
+    private cancelUiRequests(): void {
+        for (const request of this.uiRequests.values()) {
+            request.abort();
+        }
+        this.uiRequests.clear();
+    }
+
+    dispose(): void {
+        this.cancelUiRequests();
+        this.proc.dispose();
     }
 
     wasCancelRequested(): boolean {
@@ -1046,25 +1050,8 @@ export class PiAcpSession {
             return;
         }
 
-        if (method === "select") {
-            await this.handleExtensionSelect(ev, id);
-            return;
-        }
-
-        if (method === "confirm") {
-            await this.handleExtensionConfirm(ev, id);
-            return;
-        }
-
-        if (method === "input" || method === "editor") {
-            this.emit({
-                sessionUpdate: "agent_message_chunk",
-                content: {
-                    type: "text",
-                    text: `Pi ${method} UI request is not supported in ACP yet; cancelling it.`,
-                } satisfies ContentBlock,
-            });
-            await this.proc.sendExtensionUiResponse({ id, cancelled: true });
+        if (method === "select" || method === "confirm" || method === "input" || method === "editor") {
+            await this.handleExtensionQuestion(ev, id, method);
             return;
         }
 
@@ -1081,100 +1068,71 @@ export class PiAcpSession {
         await this.proc.sendExtensionUiResponse({ id, cancelled: true });
     }
 
-    private async handleExtensionSelect(ev: PiRpcEvent, id: string): Promise<void> {
-        const rawOptions = ev.options;
-        const options = Array.isArray(rawOptions) ? rawOptions.map((option) => String(option)) : [];
-        if (!options.length) {
-            await this.proc.sendExtensionUiResponse({ id, cancelled: true });
-            return;
-        }
-
-        const permissionOptions: PermissionOption[] = options.map((name, index) => ({
-            optionId: `${CHOICE_OPTION_PREFIX}${index}`,
-            name,
-            kind: "allow_once",
-        }));
-
-        const selected = await this.requestExtensionPermission(id, ev, permissionOptions);
-        if (selected === null) {
-            return;
-        }
-
-        const selectedOptionId = selected.outcome.outcome === "selected" ? selected.outcome.optionId : null;
-        const index = selectedOptionId === null ? null : optionIndex(selectedOptionId);
-        const value = index === null ? null : (options.at(index) ?? null);
-        await this.proc.sendExtensionUiResponse(value === null ? { id, cancelled: true } : { id, value });
-    }
-
-    private async handleExtensionConfirm(ev: PiRpcEvent, id: string): Promise<void> {
-        const selected = await this.requestExtensionPermission(id, ev, CONFIRM_PERMISSION_OPTIONS);
-        if (selected === null) {
-            return;
-        }
-
-        if (selected.outcome.outcome === "cancelled") {
-            await this.proc.sendExtensionUiResponse({ id, cancelled: true });
-            return;
-        }
-
-        await this.proc.sendExtensionUiResponse({ id, confirmed: selected.outcome.optionId === "yes" });
-    }
-
-    private async requestExtensionPermission(
-        id: string,
+    private async handleExtensionQuestion(
         ev: PiRpcEvent,
-        options: PermissionOption[],
-    ): Promise<PermissionResponse | null> {
-        try {
-            return await this.conn.requestPermission({
-                sessionId: this.sessionId,
-                toolCall: extensionUiToolCall(id, ev),
-                options,
-            });
-        } catch {
+        id: string,
+        method: "select" | "confirm" | "input" | "editor",
+    ): Promise<void> {
+        const options =
+            method === "confirm"
+                ? ["yes", "no"]
+                : method === "select" && Array.isArray(ev.options)
+                  ? ev.options.filter((option): option is string => typeof option === "string")
+                  : [];
+        if (method === "select" && options.length === 0) {
             await this.proc.sendExtensionUiResponse({ id, cancelled: true });
-            return null;
+            return;
+        }
+        const cancellation = new AbortController();
+        this.uiRequests.set(id, cancellation);
+        const signal = AbortSignal.any([cancellation.signal, AbortSignal.timeout(3_600_000)]);
+        try {
+            const response = await this.conn.createElicitation(
+                {
+                    sessionId: this.sessionId,
+                    mode: "form",
+                    message: stringProp(ev, "title") ?? "Pi needs your input",
+                    requestedSchema: {
+                        type: "object",
+                        properties: {
+                            answer: {
+                                type: "string",
+                                title: stringProp(ev, "title") ?? "Answer",
+                                description: stringProp(ev, "message") ?? stringProp(ev, "placeholder") ?? "",
+                                ...(method === "input" || method === "editor"
+                                    ? { default: stringProp(ev, "prefill") ?? "", maxLength: 10_000 }
+                                    : {
+                                          oneOf: options.map((option) => ({
+                                              const: option,
+                                              title: method === "confirm" ? (option === "yes" ? "Yes" : "No") : option,
+                                          })),
+                                      }),
+                                _meta: { "ai.moxt/elicitation": { multiline: method === "editor" } },
+                            },
+                        },
+                    },
+                },
+                signal,
+            );
+            const content = response.action === "accept" ? response.content : undefined;
+            const answer: unknown =
+                typeof content === "object" && content !== null ? Reflect.get(content, "answer") : undefined;
+            await this.proc.sendExtensionUiResponse(
+                typeof answer !== "string"
+                    ? { id, cancelled: true }
+                    : method === "confirm"
+                      ? { id, confirmed: answer === "yes" }
+                      : { id, value: answer },
+            );
+        } finally {
+            this.uiRequests.delete(id);
         }
     }
-}
-
-function extensionUiToolCall(id: string, ev: PiRpcEvent) {
-    const method = stringProp(ev, "method") ?? "ui";
-    const title = stringProp(ev, "title") ?? `Pi ${method}`;
-    const rawInput: Record<string, unknown> = { method };
-
-    for (const key of EXTENSION_UI_RAW_INPUT_KEYS) {
-        if (Object.hasOwn(ev, key)) {
-            rawInput[key] = ev[key];
-        }
-    }
-
-    return {
-        toolCallId: `pi-ui-${id}`,
-        title,
-        kind: "other" as const,
-        status: "pending" as const,
-        rawInput,
-    };
 }
 
 function stringProp(source: Record<string, unknown>, key: string): string | null {
     const value = source[key];
     return typeof value === "string" ? value : null;
-}
-
-function optionIndex(optionId: string): number | null {
-    if (!optionId.startsWith(CHOICE_OPTION_PREFIX)) {
-        return null;
-    }
-
-    const rawIndex = optionId.slice(CHOICE_OPTION_PREFIX.length);
-    if (!rawIndex) {
-        return null;
-    }
-
-    const index = Number(rawIndex);
-    return Number.isSafeInteger(index) && index >= 0 && String(index) === rawIndex ? index : null;
 }
 
 function toToolKind(toolName: string): ToolKind {

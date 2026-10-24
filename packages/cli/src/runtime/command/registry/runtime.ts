@@ -5,19 +5,19 @@ import { send } from "../transport.ts";
 
 export const runtimeDiagnosticsCommand: RuntimeCommand = {
     kind: "runtime.diagnostics.read",
-    handle: ({ diagnostics, socket }, message): void => {
+    handle: ({ diagnostics, transport }, message): void => {
         if (message.kind !== "runtime.diagnostics.read") {
             throw new Error("Command kind mismatch");
         }
         try {
-            send(socket, {
+            send(transport, {
                 kind: "runtime.diagnostics.result",
                 requestId: message.requestId,
                 version: packageMetadata.version,
                 ...diagnostics.snapshot(),
             });
         } catch {
-            send(socket, {
+            send(transport, {
                 kind: "session.operation.failed",
                 requestId: message.requestId,
                 sessionId: "runtime",
@@ -30,10 +30,10 @@ export const runtimeDiagnosticsCommand: RuntimeCommand = {
 
 export const runtimePingCommand: RuntimeCommand = {
     kind: RUNTIME_PING_KIND,
-    handle: ({ socket }, message): void => {
+    handle: ({ transport }, message): void => {
         if (message.kind !== RUNTIME_PING_KIND) {
             throw new Error("Command kind mismatch");
         }
-        send(socket, { kind: RUNTIME_PONG_KIND, requestId: message.requestId });
+        send(transport, { kind: RUNTIME_PONG_KIND, requestId: message.requestId });
     },
 };

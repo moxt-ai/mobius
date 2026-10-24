@@ -44,6 +44,7 @@ export const elicitationFieldSchema = z
         maximumLength: z.string().max(128),
         minimum: z.string().max(128),
         minimumLength: z.string().max(128),
+        multiline: z.boolean().optional(),
         name: z.string().min(1).max(128),
         options: z.array(elicitationOptionSchema).max(200).readonly(),
         pattern: z.string().max(500),

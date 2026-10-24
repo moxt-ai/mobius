@@ -21,10 +21,13 @@ import { discoverLocalAgentInventory } from "../../../src/agent/discovery/discov
 import type { LocalAgentSpecification } from "../../../src/agent/specification/agent-specification.ts";
 import { openMobiusCliInstallation } from "../../../src/daemon/pairing/pair-local-machine.ts";
 import { createRuntimeConfig, RuntimeLocalContext } from "../../../src/runtime/config.ts";
+import { connectLocalSession, type LocalSessionConnection } from "../../../src/runtime/local/session-client.ts";
 import { runRuntime } from "../../../src/runtime/run.ts";
 import { systemTimer, type Timer } from "../../../src/util/timer.ts";
 
 export interface RealDaemonPeer {
+    readonly command: (arguments_: readonly string[]) => Promise<string>;
+    readonly connectTerminal: (sessionId: string) => Promise<LocalSessionConnection>;
     readonly restart: () => Promise<void>;
     readonly send: (message: string) => void;
     readonly sessionId: string;
@@ -72,7 +75,7 @@ export async function withRealDaemon(
     let runtime: Promise<void> | undefined;
     let execution = new AbortController();
     const cliEnvironment = { ...process.env, ...environment, MOBIUS_STATE_DIRECTORY: directory };
-    const cli = async (args: readonly string[], deadline = signal): Promise<void> => {
+    const cli = async (args: readonly string[], deadline = signal): Promise<string> => {
         const child = spawn(
             process.execPath,
             [resolve(import.meta.dirname, "../../../src/cli/entrypoint.ts"), ...args],
@@ -96,6 +99,7 @@ export async function withRealDaemon(
                 code === 0 ? resolve_() : reject(new Error(`CLI ${args.join(" ")} failed: ${output}`)),
             );
         });
+        return output;
     };
     let socket: WebSocket | undefined;
     const messages: string[] = [];
@@ -191,6 +195,14 @@ export async function withRealDaemon(
         const pendingEvents: string[] = [];
         const sessionId = `real_${specification.id}_${randomUUID()}`;
         await scenario({
+            command: (arguments_) => cli(arguments_),
+            connectTerminal: async (id) => {
+                const stateDirectory =
+                    launch === "managed"
+                        ? (await openMobiusCliInstallation(signal, cliEnvironment)).stateDirectory
+                        : directory;
+                return await connectLocalSession({ stateDirectory, channelId: "real-agent", sessionId: id }, signal);
+            },
             restart: async () => {
                 if (launch === "managed") {
                     await cli(["quit"]);

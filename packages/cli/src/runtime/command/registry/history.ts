@@ -9,7 +9,6 @@ import {
     SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND,
     type SessionEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
-import type { WebSocket } from "undici";
 import { operationErrorCode } from "../../../infra/operation-error.ts";
 import { SessionError } from "../../../session/api/session-error.ts";
 import type { SessionEventPage } from "../../../session/history/session-event-store.ts";
@@ -22,6 +21,7 @@ import { resolveCatalogAgent } from "../../catalog/resolve-catalog-agent.ts";
 import type { RuntimeConfig } from "../../config.ts";
 import type { RelayConnectionDiagnostics } from "../../relay/diagnostics.ts";
 import type { RuntimeCommand } from "../definition.ts";
+import type { RuntimeCommandTransport } from "../transport.ts";
 import { reportOperationFailure, send } from "../transport.ts";
 
 function isAgentReasoning(event: SessionEvent | undefined): boolean {
@@ -121,7 +121,7 @@ async function loadHistoryPage(
 }
 
 export async function executeSessionHistoryPageLoad(
-    socket: WebSocket,
+    transport: RuntimeCommandTransport,
     command: ReturnType<typeof decodeSessionHistoryPageLoad>,
     config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
@@ -162,7 +162,7 @@ export async function executeSessionHistoryPageLoad(
             async (eventLimit, cursor) => await sessions.loadSessionEvents(loadOptions, eventLimit, cursor),
         );
         signal.throwIfAborted();
-        send(socket, {
+        send(transport, {
             events,
             kind: SESSION_HISTORY_PAGE_LOADED_KIND,
             requestId: command.requestId,
@@ -180,13 +180,13 @@ export async function executeSessionHistoryPageLoad(
                 },
                 error,
             );
-            reportOperationFailure(socket, command.requestId, command.sessionId, error);
+            reportOperationFailure(transport, command.requestId, command.sessionId, error);
         }
     }
 }
 
 export async function executeSessionPreviewHistoryPageLoad(
-    socket: WebSocket,
+    transport: RuntimeCommandTransport,
     command: ReturnType<typeof decodeSessionPreviewHistoryPageLoad>,
     config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
@@ -219,7 +219,7 @@ export async function executeSessionPreviewHistoryPageLoad(
                 await sessions.previewNativeSessionEvents(loadOptions, command.sessionId, eventLimit, cursor),
         );
         signal.throwIfAborted();
-        send(socket, {
+        send(transport, {
             events,
             kind: SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND,
             requestId: command.requestId,
@@ -237,7 +237,7 @@ export async function executeSessionPreviewHistoryPageLoad(
                 },
                 error,
             );
-            reportOperationFailure(socket, command.requestId, command.sessionId, error);
+            reportOperationFailure(transport, command.requestId, command.sessionId, error);
         }
     }
 }
@@ -249,7 +249,7 @@ export const sessionHistoryPageLoadCommand: RuntimeCommand = {
             throw new Error("Command kind mismatch");
         }
         void executeSessionHistoryPageLoad(
-            context.socket,
+            context.transport,
             message,
             context.config,
             context.directories,
@@ -269,7 +269,7 @@ export const previewHistoryPageLoadCommand: RuntimeCommand = {
             throw new Error("Command kind mismatch");
         }
         void executeSessionPreviewHistoryPageLoad(
-            context.socket,
+            context.transport,
             message,
             context.config,
             context.directories,

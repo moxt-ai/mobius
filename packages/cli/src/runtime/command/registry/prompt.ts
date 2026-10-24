@@ -21,7 +21,7 @@ export const sessionPromptCommand: RuntimeCommand = {
             encodeSessionPromptCommand(message),
         );
         if (receipt.kind === "conflict") {
-            send(context.socket, {
+            send(context.transport, {
                 code: "command_identity_conflict",
                 requestId: message.commandId,
                 kind: "session.operation.failed",

@@ -1,4 +1,3 @@
-import type { WebSocket } from "undici";
 import type { ExternalContentStore } from "../../session/content/external-content-store.ts";
 import type { SessionManager } from "../../session/manager/session-manager.ts";
 import type { NativeSessionService } from "../../session/native/native-session-browser.ts";
@@ -9,6 +8,7 @@ import type { WorkspaceDirectoryService } from "../../session/workspace/workspac
 import type { Timer } from "../../util/timer.ts";
 import type { RuntimeConfig } from "../config.ts";
 import type { RelayConnectionDiagnostics } from "../relay/diagnostics.ts";
+import type { RuntimeCommandTransport } from "./transport.ts";
 
 export interface CommandContext {
     readonly config: RuntimeConfig;
@@ -20,7 +20,7 @@ export interface CommandContext {
     readonly externalContent: ExternalContentStore;
     readonly sessionTurns: SessionTurns;
     readonly diagnostics: RelayConnectionDiagnostics;
-    readonly socket: WebSocket;
+    readonly transport: RuntimeCommandTransport;
     readonly signal: AbortSignal;
     readonly timer: Timer;
 }

@@ -10,7 +10,7 @@ export function createAgentSettingsCommands(context: CommandContext): readonly R
         diagnostics: context.diagnostics,
         sessions: context.sessions,
         signal: context.signal,
-        socket: context.socket,
+        transport: context.transport,
         timer: context.timer,
     });
     return [

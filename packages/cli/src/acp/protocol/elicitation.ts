@@ -76,6 +76,8 @@ export function normalizeElicitationFields(requestedSchema: unknown): readonly S
         const options = normalizeElicitationOptions(property);
         const normalizedType = type === "string" && options.length > 0 ? "select" : type;
         const defaultValue = property["default"];
+        const metadata = property["_meta"];
+        const presentation = isRecord(metadata) ? metadata["ai.moxt/elicitation"] : undefined;
         normalized.push({
             defaultBooleanValue: typeof defaultValue === "boolean" ? defaultValue : false,
             defaultNumberValue: typeof defaultValue === "number" && Number.isFinite(defaultValue) ? defaultValue : 0,
@@ -92,6 +94,7 @@ export function normalizeElicitationFields(requestedSchema: unknown): readonly S
             maximumLength: numericString(property["maxLength"] ?? property["maxItems"]),
             minimum: numericString(property["minimum"]),
             minimumLength: numericString(property["minLength"] ?? property["minItems"]),
+            multiline: normalizedType === "string" && isRecord(presentation) && presentation["multiline"] === true,
             name: truncate(name, 128),
             options,
             pattern: truncate(readString(property["pattern"]), 500),

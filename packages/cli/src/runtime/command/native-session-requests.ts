@@ -1,10 +1,10 @@
 import type { NativeSessionCancel, NativeSessionCommand } from "@moxt-ai/mobius-sdk/protocol";
-import { WebSocket } from "undici";
 import { operationErrorCode } from "../../infra/operation-error.ts";
 import { SessionError } from "../../session/api/session-error.ts";
 import type { NativeSessionService } from "../../session/native/native-session-browser.ts";
 import type { Timer } from "../../util/timer.ts";
 import type { RelayConnectionDiagnostics } from "../relay/diagnostics.ts";
+import type { RuntimeCommandTransport } from "./transport.ts";
 import { reportOperationFailure, send } from "./transport.ts";
 
 type PendingRequest = Readonly<{
@@ -18,12 +18,12 @@ interface NativeRequestDependencies {
     readonly diagnostics: RelayConnectionDiagnostics;
     readonly nativeSessions: NativeSessionService;
     readonly signal: AbortSignal;
-    readonly socket: WebSocket;
+    readonly transport: RuntimeCommandTransport;
     readonly timer: Timer;
 }
 
 export function createNativeSessionRequestHandler(dependencies: NativeRequestDependencies) {
-    const { diagnostics, nativeSessions, signal, socket, timer } = dependencies;
+    const { diagnostics, nativeSessions, signal, transport, timer } = dependencies;
     const pending = new Map<string, PendingRequest>();
 
     const cancel = (command: NativeSessionCancel): void => {
@@ -44,7 +44,7 @@ export function createNativeSessionRequestHandler(dependencies: NativeRequestDep
             (!parallelRead && previous.some((request) => !request.controller.signal.aborted))
         ) {
             reportOperationFailure(
-                socket,
+                transport,
                 command.requestId,
                 command.sessionId,
                 new SessionError("native_session_busy", "Another native session operation is running"),
@@ -80,8 +80,8 @@ export function createNativeSessionRequestHandler(dependencies: NativeRequestDep
                 }
                 operationSignal.throwIfAborted();
                 const result = await nativeSessions.execute(command, operationSignal);
-                if (socket.readyState === WebSocket.OPEN) {
-                    send(socket, result);
+                if (transport.isOpen()) {
+                    send(transport, result);
                 }
             } catch (error) {
                 const failure: unknown = operationSignal.aborted
@@ -100,7 +100,7 @@ export function createNativeSessionRequestHandler(dependencies: NativeRequestDep
                     },
                     failure,
                 );
-                reportOperationFailure(socket, command.requestId, command.sessionId, failure);
+                reportOperationFailure(transport, command.requestId, command.sessionId, failure);
             } finally {
                 timeout.cancel();
                 pending.delete(command.requestId);

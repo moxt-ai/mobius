@@ -27,6 +27,7 @@ export class RuntimeSessionEventPublisher implements SessionEventSink {
     #pendingTask: ScheduledTask | null = null;
     #socket: WebSocket | null = null;
     readonly #timer: Timer;
+    readonly #localSubscribers = new Map<string, Set<(message: DaemonToServiceMessage) => void>>();
 
     constructor(timer: Timer) {
         this.#timer = timer;
@@ -45,8 +46,29 @@ export class RuntimeSessionEventPublisher implements SessionEventSink {
     };
 
     readonly close = (): void => {
+        this.#localSubscribers.clear();
         this.#socket = null;
         this.dropPendingEvents();
+    };
+
+    readonly subscribe = (sessionId: string, receive: (message: DaemonToServiceMessage) => void): (() => void) => {
+        const subscribers = this.#localSubscribers.get(sessionId) ?? new Set();
+        subscribers.add(receive);
+        this.#localSubscribers.set(sessionId, subscribers);
+        return () => {
+            subscribers.delete(receive);
+            if (subscribers.size === 0) {
+                this.#localSubscribers.delete(sessionId);
+            }
+        };
+    };
+
+    readonly #publishMessage = (message: DaemonToServiceMessage): void => {
+        if ("sessionId" in message) {
+            for (const receive of this.#localSubscribers.get(message.sessionId) ?? []) {
+                receive(message);
+            }
+        }
     };
 
     readonly publishOperationFailure = (sessionId: string, requestId: string, code: string, message: string): void => {
@@ -57,6 +79,7 @@ export class RuntimeSessionEventPublisher implements SessionEventSink {
     readonly publishClosed = (event: SessionCloseNoticeEvent): void => this.#send(event);
 
     readonly #send = (message: DaemonToServiceMessage): void => {
+        this.#publishMessage(message);
         const socket = this.#socket;
         if (socket === null || socket.readyState !== WebSocket.OPEN) {
             return;
@@ -74,6 +97,9 @@ export class RuntimeSessionEventPublisher implements SessionEventSink {
     };
 
     readonly publish = (event: SessionLiveEvent): void => {
+        for (const receive of this.#localSubscribers.get(event.sessionId) ?? []) {
+            receive({ kind: SESSION_EVENT_KIND, events: [event] });
+        }
         const socket = this.#socket;
         if (socket === null || socket.readyState !== WebSocket.OPEN) {
             return;

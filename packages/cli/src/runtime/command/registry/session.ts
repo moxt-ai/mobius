@@ -16,7 +16,6 @@ import {
     SESSION_RESTORE_KIND,
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-sdk/protocol";
-import type { WebSocket } from "undici";
 import { operationErrorCode } from "../../../infra/operation-error.ts";
 import { AccumulatingOperationMetrics } from "../../../infra/operation-metrics.ts";
 import type { SessionRecovery } from "../../../session/api/session-api.ts";
@@ -29,6 +28,7 @@ import { resolveCatalogAgent } from "../../catalog/resolve-catalog-agent.ts";
 import type { RuntimeConfig } from "../../config.ts";
 import type { RelayConnectionDiagnostics } from "../../relay/diagnostics.ts";
 import type { RuntimeCommand } from "../definition.ts";
+import type { RuntimeCommandTransport } from "../transport.ts";
 import { reportOperationFailure, send } from "../transport.ts";
 
 async function prepareSession(
@@ -106,14 +106,14 @@ async function prepareSession(
 }
 
 export async function executeWorkspaceList(
-    socket: WebSocket,
+    transport: RuntimeCommandTransport,
     command: WorkspaceListCommand,
     directories: WorkspaceDirectoryService,
     signal: AbortSignal,
 ): Promise<void> {
     try {
         const listing = await directories.list(command.bindingId, command.directoryId, signal);
-        send(socket, {
+        send(transport, {
             bindingId: command.bindingId,
             directoryId: listing.directoryId,
             directoryLabel: listing.directoryLabel,
@@ -123,12 +123,12 @@ export async function executeWorkspaceList(
             requestId: command.requestId,
         });
     } catch (error) {
-        reportOperationFailure(socket, command.requestId, "", error);
+        reportOperationFailure(transport, command.requestId, "", error);
     }
 }
 
 export async function executeSessionPrepare(
-    socket: WebSocket,
+    transport: RuntimeCommandTransport,
     command: SessionPrepareCommand,
     config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
@@ -148,7 +148,7 @@ export async function executeSessionPrepare(
             metrics,
             signal,
         );
-        send(socket, {
+        send(transport, {
             ...readyEvent,
             runtimeTimings: metrics.snapshot(),
         });
@@ -163,12 +163,12 @@ export async function executeSessionPrepare(
             },
             error,
         );
-        reportOperationFailure(socket, command.requestId, command.sessionId, error, metrics.snapshot());
+        reportOperationFailure(transport, command.requestId, command.sessionId, error, metrics.snapshot());
     }
 }
 
 export async function executeSessionRestore(
-    socket: WebSocket,
+    transport: RuntimeCommandTransport,
     command: SessionRestoreCommand,
     config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
@@ -205,7 +205,7 @@ export async function executeSessionRestore(
             metrics,
             signal,
         );
-        send(socket, {
+        send(transport, {
             entry,
             kind: "session.restored",
             ready: { ...ready, runtimeTimings: metrics.snapshot() },
@@ -221,19 +221,19 @@ export async function executeSessionRestore(
             },
             error,
         );
-        reportOperationFailure(socket, command.requestId, command.sessionId, error, metrics.snapshot());
+        reportOperationFailure(transport, command.requestId, command.sessionId, error, metrics.snapshot());
     }
 }
 
 export async function executeSessionRename(
-    socket: WebSocket,
+    transport: RuntimeCommandTransport,
     command: SessionRenameCommand,
     sessions: SessionManager,
     signal: AbortSignal,
 ): Promise<void> {
     try {
         const renamed = await sessions.renameSession(command.sessionId, command.title, signal);
-        send(socket, {
+        send(transport, {
             kind: "session.renamed",
             requestId: command.requestId,
             sessionId: command.sessionId,
@@ -244,12 +244,12 @@ export async function executeSessionRename(
         if (signal.aborted) {
             signal.throwIfAborted();
         }
-        reportOperationFailure(socket, command.requestId, command.sessionId, error);
+        reportOperationFailure(transport, command.requestId, command.sessionId, error);
     }
 }
 
 export async function executeSessionConfigure(
-    socket: WebSocket,
+    transport: RuntimeCommandTransport,
     command: SessionConfigureCommand,
     config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
@@ -276,7 +276,7 @@ export async function executeSessionConfigure(
             value: command.value,
             valueType: command.valueType,
         });
-        send(socket, {
+        send(transport, {
             configOptions,
             kind: "session.config.updated",
             requestId: command.requestId,
@@ -286,7 +286,7 @@ export async function executeSessionConfigure(
         if (signal.aborted) {
             signal.throwIfAborted();
         }
-        reportOperationFailure(socket, command.requestId, command.sessionId, error);
+        reportOperationFailure(transport, command.requestId, command.sessionId, error);
     }
 }
 
@@ -296,7 +296,7 @@ export const workspaceListCommand: RuntimeCommand = {
         if (message.kind !== WORKSPACE_LIST_KIND) {
             throw new Error("Command kind mismatch");
         }
-        void executeWorkspaceList(context.socket, message, context.directories, context.signal);
+        void executeWorkspaceList(context.transport, message, context.directories, context.signal);
     },
 };
 
@@ -307,7 +307,7 @@ export const sessionPrepareCommand: RuntimeCommand = {
             throw new Error("Command kind mismatch");
         }
         void executeSessionPrepare(
-            context.socket,
+            context.transport,
             message,
             context.config,
             context.directories,
@@ -325,7 +325,7 @@ export const sessionConfigureCommand: RuntimeCommand = {
             throw new Error("Command kind mismatch");
         }
         void executeSessionConfigure(
-            context.socket,
+            context.transport,
             message,
             context.config,
             context.directories,
@@ -342,7 +342,7 @@ export const sessionRestoreCommand: RuntimeCommand = {
             throw new Error("Command kind mismatch");
         }
         void executeSessionRestore(
-            context.socket,
+            context.transport,
             message,
             context.config,
             context.directories,
@@ -360,12 +360,12 @@ export const sessionRenameCommand: RuntimeCommand = {
         if (message.kind !== SESSION_RENAME_KIND) {
             throw new Error("Command kind mismatch");
         }
-        void executeSessionRename(context.socket, message, context.sessions, context.signal);
+        void executeSessionRename(context.transport, message, context.sessions, context.signal);
     },
 };
 
 export async function executeSessionConfigRead(
-    socket: WebSocket,
+    transport: RuntimeCommandTransport,
     command: SessionConfigReadCommand,
     config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
@@ -406,7 +406,7 @@ export async function executeSessionConfigRead(
             metrics,
             signal,
         );
-        send(socket, {
+        send(transport, {
             configOptions: ready.configOptions,
             kind: SESSION_CONFIG_READ_RESULT_KIND,
             requestId: command.requestId,
@@ -422,7 +422,7 @@ export async function executeSessionConfigRead(
             },
             error,
         );
-        reportOperationFailure(socket, command.requestId, command.sessionId, error, metrics.snapshot());
+        reportOperationFailure(transport, command.requestId, command.sessionId, error, metrics.snapshot());
     }
 }
 
@@ -433,7 +433,7 @@ export const sessionConfigReadCommand: RuntimeCommand = {
             throw new Error("Command kind mismatch");
         }
         void executeSessionConfigRead(
-            context.socket,
+            context.transport,
             message,
             context.config,
             context.directories,

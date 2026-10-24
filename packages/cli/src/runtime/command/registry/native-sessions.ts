@@ -16,7 +16,7 @@ export function createNativeSessionCommands(context: CommandContext): readonly R
         diagnostics: context.diagnostics,
         nativeSessions: context.nativeSessions,
         signal: context.signal,
-        socket: context.socket,
+        transport: context.transport,
         timer: context.timer,
     });
     return [
@@ -41,33 +41,33 @@ export function createNativeSessionCommands(context: CommandContext): readonly R
         },
         {
             kind: SESSION_LIST_KIND,
-            handle: ({ nativeSessions, signal, socket }, message): void => {
+            handle: ({ nativeSessions, signal, transport }, message): void => {
                 if (message.kind !== SESSION_LIST_KIND) {
                     throw new Error("Command kind mismatch");
                 }
                 void nativeSessions
                     .listSessions(message.limit, signal)
                     .then((entries) => {
-                        send(socket, { entries, kind: SESSION_LISTED_KIND, requestId: message.requestId });
+                        send(transport, { entries, kind: SESSION_LISTED_KIND, requestId: message.requestId });
                     })
                     .catch((error: unknown) => {
-                        reportOperationFailure(socket, message.requestId, "", error);
+                        reportOperationFailure(transport, message.requestId, "", error);
                     });
             },
         },
         {
             kind: SESSION_QUERY_KIND,
-            handle: ({ nativeSessions, signal, socket }, message): void => {
+            handle: ({ nativeSessions, signal, transport }, message): void => {
                 if (message.kind !== SESSION_QUERY_KIND) {
                     throw new Error("Command kind mismatch");
                 }
                 void nativeSessions
                     .querySessions(message.sessionIds, signal)
                     .then((entries) => {
-                        send(socket, { entries, kind: SESSION_QUERIED_KIND, requestId: message.requestId });
+                        send(transport, { entries, kind: SESSION_QUERIED_KIND, requestId: message.requestId });
                     })
                     .catch((error: unknown) => {
-                        reportOperationFailure(socket, message.requestId, "", error);
+                        reportOperationFailure(transport, message.requestId, "", error);
                     });
             },
         },

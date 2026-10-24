@@ -115,7 +115,14 @@ export async function createFakeAgentHarnessRuntime(options: {
             harnesses.map((definition) => fakeAgentHarness(definition, harnessState)),
             localContext,
         );
-        runtime = runRuntime(config, signal);
+        const ready = Promise.withResolvers<void>();
+        runtime = runRuntime(config, signal, undefined, {
+            onConnectionStatus: (status) => {
+                if (status === "online") {
+                    ready.resolve();
+                }
+            },
+        });
         void runtime.catch((error: unknown) => {
             if (!signal.aborted) {
                 console.error("Controlled Agent harness daemon failed", error);
@@ -125,6 +132,15 @@ export async function createFakeAgentHarnessRuntime(options: {
             throw new Error("The production daemon stopped unexpectedly");
         });
         void failure.catch(() => undefined);
+        const startup = AbortSignal.any([signal, AbortSignal.timeout(30_000)]);
+        const abortStartup = (): void => ready.reject(startup.reason);
+        startup.addEventListener("abort", abortStartup, { once: true });
+        try {
+            startup.throwIfAborted();
+            await Promise.race([ready.promise, failure]);
+        } finally {
+            startup.removeEventListener("abort", abortStartup);
+        }
         const client = new MobiusClient({
             endpoint: options.origin,
             projectId: pairing.projectId,

@@ -35,31 +35,35 @@ export const sessionCancelCommand: RuntimeCommand = {
 
 export const sessionCloseCommand: RuntimeCommand = {
     kind: SESSION_CLOSE_KIND,
-    handle: ({ sessions, signal, socket }, message): void => {
+    handle: ({ sessions, signal, transport }, message): void => {
         if (message.kind !== SESSION_CLOSE_KIND) {
             throw new Error("Command kind mismatch");
         }
         void sessions
             .closeSession(message.sessionId, signal)
             .then(() => {
-                send(socket, { kind: SESSION_CLOSED_KIND, requestId: message.requestId, sessionId: message.sessionId });
+                send(transport, {
+                    kind: SESSION_CLOSED_KIND,
+                    requestId: message.requestId,
+                    sessionId: message.sessionId,
+                });
             })
             .catch((error: unknown) => {
-                reportOperationFailure(socket, message.requestId, message.sessionId, error);
+                reportOperationFailure(transport, message.requestId, message.sessionId, error);
             });
     },
 };
 
 export const promptDispositionCommand: RuntimeCommand = {
     kind: SESSION_PROMPT_DISPOSITION_KIND,
-    handle: ({ sessionTurns, socket }, message): void => {
+    handle: ({ sessionTurns, transport }, message): void => {
         if (message.kind !== SESSION_PROMPT_DISPOSITION_KIND) {
             throw new Error("Command kind mismatch");
         }
         const turn = sessionTurns.get(message.commandId, message.sessionId);
         if (turn === undefined || !turn.promoteQueuedPrompt(message)) {
             reportOperationFailure(
-                socket,
+                transport,
                 message.commandId,
                 message.sessionId,
                 new Error("The queued prompt is unavailable"),
@@ -70,24 +74,24 @@ export const promptDispositionCommand: RuntimeCommand = {
 
 export const permissionRespondCommand: RuntimeCommand = {
     kind: SESSION_PERMISSION_RESPOND_KIND,
-    handle: ({ sessions, socket }, message): void => {
+    handle: ({ sessions, transport }, message): void => {
         if (message.kind !== SESSION_PERMISSION_RESPOND_KIND) {
             throw new Error("Command kind mismatch");
         }
         void sessions.respondPermission(message).catch((error: unknown) => {
-            reportOperationFailure(socket, message.interactionId, message.sessionId, error);
+            reportOperationFailure(transport, message.interactionId, message.sessionId, error);
         });
     },
 };
 
 export const elicitationRespondCommand: RuntimeCommand = {
     kind: SESSION_ELICITATION_RESPOND_KIND,
-    handle: ({ sessions, socket }, message): void => {
+    handle: ({ sessions, transport }, message): void => {
         if (message.kind !== SESSION_ELICITATION_RESPOND_KIND) {
             throw new Error("Command kind mismatch");
         }
         void sessions.respondElicitation(message).catch((error: unknown) => {
-            reportOperationFailure(socket, message.interactionId, message.sessionId, error);
+            reportOperationFailure(transport, message.interactionId, message.sessionId, error);
         });
     },
 };

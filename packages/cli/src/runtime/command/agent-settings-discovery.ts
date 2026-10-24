@@ -1,5 +1,4 @@
 import { AGENT_SETTINGS_DISCOVERY_FAILED_KIND, type AgentSettingsDiscoverCommand } from "@moxt-ai/mobius-sdk/protocol";
-import { WebSocket } from "undici";
 import { OperationError, operationErrorCode, operationErrorMessage } from "../../infra/operation-error.ts";
 import { SessionError } from "../../session/api/session-error.ts";
 import type { SessionManager } from "../../session/manager/session-manager.ts";
@@ -9,6 +8,7 @@ import type { Timer } from "../../util/timer.ts";
 import { resolveCatalogAgent } from "../catalog/resolve-catalog-agent.ts";
 import type { RuntimeConfig } from "../config.ts";
 import type { RelayConnectionDiagnostics } from "../relay/diagnostics.ts";
+import type { RuntimeCommandTransport } from "./transport.ts";
 import { send } from "./transport.ts";
 
 interface SettingsDiscoveryDependencies {
@@ -16,13 +16,13 @@ interface SettingsDiscoveryDependencies {
     readonly directories: WorkspaceDirectoryService;
     readonly sessions: SessionManager;
     readonly diagnostics: RelayConnectionDiagnostics;
-    readonly socket: WebSocket;
+    readonly transport: RuntimeCommandTransport;
     readonly signal: AbortSignal;
     readonly timer: Timer;
 }
 
 export function createAgentSettingsDiscoveryHandler(dependencies: SettingsDiscoveryDependencies) {
-    const { config, directories, sessions, diagnostics, socket, signal, timer } = dependencies;
+    const { config, directories, sessions, diagnostics, transport, signal, timer } = dependencies;
     const agentSettingsDiscoveries = new Map<
         string,
         {
@@ -38,8 +38,8 @@ export function createAgentSettingsDiscoveryHandler(dependencies: SettingsDiscov
             (request) => request.agentId === command.agentId && !request.controller.signal.aborted,
         );
         if ([...agentSettingsDiscoveries.values()].some((request) => request.requestIds.has(command.requestId))) {
-            if (socket.readyState === WebSocket.OPEN) {
-                send(socket, {
+            if (transport.isOpen()) {
+                send(transport, {
                     code: "agent_settings_discovery_busy",
                     kind: AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
                     message: "This settings discovery request is already running",
@@ -53,8 +53,8 @@ export function createAgentSettingsDiscoveryHandler(dependencies: SettingsDiscov
             return;
         }
         if (existing !== undefined) {
-            if (socket.readyState === WebSocket.OPEN) {
-                send(socket, {
+            if (transport.isOpen()) {
+                send(transport, {
                     code: "agent_settings_discovery_busy",
                     kind: AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
                     message: "Another settings discovery is already running for this Agent",
@@ -64,8 +64,8 @@ export function createAgentSettingsDiscoveryHandler(dependencies: SettingsDiscov
             return;
         }
         if (agentSettingsDiscoveries.size >= 4) {
-            if (socket.readyState === WebSocket.OPEN) {
-                send(socket, {
+            if (transport.isOpen()) {
+                send(transport, {
                     code: "agent_settings_discovery_busy",
                     kind: AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
                     message: "Too many Agent settings discoveries are running",
@@ -102,8 +102,8 @@ export function createAgentSettingsDiscoveryHandler(dependencies: SettingsDiscov
                     );
                 }
                 for (const requestId of requestIds) {
-                    if (socket.readyState === WebSocket.OPEN) {
-                        send(socket, { ...result.event, requestId });
+                    if (transport.isOpen()) {
+                        send(transport, { ...result.event, requestId });
                     }
                 }
             } catch (error) {
@@ -118,9 +118,9 @@ export function createAgentSettingsDiscoveryHandler(dependencies: SettingsDiscov
                         `Mobius daemon diagnostic ${JSON.stringify({ event: "agent_settings_discovery_failed", requestId: command.requestId, ...details })}\n`,
                     );
                 }
-                if (socket.readyState === WebSocket.OPEN) {
+                if (transport.isOpen()) {
                     for (const requestId of requestIds) {
-                        send(socket, {
+                        send(transport, {
                             code: operationErrorCode(failure),
                             kind: AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
                             message: operationErrorMessage(failure),

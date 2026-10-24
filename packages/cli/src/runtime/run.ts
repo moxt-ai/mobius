@@ -5,6 +5,7 @@ import { systemTimer, type Timer } from "../util/timer.ts";
 import { publishAgentCatalog } from "./catalog/publish-agent-catalog.ts";
 import { resolveCatalogAgent } from "./catalog/resolve-catalog-agent.ts";
 import type { RuntimeConfig } from "./config.ts";
+import { serveLocalSessions } from "./local/session-server.ts";
 import { RuntimeDiagnosticLog } from "./observability/diagnostic-log.ts";
 import { RelayConnectionDiagnostics } from "./relay/diagnostics.ts";
 import { runRelayConnection } from "./relay/run-relay-connection.ts";
@@ -147,16 +148,32 @@ export async function runRuntime(
         }
         announceReadiness();
     };
-    const catalogPublication = publishAgentCatalogUntilAvailable(config, diagnostics, signal, timer);
-    void catalogPublication.then(() => {
-        if (signal.aborted) {
-            return;
-        }
-        catalogPublished = true;
-        announceReadiness();
-    });
-
+    let catalogPublication = Promise.resolve();
     try {
+        await using _localSessions = await serveLocalSessions(
+            {
+                config,
+                directories,
+                sessions: agentRuntime,
+                nativeSessions,
+                operations,
+                publisher,
+                eventProjection,
+                externalContent,
+                sessionTurns: activeSessions,
+                diagnostics,
+                timer,
+            },
+            signal,
+        );
+        catalogPublication = publishAgentCatalogUntilAvailable(config, diagnostics, signal, timer);
+        void catalogPublication.then(() => {
+            if (signal.aborted) {
+                return;
+            }
+            catalogPublished = true;
+            announceReadiness();
+        });
         while (!signal.aborted) {
             connectionEpoch += 1;
             try {

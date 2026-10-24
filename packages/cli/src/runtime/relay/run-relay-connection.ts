@@ -17,7 +17,7 @@ import type { SessionTurns } from "../../session/turn/session-turns.ts";
 import type { WorkspaceDirectoryService } from "../../session/workspace/workspace-directory.ts";
 import type { Timer } from "../../util/timer.ts";
 import { createRuntimeCommandDispatcher } from "../command/dispatcher.ts";
-import { send } from "../command/transport.ts";
+import { send, webSocketCommandTransport } from "../command/transport.ts";
 import type { RuntimeConfig } from "../config.ts";
 import { connectRelay } from "./connect.ts";
 import type { RelayConnectionDiagnostics } from "./diagnostics.ts";
@@ -79,7 +79,7 @@ function rejectUnsupportedCommand(
     if (socket.readyState !== WebSocket.OPEN) {
         return;
     }
-    send(socket, {
+    send(webSocketCommandTransport(socket), {
         code: rejection.code,
         kind: SESSION_OPERATION_FAILED_KIND,
         message: "The Relay sent a command this daemon does not support",
@@ -142,13 +142,13 @@ export async function runRelayConnection({
         externalContent,
         sessionTurns,
         diagnostics,
-        socket,
+        transport: webSocketCommandTransport(socket),
         signal: connectionController.signal,
         timer,
     });
     void reportUpgradeAvailability((result) => {
         if (socket.readyState === WebSocket.OPEN) {
-            send(socket, result);
+            send(webSocketCommandTransport(socket), result);
         }
     }, signal).catch((cause: unknown) => {
         if (!signal.aborted) {
@@ -208,7 +208,7 @@ export async function runRelayConnection({
                         return false;
                     }
                     try {
-                        send(socket, message);
+                        send(webSocketCommandTransport(socket), message);
                         return true;
                     } catch (error) {
                         if (socket.readyState !== WebSocket.OPEN) {
