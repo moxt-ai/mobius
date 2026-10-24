@@ -4,6 +4,7 @@ import type { ProjectedToolCall } from "../tool-call-projection.ts";
 
 /** One page of a saved native session's events. */
 export interface SessionEventPage {
+    readonly throughPosition: string;
     readonly events: readonly SessionEvent[];
     readonly nextCursor: string | null;
     readonly sessionGenerationId: string;

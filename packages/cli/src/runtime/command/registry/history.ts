@@ -71,8 +71,11 @@ async function loadHistoryPage(
     let loaded: readonly OrderedHistoryEvent[] = [];
     let sessionGenerationId: string | null = null;
     let sourceNextCursor: string | null = null;
+    let throughPosition: string | null = null;
     do {
         const replay = await load(eventLimit, cursor);
+        // Keep the newest page's cut: older pages must not advance the live boundary.
+        throughPosition ??= replay.throughPosition;
         if (sessionGenerationId !== null && replay.sessionGenerationId !== sessionGenerationId) {
             throw new SessionError("session_reloaded", "The Session reloaded while history was loading");
         }
@@ -101,7 +104,7 @@ async function loadHistoryPage(
         cursor = sourceNextCursor;
     } while (cursor !== null);
 
-    if (sessionGenerationId === null) {
+    if (sessionGenerationId === null || throughPosition === null) {
         throw new SessionError("session_history_unavailable", "The Session history is unavailable");
     }
     const visible = omitReasoning ? omitAgentReasoning(loaded) : loaded;
@@ -113,6 +116,7 @@ async function loadHistoryPage(
             nextCursor,
             sessionGenerationId,
             tailCursor: orderedEvents.at(-1)?.event.eventId ?? "",
+            throughPosition,
             truncated: nextCursor !== null,
             version: 2,
         },

@@ -456,6 +456,8 @@ describe("daemon V2 live delivery", () => {
                 (event) => event.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk",
             );
 
+            expect(complete.throughPosition).toBeDefined();
+            expect(omitted.throughPosition).toBe(complete.throughPosition);
             expect(omitted.events).toHaveLength(200);
             expect(retainedReasoning.length).toBeGreaterThan(0);
             for (const event of retainedReasoning) {
@@ -558,7 +560,7 @@ describe("daemon V2 live delivery", () => {
         try {
             const command = prompt(fixture, "stream token burst");
             sendText(fixture.socket, encodeSessionPromptCommand(command));
-            const live: SessionEvent[] = [];
+            const live: SessionLiveEvent[] = [];
             let text = "";
             for (;;) {
                 const event = await nextLive(fixture);
@@ -581,6 +583,7 @@ describe("daemon V2 live delivery", () => {
             expect(fixture.timer.batchWindowMilliseconds).toContain(100);
             expect(fixture.liveBatchSizes.some((size) => size > 1)).toBe(true);
             const page = await history(fixture, command);
+            expect(page.throughPosition).toBe(live.at(-1)?.position);
             const liveEventIds = new Set(live.map((event) => event.eventId));
             expect(page.events.every((event) => liveEventIds.has(event.eventId))).toBe(true);
             expect(page.events.length).toBeLessThan(live.length);
@@ -607,8 +610,10 @@ describe("daemon V2 live delivery", () => {
             const command = prompt(fixture, "hold after large output");
             sendText(fixture.socket, encodeSessionPromptCommand(command));
             let text = "";
+            let lastPosition = "0";
             while (text.length < 300_000) {
                 const event = await nextLive(fixture);
+                lastPosition = event.position;
                 if (
                     event.type === "acp" &&
                     event.payload.sessionUpdate === "agent_message_chunk" &&
@@ -622,6 +627,7 @@ describe("daemon V2 live delivery", () => {
             expect(text).toBe("x".repeat(300_000));
             expect(await activeTurn(fixture, command)).not.toBeNull();
             const page = await history(fixture, command);
+            expect(page.throughPosition).toBe(lastPosition);
             expect(page.truncated).toBe(false);
             const recovered = page.events
                 .flatMap((event) =>

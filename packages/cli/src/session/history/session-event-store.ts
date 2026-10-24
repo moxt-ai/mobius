@@ -34,6 +34,7 @@ class ProjectedSessionEvent {
  * are served from the cache database and written back after merges.
  */
 class SessionEvents {
+    #throughPosition = "0";
     readonly #eventIds: string[] = [];
     readonly #eventIndexById = new Map<string, number>();
     readonly #cachedItemsByEventId = new Map<string, ProjectedSessionEvent>();
@@ -47,6 +48,7 @@ class SessionEvents {
 
     readonly apply = (event: SessionLiveEvent, resolve: MaterializedEventsResolver): void => {
         const projected = this.#projection.apply(event, resolve);
+        this.#throughPosition = event.position;
         if (projected.kind === "replace") {
             const current = this.#cachedItemsByEventId.get(projected.replacedEventId);
             if (current === undefined) {
@@ -60,6 +62,10 @@ class SessionEvents {
         this.#cachedItemsByEventId.set(projected.event.eventId, item);
         this.#eventIds.push(projected.event.eventId);
     };
+
+    get throughPosition(): string {
+        return this.#throughPosition;
+    }
 
     get materializedCount(): number {
         return this.#cachedItemsByEventId.size;
@@ -154,6 +160,7 @@ type FlushSchedule =
     | { readonly handle: NodeJS.Immediate; readonly kind: "scheduled" };
 
 export interface SessionEventPage {
+    readonly throughPosition: string;
     readonly events: readonly SessionEvent[];
     readonly nextCursor: string | null;
     readonly sessionGenerationId: string;
@@ -211,6 +218,7 @@ function eventPage(
     const startIndex = Math.max(0, endIndex - eventLimit);
     return {
         events: read(startIndex, endIndex),
+        throughPosition: session.throughPosition,
         nextCursor: startIndex === 0 ? null : session.cursorAt(startIndex),
         sessionGenerationId,
         truncated: startIndex > 0,
