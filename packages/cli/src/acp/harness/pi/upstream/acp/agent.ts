@@ -526,9 +526,7 @@ export class PiAcpAgent {
                 try {
                     // One model call to summarize the session: finite but generous,
                     // and cancellable like every external-system wait.
-                    const res = await session.proc.compact(customInstructions, {
-                        timeoutMs: COMPACT_TIMEOUT_MILLISECONDS,
-                    });
+                    const res = await session.compact(customInstructions, COMPACT_TIMEOUT_MILLISECONDS);
 
                     const r: any = res && typeof res === "object" ? (res as any) : null;
                     const summary = typeof r?.summary === "string" ? r.summary : null;

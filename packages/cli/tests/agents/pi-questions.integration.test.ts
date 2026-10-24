@@ -522,3 +522,195 @@ test("Given real Pi requests fields outside the supported bounds, When the quest
         expect(result).toContain("PI_REJECTED=[null,null]");
     });
 });
+
+test("Given real Pi asks dialogs with empty titles or confirmation bodies, When the user answers them, Then every question has a displayable message and returns the exact answer", {
+    timeout: 30_000,
+}, async () => {
+    const prompt = "Ask blank-title questions";
+    await using provider = await FakeOpenAiProvider.start("gpt-4.1", "PI_BLANK_COMPLETE", {
+        toolPrompt: prompt,
+        toolSequence: [{ name: "ask_blank", input: "{}" }],
+    });
+    await using agent = await PiFixture.create(provider);
+    await agent.installExtension(
+        "blank-questions.js",
+        `export default function (pi) {
+        pi.registerTool({ name: "ask_blank", label: "Ask", description: "Ask blank-title questions",
+            parameters: { type: "object", properties: {} },
+            async execute(_id, _params, _signal, _update, ctx) {
+                const answers = [await ctx.ui.confirm("Proceed?", ""), await ctx.ui.confirm("", ""), await ctx.ui.select("", ["A", "B"]), await ctx.ui.input(""), await ctx.ui.editor("", "Initial")];
+                return { content: [{ type: "text", text: "PI_BLANK=" + JSON.stringify(answers) }], details: {} };
+            },
+        });
+    }`,
+    );
+    await withRealDaemon(new PiAgentSpecification(), agent.environment, async (peer) => {
+        sendQuestionPrompt(peer, peer.sessionId, prompt);
+        const answers = ["yes", "no", "B", "", ""];
+        let requests = 0;
+        let output = "";
+        for (;;) {
+            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            if (event.type === "lifecycle-metadata") {
+                if (event.payload.kind === "session.elicitation.requested") {
+                    const request = event.payload.event;
+                    expect(request.message.length).toBeGreaterThan(0);
+                    peer.send(
+                        encodeSessionElicitationRespondCommand({
+                            action: "accept",
+                            content: JSON.stringify({ value: answers[requests] }),
+                            interactionId: request.interactionId,
+                            kind: "session.elicitation.respond",
+                            sessionId: peer.sessionId,
+                        }),
+                    );
+                    requests += 1;
+                }
+                if (event.payload.kind === "prompt.failed") {
+                    throw new Error(JSON.stringify(event));
+                }
+                if (event.payload.kind === "prompt.completed") {
+                    break;
+                }
+            } else if (event.payload.sessionUpdate === "tool_call_update" && event.payload.rawOutput !== undefined) {
+                output += JSON.stringify(event.payload.rawOutput);
+            }
+        }
+        expect(requests).toBe(5);
+        expect(output).toContain(JSON.stringify('PI_BLANK=[true,false,"B","",""]'));
+    });
+});
+
+test.each(["answer", "stop"] as const)(
+    "Given a real Pi extension asks before manual compaction, When the user chooses %s, Then the operation settles and the next turn can continue",
+    async (outcome) => {
+        await using provider = await FakeOpenAiProvider.start("gpt-4.1", "PI_COMPACT_COMPLETE");
+        await using agent = await PiFixture.create(provider);
+        await agent.overrideSettings({ compaction: { keepRecentTokens: 1 } });
+        await agent.installExtension(
+            "compact-questions.js",
+            `export default function (pi) {
+        pi.on("session_before_compact", async (_event, ctx) => {
+            const confirmed = await ctx.ui.confirm("Compact history?", "Summarize this conversation now?");
+            if (!confirmed) return { cancel: true };
+            const style = await ctx.ui.select("Summary style", ["Short", "Detailed"]);
+            ctx.ui.notify("PI_COMPACT_ANSWERS=" + JSON.stringify([confirmed, style]), "info");
+        });
+    }`,
+        );
+        await withRealDaemon(new PiAgentSpecification(), agent.environment, async (peer) => {
+            for (const topic of ["archaeology", "bicycles", "coffee"]) {
+                sendQuestionPrompt(peer, peer.sessionId, `Talk about ${topic} with some detail`);
+                for (;;) {
+                    const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                    if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
+                        throw new Error(JSON.stringify(event));
+                    }
+                    if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
+                        break;
+                    }
+                }
+            }
+            const commandId = sendQuestionPrompt(peer, peer.sessionId, "/compact");
+            let requests = 0;
+            let cancelled = 0;
+            let interactionId = "";
+            let text = "";
+            const statuses: string[] = [];
+            for (;;) {
+                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                if (event.type === "lifecycle-metadata") {
+                    if (event.payload.kind === "session.elicitation.requested") {
+                        const request = event.payload.event;
+                        interactionId = request.interactionId;
+                        if (outcome === "stop") {
+                            peer.send(
+                                encodeSessionCancelCommand({
+                                    commandId,
+                                    kind: "session.cancel",
+                                    sessionId: peer.sessionId,
+                                }),
+                            );
+                        } else {
+                            peer.send(
+                                encodeSessionElicitationRespondCommand({
+                                    action: "accept",
+                                    content: JSON.stringify({ value: requests === 0 ? "yes" : "Detailed" }),
+                                    interactionId: request.interactionId,
+                                    kind: "session.elicitation.respond",
+                                    sessionId: peer.sessionId,
+                                }),
+                            );
+                        }
+                        requests += 1;
+                    }
+                    if (outcome === "stop" && event.payload.kind === "session.elicitation.resolved") {
+                        expect(event.payload.event.interactionId).toBe(interactionId);
+                        expect(event.payload.event.action).toBe("cancel");
+                        cancelled += 1;
+                    }
+                    if (event.payload.kind === "prompt.failed") {
+                        throw new Error(JSON.stringify(event));
+                    }
+                    if (event.payload.kind === "prompt.completed") {
+                        expect(event.payload.stopReason).toBe(outcome === "stop" ? "cancelled" : "end_turn");
+                        break;
+                    }
+                } else if (event.payload.sessionUpdate === "compaction_update") {
+                    statuses.push(event.payload.status);
+                } else if (
+                    event.payload.sessionUpdate === "agent_message_chunk" &&
+                    event.payload.content.type === "text"
+                ) {
+                    text += event.payload.content.text;
+                }
+            }
+            if (outcome === "answer") {
+                expect(requests).toBe(2);
+                expect(statuses).toEqual(["in_progress", "completed"]);
+                expect(text).toContain('PI_COMPACT_ANSWERS=[true,"Detailed"]');
+            } else {
+                expect(requests).toBe(1);
+                expect(cancelled).toBe(1);
+                peer.send(
+                    encodeSessionElicitationRespondCommand({
+                        action: "accept",
+                        content: '{"value":"yes"}',
+                        interactionId,
+                        kind: "session.elicitation.respond",
+                        sessionId: peer.sessionId,
+                    }),
+                );
+                for (;;) {
+                    const message = await peer.nextMessage();
+                    if (decodeMessageKind(message) === "session.operation.failed") {
+                        expect(decodeSessionOperationFailedEvent(message).code).toBe("elicitation_request_not_found");
+                        break;
+                    }
+                }
+            }
+            sendQuestionPrompt(peer, peer.sessionId, "Continue after manual compaction");
+            let reply = "";
+            for (;;) {
+                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                if (event.type === "lifecycle-metadata") {
+                    if (
+                        event.payload.kind === "session.elicitation.requested" ||
+                        event.payload.kind === "prompt.failed"
+                    ) {
+                        throw new Error(JSON.stringify(event));
+                    }
+                    if (event.payload.kind === "prompt.completed") {
+                        break;
+                    }
+                } else if (
+                    event.payload.sessionUpdate === "agent_message_chunk" &&
+                    event.payload.content.type === "text"
+                ) {
+                    reply += event.payload.content.text;
+                }
+            }
+            expect(reply).toContain("PI_COMPACT_COMPLETE");
+        });
+    },
+);

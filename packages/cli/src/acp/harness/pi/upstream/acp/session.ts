@@ -455,6 +455,16 @@ export class PiAcpSession {
         return turnPromise;
     }
 
+    async compact(customInstructions: string | undefined, timeoutMs: number): Promise<unknown> {
+        const signal = this.extensionQuestions.startTurn();
+        try {
+            return await this.proc.compact(customInstructions, { signal, timeoutMs });
+        } finally {
+            this.extensionQuestions.endTurn();
+            await this.flushEmits();
+        }
+    }
+
     async steer(message: string, images: unknown[], signal: AbortSignal): Promise<PiSteerOutcome> {
         const target = this.pendingTurn;
         if (target === null) {

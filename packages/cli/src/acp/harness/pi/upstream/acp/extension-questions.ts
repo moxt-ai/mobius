@@ -61,9 +61,10 @@ export class PiExtensionQuestions {
         private readonly notify: (text: string) => Promise<void>,
     ) {}
 
-    startTurn(): void {
+    startTurn(): AbortSignal {
         this.endTurn();
         this.turn = { controller: new AbortController(), requestIds: new Set() };
+        return this.turn.controller.signal;
     }
 
     endTurn(): void {
@@ -111,7 +112,7 @@ export class PiExtensionQuestions {
                 {
                     sessionId: this.sessionId,
                     mode: "form",
-                    message: question.method === "confirm" ? question.message : question.title,
+                    message: (question.method === "confirm" ? question.message : "") || question.title || "Pi question",
                     requestedSchema: {
                         type: "object",
                         properties: { value: questionField(question) },
