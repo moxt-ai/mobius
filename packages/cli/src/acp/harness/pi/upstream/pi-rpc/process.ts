@@ -14,6 +14,15 @@ export class PiRpcSpawnError extends Error {
     }
 }
 
+export class PiRpcProcessError extends Error {
+    readonly code = "pi_process_exited";
+
+    constructor(cause: unknown) {
+        super("Pi process stopped unexpectedly.", { cause });
+        this.name = "PiRpcProcessError";
+    }
+}
+
 const ESC = String.fromCharCode(0x1b);
 const CSI = String.fromCharCode(0x9b);
 
@@ -112,6 +121,11 @@ type SpawnParams = {
 
 export class PiRpcProcess {
     private readonly child: ChildProcessWithoutNullStreams;
+    private readonly lifetime = new AbortController();
+
+    get signal(): AbortSignal {
+        return this.lifetime.signal;
+    }
     private readonly pending = new Map<string, { resolve: (v: PiRpcResponse) => void; reject: (e: unknown) => void }>();
     private eventHandlers: Array<(ev: PiRpcEvent) => void> = [];
     private readonly preludeLines: string[] = [];
@@ -157,14 +171,17 @@ export class PiRpcProcess {
         });
 
         child.on("exit", (code, signal) => {
-            const err = new Error(`pi process exited (code=${code}, signal=${signal})`);
+            const err = new PiRpcProcessError({ code, signal });
+            this.lifetime.abort(err);
             for (const [, p] of this.pending) {
                 p.reject(err);
             }
             this.pending.clear();
         });
 
-        child.on("error", (err) => {
+        child.on("error", (cause) => {
+            const err = new PiRpcProcessError(cause);
+            this.lifetime.abort(err);
             for (const [, p] of this.pending) {
                 p.reject(err);
             }
@@ -279,6 +296,7 @@ export class PiRpcProcess {
     }
 
     dispose(signal: NodeJS.Signals | number = "SIGTERM"): void {
+        this.lifetime.abort();
         if (this.child.killed) {
             return;
         }
@@ -287,6 +305,11 @@ export class PiRpcProcess {
         } catch {
             // ignore
         }
+    }
+
+    terminateAfterFailure(cause: unknown): void {
+        this.lifetime.abort(new PiRpcProcessError(cause));
+        this.dispose();
     }
 
     /**
@@ -312,8 +335,8 @@ export class PiRpcProcess {
         }
     }
 
-    async abort(): Promise<void> {
-        const res = await this.request({ type: "abort" });
+    async abort(opts?: { readonly signal: AbortSignal; readonly timeoutMs: number }): Promise<void> {
+        const res = await this.request({ type: "abort" }, opts);
         if (!res.success) {
             throw new Error(`pi abort failed: ${res.error ?? JSON.stringify(res.data)}`);
         }
