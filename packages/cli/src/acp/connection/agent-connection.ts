@@ -121,6 +121,7 @@ export class AgentConnection {
                 command: agent.command,
                 cwd,
                 environment: agent.environment,
+                onSessionUpdate: client.onUpdate,
             });
             this.#process = { kind: "in-process", endpoint: inProcess };
             this.termination = inProcess.terminated;
@@ -187,7 +188,6 @@ export class AgentConnection {
     readonly closeProcess = async (): Promise<void> => {
         try {
             if (this.#process.kind === "in-process") {
-                // The in-process agent owns its app-server child and its process tree.
                 await this.#process.endpoint.close();
                 return;
             }

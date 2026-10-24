@@ -83,10 +83,12 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
     #closePromise: Promise<void> | null = null;
     #connection: AgentConnection | null = null;
     readonly #settings: CodexSettings;
+    readonly #onSessionUpdate: (notification: SessionNotification) => Promise<void>;
     #nativeSessionId = "";
     #sessionAgent: CodexSessionAgent;
 
     constructor(options: InProcessAcpEndpointOptions) {
+        this.#onSessionUpdate = options.onSessionUpdate;
         this.#appServer = new CodexAppServerClient({
             command: options.command,
             cwd: options.cwd,
@@ -431,7 +433,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
         if (connection === null || this.#nativeSessionId.length === 0) {
             return;
         }
-        await connection.client.notify(methods.client.session.update, {
+        await this.#onSessionUpdate({
             sessionId: this.#nativeSessionId,
             update,
         });

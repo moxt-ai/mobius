@@ -24,6 +24,7 @@ export class ClaudeAcpEndpoint implements InProcessAcpEndpoint {
                 ...options.environment,
                 CLAUDE_CODE_EXECUTABLE: options.command,
             }),
+            onSessionUpdate: options.onSessionUpdate,
             onConnect: (connection) => {
                 this.#connection = connection;
             },

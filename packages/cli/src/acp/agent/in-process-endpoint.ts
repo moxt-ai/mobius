@@ -1,4 +1,4 @@
-import type { AgentApp } from "@agentclientprotocol/sdk";
+import type { AgentApp, SessionNotification } from "@agentclientprotocol/sdk";
 import type { AgentModelEffort } from "@moxt-ai/mobius-sdk/protocol";
 import { AcpExecutionError } from "../acp-error.ts";
 
@@ -24,8 +24,8 @@ export function acpEndpointTerminationError(termination: AcpEndpointTermination)
  *
  * The implementation owns whatever it needs to serve ACP for one session — typically a vendor CLI
  * child process speaking that vendor's own protocol — and exposes it as a plain ACP `AgentApp`. The
- * daemon connects its normal ACP client to that app in memory, so the rest of Mobius cannot tell an
- * in-process Agent from an adapter process.
+ * daemon connects its normal ACP client to that app for control requests. Session updates use an
+ * awaited local callback so producers wait for consumption instead of only transport delivery.
  *
  * Ownership is explicit: `initialize` prepares the backing resources, and `close` releases them and
  * every process they started, on success, failure, and cancellation alike.
@@ -51,6 +51,8 @@ export interface InProcessAcpEndpointOptions {
     readonly command: string;
     readonly cwd: string;
     readonly environment: Readonly<Record<string, string>>;
+    /** Resolves after Mobius processes the update, backpressuring the local producer. */
+    readonly onSessionUpdate: (notification: SessionNotification) => Promise<void>;
 }
 
 /**

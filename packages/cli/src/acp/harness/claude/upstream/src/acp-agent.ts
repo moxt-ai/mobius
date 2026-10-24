@@ -1355,9 +1355,15 @@ export interface AcpClient {
  * construction.
  */
 class ClientConnection implements AcpClient {
-    constructor(private readonly ctx: AgentContext) {}
+    constructor(
+        private readonly ctx: AgentContext,
+        private readonly onSessionUpdate?: (params: SessionNotification) => Promise<void>,
+    ) {}
 
     sessionUpdate(params: SessionNotification): Promise<void> {
+        if (this.onSessionUpdate !== undefined) {
+            return this.onSessionUpdate(params);
+        }
         return this.ctx.notify(methods.client.session.update, params);
     }
 
@@ -8603,13 +8609,19 @@ export interface ClaudeAcpAppOptions {
     readonly environment?: Readonly<NodeJS.ProcessEnv>;
     readonly logger?: Logger;
     readonly onConnect?: (connection: AgentConnection) => void;
+    /** In-process delivery waits for consumption; standalone ACP uses the wire transport. */
+    readonly onSessionUpdate?: (params: SessionNotification) => Promise<void>;
 }
 
 export function createClaudeAcpApp(options: ClaudeAcpAppOptions = {}): ClaudeAcpApp {
     let agent: ClaudeAcpAgent | null = null;
     const app = acpAgent({ name: "claude-code-acp" })
         .onConnect((connection) => {
-            agent = new ClaudeAcpAgent(new ClientConnection(connection.client), options.logger, options.environment);
+            agent = new ClaudeAcpAgent(
+                new ClientConnection(connection.client, options.onSessionUpdate),
+                options.logger,
+                options.environment,
+            );
             options.onConnect?.(connection);
         })
         .onRequest(methods.agent.initialize, (ctx) => requiredAgent(agent).initialize(ctx.params))
