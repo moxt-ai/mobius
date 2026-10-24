@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -64,6 +65,34 @@ export class PiFixture implements AsyncDisposable {
 
     async [Symbol.asyncDispose](): Promise<void> {
         await rm(this.#directory, { force: true, recursive: true });
+    }
+
+    async installExtension(name: string, source: string): Promise<void> {
+        const extensions = join(this.#directory, ".pi", "agent", "extensions");
+        await mkdir(extensions, { recursive: true });
+        await writeFile(join(extensions, name), source, { mode: 0o600 });
+    }
+
+    async seedSession(cwd: string, prompt: string, signal: AbortSignal): Promise<void> {
+        const child = spawn(this.executable, ["--mode", "json", "--print", prompt], {
+            cwd,
+            env: { ...process.env, ...this.environment },
+            signal,
+            stdio: ["ignore", "pipe", "pipe"],
+        });
+        let output = "";
+        child.stdout.on("data", (chunk: Buffer) => {
+            output += chunk.toString();
+        });
+        child.stderr.on("data", (chunk: Buffer) => {
+            output += chunk.toString();
+        });
+        await new Promise<void>((resolve, reject) => {
+            child.once("error", reject);
+            child.once("close", (code) =>
+                code === 0 ? resolve() : reject(new Error(`Native Pi seed failed: ${output}`)),
+            );
+        });
     }
 
     /** Merges a pi settings override into `.pi/agent/settings.json` under HOME. */

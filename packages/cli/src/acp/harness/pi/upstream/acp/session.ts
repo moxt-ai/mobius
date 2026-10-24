@@ -4,7 +4,6 @@ import { isAbsolute, resolve as resolvePath } from "node:path";
 import type {
     ContentBlock,
     McpServer,
-    PermissionOption,
     SessionUpdate,
     ToolCallContent,
     ToolCallLocation,
@@ -21,6 +20,7 @@ import {
 } from "../pi-rpc/process.js";
 import { maybeAuthRequiredError } from "./auth-required.js";
 import type { PiAcpClient } from "./client.js";
+import { PiExtensionQuestions } from "./extension-questions.js";
 import { SessionStore } from "./session-store.js";
 import { expandSlashCommand, type FileSlashCommand } from "./slash-commands.js";
 import { bashCommand, bashResultText, isBashTool } from "./translate/bash.js";
@@ -51,15 +51,6 @@ type QueuedTurn = {
 };
 
 type PiSteerOutcome = { readonly kind: "idle" } | { readonly kind: "injected" };
-
-type PermissionResponse = Awaited<ReturnType<PiAcpClient["requestPermission"]>>;
-
-const CONFIRM_PERMISSION_OPTIONS: PermissionOption[] = [
-    { optionId: "yes", name: "Yes", kind: "allow_once" },
-    { optionId: "no", name: "No", kind: "reject_once" },
-];
-const EXTENSION_UI_RAW_INPUT_KEYS = ["title", "message", "options", "placeholder", "prefill"] as const;
-const CHOICE_OPTION_PREFIX = "choice-";
 
 /**
  * Map pi's `stats.contextUsage` to an ACP `usage_update`. Returns null whenever pi
@@ -212,7 +203,7 @@ export class SessionManager {
             return;
         }
         try {
-            s.proc.dispose?.();
+            s.dispose();
         } catch {
             // ignore
         }
@@ -319,6 +310,7 @@ export class PiAcpSession {
 
     readonly proc: PiRpcProcess;
     private readonly conn: PiAcpClient;
+    private readonly extensionQuestions: PiExtensionQuestions;
     private readonly fileCommands: FileSlashCommand[];
 
     // Used to map abort semantics to ACP stopReason.
@@ -390,7 +382,17 @@ export class PiAcpSession {
         this.conn = opts.conn;
         this.fileCommands = opts.fileCommands ?? [];
 
+        this.extensionQuestions = new PiExtensionQuestions(this.sessionId, this.conn, this.proc, async (text) => {
+            this.emit({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
+            await this.flushEmits();
+        });
+        this.proc.signal.addEventListener("abort", () => this.extensionQuestions.endTurn(), { once: true });
         this.proc.onEvent((ev) => this.handlePiEvent(ev));
+    }
+
+    dispose(): void {
+        this.extensionQuestions.endTurn();
+        this.proc.dispose();
     }
 
     setStartupInfo(text: string) {
@@ -473,6 +475,7 @@ export class PiAcpSession {
     async cancel(): Promise<void> {
         // Cancel current and clear any queued prompts.
         this.cancelRequested = true;
+        this.extensionQuestions.endTurn();
 
         if (this.turnQueue.length) {
             const queued = this.turnQueue.splice(0, this.turnQueue.length);
@@ -491,7 +494,14 @@ export class PiAcpSession {
         }
 
         // Abort the currently running turn (if any). If nothing is running, this is a no-op.
-        await this.proc.abort();
+        try {
+            await this.proc.abort();
+        } catch (cause) {
+            // Closing the endpoint can terminate Pi before its abort acknowledgement arrives.
+            if (!this.proc.signal.aborted) {
+                throw cause;
+            }
+        }
     }
 
     wasCancelRequested(): boolean {
@@ -539,6 +549,7 @@ export class PiAcpSession {
     }
 
     private async settleTurn(): Promise<void> {
+        this.extensionQuestions.endTurn();
         // Ensure all updates derived from pi events (plus the final usage update) are
         // delivered before we resolve the ACP `session/prompt` request.
         await this.publishContextUsage();
@@ -629,6 +640,7 @@ export class PiAcpSession {
     }
 
     private startTurn(t: QueuedTurn): void {
+        this.extensionQuestions.startTurn();
         this.cancelRequested = false;
         this.turnRetryFailure = null;
 
@@ -644,6 +656,7 @@ export class PiAcpSession {
         // The prompt RPC only acknowledges acceptance; retry, compaction, or queued
         // continuations may emit multiple `agent_end` events before `agent_settled`.
         this.proc.prompt(t.message, t.images).catch((err) => {
+            this.extensionQuestions.endTurn();
             // If the subprocess errors before we get `agent_settled`, treat as error unless cancelled.
             // Also ensure we flush any already-enqueued updates first.
             void this.flushEmits().finally(() => {
@@ -947,13 +960,16 @@ export class PiAcpSession {
             }
 
             case "extension_ui_request": {
-                void this.handleExtensionUiRequest(ev).catch(() => {
-                    const id = stringProp(ev, "id");
-                    if (!id) {
-                        return;
-                    }
-
-                    void this.proc.sendExtensionUiResponse({ id, cancelled: true }).catch(() => {});
+                if (ev.method === "notify") {
+                    this.emit({
+                        sessionUpdate: "agent_message_chunk",
+                        content: { type: "text", text: stringProp(ev, "message") ?? "Pi notification" },
+                        _meta: { piAcp: { notify: { level: stringProp(ev, "notifyType") ?? "info" } } },
+                    });
+                    break;
+                }
+                void this.extensionQuestions.handle(ev).catch(() => {
+                    // A closed Pi transport cannot receive a dialog response.
                 });
                 break;
             }
@@ -1038,143 +1054,11 @@ export class PiAcpSession {
                 break;
         }
     }
-
-    private async handleExtensionUiRequest(ev: PiRpcEvent): Promise<void> {
-        const id = stringProp(ev, "id");
-        const method = stringProp(ev, "method");
-        if (!id) {
-            return;
-        }
-
-        if (method === "select") {
-            await this.handleExtensionSelect(ev, id);
-            return;
-        }
-
-        if (method === "confirm") {
-            await this.handleExtensionConfirm(ev, id);
-            return;
-        }
-
-        if (method === "input" || method === "editor") {
-            this.emit({
-                sessionUpdate: "agent_message_chunk",
-                content: {
-                    type: "text",
-                    text: `Pi ${method} UI request is not supported in ACP yet; cancelling it.`,
-                } satisfies ContentBlock,
-            });
-            await this.proc.sendExtensionUiResponse({ id, cancelled: true });
-            return;
-        }
-
-        if (method === "notify") {
-            this.emit({
-                sessionUpdate: "agent_message_chunk",
-                content: { type: "text", text: stringProp(ev, "message") ?? "Pi notification" } satisfies ContentBlock,
-                _meta: { piAcp: { notify: { level: stringProp(ev, "notifyType") ?? "info" } } },
-            });
-            await this.proc.sendExtensionUiResponse({ id, cancelled: true });
-            return;
-        }
-
-        await this.proc.sendExtensionUiResponse({ id, cancelled: true });
-    }
-
-    private async handleExtensionSelect(ev: PiRpcEvent, id: string): Promise<void> {
-        const rawOptions = ev.options;
-        const options = Array.isArray(rawOptions) ? rawOptions.map((option) => String(option)) : [];
-        if (!options.length) {
-            await this.proc.sendExtensionUiResponse({ id, cancelled: true });
-            return;
-        }
-
-        const permissionOptions: PermissionOption[] = options.map((name, index) => ({
-            optionId: `${CHOICE_OPTION_PREFIX}${index}`,
-            name,
-            kind: "allow_once",
-        }));
-
-        const selected = await this.requestExtensionPermission(id, ev, permissionOptions);
-        if (selected === null) {
-            return;
-        }
-
-        const selectedOptionId = selected.outcome.outcome === "selected" ? selected.outcome.optionId : null;
-        const index = selectedOptionId === null ? null : optionIndex(selectedOptionId);
-        const value = index === null ? null : (options.at(index) ?? null);
-        await this.proc.sendExtensionUiResponse(value === null ? { id, cancelled: true } : { id, value });
-    }
-
-    private async handleExtensionConfirm(ev: PiRpcEvent, id: string): Promise<void> {
-        const selected = await this.requestExtensionPermission(id, ev, CONFIRM_PERMISSION_OPTIONS);
-        if (selected === null) {
-            return;
-        }
-
-        if (selected.outcome.outcome === "cancelled") {
-            await this.proc.sendExtensionUiResponse({ id, cancelled: true });
-            return;
-        }
-
-        await this.proc.sendExtensionUiResponse({ id, confirmed: selected.outcome.optionId === "yes" });
-    }
-
-    private async requestExtensionPermission(
-        id: string,
-        ev: PiRpcEvent,
-        options: PermissionOption[],
-    ): Promise<PermissionResponse | null> {
-        try {
-            return await this.conn.requestPermission({
-                sessionId: this.sessionId,
-                toolCall: extensionUiToolCall(id, ev),
-                options,
-            });
-        } catch {
-            await this.proc.sendExtensionUiResponse({ id, cancelled: true });
-            return null;
-        }
-    }
-}
-
-function extensionUiToolCall(id: string, ev: PiRpcEvent) {
-    const method = stringProp(ev, "method") ?? "ui";
-    const title = stringProp(ev, "title") ?? `Pi ${method}`;
-    const rawInput: Record<string, unknown> = { method };
-
-    for (const key of EXTENSION_UI_RAW_INPUT_KEYS) {
-        if (Object.hasOwn(ev, key)) {
-            rawInput[key] = ev[key];
-        }
-    }
-
-    return {
-        toolCallId: `pi-ui-${id}`,
-        title,
-        kind: "other" as const,
-        status: "pending" as const,
-        rawInput,
-    };
 }
 
 function stringProp(source: Record<string, unknown>, key: string): string | null {
     const value = source[key];
     return typeof value === "string" ? value : null;
-}
-
-function optionIndex(optionId: string): number | null {
-    if (!optionId.startsWith(CHOICE_OPTION_PREFIX)) {
-        return null;
-    }
-
-    const rawIndex = optionId.slice(CHOICE_OPTION_PREFIX.length);
-    if (!rawIndex) {
-        return null;
-    }
-
-    const index = Number(rawIndex);
-    return Number.isSafeInteger(index) && index >= 0 && String(index) === rawIndex ? index : null;
 }
 
 function toToolKind(toolName: string): ToolKind {
