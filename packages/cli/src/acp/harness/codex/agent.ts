@@ -387,7 +387,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                     continue;
                 }
                 if (item.type === "agentMessage") {
-                    await this.#emit(agentMessageUpdate(item.id, item.text, item.phase));
+                    await this.#emit(agentMessageUpdate(item.id, item.text));
                     continue;
                 }
                 if (item.type === "contextCompaction") {

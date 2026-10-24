@@ -78,7 +78,7 @@ class Messages {
     };
 }
 
-test("Given real Codex starts a tool, When clients watch and reopen the completed Session, Then live tool updates merge into one chronological history event", async () => {
+test("Given real Codex streams commentary after a tool, When clients watch and reopen the completed Session, Then commentary remains assistant output in chronological history", async () => {
     let providerEntered = Promise.withResolvers<void>();
     let releaseProvider = Promise.withResolvers<void>();
     const provider = await FakeOpenAiProvider.start("mobius-test-model", "Codex live reply", {
@@ -272,7 +272,6 @@ test("Given real Codex starts a tool, When clients watch and reopen the complete
                         expect(Number(event.position)).toBeGreaterThan(sequence);
                         sequence = Number(event.position);
                         text += event.payload.content.text;
-                        expect(text).not.toContain("Checking the live progress boundary.");
                     } else if (
                         event.type === "acp" &&
                         event.payload.sessionUpdate === "agent_thought_chunk" &&
@@ -314,8 +313,9 @@ test("Given real Codex starts a tool, When clients watch and reopen the complete
             expect(queuedCancelled).toBe(true);
             expect(snapshotVerified).toBe(true);
             expect(sequence).toBeGreaterThan(0);
+            expect(text).toContain("Checking the live progress boundary.");
             expect(text).toContain("Codex live reply");
-            expect(thought).toBe("Checking the live progress boundary.");
+            expect(thought).toBe("");
             const originalCommand = decodeSessionPromptCommand(originalPrompt);
             socket.send(JSON.stringify(Object.fromEntries(Object.entries(originalCommand).reverse())));
             socket.send(
@@ -357,8 +357,7 @@ test("Given real Codex starts a tool, When clients watch and reopen the complete
                 );
                 const commentaryIndex = updates.findIndex(
                     (update) =>
-                        (update.sessionUpdate === "agent_message_chunk" ||
-                            update.sessionUpdate === "agent_thought_chunk") &&
+                        update.sessionUpdate === "agent_message_chunk" &&
                         update.content.type === "text" &&
                         updates.indexOf(update) > toolIndex,
                 );
@@ -371,9 +370,7 @@ test("Given real Codex starts a tool, When clients watch and reopen the complete
                 const commentary = updates
                     .slice(commentaryIndex, finalIndex)
                     .flatMap((update) =>
-                        (update.sessionUpdate === "agent_message_chunk" ||
-                            update.sessionUpdate === "agent_thought_chunk") &&
-                        update.content.type === "text"
+                        update.sessionUpdate === "agent_message_chunk" && update.content.type === "text"
                             ? [update.content.text]
                             : [],
                     )
