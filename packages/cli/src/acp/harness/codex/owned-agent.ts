@@ -138,15 +138,12 @@ interface ActiveTurn {
     readonly turn: { id: string };
 }
 
-export function agentMessageUpdate(
-    messageId: string,
-    text: string,
-    phase: "commentary" | "final_answer" | null | undefined,
-): SessionNotification["update"] {
+export function agentMessageUpdate(messageId: string, text: string): SessionNotification["update"] {
+    // Commentary and final answers are public assistant messages; reasoning has separate events.
     return {
         content: { text, type: "text" },
         messageId,
-        sessionUpdate: phase === "commentary" ? "agent_thought_chunk" : "agent_message_chunk",
+        sessionUpdate: "agent_message_chunk",
     };
 }
 
@@ -179,10 +176,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
     readonly #appServer: CodexAppServerClient;
     readonly #settings: CodexSettings;
     readonly #streamedReasoningItemIds = new Set<string>();
-    readonly #agentMessages = new Map<
-        string,
-        { readonly phase: "commentary" | "final_answer" | null | undefined; readonly kind: "started" | "streaming" }
-    >();
+    readonly #agentMessages = new Map<string, "started" | "streaming">();
     #turn: ActiveTurn | null = null;
     #nativeTurnId: string | null = null;
     #updateTail: Promise<void> = Promise.resolve();
@@ -446,10 +440,9 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
                 decoded.data.turnId === this.#turn.turn.id &&
                 decoded.data.delta.length > 0
             ) {
-                const phase = this.#agentMessages.get(decoded.data.itemId)?.phase;
-                this.#agentMessages.set(decoded.data.itemId, { phase, kind: "streaming" });
+                this.#agentMessages.set(decoded.data.itemId, "streaming");
                 await this.#enqueue(async () => {
-                    await this.#context.emit(agentMessageUpdate(decoded.data.itemId, decoded.data.delta, phase));
+                    await this.#context.emit(agentMessageUpdate(decoded.data.itemId, decoded.data.delta));
                 });
             }
             return;
@@ -465,16 +458,16 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
             // An item/completed agent message carries the whole text and would duplicate the deltas
             // already streamed for the same item.
             if (method === "item/started") {
-                this.#agentMessages.set(item.id, { phase: item.phase, kind: "started" });
+                this.#agentMessages.set(item.id, "started");
                 return;
             }
             const message = this.#agentMessages.get(item.id);
             this.#agentMessages.delete(item.id);
-            if (message?.kind === "streaming") {
+            if (message === "streaming") {
                 return;
             }
             await this.#enqueue(async () => {
-                await this.#context.emit(agentMessageUpdate(item.id, item.text, item.phase));
+                await this.#context.emit(agentMessageUpdate(item.id, item.text));
             });
             return;
         }
