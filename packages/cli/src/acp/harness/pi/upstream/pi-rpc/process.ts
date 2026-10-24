@@ -14,6 +14,15 @@ export class PiRpcSpawnError extends Error {
     }
 }
 
+export class PiRpcProcessError extends Error {
+    readonly code = "pi_process_exited";
+
+    constructor(cause: unknown) {
+        super("Pi process stopped unexpectedly.", { cause });
+        this.name = "PiRpcProcessError";
+    }
+}
+
 const ESC = String.fromCharCode(0x1b);
 const CSI = String.fromCharCode(0x9b);
 
@@ -162,7 +171,7 @@ export class PiRpcProcess {
         });
 
         child.on("exit", (code, signal) => {
-            const err = new Error(`pi process exited (code=${code}, signal=${signal})`);
+            const err = new PiRpcProcessError({ code, signal });
             this.lifetime.abort(err);
             for (const [, p] of this.pending) {
                 p.reject(err);
@@ -170,7 +179,8 @@ export class PiRpcProcess {
             this.pending.clear();
         });
 
-        child.on("error", (err) => {
+        child.on("error", (cause) => {
+            const err = new PiRpcProcessError(cause);
             this.lifetime.abort(err);
             for (const [, p] of this.pending) {
                 p.reject(err);
@@ -295,6 +305,11 @@ export class PiRpcProcess {
         } catch {
             // ignore
         }
+    }
+
+    terminateAfterFailure(cause: unknown): void {
+        this.lifetime.abort(new PiRpcProcessError(cause));
+        this.dispose();
     }
 
     /**

@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
     decodeMessageKind,
     decodeNativeSessionResult,
@@ -311,8 +313,16 @@ for (const ending of ["stop", "timeout"] as const) {
                         await vi.advanceTimersByTimeAsync(5000);
                     }
                     let resolved = 0;
+                    let notices = "";
                     for (;;) {
                         const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                        if (
+                            event.type === "acp" &&
+                            event.payload.sessionUpdate === "agent_message_chunk" &&
+                            event.payload.content.type === "text"
+                        ) {
+                            notices += event.payload.content.text;
+                        }
                         if (event.type !== "lifecycle-metadata") {
                             continue;
                         }
@@ -330,6 +340,12 @@ for (const ending of ["stop", "timeout"] as const) {
                         }
                     }
                     expect(resolved).toBe(1);
+                    if (ending === "timeout") {
+                        expect(notices).toContain("Pi question timed out; no answer was submitted.");
+                    } else {
+                        expect(notices).not.toContain("Pi question timed out");
+                        expect(notices).not.toContain("Pi could not");
+                    }
                     vi.useRealTimers();
                     peer.send(
                         encodeSessionElicitationRespondCommand({
@@ -459,6 +475,61 @@ test("Given real Pi asks a question before a daemon disconnect, When the daemon 
             expect(decodeSessionOperationFailedEvent(message).code).toBe("elicitation_request_not_found");
             break;
         }
+    });
+});
+
+test("Given real Pi is waiting for an answer, When its process exits unexpectedly, Then the daemon reports failure and removes the pending question", async () => {
+    const prompt = "Ask before the process exits";
+    await using provider = await FakeOpenAiProvider.start("gpt-4.1", "PI_MUST_NOT_SUCCEED", {
+        toolPrompt: prompt,
+        toolSequence: [{ name: "ask_exit", input: "{}" }],
+    });
+    await using agent = await PiFixture.create(provider);
+    await agent.installExtension(
+        "exit-question.js",
+        `import { writeFileSync } from "node:fs";
+        export default function (pi) {
+            pi.registerTool({ name: "ask_exit", label: "Ask", description: "Ask before exit",
+                parameters: { type: "object", properties: {} },
+                async execute(_id, _params, _signal, _update, ctx) {
+                    writeFileSync("pi-test-process.pid", String(process.pid));
+                    await ctx.ui.input("Pending input", "Wait here");
+                    return { content: [{ type: "text", text: "UNREACHABLE" }], details: {} };
+                },
+            });
+        }`,
+    );
+    await withRealDaemon(new PiAgentSpecification(), agent.environment, async (peer) => {
+        const commandId = sendQuestionPrompt(peer, peer.sessionId, prompt);
+        let interactionId = "";
+        let resolved = 0;
+        for (;;) {
+            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            if (event.type !== "lifecycle-metadata") {
+                continue;
+            }
+            if (event.payload.kind === "session.elicitation.requested") {
+                interactionId = event.payload.event.interactionId;
+                const pid = Number(await readFile(join(peer.workspace, "pi-test-process.pid"), "utf8"));
+                if (!Number.isSafeInteger(pid) || pid <= 0) {
+                    throw new Error("Missing test Pi process");
+                }
+                process.kill(pid, "SIGTERM");
+            }
+            if (event.payload.kind === "session.elicitation.resolved") {
+                expect(event.payload.event.interactionId).toBe(interactionId);
+                resolved += 1;
+            }
+            if (event.payload.kind === "prompt.completed") {
+                throw new Error("An unexpected Pi exit must not report a successful or cancelled turn");
+            }
+            if (event.payload.kind === "prompt.failed") {
+                expect(event.payload.commandId).toBe(commandId);
+                expect(event.payload.message).toBe("Pi process stopped unexpectedly.");
+                break;
+            }
+        }
+        expect(resolved).toBe(1);
     });
 });
 

@@ -13,6 +13,7 @@ import { RequestError } from "@agentclientprotocol/sdk";
 import {
     type PiRpcEvent,
     PiRpcProcess,
+    PiRpcProcessError,
     PiRpcSpawnError,
     type PiSessionOrigin,
     type PiSessionStats,
@@ -39,6 +40,7 @@ type SessionCreateParams = {
 export type StopReason = "end_turn" | "cancelled" | "error";
 
 type PendingTurn = {
+    readonly questionSignal: AbortSignal;
     resolve: (reason: StopReason) => void;
     reject: (err: unknown) => void;
 };
@@ -386,7 +388,35 @@ export class PiAcpSession {
             this.emit({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
             await this.flushEmits();
         });
-        this.proc.signal.addEventListener("abort", () => this.extensionQuestions.endTurn(), { once: true });
+        this.proc.signal.addEventListener(
+            "abort",
+            () => {
+                const cause: unknown = this.proc.signal.reason;
+                if (cause instanceof PiRpcProcessError) {
+                    const pending = this.pendingTurn;
+                    const reason: unknown = pending?.questionSignal.reason;
+                    const error =
+                        reason instanceof RequestError
+                            ? reason
+                            : RequestError.internalError({ code: cause.code, details: cause.message });
+                    if (!(reason instanceof RequestError)) {
+                        error.cause = cause;
+                    }
+                    this.extensionQuestions.endTurn(error);
+                    this.pendingTurn = null;
+                    void this.flushEmits().then(() => {
+                        if (this.cancelRequested) {
+                            pending?.resolve("cancelled");
+                        } else {
+                            pending?.reject(error);
+                        }
+                    });
+                } else {
+                    this.extensionQuestions.endTurn();
+                }
+            },
+            { once: true },
+        );
         this.proc.onEvent((ev) => this.handlePiEvent(ev));
     }
 
@@ -458,7 +488,16 @@ export class PiAcpSession {
     async compact(customInstructions: string | undefined, timeoutMs: number): Promise<unknown> {
         const signal = this.extensionQuestions.startTurn();
         try {
-            return await this.proc.compact(customInstructions, { signal, timeoutMs });
+            const result = await this.proc.compact(customInstructions, { signal, timeoutMs });
+            if (signal.aborted && signal.reason instanceof RequestError) {
+                throw signal.reason;
+            }
+            return result;
+        } catch (cause) {
+            if (signal.aborted && signal.reason instanceof RequestError) {
+                throw signal.reason;
+            }
+            throw cause;
         } finally {
             this.extensionQuestions.endTurn();
             await this.flushEmits();
@@ -559,6 +598,7 @@ export class PiAcpSession {
     }
 
     private async settleTurn(): Promise<void> {
+        const questionSignal = this.pendingTurn?.questionSignal;
         this.extensionQuestions.endTurn();
         // Ensure all updates derived from pi events (plus the final usage update) are
         // delivered before we resolve the ACP `session/prompt` request.
@@ -572,7 +612,9 @@ export class PiAcpSession {
         // exhaustion still settles as cancelled.
         const retryFailure = this.turnRetryFailure;
         this.turnRetryFailure = null;
-        if (retryFailure !== null && !this.cancelRequested) {
+        if (questionSignal?.aborted && questionSignal.reason instanceof RequestError && !this.cancelRequested) {
+            this.pendingTurn?.reject(questionSignal.reason);
+        } else if (retryFailure !== null && !this.cancelRequested) {
             this.pendingTurn?.reject(
                 // The message rides in `data.details` so clients that unwrap the
                 // JSON-RPC internal-error envelope (like Mobius) surface the real
@@ -650,11 +692,11 @@ export class PiAcpSession {
     }
 
     private startTurn(t: QueuedTurn): void {
-        this.extensionQuestions.startTurn();
+        const questionSignal = this.extensionQuestions.startTurn();
         this.cancelRequested = false;
         this.turnRetryFailure = null;
 
-        this.pendingTurn = { resolve: t.resolve, reject: t.reject };
+        this.pendingTurn = { questionSignal, resolve: t.resolve, reject: t.reject };
 
         // Publish queue depth (0 because we're starting the turn now).
         this.emit({
@@ -978,9 +1020,7 @@ export class PiAcpSession {
                     });
                     break;
                 }
-                void this.extensionQuestions.handle(ev).catch(() => {
-                    // A closed Pi transport cannot receive a dialog response.
-                });
+                void this.extensionQuestions.handle(ev);
                 break;
             }
 

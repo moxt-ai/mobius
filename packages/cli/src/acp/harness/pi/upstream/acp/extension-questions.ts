@@ -1,4 +1,4 @@
-import type { ElicitationPropertySchema } from "@agentclientprotocol/sdk";
+import { type ElicitationPropertySchema, RequestError } from "@agentclientprotocol/sdk";
 import { z } from "zod";
 import type { PiRpcEvent, PiRpcProcess } from "../pi-rpc/process.js";
 import type { PiAcpClient } from "./client.js";
@@ -22,6 +22,20 @@ const questionSchema = z
     .readonly();
 type Question = z.infer<typeof questionSchema>;
 const QUESTION_TIMEOUT_MS = 3_600_000;
+
+class PiQuestionError extends RequestError {
+    constructor(kind: "request_failed" | "invalid_response" | "response_failed", cause?: unknown) {
+        const messages = {
+            request_failed: "Pi could not request an answer.",
+            invalid_response: "Pi received an invalid answer.",
+            response_failed: "Pi could not receive the answer.",
+        };
+        super(-32603, "Internal error", { code: `pi_question_${kind}`, details: messages[kind] });
+        this.cause = cause;
+    }
+}
+
+type QuestionTurn = { readonly controller: AbortController; readonly requestIds: Set<string> };
 
 function questionField(question: Question): ElicitationPropertySchema {
     const title = question.title || "Answer";
@@ -52,7 +66,7 @@ function questionField(question: Question): ElicitationPropertySchema {
 
 /** Owns native dialog lifetimes within the ACP turn that requested them. */
 export class PiExtensionQuestions {
-    private turn: { readonly controller: AbortController; readonly requestIds: Set<string> } | null = null;
+    private turn: QuestionTurn | null = null;
 
     constructor(
         private readonly sessionId: string,
@@ -67,8 +81,8 @@ export class PiExtensionQuestions {
         return this.turn.controller.signal;
     }
 
-    endTurn(): void {
-        this.turn?.controller.abort();
+    endTurn(reason?: RequestError): void {
+        this.turn?.controller.abort(reason);
         this.turn = null;
     }
 
@@ -90,12 +104,26 @@ export class PiExtensionQuestions {
             return;
         }
         turn?.requestIds.add(event.id);
+        try {
+            await this.answer(event, turn);
+        } catch (cause) {
+            // Intentional disposal has already cancelled the owning operation. A live
+            // transport write failure must fail that operation, not a later turn.
+            if (!this.proc.signal.aborted) {
+                turn?.controller.abort(new PiQuestionError("response_failed", cause));
+                this.proc.terminateAfterFailure(cause);
+            }
+        }
+    }
+
+    private async answer(event: PiRpcEvent, turn: QuestionTurn | null): Promise<void> {
+        const id = typeof event.id === "string" ? event.id : "";
         const parsed = questionSchema.safeParse(event);
         if (!parsed.success) {
             await this.notify(
                 "Pi requested a question with unsupported or oversized fields. The question was cancelled without changing its content.",
             );
-            await this.proc.sendExtensionUiResponse({ id: event.id, cancelled: true });
+            await this.proc.sendExtensionUiResponse({ id, cancelled: true });
             return;
         }
         const question = parsed.data;
@@ -123,30 +151,45 @@ export class PiExtensionQuestions {
             );
             const content: unknown = answer.action === "accept" ? answer.content : undefined;
             const value = typeof content === "object" && content !== null ? Reflect.get(content, "value") : undefined;
-            if (!signal.aborted && typeof value === "string") {
+            if (!signal.aborted && answer.action === "accept") {
+                if (typeof value !== "string") {
+                    throw new PiQuestionError("invalid_response");
+                }
                 switch (question.method) {
                     case "select":
-                        if (question.options.includes(value)) {
-                            response = { id: question.id, value };
+                        if (!question.options.includes(value)) {
+                            throw new PiQuestionError("invalid_response");
                         }
+                        response = { id: question.id, value };
                         break;
                     case "confirm":
-                        if (value === "yes" || value === "no") {
-                            response = { id: question.id, confirmed: value === "yes" };
+                        if (value !== "yes" && value !== "no") {
+                            throw new PiQuestionError("invalid_response");
                         }
+                        response = { id: question.id, confirmed: value === "yes" };
                         break;
                     case "input":
                     case "editor":
-                        if (value.length <= 10_000) {
-                            response = { id: question.id, value };
+                        if (value.length > 10_000) {
+                            throw new PiQuestionError("invalid_response");
                         }
+                        response = { id: question.id, value };
                         break;
                 }
+            } else if (!signal.aborted && answer.action !== "cancel" && answer.action !== "decline") {
+                throw new PiQuestionError("invalid_response");
             }
-        } catch {
-            // A closed ACP connection, cancelled turn or deadline cancels the native dialog.
+        } catch (cause) {
+            if (!signal.aborted && !(cause instanceof RequestError && cause.code === -32800)) {
+                turn.controller.abort(
+                    cause instanceof PiQuestionError ? cause : new PiQuestionError("request_failed", cause),
+                );
+            }
         } finally {
             clearTimeout(timeout);
+        }
+        if (deadline.signal.aborted && signal.reason === deadline.signal.reason) {
+            await this.notify("Pi question timed out; no answer was submitted.");
         }
         await this.proc.sendExtensionUiResponse(response);
     }
