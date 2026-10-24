@@ -28,7 +28,7 @@ export class PiAcpEndpoint implements InProcessAcpEndpoint {
         this.#app = createAgentApp({ name: "mobius-pi" })
             .onConnect((connection) => {
                 this.#connection = connection;
-                piAgent = new PiAcpAgent(createPiAcpClient(connection), { environment });
+                piAgent = new PiAcpAgent(createPiAcpClient(connection, options.onSessionUpdate), { environment });
                 this.#agent = piAgent;
             })
             .onRequest(

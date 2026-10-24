@@ -11,12 +11,13 @@ export interface PiAcpClient {
     readonly sessionUpdate: (notification: SessionNotification) => Promise<void>;
 }
 
-export function createPiAcpClient(connection: AgentConnection): PiAcpClient {
+export function createPiAcpClient(
+    connection: AgentConnection,
+    onSessionUpdate: (notification: SessionNotification) => Promise<void>,
+): PiAcpClient {
     return {
         requestPermission: async (request) =>
             await connection.client.request(methods.client.session.requestPermission, request),
-        sessionUpdate: async (notification) => {
-            await connection.client.notify(methods.client.session.update, notification);
-        },
+        sessionUpdate: onSessionUpdate,
     };
 }

@@ -10,7 +10,6 @@ import {
     type InProcessAcpEndpoint,
 } from "../agent/in-process-endpoint.ts";
 import { type AcpClientHandler, createAcpClient } from "./create-client.ts";
-import { connectInProcessAgent } from "./in-process-connection.ts";
 
 function requestErrorMessage(error: RequestError): string {
     const fallback = truncate(error.message, 500);
@@ -106,7 +105,7 @@ export function createWritableAcpStream(output: NodeJS.WritableStream): Writable
 }
 
 type EndpointProcess =
-    | { readonly kind: "in-process"; readonly endpoint: InProcessAcpEndpoint; readonly stopUpdates: () => void }
+    | { readonly kind: "in-process"; readonly endpoint: InProcessAcpEndpoint }
     | { readonly kind: "child"; readonly child: ReturnType<typeof spawn> };
 
 /** Owns the transport, termination signal and process tree for one Agent endpoint. */
@@ -122,11 +121,11 @@ export class AgentConnection {
                 command: agent.command,
                 cwd,
                 environment: agent.environment,
+                onSessionUpdate: client.onUpdate,
             });
-            const connected = connectInProcessAgent(inProcess.app(), client);
-            this.#process = { kind: "in-process", endpoint: inProcess, stopUpdates: connected.stopUpdates };
+            this.#process = { kind: "in-process", endpoint: inProcess };
             this.termination = inProcess.terminated;
-            this.connection = connected.connection;
+            this.connection = createAcpClient(client).connect(inProcess.app());
             return;
         }
         const launch = executableLaunch(agent.adapterPath, agent.arguments);
@@ -189,9 +188,6 @@ export class AgentConnection {
     readonly closeProcess = async (): Promise<void> => {
         try {
             if (this.#process.kind === "in-process") {
-                // Release pending local writes before disposing the producer that
-                // may be awaiting them. The endpoint still owns its child processes.
-                this.#process.stopUpdates();
                 await this.#process.endpoint.close();
                 return;
             }

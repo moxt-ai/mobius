@@ -126,13 +126,15 @@ async function probeInProcessReadiness(
     defaultWorkspace: string,
     controller: AbortController,
 ): Promise<VerifiedAcpReadiness> {
+    const handler = new DiscoveryAcpHandler();
     const inProcess = agent.createEndpoint({
         command: agent.command,
         cwd: defaultWorkspace,
         environment: { ...filterEnvironment(environment), ...agent.environment },
+        onSessionUpdate: handler.onUpdate,
     });
     try {
-        const connection = createAcpClient(new DiscoveryAcpHandler()).connect(inProcess.app());
+        const connection = createAcpClient(handler).connect(inProcess.app());
         try {
             return await Promise.race([
                 (async () => {
