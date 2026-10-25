@@ -116,31 +116,36 @@ export async function restoreSession(
                 async () => (await session.loadSession(signal, "ACP agent exited while loading a session")).response,
             );
         } else if (recovery.kind === "execution-only") {
-            if (!session.capabilities.resumeSession) {
+            try {
+                lifecycleResponse = await session.metrics.measure(
+                    "session-resume",
+                    async () =>
+                        await session.race(
+                            session.agentRequest(
+                                methods.agent.session.resume,
+                                {
+                                    additionalDirectories: [...session.additionalDirectories],
+                                    cwd: session.cwd,
+                                    mcpServers: [],
+                                    sessionId: session.nativeSessionId(),
+                                },
+                                { cancellationSignal: signal },
+                            ),
+                            "ACP agent exited while resuming a session",
+                            signal,
+                        ),
+                );
+            } catch (cause) {
+                signal.throwIfAborted();
+                if (cause instanceof AcpExecutionError && cause.code !== "acp_agent_error") {
+                    throw cause;
+                }
                 throw new AcpExecutionError(
                     "This Agent cannot continue a persisted session without replaying native history",
-                    {},
+                    { cause },
                     "execution_only_unsupported",
                 );
             }
-            lifecycleResponse = await session.metrics.measure(
-                "session-resume",
-                async () =>
-                    await session.race(
-                        session.agentRequest(
-                            methods.agent.session.resume,
-                            {
-                                additionalDirectories: [...session.additionalDirectories],
-                                cwd: session.cwd,
-                                mcpServers: [],
-                                sessionId: session.nativeSessionId(),
-                            },
-                            { cancellationSignal: signal },
-                        ),
-                        "ACP agent exited while resuming a session",
-                        signal,
-                    ),
-            );
             session.startExecutionOnlyCapture();
         } else if (session.capabilities.resumeSession) {
             lifecycleResponse = await session.metrics.measure(

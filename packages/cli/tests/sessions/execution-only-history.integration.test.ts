@@ -1,8 +1,10 @@
 import { methods } from "@agentclientprotocol/sdk";
+import { SessionHistoryPolicy } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
 import { unmeasuredOperationMetrics } from "../../src/infra/operation-metrics.ts";
 import type { AgentSessionRestore } from "../../src/session/live/agent-session-restore.ts";
 import { restoreSession } from "../../src/session/live/session-restore.ts";
+import { executePrompt } from "../../src/session/prompt/execute-prompt.ts";
 import { MemorySessionStore, StoredSession } from "../../src/session/record/session-store.ts";
 
 function sessionFixture(options: { readonly resume: boolean }): {
@@ -41,6 +43,9 @@ function sessionFixture(options: { readonly resume: boolean }): {
         store,
         agentRequest: async (method: string) => {
             calls.push(method);
+            if (method === methods.agent.session.resume && !options.resume) {
+                throw new Error("resume is unsupported");
+            }
             if (method === methods.agent.session.load) {
                 throw new Error("execution-only must never load native history");
             }
@@ -87,4 +92,52 @@ test("execution-only recovery fails closed when the native Agent cannot resume",
     ).rejects.toMatchObject({ code: "execution_only_unsupported" });
     expect(fixture.calls).not.toContain(methods.agent.session.load);
     expect(fixture.calls).not.toContain("execution-only-capture");
+});
+
+test("execution-only prompt propagation keeps the run path out of eager recovery", async () => {
+    let runOptions: Record<string, unknown> | undefined;
+    const command = {
+        additionalDirectoryIds: [],
+        agentId: "agent-1",
+        bindingId: "binding-1",
+        commandId: "command-1",
+        directoryId: "default",
+        disposition: "reject",
+        historyPolicy: SessionHistoryPolicy.ExecutionOnly,
+        images: [],
+        kind: "session.prompt" as const,
+        prompt: "continue",
+        resources: [],
+        sessionId: "session-1",
+        targetCommandId: "",
+    };
+
+    await executePrompt({
+        operations: { transitionExecution: () => undefined },
+        eventProjection: {
+            completed: async () => undefined,
+            failed: async () => undefined,
+            started: () => ({}),
+        },
+        command,
+        resolveAgent: async () => ({ id: "agent-1", environment: {} }),
+        downloadArtifact: async () => new Uint8Array(),
+        reportFailure: () => undefined,
+        directories: { resolve: async () => "/workspace" },
+        sessions: {
+            prepareExecutionSession: async () => ({ configOptions: [] }),
+            runPrompt: async (options: Record<string, unknown>) => {
+                runOptions = options;
+                return { stopReason: "end_turn" };
+            },
+        },
+        attemptId: "attempt-1",
+        activateAttempt: () => ({ epoch: "epoch-1", sequence: 0 }),
+        waitForSessionAvailability: async () => ({ kind: "available", disposition: "reject" }),
+        signal: new AbortController().signal,
+        recordSteeringPrompt: () => false,
+        cancellationRequested: () => false,
+    } as never);
+
+    expect(runOptions?.["recovery"]).toEqual({ kind: "execution-only" });
 });

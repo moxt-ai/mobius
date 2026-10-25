@@ -131,7 +131,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 agentCapabilities: {
                     loadSession: true,
                     promptCapabilities: { embeddedContext: true, image: true },
-                    sessionCapabilities: { close: {}, fork: {}, list: {}, resume: {} },
+                    sessionCapabilities: { close: {}, fork: {}, list: {} },
                 },
                 agentInfo: { name: "Codex", version: CODEX_AGENT_VERSION },
                 authMethods: [],

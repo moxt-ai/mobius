@@ -309,7 +309,6 @@ export class PiAcpAgent {
                     list: {},
                     delete: {},
                     fork: {},
-                    resume: {},
                 },
             },
         };

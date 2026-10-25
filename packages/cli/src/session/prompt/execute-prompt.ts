@@ -151,7 +151,6 @@ export async function executePrompt({
                 sessionId: command.sessionId,
                 signal,
                 targetCommandId: command.targetCommandId,
-                recovery,
             });
             stopReason = "steered";
         } else {
@@ -168,6 +167,7 @@ export async function executePrompt({
                 sessionId: command.sessionId,
                 signal,
                 targetCommandId: command.targetCommandId,
+                recovery,
             });
             stopReason = result.stopReason;
         }

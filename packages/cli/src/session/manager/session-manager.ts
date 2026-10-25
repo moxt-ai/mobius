@@ -526,6 +526,9 @@ export class SessionManager {
                 );
             }
             if (existing.usesEnvironment(options.agent.environment)) {
+                if (recovery.kind === "execution-only") {
+                    existing.startExecutionOnlyCapture();
+                }
                 this.#executionProcesses.touch(options.sessionId, existing);
                 return existing.prepared();
             }
@@ -875,6 +878,9 @@ export class SessionManager {
                         {},
                         "session_identity_mismatch",
                     );
+                }
+                if (options.recovery?.kind === "execution-only") {
+                    existing.startExecutionOnlyCapture();
                 }
                 this.#executionProcesses.touch(options.sessionId, existing);
                 return existing;
