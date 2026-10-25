@@ -21,6 +21,8 @@ import {
     type PromptRequest,
     type PromptResponse,
     RequestError,
+    type ResumeSessionRequest,
+    type ResumeSessionResponse,
     type SessionConfigOption,
     type SessionInfo,
     type SetSessionConfigOptionRequest,
@@ -307,6 +309,7 @@ export class PiAcpAgent {
                     list: {},
                     delete: {},
                     fork: {},
+                    resume: {},
                 },
             },
         };
@@ -1149,6 +1152,85 @@ export class PiAcpAgent {
         }, 0);
 
         return { sessionId: session.sessionId, configOptions, modes };
+    }
+
+    async resumeSession(params: ResumeSessionRequest): Promise<ResumeSessionResponse> {
+        if (!isAbsolute(params.cwd)) {
+            throw RequestError.invalidParams(`cwd must be an absolute path: ${params.cwd}`);
+        }
+
+        this.sessions.close(params.sessionId);
+        this.lastSessionCwd = params.cwd;
+
+        const stored = this.findStoredSession(params.sessionId);
+        if (!stored) {
+            throw RequestError.invalidParams(`Unknown sessionId: ${params.sessionId}`);
+        }
+
+        const session = await this.restoreSession(params.sessionId, {
+            cwd: params.cwd,
+            mcpServers: params.mcpServers,
+        });
+        let configuration: Awaited<ReturnType<typeof getSessionConfiguration>>;
+        try {
+            configuration = await getSessionConfiguration(session.proc);
+        } catch (err) {
+            this.sessions.close(session.sessionId);
+            throw err;
+        }
+        const { configOptions, models, modes } = configuration;
+        const enableSkillCommands = getEnableSkillCommands(params.cwd, this.environment);
+        const fileCommands = loadSlashCommands(params.cwd, this.environment);
+
+        (this.sessions as any).closeAllExcept?.(session.sessionId);
+        this.store.upsert({
+            sessionId: params.sessionId,
+            cwd: params.cwd,
+            sessionFile: stored.sessionFile,
+        });
+
+        const response = {
+            configOptions,
+            models,
+            modes,
+            _meta: {
+                piAcp: {
+                    startupInfo: null,
+                },
+            },
+        };
+        setTimeout(() => {
+            void (async () => {
+                await session.publishContextUsage();
+                try {
+                    const pi = (await session.proc.getCommands()) as any;
+                    const { commands } = toAvailableCommandsFromPiGetCommands(pi, {
+                        enableSkillCommands,
+                        includeExtensionCommands: false,
+                    });
+                    await this.conn.sessionUpdate({
+                        sessionId: session.sessionId,
+                        update: {
+                            sessionUpdate: "available_commands_update",
+                            availableCommands: mergeCommands(commands, builtinAvailableCommands()),
+                        },
+                    });
+                    return;
+                } catch {
+                    // fall back
+                }
+                await this.conn.sessionUpdate({
+                    sessionId: session.sessionId,
+                    update: {
+                        sessionUpdate: "available_commands_update",
+                        availableCommands: mergeCommands(toAvailableCommands(fileCommands), builtinAvailableCommands()),
+                    },
+                });
+            })().catch(() => {
+                // Session setup notifications are best-effort; the client or Pi process may close first.
+            });
+        }, 0);
+        return response;
     }
 
     async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {

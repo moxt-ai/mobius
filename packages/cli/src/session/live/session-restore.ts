@@ -89,6 +89,9 @@ export async function restoreSession(
         }
         session.setPrompted(true);
         session.setRestored(true);
+        if (recovery.kind === "execution-only") {
+            session.startExecutionOnlyCapture();
+        }
         lifecycleResponse = forked;
     } else if (
         stored instanceof FoundStoredSession &&
@@ -112,6 +115,33 @@ export async function restoreSession(
                 "session-load",
                 async () => (await session.loadSession(signal, "ACP agent exited while loading a session")).response,
             );
+        } else if (recovery.kind === "execution-only") {
+            if (!session.capabilities.resumeSession) {
+                throw new AcpExecutionError(
+                    "This Agent cannot continue a persisted session without replaying native history",
+                    {},
+                    "execution_only_unsupported",
+                );
+            }
+            lifecycleResponse = await session.metrics.measure(
+                "session-resume",
+                async () =>
+                    await session.race(
+                        session.agentRequest(
+                            methods.agent.session.resume,
+                            {
+                                additionalDirectories: [...session.additionalDirectories],
+                                cwd: session.cwd,
+                                mcpServers: [],
+                                sessionId: session.nativeSessionId(),
+                            },
+                            { cancellationSignal: signal },
+                        ),
+                        "ACP agent exited while resuming a session",
+                        signal,
+                    ),
+            );
+            session.startExecutionOnlyCapture();
         } else if (session.capabilities.resumeSession) {
             lifecycleResponse = await session.metrics.measure(
                 "session-resume",
@@ -173,6 +203,9 @@ export async function restoreSession(
         );
         session.selectNativeSession(created.sessionId);
         session.setNativeHistoryOwnership({ kind: "fresh-session" });
+        if (recovery.kind === "execution-only") {
+            session.startExecutionOnlyCapture();
+        }
         lifecycleResponse = created;
     }
     session.restrictSessionCapabilities(lifecycleResponse);

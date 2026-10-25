@@ -279,6 +279,7 @@ export class SessionManager {
 
     async #replaceExecutionPreparation(existing: AgentSession, options: SessionPrepareOptions): Promise<AgentSession> {
         const desiredConfigOptions = existing.prepared().configOptions;
+        const recovery: SessionRecovery = options.recovery ?? { kind: "interactive-only" };
         return await this.#executionProcesses.prepare(options.sessionId, async () => {
             await this.#retireSessionProcess(options.sessionId, existing, async () => await existing.close());
             const runtime = await this.#startRetainedSessionProcess(
@@ -286,7 +287,7 @@ export class SessionManager {
                 async () =>
                     await AgentSession.start(
                         options,
-                        { kind: "interactive-only" },
+                        recovery,
                         () => this.#observer,
                         this.#store,
                         unmeasuredOperationMetrics,
@@ -506,6 +507,7 @@ export class SessionManager {
 
     readonly prepareExecutionSession = async (options: SessionPrepareOptions): Promise<PreparedSession> =>
         this.#operations.run(options, async (options) => {
+            const recovery: SessionRecovery = options.recovery ?? { kind: "interactive-only" };
             this.#assertOpen(options.sessionId);
             const pending = this.#executionProcesses.pending(options.sessionId);
             if (pending !== undefined) {
@@ -514,7 +516,7 @@ export class SessionManager {
             }
             const existing = this.#executionProcesses.get(options.sessionId);
             if (existing === undefined) {
-                return (await this.#startPreparation(options, { kind: "interactive-only" })).prepared();
+                return (await this.#startPreparation(options, recovery)).prepared();
             }
             if (!existing.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)) {
                 throw new AcpExecutionError(
@@ -877,7 +879,7 @@ export class SessionManager {
                 this.#executionProcesses.touch(options.sessionId, existing);
                 return existing;
             }
-            await this.prepareSession(options);
+            await this.#prepareSession(options, options.recovery ?? { kind: "interactive-only" }, "reopen");
             const started = this.#executionProcesses.get(options.sessionId);
             if (started === undefined) {
                 throw new AcpExecutionError("ACP session did not start");

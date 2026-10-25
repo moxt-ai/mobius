@@ -1,4 +1,8 @@
-import { type SessionPromptCommand, SessionPromptDisposition } from "@moxt-ai/mobius-sdk/protocol";
+import {
+    SessionHistoryPolicy,
+    type SessionPromptCommand,
+    SessionPromptDisposition,
+} from "@moxt-ai/mobius-sdk/protocol";
 import { AcpExecutionError } from "../../acp/acp-error.ts";
 import { operationErrorCode, operationErrorMessage } from "../../infra/operation-error.ts";
 import type { ReportFailure, ResolveAgent } from "../api/session-api.ts";
@@ -79,12 +83,17 @@ export async function executePrompt({
                 : agentForSessionConfiguration(agent, command.sessionConfigurations);
         const executionAgent = appliedSettings?.agent ?? agent;
         const sessionConfigurations = appliedSettings?.sessionConfigurations;
+        const recovery =
+            command.historyPolicy === SessionHistoryPolicy.ExecutionOnly
+                ? ({ kind: "execution-only" } as const)
+                : ({ kind: "interactive-only" } as const);
         const preparation = {
             additionalDirectories: resolved.additionalDirectories,
             agent: executionAgent,
             cwd: resolved.cwd,
             sessionId: command.sessionId,
             signal,
+            recovery,
         };
         let prepared = await sessions.prepareExecutionSession(preparation);
         if (command.sessionConfigurations !== undefined) {
@@ -142,6 +151,7 @@ export async function executePrompt({
                 sessionId: command.sessionId,
                 signal,
                 targetCommandId: command.targetCommandId,
+                recovery,
             });
             stopReason = "steered";
         } else {

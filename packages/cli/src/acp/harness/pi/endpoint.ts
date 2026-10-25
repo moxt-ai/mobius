@@ -48,6 +48,10 @@ export class PiAcpEndpoint implements InProcessAcpEndpoint {
                 async (context) => await piAgentOrThrow(piAgent).loadSession(context.params),
             )
             .onRequest(
+                methods.agent.session.resume,
+                async (context) => await piAgentOrThrow(piAgent).resumeSession(context.params),
+            )
+            .onRequest(
                 methods.agent.session.list,
                 async (context) => await piAgentOrThrow(piAgent).listSessions(context.params),
             )
