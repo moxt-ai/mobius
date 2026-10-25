@@ -15,6 +15,16 @@ export const sessionPromptCommand: RuntimeCommand = {
         if (message.kind !== SESSION_PROMPT_KIND) {
             throw new Error("Command kind mismatch");
         }
+        if (!context.sessionTurns.acceptsPrompts()) {
+            send(context.socket, {
+                code: "runtime_upgrading",
+                requestId: message.commandId,
+                kind: "session.operation.failed",
+                message: "The Runtime is upgrading. Retry after it reconnects.",
+                sessionId: message.sessionId,
+            });
+            return;
+        }
         const receipt = context.operations.claimExecution(
             message.commandId,
             message.sessionId,

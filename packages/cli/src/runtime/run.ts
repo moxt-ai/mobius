@@ -1,6 +1,7 @@
 import { styleText } from "node:util";
 import type { RuntimeUpgradeResult } from "@moxt-ai/mobius-sdk/protocol";
 import { buildSessionLayer } from "../session/api/session-layer.ts";
+import type { RuntimeTurnActivity } from "../session/turn/runtime-turn-activity.ts";
 import { systemTimer, type Timer } from "../util/timer.ts";
 import { publishAgentCatalog } from "./catalog/publish-agent-catalog.ts";
 import { resolveCatalogAgent } from "./catalog/resolve-catalog-agent.ts";
@@ -62,6 +63,7 @@ async function publishAgentCatalogUntilAvailable(
 }
 
 export interface RunRuntimeOptions {
+    readonly turnActivity?: RuntimeTurnActivity;
     readonly onConnectionStatus?: (status: "online" | "reconnecting") => void;
     /** Reports a finished daemon upgrade to the relay. The daemon worker supplies it. */
     readonly reportUpgradeAvailability?: (
@@ -97,6 +99,7 @@ export async function runRuntime(
     );
     const publisher = new RuntimeSessionEventPublisher(timer);
     const layer = buildSessionLayer({
+        ...(options.turnActivity === undefined ? {} : { turnActivity: options.turnActivity }),
         bindingId: config.bindingId,
         channelId: config.channelId,
         defaultWorkspace: config.defaultWorkspace,
