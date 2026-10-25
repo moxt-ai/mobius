@@ -627,7 +627,9 @@ describe("daemon V2 live delivery", () => {
             expect(text).toBe("x".repeat(300_000));
             expect(await activeTurn(fixture, command)).not.toBeNull();
             const page = await history(fixture, command);
-            expect(page.throughPosition).toBe(lastPosition);
+            // The running Agent can emit metadata after its last text chunk.
+            // The snapshot must cover every observed event, including that text.
+            expect(BigInt(page.throughPosition ?? "0")).toBeGreaterThanOrEqual(BigInt(lastPosition));
             expect(page.truncated).toBe(false);
             const recovered = page.events
                 .flatMap((event) =>
