@@ -43,6 +43,7 @@ createInterface({input: process.stdin}).on("line", line => {
             approvalPolicy: params.approvalPolicy,
             approvalsReviewer: params.approvalsReviewer,
             sandboxPolicy: params.sandboxPolicy,
+            summary: params.summary,
         }));
     }
     if (!child.stdin.destroyed) child.stdin.write(line + "\\n");
@@ -174,6 +175,7 @@ test("Given Codex publishes complete model settings and defaults to Full access,
             approvalPolicy: "never",
             approvalsReviewer: "user",
             sandboxPolicy: { type: "dangerFullAccess" },
+            summary: "auto",
         });
     } finally {
         await rm(directory, { force: true, recursive: true });

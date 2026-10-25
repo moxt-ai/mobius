@@ -2,6 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionNotification } from "@agentclientprotocol/sdk";
+import type { SessionEventPayload } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, it } from "vitest";
 import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import type { CodexAppServerClient } from "../../src/acp/harness/codex/app-server-client.ts";
@@ -9,6 +10,8 @@ import { reasoningText } from "../../src/acp/harness/codex/items.ts";
 import { CodexOwnedAcpAgent } from "../../src/acp/harness/codex/owned-agent.ts";
 import type { CodexSettings } from "../../src/acp/harness/codex/settings.ts";
 import { readCodexFullHistory } from "../../src/acp/native-history/codex/codex-history.ts";
+import { nativeHistoryEvents } from "../../src/acp/native-history/codex/native-history-events.ts";
+import type { SessionEventStore } from "../../src/acp/native-history/preview-contract.ts";
 
 it("Given Codex streams detailed reasoning and a summary, When Mobius forwards the turn, Then Thinking keeps the reasoning stream", async () => {
     const updates: SessionNotification["update"][] = [];
@@ -183,4 +186,59 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     } finally {
         await rm(directory, { force: true, recursive: true });
     }
+});
+
+it("Given Codex history contains reasoning, When Mobius materializes replay events, Then reasoning remains a Thinking chunk", () => {
+    const events: SessionEventPayload[] = [];
+    const eventStore = {
+        materialize: (_sessionId: string, _generationId: string, materialized: readonly SessionEventPayload[]) => {
+            events.push(...materialized);
+        },
+        page: () => ({}),
+    } as unknown as SessionEventStore;
+
+    nativeHistoryEvents(
+        "session",
+        "native-session",
+        {
+            messages: [
+                {
+                    activities: [
+                        {
+                            activityId: "reasoning-1",
+                            activityType: "reasoning",
+                            content: [],
+                            input: "",
+                            locations: [],
+                            name: "",
+                            output: "Detailed reasoning",
+                            sequence: 0,
+                            status: "completed",
+                            title: "Reasoning",
+                            toolKind: "",
+                        },
+                    ],
+                    content: [],
+                    role: "assistant",
+                    text: "",
+                },
+            ],
+            status: "available",
+            truncated: false,
+        },
+        50,
+        null,
+        eventStore,
+    );
+
+    expect(events).toEqual([
+        expect.objectContaining({
+            payload: expect.objectContaining({
+                content: { text: "Detailed reasoning", type: "text" },
+                messageId: "reasoning-1",
+                sessionUpdate: "agent_thought_chunk",
+            }),
+            type: "acp",
+        }),
+    ]);
 });
