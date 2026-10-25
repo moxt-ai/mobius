@@ -362,33 +362,9 @@ function decodeHistory(
                     text,
                 });
             } else if (historyItem.type === "agentMessage") {
-                if (historyItem.phase === "commentary") {
-                    if (historyItem.text.length > 0) {
-                        append({
-                            activities: [
-                                activity(historyItem.id ?? `reasoning-${sequence.toString()}`, "reasoning", sequence, {
-                                    input: "",
-                                    locations: [],
-                                    name: "",
-                                    output: historyItem.text,
-                                    status: "completed",
-                                    title: "Reasoning",
-                                    toolKind: "think",
-                                }),
-                            ],
-                            content: [],
-                            role: "assistant",
-                            text: "",
-                        });
-                        sequence += 1;
-                    }
-                    continue;
-                }
                 append({ activities: [], content: [], role: "assistant", text: historyItem.text });
             } else if (historyItem.type === "reasoning") {
-                const output = (historyItem.summary.length > 0 ? historyItem.summary : historyItem.content).join(
-                    "\n\n",
-                );
+                const output = historyItem.summary.join("\n\n");
                 if (output.length > 0) {
                     append({
                         activities: [

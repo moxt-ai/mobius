@@ -272,10 +272,12 @@ export function decodeThreadItem(value: unknown): ThreadItem | null {
     return decoded.success ? decoded.data : null;
 }
 
-/** Returns the bounded narration Codex exposes for a completed reasoning item. */
+/** Returns the bounded summary Codex exposes for a completed reasoning item. */
 export function reasoningText(item: ThreadItem): string | null {
     if (item.type !== "reasoning") {
         return null;
     }
-    return boundedParagraphs(item.summary.length > 0 ? item.summary : item.content, TOOL_OUTPUT_CHARACTER_LIMIT);
+    // `content` is the model's private chain of thought. Only the provider-authored summary is
+    // suitable for the ACP Thinking surface; an empty summary means there is nothing to expose.
+    return boundedParagraphs(item.summary, TOOL_OUTPUT_CHARACTER_LIMIT);
 }

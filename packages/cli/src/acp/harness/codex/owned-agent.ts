@@ -412,7 +412,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
             }
             return;
         }
-        if (method === "item/reasoning/summaryTextDelta" || method === "item/reasoning/textDelta") {
+        if (method === "item/reasoning/summaryTextDelta") {
             const decoded = reasoningTextDeltaParamsSchema.safeParse(params);
             if (
                 decoded.success &&
