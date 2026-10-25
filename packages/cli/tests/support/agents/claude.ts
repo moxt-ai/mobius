@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,13 +17,50 @@ export class ClaudeFixture implements AsyncDisposable {
     }
 
     static async create(provider: FakeAnthropicProvider): Promise<ClaudeFixture> {
+        return await ClaudeFixture.createWithAuthentication({
+            ANTHROPIC_API_KEY: FakeAnthropicProvider.apiKey,
+            ANTHROPIC_BASE_URL: provider.origin,
+            ANTHROPIC_MODEL: provider.model,
+        });
+    }
+
+    static async createExpiredOAuth(): Promise<ClaudeFixture> {
+        const fixture = await ClaudeFixture.createWithAuthentication({
+            ANTHROPIC_API_KEY: "",
+            ANTHROPIC_AUTH_TOKEN: "",
+            CLAUDE_CODE_OAUTH_TOKEN: "",
+        });
+        try {
+            const config = join(fixture.#directory, "claude");
+            await mkdir(config, { recursive: true });
+            await writeFile(
+                join(config, ".credentials.json"),
+                JSON.stringify({
+                    claudeAiOauth: {
+                        accessToken: "",
+                        refreshToken: "",
+                        expiresAt: 0,
+                        refreshTokenExpiresAt: 0,
+                        scopes: ["user:inference", "user:profile", "user:sessions:claude_code"],
+                        subscriptionType: "max",
+                    },
+                }),
+            );
+            return fixture;
+        } catch (cause) {
+            await fixture[Symbol.asyncDispose]();
+            throw cause;
+        }
+    }
+
+    private static async createWithAuthentication(
+        authentication: Readonly<Record<string, string>>,
+    ): Promise<ClaudeFixture> {
         const executable = await resolveTestExecutable("claude", "MOBIUS_TEST_CLAUDE_PATH");
         const directory = await mkdtemp(join(tmpdir(), "mobius-agent-daemon-claude-"));
         const missing = join(directory, "missing-agent");
         return new ClaudeFixture(directory, executable, {
-            ANTHROPIC_API_KEY: FakeAnthropicProvider.apiKey,
-            ANTHROPIC_BASE_URL: provider.origin,
-            ANTHROPIC_MODEL: provider.model,
+            ...authentication,
             CLAUDE_CONFIG_DIR: join(directory, "claude"),
             CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
             DISABLE_AUTOUPDATER: "1",
