@@ -272,10 +272,10 @@ export function decodeThreadItem(value: unknown): ThreadItem | null {
     return decoded.success ? decoded.data : null;
 }
 
-/** Returns the bounded narration Codex exposes for a completed reasoning item. */
+/** Returns the bounded reasoning Codex exposes for a completed reasoning item. */
 export function reasoningText(item: ThreadItem): string | null {
     if (item.type !== "reasoning") {
         return null;
     }
-    return boundedParagraphs(item.summary.length > 0 ? item.summary : item.content, TOOL_OUTPUT_CHARACTER_LIMIT);
+    return boundedParagraphs(item.content.length > 0 ? item.content : item.summary, TOOL_OUTPUT_CHARACTER_LIMIT);
 }
