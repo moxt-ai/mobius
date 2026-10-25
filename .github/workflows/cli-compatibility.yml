@@ -1,0 +1,82 @@
+name: Installed CLI compatibility
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - name: Pack the release once
+        run: pnpm --dir packages/cli pack --out "$RUNNER_TEMP/mobius-cli.tgz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobius-cli-release
+          path: ${{ runner.temp }}/mobius-cli.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  installed-release:
+    name: Installed CLI (${{ matrix.os }}, Node ${{ matrix.node }})
+    needs: pack
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: ['22.19.0', '22', '24.0.0', '24']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: mobius-cli-release
+          path: ${{ runner.temp }}/release
+      - name: Install the exact archive with engine checks
+        shell: bash
+        run: npm install --prefix "$RUNNER_TEMP/installed-cli" --engine-strict --ignore-scripts --no-audit --no-fund "$RUNNER_TEMP/release/mobius-cli.tgz"
+      - name: Exercise public APIs and the daemon lifecycle
+        env:
+          MOBIUS_INSTALL_DIRECTORY: ${{ runner.temp }}/installed-cli
+        run: node --test packages/cli/tests/release/installed-release.test.mjs
+
+  unsupported-node:
+    name: Unsupported Node diagnostic
+    needs: pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+      - uses: actions/download-artifact@v4
+        with:
+          name: mobius-cli-release
+          path: ${{ runner.temp }}/release
+      - name: Reproduce npm's default advisory engine check
+        run: npm install --prefix "$RUNNER_TEMP/installed-cli" --engine-strict=false --ignore-scripts --no-audit --no-fund "$RUNNER_TEMP/release/mobius-cli.tgz"
+      - name: Verify actionable startup rejection
+        env:
+          MOBIUS_INSTALL_DIRECTORY: ${{ runner.temp }}/installed-cli
+          MOBIUS_EXPECT_UNSUPPORTED: 'true'
+        run: node --test packages/cli/tests/release/installed-release.test.mjs

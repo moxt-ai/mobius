@@ -11,6 +11,7 @@ export async function packedRelease(
     version: string,
     broken: boolean,
     signal: AbortSignal,
+    options: { readonly node?: string; readonly smokeFailure?: boolean } = {},
 ): Promise<Buffer> {
     const root = join(directory, version);
     await mkdir(join(root, "dist"), { recursive: true });
@@ -26,7 +27,7 @@ export async function packedRelease(
     } else {
         await writeFile(
             join(root, "dist/cli.js"),
-            'console.log("Starting controlled release"); throw new Error("Controlled startup failure");',
+            `${options.smokeFailure ? "" : `if (process.argv.includes('--version')) { console.log('CLI: ${version}'); process.exit(0); }`} console.log("Starting controlled release"); throw new Error("Controlled startup failure");`,
         );
     }
     await writeFile(
@@ -37,6 +38,7 @@ export async function packedRelease(
             type: "module",
             bin: { mobius: "dist/cli.js" },
             files: ["dist"],
+            engines: { node: options.node ?? cliPackage.engines.node },
         }),
     );
     const npm = await findExecutableOnPath("npm", process.env);
