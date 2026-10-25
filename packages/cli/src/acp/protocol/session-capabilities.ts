@@ -48,3 +48,18 @@ export function normalizeAcpCapabilities(initialized: InitializeResponse): Sessi
         unstableForkSession: session?.fork != null,
     });
 }
+
+/** Session opening can restrict an Agent-wide capability once the access mode is known. */
+export function restrictAcpSessionCapabilities(
+    capabilities: SessionCapabilities,
+    response: unknown,
+): SessionCapabilities {
+    if (!isRecord(response) || !isRecord(response["_meta"])) {
+        return capabilities;
+    }
+    const steering = response["_meta"]["steering"];
+    if (!isRecord(steering) || steering["supported"] !== false) {
+        return capabilities;
+    }
+    return Object.freeze({ ...capabilities, steering: false });
+}

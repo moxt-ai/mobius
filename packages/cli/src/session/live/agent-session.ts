@@ -32,7 +32,11 @@ import {
     type NativeSessionPage,
     nativeSessionPageSchema,
 } from "../../acp/protocol/native-session.ts";
-import { normalizeAcpCapabilities, unsupportedSessionCapabilities } from "../../acp/protocol/session-capabilities.ts";
+import {
+    normalizeAcpCapabilities,
+    restrictAcpSessionCapabilities,
+    unsupportedSessionCapabilities,
+} from "../../acp/protocol/session-capabilities.ts";
 import {
     type SessionConfigProtocol,
     SessionConfigProtocolError,
@@ -384,6 +388,10 @@ export class AgentSession implements AcpClientHandler, AgentSessionRestore {
         );
     };
 
+    readonly restrictSessionCapabilities = (response: unknown): void => {
+        this.#capabilities = restrictAcpSessionCapabilities(this.#capabilities, response);
+    };
+
     readonly prepared = (): PreparedSession =>
         new PreparedSession(
             this.#agentName,
@@ -466,6 +474,7 @@ export class AgentSession implements AcpClientHandler, AgentSessionRestore {
                 );
                 await this.#updates.drained();
                 signal.throwIfAborted();
+                this.restrictSessionCapabilities(response);
                 const loaded = { history, kind: "loaded", response } satisfies LoadedSession;
                 this.#sessionLoad = loaded;
                 return loaded;

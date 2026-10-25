@@ -172,6 +172,7 @@ function userInputSchema(questions: readonly UserInputQuestion[]): unknown {
 
 /** Owns direct turns, their live notifications, and local approval requests. */
 export class CodexOwnedAcpAgent implements CodexSessionAgent {
+    readonly steeringSupported = true;
     readonly #context: OwnedAgentContext;
     readonly #appServer: CodexAppServerClient;
     readonly #settings: CodexSettings;

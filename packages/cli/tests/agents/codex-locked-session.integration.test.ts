@@ -15,7 +15,7 @@ import { CodexFixture } from "../support/agents/codex.ts";
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 
-test("Given another local Codex owns the Session lock, When Morty opens and prompts that Session, Then the daemon queues the message and returns its owner's reply without forking", async () => {
+test("Given desktop Codex owns the Session, When Morty imports it and receives stale steering, Then steering is unsupported and queued input completes without interrupting the owner", async () => {
     const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     let hold = false;
@@ -100,7 +100,10 @@ test("Given another local Codex owns the Session lock, When Morty opens and prom
                 if (decodeMessageKind(message) === "native.session.result") {
                     const result = decodeNativeSessionResult(message);
                     if (result.requestId === "open") {
-                        expect(result).toMatchObject({ action: "import", ready: { sessionId: id } });
+                        expect(result).toMatchObject({
+                            action: "import",
+                            ready: { sessionId: id, capabilities: { steering: false } },
+                        });
                         break;
                     }
                 }
@@ -113,6 +116,8 @@ test("Given another local Codex owns the Session lock, When Morty opens and prom
             await start("Local owner is still running");
             await entered.promise;
             const commandId = randomUUID();
+            const steeringCommandId = randomUUID();
+            let rejectedSteering = false;
             peer.send(
                 encodeSessionPromptCommand({
                     ...base,
@@ -129,8 +134,23 @@ test("Given another local Codex owns the Session lock, When Morty opens and prom
             let reply = "";
             for (;;) {
                 const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
-                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.started") {
-                    release.resolve();
+                if (
+                    event.type === "lifecycle-metadata" &&
+                    event.payload.kind === "prompt.started" &&
+                    event.payload.commandId === commandId
+                ) {
+                    peer.send(
+                        encodeSessionPromptCommand({
+                            ...base,
+                            kind: "session.prompt",
+                            commandId: steeringCommandId,
+                            prompt: "A stale client attempts steering",
+                            images: [],
+                            resources: [],
+                            disposition: SessionPromptDisposition.Steer,
+                            targetCommandId: commandId,
+                        }),
+                    );
                 }
                 if (
                     event.type === "acp" &&
@@ -139,17 +159,33 @@ test("Given another local Codex owns the Session lock, When Morty opens and prom
                 ) {
                     reply += event.payload.content.text;
                 }
-                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
-                    throw new Error(JSON.stringify(event));
+                if (
+                    event.type === "lifecycle-metadata" &&
+                    (event.payload.kind === "prompt.failed" || event.payload.kind === "prompt.failed-before-start")
+                ) {
+                    expect(event.payload.commandId).toBe(steeringCommandId);
+                    expect(event.payload.code).toBe("steering_unsupported");
+                    const running = await owner.request(
+                        "thread/read",
+                        { threadId: id, includeTurns: true },
+                        peer.signal,
+                    );
+                    expect(running).toMatchObject({
+                        thread: { turns: expect.arrayContaining([expect.objectContaining({ status: "inProgress" })]) },
+                    });
+                    rejectedSteering = true;
+                    release.resolve();
                 }
                 if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
                     expect(event.payload.commandId).toBe(commandId);
                     break;
                 }
             }
+            expect(rejectedSteering).toBe(true);
             expect(reply).toContain("LOCKED_SESSION_REPLY");
             const history = await owner.request("thread/read", { threadId: id, includeTurns: true }, peer.signal);
             expect(JSON.stringify(history)).toContain("Queued from Morty");
+            expect(JSON.stringify(history)).not.toContain("A stale client attempts steering");
         } finally {
             release.resolve();
             owner.detach();

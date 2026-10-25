@@ -175,6 +175,7 @@ export async function restoreSession(
         session.setNativeHistoryOwnership({ kind: "fresh-session" });
         lifecycleResponse = created;
     }
+    session.restrictSessionCapabilities(lifecycleResponse);
     session.setConfigOptions(session.sessionConfigProtocol.normalizeLifecycle(lifecycleResponse));
     if (stored instanceof FoundStoredSession && session.restored) {
         await session.restoreStoredConfigurations(stored.session, signal);
