@@ -198,9 +198,14 @@ jobs:
         run: npm install --global "npm@$NPM_MAJOR" && npm --version
       - run: pnpm test:npm-compatibility
 
+  cli-compatibility:
+    needs: changes
+    if: needs.changes.outputs.docs-only == 'false'
+    uses: ./.github/workflows/cli-compatibility.yml
+
   validate:
     if: always()
-    needs: [changes, checks, real-agents, npm-compatibility, package-versions]
+    needs: [changes, checks, real-agents, npm-compatibility, package-versions, cli-compatibility]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -212,12 +217,15 @@ jobs:
           REAL_AGENTS_RESULT: ${{ needs.real-agents.result }}
           NPM_COMPATIBILITY_RESULT: ${{ needs.npm-compatibility.result }}
           PACKAGE_VERSIONS_RESULT: ${{ needs.package-versions.result }}
+          CLI_COMPATIBILITY_RESULT: ${{ needs.cli-compatibility.result }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
           [[ "$CHANGES_RESULT" == "success" ]]
           if [[ "$DOCS_ONLY" == "true" ]]; then
+            [[ "$CLI_COMPATIBILITY_RESULT" == "skipped" ]]
             [[ "$CHECKS_RESULT" == "skipped" && "$REAL_AGENTS_RESULT" == "skipped" && "$NPM_COMPATIBILITY_RESULT" == "skipped" && "$PACKAGE_VERSIONS_RESULT" == "skipped" ]]
           else
+            [[ "$CLI_COMPATIBILITY_RESULT" == "success" ]]
             [[ "$DOCS_ONLY" == "false" && "$CHECKS_RESULT" == "success" && "$REAL_AGENTS_RESULT" == "success" && "$NPM_COMPATIBILITY_RESULT" == "success" ]]
             # Pushes and manual runs have no pull request whose version bump to check.
             if [[ "$EVENT_NAME" == "pull_request" || "$EVENT_NAME" == "merge_group" ]]; then

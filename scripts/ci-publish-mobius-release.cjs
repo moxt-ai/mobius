@@ -1,7 +1,5 @@
 const { spawnSync } = require("node:child_process");
-const { mkdtempSync } = require("node:fs");
-const { tmpdir } = require("node:os");
-const { join, resolve } = require("node:path");
+const { resolve } = require("node:path");
 
 const release = process.argv[2];
 const runnerTemp = process.env.RUNNER_TEMP;
@@ -17,19 +15,11 @@ if (release !== "cli" && definitions[release] === undefined) {
 let archive;
 let cwd;
 if (release === "cli") {
-    // `npm publish` does not apply every `publishConfig` override (it dropped `types`/`exports`),
-    // so publishing the CLI straight from its directory ships the workspace-source `exports`. Pack
-    // it with `pnpm pack`, which does apply `publishConfig`, and publish the resulting tarball.
-    archive = resolve(mkdtempSync(join(tmpdir(), "mobius-cli-release-")), "mobius-cli.tgz");
-    const packed = spawnSync("pnpm", ["--dir", "packages/cli", "pack", "--out", archive], {
-        stdio: "inherit",
-    });
-    if (packed.error) {
-        throw packed.error;
+    // Publish exactly the archive that passed the installed-release matrix.
+    if (runnerTemp === undefined) {
+        throw new Error("Runner temporary directory is unavailable");
     }
-    if (packed.status !== 0) {
-        throw new Error(`pnpm pack exited with status ${packed.status}`);
-    }
+    archive = resolve(runnerTemp, "mobius-cli.tgz");
     cwd = "packages/cli";
 } else {
     const definition = definitions[release];
