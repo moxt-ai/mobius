@@ -1,5 +1,6 @@
 import { setTimeout } from "node:timers/promises";
 import { MobiusRuntimeEngine } from "../../runtime/engine.ts";
+import { RuntimeTurnActivity } from "../../session/turn/runtime-turn-activity.ts";
 import { acquireManagerLock } from "../../storage/daemon/manager-lock.ts";
 import { isNodeError } from "../../util/node-error.ts";
 import { sendLocalRequest } from "../control/local-client.ts";
@@ -82,6 +83,7 @@ async function runWorkerRuntime(
     // The lock makes this process the only worker, and therefore the only
     // writer of the worker's rejection log; buffered startup entries flush now.
     rejectionGuard.bindStateDirectory(control.stateDirectory);
+    const turnActivity = new RuntimeTurnActivity();
     const active = new Map<
         string,
         {
@@ -120,6 +122,7 @@ async function runWorkerRuntime(
                 // bug report taken through this Runtime reads them from there.
                 const engine = new MobiusRuntimeEngine(paired.config, {
                     processLogsDirectory: control.stateDirectory,
+                    turnActivity,
                     reportUpgradeAvailability: reportDaemonUpgradeAvailability,
                 });
                 const completion = engine
@@ -170,7 +173,7 @@ async function runWorkerRuntime(
             async () => {
                 combined.throwIfAborted();
                 await recordCurrentData(version, combined);
-                upgrades = runDaemonReleaseUpgrades(combined);
+                upgrades = runDaemonReleaseUpgrades(combined, turnActivity);
                 if (process.connected) {
                     process.send?.({ kind: "worker-ready", version }, () => undefined);
                 }

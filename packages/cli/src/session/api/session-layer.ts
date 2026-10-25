@@ -19,6 +19,7 @@ import { resolveMaxAcpProcesses } from "../process/agent-process-pool.ts";
 import { PromptLifecycle } from "../prompt/prompt-lifecycle.ts";
 import { SqliteSessionStore } from "../record/session-store.ts";
 import { ExecutionReceipts } from "../turn/execution-receipts.ts";
+import type { RuntimeTurnActivity } from "../turn/runtime-turn-activity.ts";
 import { SessionTurns } from "../turn/session-turns.ts";
 import { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
 import type { ResolveAgent, SessionEventSink } from "./session-api.ts";
@@ -48,6 +49,7 @@ export class SessionLayerObserver extends NullSessionObserver {
 
 /** What the session layer needs to wire itself: the runtime's identity, its agent source, and its sink. */
 export interface SessionLayerOptions {
+    readonly turnActivity?: RuntimeTurnActivity;
     readonly bindingId: string;
     readonly channelId: string;
     readonly defaultWorkspace: string;
@@ -76,7 +78,7 @@ export function buildSessionLayer(options: SessionLayerOptions) {
     const sessionStore = new SqliteSessionStore(new AcpSessionTable(sessionDatabase), events);
     const externalContent = new LocalExternalContentStore(stateDirectory);
     const operations = new ExecutionReceipts();
-    const activeSessions = new SessionTurns(operations);
+    const activeSessions = new SessionTurns(operations, options.turnActivity);
     const directories = new WorkspaceDirectoryService(bindingId, defaultWorkspace);
     const manager = new SessionManager({
         observer: new SessionLayerObserver((event) => eventProjection.record(event), sink.publishInfo),

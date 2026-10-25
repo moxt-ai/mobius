@@ -4,6 +4,7 @@ import {
     discoverLocalAgentInventory,
     supportedLocalAgentSpecifications,
 } from "../agent/discovery/discover-local-agents.ts";
+import type { RuntimeTurnActivity } from "../session/turn/runtime-turn-activity.ts";
 import { ensureCanonicalDirectory } from "../storage/files/local-files.ts";
 import { readStateDirectory } from "../storage/state-directory.ts";
 import { publishAgentCatalog } from "./catalog/publish-agent-catalog.ts";
@@ -159,6 +160,7 @@ export class MobiusRuntimeEngine {
         this.#state = new RunningMobiusRuntimeState();
         try {
             await runRuntime(this.#config, signal, undefined, {
+                ...(this.#options.turnActivity === undefined ? {} : { turnActivity: this.#options.turnActivity }),
                 ...(this.#options.onConnectionStatus === undefined
                     ? {}
                     : { onConnectionStatus: this.#options.onConnectionStatus }),
@@ -176,6 +178,7 @@ export class MobiusRuntimeEngine {
 }
 
 export interface MobiusRuntimeEngineOptions {
+    readonly turnActivity?: RuntimeTurnActivity;
     readonly onConnectionStatus?: (status: "online" | "reconnecting") => void;
     /** Reports a finished daemon upgrade to the relay. The daemon worker supplies it. */
     readonly reportUpgradeAvailability?: (

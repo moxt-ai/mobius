@@ -49,6 +49,12 @@ export class RuntimeSessionEventPublisher implements SessionEventSink {
         this.dropPendingEvents();
     };
 
+    readonly flush = (): void => {
+        if (this.#socket !== null) {
+            this.flushEvents(this.#socket);
+        }
+    };
+
     readonly publishOperationFailure = (sessionId: string, requestId: string, code: string, message: string): void => {
         this.#send({ kind: "session.operation.failed", sessionId, requestId, code, message });
     };

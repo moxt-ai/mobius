@@ -236,7 +236,7 @@ export class FakeAnthropicProvider implements AsyncDisposable {
         model: string,
         answer: string,
         options: {
-            readonly beforeFirstText?: () => Promise<void>;
+            readonly beforeFirstText?: (scenario: FakeProviderScenario) => Promise<void>;
             readonly disconnectsBeforeSuccess?: number;
             readonly readPath?: string;
             readonly subagent?: SubagentScript;
@@ -289,7 +289,7 @@ export class FakeAnthropicProvider implements AsyncDisposable {
                     : { type: "tool_use", id: tool.id, name: tool.name, input: tool.input };
             const stopReason = tool === undefined ? "end_turn" : "tool_use";
             if (tool === undefined) {
-                await options.beforeFirstText?.();
+                await options.beforeFirstText?.(scenario);
             }
             if (payload["stream"] === true) {
                 sendStream(response, model, content, responseChunks(selectedAnswer, scenario), stopReason);

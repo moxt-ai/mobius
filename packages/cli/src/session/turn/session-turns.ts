@@ -1,6 +1,7 @@
 import type { NativeSessionResult, SessionLiveEvent, SessionPromptCommand } from "@moxt-ai/mobius-sdk/protocol";
 import type { ActiveRuntimeTurn, RecordedSessionEvent } from "./active-turn.ts";
 import type { ExecutionReceipts } from "./execution-receipts.ts";
+import { RuntimeTurnActivity } from "./runtime-turn-activity.ts";
 import type { SessionAdmission } from "./session-execution.ts";
 import { SessionExecutionState } from "./session-execution.ts";
 
@@ -10,10 +11,14 @@ type QueuedTurnSnapshot = Extract<NativeSessionResult, { readonly action: "activ
 export class SessionTurns {
     readonly #bySessionId = new Map<string, SessionExecutionState>();
     readonly #operations: ExecutionReceipts;
+    readonly #activity: RuntimeTurnActivity;
 
-    constructor(operations: ExecutionReceipts) {
+    constructor(operations: ExecutionReceipts, activity = new RuntimeTurnActivity()) {
         this.#operations = operations;
+        this.#activity = activity;
     }
+
+    readonly acceptsPrompts = (): boolean => this.#activity.acceptsPrompts();
 
     readonly session = (sessionId: string): SessionExecutionState => {
         let session = this.#bySessionId.get(sessionId);
@@ -27,12 +32,16 @@ export class SessionTurns {
     readonly get = (commandId: string, sessionId: string): ActiveRuntimeTurn | undefined =>
         this.#bySessionId.get(sessionId)?.get(commandId);
 
-    readonly start = (command: SessionPromptCommand, attemptId: string): ActiveRuntimeTurn =>
-        this.session(command.sessionId).start(command, attemptId);
+    readonly start = (command: SessionPromptCommand, attemptId: string): ActiveRuntimeTurn => {
+        const turn = this.session(command.sessionId).start(command, attemptId);
+        this.#activity.start(turn);
+        return turn;
+    };
 
     readonly finish = (turn: ActiveRuntimeTurn): void => {
         this.#bySessionId.get(turn.command.sessionId)?.finish(turn);
         this.sweep();
+        this.#activity.finish(turn);
     };
 
     readonly recordEvent = (event: RecordedSessionEvent): RecordedSessionEvent =>

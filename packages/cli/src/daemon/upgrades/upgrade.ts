@@ -2,9 +2,11 @@ import { randomUUID } from "node:crypto";
 import { setInterval, setTimeout } from "node:timers/promises";
 import { decodeIdentifier, type RuntimeUpgradeResult } from "@moxt-ai/mobius-sdk/protocol";
 import packageMetadata from "../../../package.json" with { type: "json" };
+import { RuntimeDiagnosticLog } from "../../runtime/observability/diagnostic-log.ts";
+import type { RuntimeTurnActivity } from "../../session/turn/runtime-turn-activity.ts";
 import { isNodeError } from "../../util/node-error.ts";
 import { sendLocalRequest } from "../control/local-client.ts";
-import { type DaemonReleaseSwitchState, lifecycleResponse } from "../control/protocol.ts";
+import { type DaemonReleaseSwitchState, lifecycleResponse, type WorkerLaunch } from "../control/protocol.ts";
 import { readSwitchStatus } from "../control/switch-status.ts";
 import { openMobiusControlInstallation } from "../pairing/pair-local-machine.ts";
 import { DaemonReleaseUpgradeError, findNewDaemonReleaseVersion, installDaemonReleaseVersion } from "./package.ts";
@@ -51,11 +53,11 @@ export async function reportDaemonUpgradeAvailability(
 
 // One loop belongs to the worker, regardless of how many Relay connections it owns.
 // Await each attempt so checks and installations never overlap.
-export async function runDaemonReleaseUpgrades(signal: AbortSignal): Promise<void> {
+export async function runDaemonReleaseUpgrades(signal: AbortSignal, activity: RuntimeTurnActivity): Promise<void> {
     try {
         for await (const _tick of setInterval(3_600_000, undefined, { signal })) {
             try {
-                await checkDaemonReleaseUpgrade(signal);
+                await checkDaemonReleaseUpgrade(signal, activity);
             } catch (cause) {
                 signal.throwIfAborted();
                 console.error("Daemon npm upgrade check failed", cause);
@@ -89,6 +91,14 @@ export async function requestDaemonReleaseUpgrade(
         return { kind: "current" };
     }
     const launch = await installDaemonReleaseVersion(version, signal);
+    return await requestInstalledDaemonReleaseSwitch(stateDirectory, launch, signal);
+}
+
+async function requestInstalledDaemonReleaseSwitch(
+    stateDirectory: string,
+    launch: WorkerLaunch,
+    signal: AbortSignal,
+): Promise<Extract<DaemonReleaseUpgradeAttempt, { kind: "requested" }>> {
     const id = randomUUID();
     const response = lifecycleResponse.parse(
         await sendLocalRequest(stateDirectory, "manager", { kind: "switch", id, context: "npm", launch }, signal),
@@ -99,7 +109,7 @@ export async function requestDaemonReleaseUpgrade(
     if (response.kind !== "switching") {
         throw new DaemonReleaseUpgradeError("manager_incompatible", "The manager does not support daemon switching");
     }
-    return { kind: "requested", id, version };
+    return { kind: "requested", id, version: launch.version };
 }
 
 // Wait until the manager settles the switch requested under the given id. The
@@ -142,7 +152,7 @@ export async function awaitDaemonReleaseSwitch(
     return outcome;
 }
 
-async function checkDaemonReleaseUpgrade(signal: AbortSignal): Promise<void> {
+async function checkDaemonReleaseUpgrade(signal: AbortSignal, activity: RuntimeTurnActivity): Promise<void> {
     const control = await openMobiusControlInstallation(signal, process.env);
     const transition = await readSwitchStatus(control.stateDirectory, signal);
     if (
@@ -151,5 +161,31 @@ async function checkDaemonReleaseUpgrade(signal: AbortSignal): Promise<void> {
     ) {
         return;
     }
-    await requestDaemonReleaseUpgrade(control.stateDirectory, packageMetadata.version, signal);
+    const version = await findNewDaemonReleaseVersion(packageMetadata.version, signal);
+    if (version === null) {
+        return;
+    }
+    const launch = await installDaemonReleaseVersion(version, signal);
+    if (activity.count() > 0) {
+        new RuntimeDiagnosticLog(control.stateDirectory).record(
+            `Mobius daemon diagnostic ${JSON.stringify({
+                timestamp: new Date().toISOString(),
+                event: "daemon_upgrade_deferred",
+                version,
+                activeTurns: activity.count(),
+            })}`,
+        );
+    }
+    using _reservation = await activity.reserveWhenIdle(signal);
+    signal.throwIfAborted();
+    await requestInstalledDaemonReleaseSwitch(control.stateDirectory, launch, signal);
+    // The manager now owns the switch. Hold admission until it stops this worker;
+    // releasing it after the RPC would let a new prompt race the shutdown.
+    await new Promise<void>((resolve) => {
+        if (signal.aborted) {
+            resolve();
+        } else {
+            signal.addEventListener("abort", () => resolve(), { once: true });
+        }
+    });
 }

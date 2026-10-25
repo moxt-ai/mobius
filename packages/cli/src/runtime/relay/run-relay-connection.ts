@@ -190,6 +190,8 @@ export async function runRelayConnection({
             };
 
             const stop = (): void => {
+                // A planned upgrade can follow the last completion before the batch timer fires.
+                publisher.flush();
                 diagnostics.connectionClosed(connectionEpoch, 1000, "Daemon stopped", "daemon_stop");
                 closeRelaySocket(socket, 1000, "Daemon stopped");
                 resolveConnection();
