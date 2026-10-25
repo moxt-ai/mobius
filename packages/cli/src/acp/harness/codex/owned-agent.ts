@@ -176,7 +176,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
     readonly #context: OwnedAgentContext;
     readonly #appServer: CodexAppServerClient;
     readonly #settings: CodexSettings;
-    readonly #streamedReasoningItemIds = new Set<string>();
+    readonly #streamedReasoningSources = new Map<string, "summary" | "content">();
     readonly #agentMessages = new Map<string, "started" | "streaming">();
     #turn: ActiveTurn | null = null;
     #nativeTurnId: string | null = null;
@@ -412,7 +412,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
             }
             return;
         }
-        if (method === "item/reasoning/summaryTextDelta") {
+        if (method === "item/reasoning/summaryTextDelta" || method === "item/reasoning/textDelta") {
             const decoded = reasoningTextDeltaParamsSchema.safeParse(params);
             if (
                 decoded.success &&
@@ -421,7 +421,12 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
                 decoded.data.turnId === this.#turn.turn.id &&
                 decoded.data.delta.length > 0
             ) {
-                this.#streamedReasoningItemIds.add(decoded.data.itemId);
+                const source = method === "item/reasoning/textDelta" ? "content" : "summary";
+                const previous = this.#streamedReasoningSources.get(decoded.data.itemId);
+                this.#streamedReasoningSources.set(
+                    decoded.data.itemId,
+                    previous === "content" || source === "content" ? "content" : "summary",
+                );
                 await this.#enqueue(async () => {
                     await this.#context.emit({
                         content: { text: decoded.data.delta, type: "text" },
@@ -504,8 +509,17 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
         }
         const reasoning = reasoningText(item);
         if (reasoning !== null) {
-            const streamed = method === "item/completed" && this.#streamedReasoningItemIds.delete(item.id);
-            if (method === "item/completed" && reasoning.length > 0 && !streamed) {
+            const streamedSource =
+                method === "item/completed" ? this.#streamedReasoningSources.get(item.id) : undefined;
+            if (method === "item/completed") {
+                this.#streamedReasoningSources.delete(item.id);
+            }
+            const needsCompletedContent =
+                method === "item/completed" &&
+                reasoning.length > 0 &&
+                (streamedSource === undefined ||
+                    (streamedSource === "summary" && item.type === "reasoning" && item.content.length > 0));
+            if (needsCompletedContent) {
                 await this.#enqueue(async () => {
                     await this.#context.emit({
                         content: { text: reasoning, type: "text" },
@@ -682,7 +696,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
         // response arrives, and a completion for an unarmed turn would be lost.
         const turn: ActiveTurn = { completion, turn: { id: "" } };
         this.#agentMessages.clear();
-        this.#streamedReasoningItemIds.clear();
+        this.#streamedReasoningSources.clear();
         this.#turn = turn;
         this.#nativeTurnId = null;
         try {
@@ -712,7 +726,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
             if (this.#turn === turn) {
                 this.#turn = null;
                 this.#agentMessages.clear();
-                this.#streamedReasoningItemIds.clear();
+                this.#streamedReasoningSources.clear();
             }
         }
     };

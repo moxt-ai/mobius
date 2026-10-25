@@ -364,7 +364,9 @@ function decodeHistory(
             } else if (historyItem.type === "agentMessage") {
                 append({ activities: [], content: [], role: "assistant", text: historyItem.text });
             } else if (historyItem.type === "reasoning") {
-                const output = historyItem.summary.join("\n\n");
+                const output = (historyItem.content.length > 0 ? historyItem.content : historyItem.summary).join(
+                    "\n\n",
+                );
                 if (output.length > 0) {
                     append({
                         activities: [
