@@ -1,4 +1,4 @@
-import { getSessionMessages, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
+import { getSessionMessages, importSessionToStore, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { withDeadline, withEnvironment } from "./utils.js";
 
 const SESSION_MESSAGES_TIMEOUT_MILLISECONDS = 30_000;
@@ -18,6 +18,46 @@ export function getEnvironmentSessionMessages(
     signal: AbortSignal,
 ): Promise<readonly SessionMessage[]> {
     return withEnvironment(environment, () =>
-        withDeadline(signal, SESSION_MESSAGES_TIMEOUT_MILLISECONDS, () => getSessionMessages(sessionId)),
+        withDeadline(signal, SESSION_MESSAGES_TIMEOUT_MILLISECONDS, async () => {
+            const messages = await getSessionMessages(sessionId);
+            if (
+                !messages.some(
+                    ({ type, message }) =>
+                        type === "assistant" &&
+                        typeof message === "object" &&
+                        message !== null &&
+                        "model" in message &&
+                        message.model === "<synthetic>",
+                )
+            ) {
+                return messages;
+            }
+            // The SDK's message projection omits the structured error category.
+            // Read that metadata through its transcript API; keep ordering and
+            // conversation-chain selection in getSessionMessages, and never
+            // classify a diagnostic by its human-readable text.
+            const authenticationFailures = new Set<string>();
+            await importSessionToStore(
+                sessionId,
+                {
+                    append: async (_key, entries) => {
+                        signal.throwIfAborted();
+                        for (const entry of entries) {
+                            if (
+                                entry.type === "assistant" &&
+                                entry["error"] === "authentication_failed" &&
+                                typeof entry.uuid === "string"
+                            ) {
+                                authenticationFailures.add(entry.uuid);
+                            }
+                        }
+                    },
+                    load: async () => null,
+                },
+                { includeSubagents: false },
+            );
+            signal.throwIfAborted();
+            return messages.filter((message) => !authenticationFailures.has(message.uuid));
+        }),
     );
 }
