@@ -6,6 +6,20 @@ import type { SessionRecovery } from "../api/session-api.ts";
 import { FoundStoredSession, StoredSession } from "../record/session-store.ts";
 import type { AgentSessionRestore } from "./agent-session-restore.ts";
 
+function hasMethodNotFoundCode(cause: unknown): boolean {
+    const visited = new Set<unknown>();
+    let current: unknown = cause;
+    while ((current instanceof Error || (typeof current === "object" && current !== null)) && !visited.has(current)) {
+        visited.add(current);
+        const code = Reflect.get(current, "code");
+        if (code === -32601 || code === "METHOD_NOT_FOUND" || code === "method_not_found") {
+            return true;
+        }
+        current = current instanceof Error ? current.cause : undefined;
+    }
+    return false;
+}
+
 /**
  * Decides how the conversation is established and performs it: fork the native session,
  * restore the stored one (session/load or session/resume), or start a new one. The session
@@ -137,7 +151,7 @@ export async function restoreSession(
                 );
             } catch (cause) {
                 signal.throwIfAborted();
-                if (cause instanceof AcpExecutionError && cause.code !== "acp_agent_error") {
+                if (cause instanceof AcpExecutionError && !hasMethodNotFoundCode(cause)) {
                     throw cause;
                 }
                 throw new AcpExecutionError(
