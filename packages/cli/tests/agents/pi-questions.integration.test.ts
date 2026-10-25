@@ -419,7 +419,7 @@ test("Given real Pi asks a question before a daemon disconnect, When the daemon 
     }`,
     );
     await withRealDaemon(new PiAgentSpecification(), agent.environment, async (peer) => {
-        sendQuestionPrompt(peer, peer.sessionId, prompt);
+        const interruptedCommandId = sendQuestionPrompt(peer, peer.sessionId, prompt);
         let interactionId = "";
         for (;;) {
             const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
@@ -433,6 +433,7 @@ test("Given real Pi asks a question before a daemon disconnect, When the daemon 
         }
         await peer.restart();
         const commandId = sendQuestionPrompt(peer, peer.sessionId, "Continue after reconnect without asking again");
+        let interrupted = false;
         let reply = "";
         for (;;) {
             const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
@@ -447,7 +448,9 @@ test("Given real Pi asks a question before a daemon disconnect, When the daemon 
                 throw new Error("The interrupted question was replayed");
             }
             if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
-                throw new Error(JSON.stringify(event));
+                expect(event.payload.commandId).toBe(interruptedCommandId);
+                expect(event.payload.code).toBe("runtime_restarted");
+                interrupted = true;
             }
             if (
                 event.type === "lifecycle-metadata" &&
@@ -457,6 +460,7 @@ test("Given real Pi asks a question before a daemon disconnect, When the daemon 
                 break;
             }
         }
+        expect(interrupted).toBe(true);
         expect(reply).toContain("PI_RECONNECTED");
         peer.send(
             encodeSessionElicitationRespondCommand({
