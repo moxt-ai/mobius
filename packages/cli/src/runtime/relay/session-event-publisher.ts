@@ -13,6 +13,7 @@ import type { SessionEventSink } from "../../session/api/session-api.ts";
 import type { ScheduledTask, Timer } from "../../util/timer.ts";
 
 const MAX_BUFFERED_BYTES = 32 * 1024 * 1024;
+const MAX_PENDING_BYTES = 32 * 1024 * 1024;
 const MAX_EVENT_BATCH_BYTES = 1024 * 1024;
 const MAX_FRAME_BYTES = 8 * 1024 * 1024;
 // Browser-compatible WebSocket clients may initiate only 1000 or application close codes.
@@ -20,12 +21,23 @@ const LOCAL_BACKPRESSURE_CLOSE_CODE = 4009;
 const EMPTY_ENVELOPE_BYTES = Buffer.byteLength(JSON.stringify({ events: [], kind: SESSION_EVENT_KIND }));
 export const SESSION_EVENT_BATCH_WINDOW_MILLISECONDS = 100;
 
-/** Live delivery is best-effort. Recovery snapshots are owned by the daemon's local Session cache. */
+type PublisherConnection =
+    | { readonly kind: "disconnected" }
+    | { readonly kind: "connected"; readonly socket: WebSocket }
+    | { readonly kind: "closed" };
+
+interface PendingBatch {
+    readonly events: SessionLiveEvent[];
+    bytes: number;
+}
+
+/** Keeps unsent output in bounded memory across reconnects. Sent events are never replayed. */
 export class RuntimeSessionEventPublisher implements SessionEventSink {
-    #pendingEvents: SessionLiveEvent[] = [];
-    #pendingBytes = EMPTY_ENVELOPE_BYTES;
+    readonly #pending: PendingBatch[] = [];
+    #pendingBytes = 0;
+    #overflowReported = false;
     #pendingTask: ScheduledTask | null = null;
-    #socket: WebSocket | null = null;
+    #connection: PublisherConnection = { kind: "disconnected" };
     readonly #timer: Timer;
 
     constructor(timer: Timer) {
@@ -33,25 +45,31 @@ export class RuntimeSessionEventPublisher implements SessionEventSink {
     }
 
     readonly connect = (socket: WebSocket): void => {
-        this.dropPendingEvents();
-        this.#socket = socket;
+        if (this.#connection.kind === "closed") {
+            return;
+        }
+        this.#connection = { kind: "connected", socket };
+        // Hand off the unsent tail before a new command can publish newer events.
+        this.flushEvents(socket);
     };
 
     readonly disconnect = (socket: WebSocket): void => {
-        if (this.#socket === socket) {
-            this.#socket = null;
-            this.dropPendingEvents();
+        if (this.#connection.kind === "connected" && this.#connection.socket === socket) {
+            this.#connection = { kind: "disconnected" };
+            this.cancelFlush();
         }
     };
 
     readonly close = (): void => {
-        this.#socket = null;
-        this.dropPendingEvents();
+        this.#connection = { kind: "closed" };
+        this.cancelFlush();
+        this.#pending.length = 0;
+        this.#pendingBytes = 0;
     };
 
     readonly flush = (): void => {
-        if (this.#socket !== null) {
-            this.flushEvents(this.#socket);
+        if (this.#connection.kind === "connected") {
+            this.flushEvents(this.#connection.socket);
         }
     };
 
@@ -63,10 +81,11 @@ export class RuntimeSessionEventPublisher implements SessionEventSink {
     readonly publishClosed = (event: SessionCloseNoticeEvent): void => this.#send(event);
 
     readonly #send = (message: DaemonToServiceMessage): void => {
-        const socket = this.#socket;
-        if (socket === null || socket.readyState !== WebSocket.OPEN) {
+        const connection = this.#connection;
+        if (connection.kind !== "connected" || connection.socket.readyState !== WebSocket.OPEN) {
             return;
         }
+        const socket = connection.socket;
         const encoded = encodeDaemonToServiceMessage(message);
         if (socket.bufferedAmount + Buffer.byteLength(encoded, "utf8") > MAX_BUFFERED_BYTES) {
             socket.close(LOCAL_BACKPRESSURE_CLOSE_CODE, "Live event transport overloaded");
@@ -80,8 +99,7 @@ export class RuntimeSessionEventPublisher implements SessionEventSink {
     };
 
     readonly publish = (event: SessionLiveEvent): void => {
-        const socket = this.#socket;
-        if (socket === null || socket.readyState !== WebSocket.OPEN) {
+        if (this.#connection.kind === "closed") {
             return;
         }
         const bytes = Buffer.byteLength(JSON.stringify(event), "utf8") + 1;
@@ -94,15 +112,41 @@ export class RuntimeSessionEventPublisher implements SessionEventSink {
             });
             return;
         }
-        if (this.#pendingEvents.length > 0 && this.#pendingBytes + bytes > MAX_EVENT_BATCH_BYTES) {
-            this.flushEvents(socket);
-            if (socket.readyState !== WebSocket.OPEN) {
-                return;
+        let batch = this.#pending.at(-1);
+        const newBatch =
+            batch === undefined ||
+            batch.events.length >= SESSION_EVENT_BATCH_MAX_SIZE ||
+            batch.bytes + bytes > MAX_EVENT_BATCH_BYTES;
+        const additionalBytes = bytes + (newBatch ? EMPTY_ENVELOPE_BYTES : 0);
+        if (this.#pendingBytes + additionalBytes > MAX_PENDING_BYTES) {
+            if (!this.#overflowReported) {
+                this.#overflowReported = true;
+                console.warn("Live Session output exceeded the pending buffer limit", {
+                    code: "live_event_buffer_full",
+                    sessionId: event.sessionId,
+                    eventId: event.eventId,
+                    maximumBytes: MAX_PENDING_BYTES,
+                });
             }
+            return;
         }
-        this.#pendingEvents.push(event);
-        this.#pendingBytes += bytes;
-        if (this.#pendingEvents.length >= SESSION_EVENT_BATCH_MAX_SIZE || this.#pendingBytes >= MAX_EVENT_BATCH_BYTES) {
+        if (batch === undefined || newBatch) {
+            batch = { events: [], bytes: EMPTY_ENVELOPE_BYTES };
+            this.#pending.push(batch);
+        }
+        batch.events.push(event);
+        batch.bytes += bytes;
+        this.#pendingBytes += additionalBytes;
+        const connection = this.#connection;
+        if (connection.kind !== "connected" || connection.socket.readyState !== WebSocket.OPEN) {
+            return;
+        }
+        const socket = connection.socket;
+        if (
+            this.#pending.length > 1 ||
+            batch.events.length >= SESSION_EVENT_BATCH_MAX_SIZE ||
+            batch.bytes >= MAX_EVENT_BATCH_BYTES
+        ) {
             this.flushEvents(socket);
             return;
         }
@@ -112,31 +156,37 @@ export class RuntimeSessionEventPublisher implements SessionEventSink {
         );
     };
 
-    private readonly dropPendingEvents = (): void => {
+    private readonly cancelFlush = (): void => {
         this.#pendingTask?.cancel();
         this.#pendingTask = null;
-        this.#pendingEvents = [];
-        this.#pendingBytes = EMPTY_ENVELOPE_BYTES;
     };
 
     private readonly flushEvents = (socket: WebSocket): void => {
-        this.#pendingTask?.cancel();
-        this.#pendingTask = null;
-        const events = this.#pendingEvents;
-        this.#pendingEvents = [];
-        this.#pendingBytes = EMPTY_ENVELOPE_BYTES;
-        if (events.length === 0 || this.#socket !== socket || socket.readyState !== WebSocket.OPEN) {
+        this.cancelFlush();
+        const connection = this.#connection;
+        if (connection.kind !== "connected" || connection.socket !== socket || socket.readyState !== WebSocket.OPEN) {
             return;
         }
-        const encoded = encodeDaemonToServiceMessage({ events, kind: SESSION_EVENT_KIND });
-        if (socket.bufferedAmount + Buffer.byteLength(encoded, "utf8") > MAX_BUFFERED_BYTES) {
-            socket.close(LOCAL_BACKPRESSURE_CLOSE_CODE, "Live event transport overloaded");
-            return;
+        let attempted = 0;
+        for (const batch of this.#pending) {
+            const encoded = encodeDaemonToServiceMessage({ events: batch.events, kind: SESSION_EVENT_KIND });
+            if (socket.bufferedAmount + Buffer.byteLength(encoded, "utf8") > MAX_BUFFERED_BYTES) {
+                socket.close(LOCAL_BACKPRESSURE_CLOSE_CODE, "Live event transport overloaded");
+                break;
+            }
+            // Once handed to the socket, a batch cannot be safely resent without acknowledgements.
+            attempted += 1;
+            this.#pendingBytes -= batch.bytes;
+            try {
+                socket.send(encoded);
+            } catch {
+                console.warn("Live Session output could not be sent", { code: "live_event_send_failed" });
+                break;
+            }
         }
-        try {
-            socket.send(encoded);
-        } catch {
-            // Socket liveness owns reconnection. Missed events are recovered from the local cache.
+        this.#pending.splice(0, attempted);
+        if (this.#pending.length === 0) {
+            this.#overflowReported = false;
         }
     };
 }
