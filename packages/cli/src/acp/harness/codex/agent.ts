@@ -169,7 +169,10 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 await this.#resume(context.params.sessionId, context.params.cwd, context.signal);
                 await this.#replaySavedHistory(context.signal);
                 this.#advertiseCompactCommand();
-                return { configOptions: this.#settings.configOptions() };
+                return {
+                    _meta: { steering: { supported: this.#sessionAgent.steeringSupported } },
+                    configOptions: this.#settings.configOptions(),
+                };
             })
             .onRequest(methods.agent.session.fork, async (context) => {
                 const forked = threadForkResponseSchema.parse(
@@ -194,7 +197,10 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             .onRequest(methods.agent.session.resume, async (context) => {
                 await this.#resume(context.params.sessionId, context.params.cwd, context.signal);
                 this.#advertiseCompactCommand();
-                return { configOptions: this.#settings.configOptions() };
+                return {
+                    _meta: { steering: { supported: this.#sessionAgent.steeringSupported } },
+                    configOptions: this.#settings.configOptions(),
+                };
             })
             .onRequest(methods.agent.session.prompt, async (context) => {
                 if (isCompactCommand(context.params.prompt)) {

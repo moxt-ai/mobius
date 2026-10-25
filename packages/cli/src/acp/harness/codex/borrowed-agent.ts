@@ -21,6 +21,7 @@ const queuePageSchema = z.object({
 
 /** A locked thread remains owned by Codex. This connection only reads it and appends queued input. */
 export class CodexBorrowedAcpAgent implements CodexSessionAgent {
+    readonly steeringSupported = false;
     readonly #client: CodexAppServerClient;
     readonly #threadId: string;
     readonly #emit: (update: SessionNotification["update"]) => Promise<void>;
@@ -275,12 +276,9 @@ export class CodexBorrowedAcpAgent implements CodexSessionAgent {
     };
 
     readonly nativeTurnId = (): null => null;
-    readonly steer = async (
-        _params: unknown,
-        signal: AbortSignal,
-    ): Promise<{ readonly outcome: "promptRequired"; readonly reason: string }> => {
+    readonly steer = async (_params: unknown, signal: AbortSignal): Promise<never> => {
         signal.throwIfAborted();
-        return { outcome: "promptRequired", reason: "noRunningTurn" };
+        throw new AcpExecutionError("This Codex session only supports queued input", {}, "steering_unsupported");
     };
     // The reader connection cannot receive or control the owner's live turn.
     readonly onNotification = async (_method: string, _params: unknown): Promise<void> => {};

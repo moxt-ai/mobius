@@ -33,6 +33,7 @@ export interface AgentSessionRestore {
     race<T>(operation: Promise<T>, exitMessage: string, signal: AbortSignal): Promise<T>;
     restoreStoredConfigurations(session: StoredSession, signal: AbortSignal): Promise<void>;
     selectNativeSession(sessionId: string): void;
+    readonly restrictSessionCapabilities: (response: unknown) => void;
     setConfigOptions(options: readonly SessionConfigOption[]): void;
     setNativeHistoryOwnership(
         ownership: { kind: "unbound" } | { kind: "fresh-session" } | { kind: "agent-owned" },

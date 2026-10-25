@@ -4,6 +4,7 @@ import type { CodexAppServerServerRequest } from "./app-server-client.ts";
 
 /** Session behavior selected after opening; transport ownership stays with the ACP endpoint. */
 export interface CodexSessionAgent {
+    readonly steeringSupported: boolean;
     readonly prompt: (input: readonly unknown[], signal: AbortSignal) => Promise<PromptResponse>;
     readonly steer: (
         params: unknown,
