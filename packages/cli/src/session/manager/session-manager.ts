@@ -428,16 +428,22 @@ export class SessionManager {
                     const prepared = runtime.prepared();
                     const discoveredModelEffort = runtime.agentSettingsModelEffort();
                     const model = options.model;
+                    const modelOption = prepared.configOptions.find(
+                        (option) => option.id === "model" || option.category === "model",
+                    );
+                    // A Session cannot switch a model select with a single value, and the
+                    // Agent already reported its settings for that current model.
+                    const modelIsFixed =
+                        modelOption?.type === "select" &&
+                        modelOption.values.length < 2 &&
+                        modelOption.currentValue === model;
                     const configOptions =
-                        model === undefined
+                        model === undefined || modelIsFixed
                             ? prepared.configOptions
                             : await runtime.configure({
                                   ...options,
                                   booleanValue: false,
-                                  configId:
-                                      prepared.configOptions.find(
-                                          (option) => option.id === "model" || option.category === "model",
-                                      )?.id ?? "model",
+                                  configId: modelOption?.id ?? "model",
                                   requestId: "agent-settings-model",
                                   sessionId: `agent-settings-${crypto.randomUUID()}`,
                                   value: model,
