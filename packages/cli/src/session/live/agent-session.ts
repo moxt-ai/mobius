@@ -52,8 +52,6 @@ import { type AgentTurnState, IdleAgentTurn, RunningAgentTurn } from "./agent-tu
 import { SessionConfigurations } from "./session-configurations.ts";
 import { restoreSession } from "./session-restore.ts";
 
-const PROCESS_STOP_TIMEOUT_MILLISECONDS = 1_000;
-
 export { AcpConfigurationValueUnavailableError, AcpExecutionError } from "../../acp/acp-error.ts";
 
 type SessionLoadState =
@@ -671,12 +669,12 @@ export class AgentSession implements AgentSessionRestore {
         }
     };
 
-    readonly cancel = async (): Promise<void> => {
+    readonly cancel = async (signal: AbortSignal): Promise<void> => {
+        signal.throwIfAborted();
         await this.#interactions.cancelPendingInteractions();
+        signal.throwIfAborted();
         if (this.#turn.running) {
-            await this.#connection.connection.agent.notify(methods.agent.session.cancel, {
-                sessionId: this.#updates.sessionId(),
-            });
+            await this.#adapter.cancel(this.#target(), signal);
         }
     };
 
@@ -772,22 +770,18 @@ export class AgentSession implements AgentSessionRestore {
     readonly close = async (): Promise<void> => {
         try {
             await this.#interactions.cancelPendingInteractions();
-            if (this.#capabilities.closeSession && this.#updates.sessionId().length > 0) {
-                try {
-                    await this.#connection.connection.agent.request(
-                        methods.agent.session.close,
-                        { sessionId: this.#updates.sessionId() },
-                        {
-                            cancellationSignal: AbortSignal.timeout(PROCESS_STOP_TIMEOUT_MILLISECONDS),
-                        },
-                    );
-                } catch {
-                    // Process teardown below remains authoritative.
-                }
+        } catch (error) {
+            try {
+                throw error;
+            } finally {
+                await this.closeProcess();
             }
-        } finally {
-            await this.closeProcess();
         }
+        if (this.#updates.sessionId().length === 0) {
+            await this.closeProcess();
+            return;
+        }
+        await this.#adapter.closeSession(this.#target(), AbortSignal.timeout(30_000));
     };
 
     readonly closeProcess = (): Promise<void> => this.#connection.closeProcess();

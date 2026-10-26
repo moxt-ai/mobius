@@ -50,7 +50,7 @@ export class AcpLiveSessions {
         return connection;
     };
 
-    readonly #resolve = (target: AdapterSessionTarget): LiveSession => {
+    readonly #find = (target: AdapterSessionTarget): LiveSession | undefined => {
         const decoded = targetSchema.safeParse(target);
         if (!decoded.success) {
             throw new AcpExecutionError(
@@ -73,11 +73,58 @@ export class AcpLiveSessions {
         if (matches.length > 1) {
             throw new AcpExecutionError("Another writer is using this native session", {}, "session_busy");
         }
-        const session = matches[0];
+        return matches[0];
+    };
+
+    readonly #resolve = (target: AdapterSessionTarget): LiveSession => {
+        const session = this.#find(target);
         if (session === undefined) {
             throw new AcpExecutionError("The native session is not active", {}, "invalid_agent_session");
         }
         return session;
+    };
+
+    readonly cancel = async (target: AdapterSessionTarget, signal: AbortSignal): Promise<void> => {
+        const bounded = AbortSignal.any([signal, AbortSignal.timeout(30_000)]);
+        bounded.throwIfAborted();
+        const { connection } = this.#resolve(target);
+        await connection.race(
+            connection.connection.agent.notify(methods.agent.session.cancel, {
+                sessionId: connection.events.sessionId(),
+            }),
+            "ACP agent exited while cancelling a prompt",
+            bounded,
+        );
+    };
+
+    readonly closeSession = async (target: AdapterSessionTarget, signal: AbortSignal): Promise<void> => {
+        // Once teardown is requested, release the writer even if its caller is
+        // cancelled. Only the graceful protocol request is interruptible.
+        const session = this.#find(target);
+        if (session === undefined) {
+            signal.throwIfAborted();
+            return;
+        }
+        const { connection, scope } = session;
+        try {
+            signal.throwIfAborted();
+            if (scope.capabilities().closeSession) {
+                try {
+                    await connection.connection.agent.request(
+                        methods.agent.session.close,
+                        { sessionId: connection.events.sessionId() },
+                        { cancellationSignal: AbortSignal.any([signal, AbortSignal.timeout(1_000)]) },
+                    );
+                } catch {
+                    // Process teardown remains authoritative when graceful close
+                    // is rejected or its one-second deadline expires.
+                    signal.throwIfAborted();
+                }
+            }
+        } finally {
+            await connection.closeProcess();
+        }
+        signal.throwIfAborted();
     };
 
     readonly prompt = async (target: AdapterSessionTarget, content: PromptContent, signal: AbortSignal) => {

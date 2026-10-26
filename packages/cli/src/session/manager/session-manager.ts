@@ -575,14 +575,18 @@ export class SessionManager {
             }),
         );
 
-    readonly cancelPrompt = async (sessionId: string): Promise<void> => {
-        await this.#executions.cancel(sessionId, async () => {
-            const runtime = this.#executionProcesses.get(sessionId);
-            if (runtime !== undefined) {
-                await runtime.cancel();
-            }
+    readonly cancelPrompt = async (
+        sessionId: string,
+        signal: AbortSignal = AbortSignal.timeout(30_000),
+    ): Promise<void> =>
+        this.#operations.run({ signal }, async ({ signal }) => {
+            await this.#executions.cancel(sessionId, async () => {
+                const runtime = this.#executionProcesses.get(sessionId);
+                if (runtime !== undefined) {
+                    await runtime.cancel(signal);
+                }
+            });
         });
-    };
 
     readonly steerPrompt = async (options: SessionSteerOptions): Promise<string> =>
         this.#operations.run(options, async (options) => {
