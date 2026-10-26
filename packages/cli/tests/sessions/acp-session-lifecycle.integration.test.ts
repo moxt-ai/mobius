@@ -703,6 +703,7 @@ child.once("exit", (code) => process.exit(code ?? 84));
             );
             await chmod(adapterPath, 0o700);
             vi.useFakeTimers({ toFake: ["clearTimeout", "setTimeout"] });
+            vi.setSystemTime(new Date("2026-10-26T00:00:00.000Z"));
             const manager = new SessionManager({
                 observer: new NullSessionObserver(),
                 store: new MemorySessionStore(),
@@ -745,7 +746,7 @@ child.once("exit", (code) => process.exit(code ?? 84));
                     commandId: "pi-hanging-command",
                     cwd: process.cwd(),
                     images: [],
-                    prompt: "wait until cancelled",
+                    prompt: "hold after first delta",
                     resources: [],
                     sessionId: "pi-hanging-conversation",
                     signal: new AbortController().signal,
@@ -759,7 +760,9 @@ child.once("exit", (code) => process.exit(code ?? 84));
                         settled = true;
                     },
                 );
-                await observer.turnStarted();
+                await observer.waitForEvent(
+                    (event) => event.type === "acp" && event.payload.sessionUpdate === "agent_message_chunk",
+                );
 
                 await vi.advanceTimersByTimeAsync(7 * 24 * 60 * 60 * 1_000);
 
