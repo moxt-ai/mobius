@@ -7,7 +7,9 @@ import {
     decodeMessageKind,
     decodeSessionEventEnvelope,
     decodeSessionHistoryPageLoaded,
+    decodeSessionPreviewHistoryPageLoaded,
     encodeSessionHistoryPageLoad,
+    encodeSessionPreviewHistoryPageLoad,
     encodeSessionPromptCommand,
     encodeWorkspaceListCommand,
     RUNTIME_HEARTBEAT_ACK_MESSAGE,
@@ -293,6 +295,7 @@ async function startRuntime() {
     await initial.barrier();
     return {
         activity,
+        bindingId: config.bindingId,
         cancellation,
         initial,
         producer,
@@ -342,51 +345,154 @@ beforeEach(() => {
 
 afterEach(() => vi.useRealTimers());
 
-test("Given short reasoning followed by a truncated chunk and more short text, When a client loads the daemon history page, Then the coalesced reasoning retains its truncation flag", async () => {
-    await using runtime = await startRuntime();
-    const turn = await runtime.prompt(runtime.initial, "reasoning-history");
-    await turn.writeThought("short prefix ");
-    await turn.writeThought(`discarded${"r".repeat(24 * 1024)}`);
-    await turn.writeThought(" short suffix");
-    (await runtime.timer.next(100)).run();
-    await runtime.initial.barrier();
-    runtime.initial.socket.send(
-        encodeSessionHistoryPageLoad({
-            kind: "session.live-history.v2.page.load",
-            sessionId: "reasoning-history",
-            requestId: "reasoning-history-page",
-            cursor: null,
-            eventLimit: 50,
-        }),
-    );
-    for (;;) {
-        const message = await runtime.initial.next();
-        const kind = decodeMessageKind(message);
-        if (kind === "session.operation.failed") {
-            throw new Error(message);
+test.each([
+    {
+        label: "short chunks around oversized reasoning",
+        chunks: ["short prefix ", `discarded${"r".repeat(24 * 1024)}`, " short suffix"],
+        expected: `${"r".repeat(24 * 1024 - " short suffix".length)} short suffix`,
+        meta: { truncated: true },
+    },
+    {
+        label: "41 individually valid chunks whose merged text exceeds the wire limit",
+        chunks: Array.from({ length: 41 }, () => "r".repeat(24 * 1024)),
+        expected: "r".repeat(24 * 1024),
+        meta: { truncated: true },
+    },
+    {
+        label: "a single oversized UTF-8 chunk",
+        chunks: [`discarded${"\u601d\u{1f600}r".repeat(12_000)} tail-0!!`],
+        expected: `\u{1f600}r${"\u601d\u{1f600}r".repeat(3_070)} tail-0!!`,
+        meta: { truncated: true },
+    },
+    {
+        label: "merged UTF-8 reasoning across the byte boundary",
+        chunks: ["\u601d\u{1f600}r".repeat(4_000), " tail-0!!"],
+        expected: `\u{1f600}r${"\u601d\u{1f600}r".repeat(3_070)} tail-0!!`,
+        meta: { truncated: true },
+    },
+    {
+        label: "merged reasoning exactly at 24 KiB",
+        chunks: ["x".repeat(12 * 1024), "y".repeat(12 * 1024)],
+        expected: "x".repeat(12 * 1024) + "y".repeat(12 * 1024),
+        meta: undefined,
+    },
+])(
+    "Given $label, When a client loads history, Then projected reasoning retains only its last 24 KiB without changing live output or answers",
+    async ({ chunks, expected, meta }) => {
+        await using runtime = await startRuntime();
+        const turn = await runtime.prompt(runtime.initial, "reasoning-history");
+        for (const chunk of chunks) {
+            await turn.writeThought(chunk);
         }
-        if (kind !== "session.live-history.v2.page.loaded") {
-            continue;
-        }
-        const page = decodeSessionHistoryPageLoaded(message);
-        const thoughts = page.events.events.events.flatMap((event) =>
-            event.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk" ? [event.payload] : [],
+        await turn.write("Complete answer");
+        (await runtime.timer.next(100)).run();
+        await runtime.initial.barrier();
+        runtime.initial.socket.send(
+            encodeSessionHistoryPageLoad({
+                kind: "session.live-history.v2.page.load",
+                sessionId: "reasoning-history",
+                requestId: "reasoning-history-page",
+                cursor: null,
+                eventLimit: 50,
+            }),
         );
-        expect(thoughts).toEqual([
-            {
-                sessionUpdate: "agent_thought_chunk",
-                messageId: expect.any(String),
-                content: { type: "text", text: `short prefix ${"r".repeat(24 * 1024)} short suffix` },
-                meta: { truncated: true },
-            },
-        ]);
-        break;
-    }
-    turn.finish();
-    using _idle = await runtime.activity.reserveWhenIdle(runtime.cancellation.signal);
-});
+        for (;;) {
+            const message = await runtime.initial.next();
+            const kind = decodeMessageKind(message);
+            if (kind === "session.operation.failed") {
+                throw new Error(message);
+            }
+            if (kind !== "session.live-history.v2.page.loaded") {
+                continue;
+            }
+            const page = decodeSessionHistoryPageLoaded(message);
+            const thoughts = page.events.events.events.flatMap((event) =>
+                event.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk" ? [event.payload] : [],
+            );
+            expect(thoughts).toEqual([
+                {
+                    sessionUpdate: "agent_thought_chunk",
+                    messageId: expect.any(String),
+                    content: { type: "text", text: expected },
+                    ...(meta === undefined ? {} : { meta }),
+                },
+            ]);
+            expect(Buffer.byteLength(expected, "utf8")).toBeLessThanOrEqual(24 * 1024);
+            expect(expected).not.toContain("\ufffd");
+            expect(page.events.events.events).toContainEqual(
+                expect.objectContaining({
+                    type: "acp",
+                    payload: expect.objectContaining({
+                        sessionUpdate: "agent_message_chunk",
+                        content: { type: "text", text: "Complete answer" },
+                    }),
+                }),
+            );
+            expect(
+                runtime.initial.events
+                    .flatMap((event) =>
+                        event.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk"
+                            ? [event.payload]
+                            : [],
+                    )
+                    .map((thought) => ({ content: thought.content, meta: thought.meta })),
+            ).toEqual(chunks.map((text) => ({ content: { type: "text", text }, meta: undefined })));
+            break;
+        }
+        turn.finish();
+        {
+            using _idle = await runtime.activity.reserveWhenIdle(runtime.cancellation.signal);
+        }
+        const nativeThought = runtime.initial.events.find(
+            (event) => event.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk",
+        );
+        if (
+            nativeThought?.type !== "acp" ||
+            nativeThought.payload.sessionUpdate !== "agent_thought_chunk" ||
+            typeof nativeThought.payload.messageId !== "string"
+        ) {
+            throw new Error("Expected the native Session identifier from the controlled Agent");
+        }
+        runtime.initial.socket.send(
+            encodeSessionPreviewHistoryPageLoad({
+                additionalDirectoryIds: [],
+                agentId: "controlled",
+                bindingId: runtime.bindingId,
+                directoryId: "default",
+                kind: "session.preview-history.page.load",
+                sessionId: nativeThought.payload.messageId,
+                requestId: "reasoning-native-preview",
+                cursor: null,
+                eventLimit: 50,
+            }),
+        );
+        for (;;) {
+            const message = await runtime.initial.next();
+            const kind = decodeMessageKind(message);
+            if (kind === "session.operation.failed") {
+                throw new Error(message);
+            }
+            if (kind !== "session.preview-history.page.loaded") {
+                continue;
+            }
+            const page = decodeSessionPreviewHistoryPageLoaded(message);
+            const thoughts = page.events.events.events.flatMap((event) =>
+                event.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk" ? [event.payload] : [],
+            );
+            expect(thoughts).toEqual([
+                {
+                    sessionUpdate: "agent_thought_chunk",
+                    messageId: expect.any(String),
+                    content: { type: "text", text: expected },
+                    ...(meta === undefined ? {} : { meta }),
+                },
+            ]);
+            break;
+        }
+    },
+);
 
-test("Given oversized reasoning chunks, When the daemon streams them to the Relay, Then each retains its last 24 KiB and marks truncation without changing answers", async () => {
+test("Given oversized reasoning chunks, When the daemon streams them to the Relay, Then live reasoning and answers remain complete without history truncation metadata", async () => {
     await using runtime = await startRuntime();
     const turn = await runtime.prompt(runtime.initial, "reasoning-tail");
     const oversized = `discarded prefix${"\u601d\u{1f600}r".repeat(12_000)} tail-0!!`;
@@ -405,11 +511,11 @@ test("Given oversized reasoning chunks, When the daemon streams them to the Rela
     expect(thoughts.map((thought) => ({ content: thought.content, meta: thought.meta }))).toEqual([
         { content: { type: "text", text: "short thought" }, meta: undefined },
         {
-            content: { type: "text", text: `\u{1f600}r${"\u601d\u{1f600}r".repeat(3_070)} tail-0!!` },
-            meta: { truncated: true },
+            content: { type: "text", text: oversized },
+            meta: undefined,
         },
         { content: { type: "text", text: "x".repeat(24 * 1024) }, meta: undefined },
-        { content: { type: "text", text: "y".repeat(24 * 1024) }, meta: { truncated: true } },
+        { content: { type: "text", text: `prefix${"y".repeat(24 * 1024)}` }, meta: undefined },
     ]);
     expect(answer(runtime.initial.events, "reasoning-tail")).toBe(oversized);
 });
