@@ -148,6 +148,9 @@ export function createProjectRuntimeSessionControlRoutes() {
             const sessionId = validateIdentifier(context.req.param("sessionId"), "session_id");
             const cursor = context.req.query("cursor");
             const omit = context.req.queries("omit");
+            if (omit !== undefined) {
+                validated(v.pipe(v.array(v.literal("agent-reasoning")), v.maxLength(1)), omit);
+            }
             const result = await requestControl(
                 context,
                 decodeSessionHistoryPageLoad(
@@ -161,9 +164,6 @@ export function createProjectRuntimeSessionControlRoutes() {
                             Number(context.req.query("limit") ?? "50"),
                         ),
                         kind: "session.live-history.v2.page.load",
-                        ...(omit === undefined
-                            ? {}
-                            : { omit: validated(v.pipe(v.array(v.literal("agent-reasoning")), v.maxLength(1)), omit) }),
                         requestId: crypto.randomUUID(),
                         sessionId,
                     }),

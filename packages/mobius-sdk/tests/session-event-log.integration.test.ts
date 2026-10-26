@@ -188,7 +188,7 @@ describe("Session Event Log V2 SDK", () => {
             {
                 body: null,
                 method: "GET",
-                path: "/mobius/api/v1/projects/project-1/sessions/source-session/events-v2?limit=500&omit=agent-reasoning",
+                path: "/mobius/api/v1/projects/project-1/sessions/source-session/events-v2?limit=500",
             },
             {
                 body: null,

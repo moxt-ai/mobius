@@ -4,6 +4,29 @@ export type { ProjectedToolCall } from "../../acp/tool-call-projection.ts";
 
 type AcpSessionEvent = Extract<SessionEvent, { readonly type: "acp" }>;
 type ToolCall = Extract<AcpSessionUpdate, { readonly sessionUpdate: "tool_call" | "tool_call_update" }>;
+type Reasoning = Extract<AcpSessionUpdate, { readonly sessionUpdate: "agent_thought_chunk" }>;
+
+const MAXIMUM_PROJECTED_REASONING_BYTES = 24 * 1024;
+
+function boundReasoning(payload: Reasoning): Reasoning {
+    if (
+        payload.content.type !== "text" ||
+        Buffer.byteLength(payload.content.text, "utf8") <= MAXIMUM_PROJECTED_REASONING_BYTES
+    ) {
+        return payload;
+    }
+    const bytes = Buffer.from(payload.content.text, "utf8");
+    let start = bytes.length - MAXIMUM_PROJECTED_REASONING_BYTES;
+    // Retain a UTF-8 tail without starting inside a code point.
+    while (start < bytes.length && (bytes.readUInt8(start) & 0xc0) === 0x80) {
+        start += 1;
+    }
+    return {
+        ...payload,
+        content: { ...payload.content, text: bytes.toString("utf8", start) },
+        meta: { ...payload.meta, truncated: true },
+    };
+}
 
 export type SessionEventHistoryProjectionMutation =
     | { readonly event: SessionEvent; readonly kind: "append" }
@@ -18,6 +41,9 @@ export type MaterializedEventsResolver = (eventIds: readonly string[]) => Readon
 
 function projectNewEvent(liveEvent: SessionLiveEvent, eventId: string): SessionEvent {
     const { position: _position, eventId: _liveEventId, ...event } = liveEvent;
+    if (event.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk") {
+        return { ...event, eventId, payload: boundReasoning(event.payload) };
+    }
     return { ...event, eventId };
 }
 
@@ -110,13 +136,13 @@ function mergeTextChunk(previous: AcpSessionUpdate, incoming: AcpSessionUpdate):
     }
     const content = { text: `${previous.content.text}${incoming.content.text}`, type: "text" as const };
     if (previous.sessionUpdate === "agent_thought_chunk" && incoming.sessionUpdate === "agent_thought_chunk") {
-        return {
+        return boundReasoning({
             ...previous,
             content,
             ...(previous.meta?.truncated === true || incoming.meta?.truncated === true
                 ? { meta: { ...previous.meta, ...incoming.meta, truncated: true } }
                 : {}),
-        };
+        });
     }
     return { ...previous, content };
 }
