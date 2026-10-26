@@ -4,6 +4,7 @@ import {
     discoverLocalAgentInventory,
     supportedLocalAgentSpecifications,
 } from "../agent/discovery/discover-local-agents.ts";
+import { RuntimeAgentDependencies } from "../agent/runtime-agents.ts";
 import type { RuntimeTurnActivity } from "../session/turn/runtime-turn-activity.ts";
 import { ensureCanonicalDirectory } from "../storage/files/local-files.ts";
 import { readStateDirectory } from "../storage/state-directory.ts";
@@ -129,7 +130,7 @@ export async function createMobiusRuntimeEngine(
             defaultWorkspace,
             relayUrl,
         },
-        inventory.readyAgents(),
+        new RuntimeAgentDependencies(inventory.readyAgents()),
         localContext,
         null,
         createCatalogAgentResolver(

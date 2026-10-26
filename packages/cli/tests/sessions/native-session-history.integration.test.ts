@@ -12,14 +12,19 @@ const cannedHistoryAdapter: AdapterResolver = (_agent, dependencies) => {
     const acp = new ClaudeAdapter(dependencies);
     const events = new MemorySessionEventStore();
     return {
-        capabilities: acp.capabilities,
+        getCapabilities: acp.getCapabilities,
         connectSession: acp.connectSession,
-        listNativeSessions: acp.listNativeSessions,
+        prompt: acp.prompt,
+        steer: acp.steer,
+        renameSession: acp.renameSession,
+        configureSession: acp.configureSession,
+        listSessions: acp.listSessions,
+        findSession: acp.findSession,
         close: async () => {
             await acp.close();
             events.close();
         },
-        previewSessionEvents: async (_query, request) => {
+        readSessionHistory: async (_query, request) => {
             events.materialize(request.sessionId, request.nativeSessionId, [
                 {
                     type: "acp",

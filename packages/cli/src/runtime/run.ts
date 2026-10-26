@@ -219,6 +219,7 @@ export async function runRuntime(
         await activeSessions.close();
         await runCleanup(
             () => catalogPublication,
+            () => nativeSessions.close(),
             () => agentRuntime.close(),
             () => adapters.close(),
             () => sessionStore.close(),

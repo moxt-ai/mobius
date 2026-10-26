@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { decodeAcpSessionUpdate, type SessionEventPayload } from "@moxt-ai/mobius-sdk/protocol";
 import { revalidateExecutable, stopProcessTree } from "../../../util/process/executable.ts";
+import { runCleanup } from "../../../util/run-cleanup.ts";
 import { AcpExecutionError } from "../../acp-error.ts";
 import type { AcpContentExternalizer } from "../../content/content-externalizer.ts";
 import { CodexAppServerClient } from "../../harness/codex/app-server-client.ts";
@@ -8,14 +9,17 @@ import { replayCodexHistory } from "../../harness/codex/history.ts";
 import type {
     Adapter,
     AdapterDependencies,
+    NativeSessionLookupBudget,
     NativeSessionPreviewRequest,
     NativeSessionQuery,
     SessionEventPage,
 } from "../../native-history/preview-contract.ts";
 import { nativeSessionIdSchema } from "../../protocol/native-session.ts";
+import { AcpLiveSessions } from "../live-sessions.ts";
+import { findNativeSession } from "../native-session-lookup.ts";
 import { openPreviewEventCache, type PreviewEventCache } from "../preview-event-cache.ts";
 import { AgentQueryProcesses } from "../query-processes.ts";
-import { AcpSessionConnector, type AdapterSessionConnectionOptions } from "../session-events.ts";
+import { AcpSessionConnector, type LiveSessionConnectionOptions } from "../session-events.ts";
 import { fitCodexToolEvent, prepareCodexToolUpdate } from "./tool-event.ts";
 
 /**
@@ -26,6 +30,7 @@ import { fitCodexToolEvent, prepareCodexToolUpdate } from "./tool-event.ts";
 export class CodexAdapter implements Adapter {
     readonly #queryProcesses: AgentQueryProcesses;
     readonly #connector: AcpSessionConnector;
+    readonly #liveSessions: AcpLiveSessions;
     readonly #dependencies: AdapterDependencies;
     readonly #contentExternalizer: Pick<AcpContentExternalizer, "update">;
     #previewCache: PreviewEventCache | null = null;
@@ -41,22 +46,29 @@ export class CodexAdapter implements Adapter {
             },
         };
         this.#connector = new AcpSessionConnector(this.#contentExternalizer, fitCodexToolEvent);
+        this.#liveSessions = new AcpLiveSessions(this.#contentExternalizer, fitCodexToolEvent);
         this.#queryProcesses = new AgentQueryProcesses(dependencies.processes, this.#connector);
     }
 
-    readonly capabilities = async (query: NativeSessionQuery) => await this.#queryProcesses.capabilities(query);
-    readonly connectSession = (options: AdapterSessionConnectionOptions) => this.#connector.connectSession(options);
-    readonly listNativeSessions = async (query: NativeSessionQuery, cursor: string | null) =>
+    readonly getCapabilities = async (query: NativeSessionQuery) => await this.#queryProcesses.capabilities(query);
+    readonly connectSession = (options: LiveSessionConnectionOptions) => this.#liveSessions.connectSession(options);
+    readonly prompt: Adapter["prompt"] = (...args) => this.#liveSessions.prompt(...args);
+    readonly steer: Adapter["steer"] = (...args) => this.#liveSessions.steer(...args);
+    readonly renameSession: Adapter["renameSession"] = (...args) => this.#liveSessions.renameSession(...args);
+    readonly configureSession: Adapter["configureSession"] = (...args) => this.#liveSessions.configureSession(...args);
+    readonly listSessions = async (query: NativeSessionQuery, cursor: string | null) =>
         await this.#queryProcesses.listNativeSessions(query, cursor);
+    readonly findSession = (query: NativeSessionQuery, nativeSessionId: string, budget: NativeSessionLookupBudget) =>
+        findNativeSession(this.listSessions, query, nativeSessionId, budget);
     readonly close = async (): Promise<void> => {
-        try {
-            await this.#queryProcesses.close();
-        } finally {
-            this.#previewCache?.close();
-        }
+        await runCleanup(
+            () => this.#queryProcesses.close(),
+            () => this.#liveSessions.close(),
+            () => this.#previewCache?.close(),
+        );
     };
 
-    readonly previewSessionEvents = async (
+    readonly readSessionHistory = async (
         query: NativeSessionQuery,
         request: NativeSessionPreviewRequest,
     ): Promise<SessionEventPage> => {

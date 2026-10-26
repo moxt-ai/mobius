@@ -3,6 +3,7 @@ import { initializeAgentConnection, validateAgentRuntime } from "../../src/acp/a
 import { CodexAdapter } from "../../src/acp/adapter/codex/adapter.ts";
 import type { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
+import { unsupportedSessionCapabilities } from "../../src/acp/protocol/session-capabilities.ts";
 import { MemorySessionEventStore } from "../../src/session/history/session-event-store.ts";
 import { AgentProcessPool } from "../../src/session/process/agent-process-pool.ts";
 import { UnretainedExternalContentStore } from "./unretained-external-content-store.ts";
@@ -30,7 +31,7 @@ function historyAdapter() {
 export async function previewCodexHistory(agent: AcpAgentDefinition, cwd: string, nativeSessionId: string) {
     const { adapter, processes } = historyAdapter();
     try {
-        return await adapter.previewSessionEvents(
+        return await adapter.readSessionHistory(
             { agent, cwd, additionalDirectories: [], sessionId: "preview", signal: AbortSignal.timeout(30_000) },
             {
                 nativeSessionId,
@@ -55,9 +56,12 @@ export async function loadCodexHistory(agent: AcpAgentDefinition, cwd: string, n
         const rejectInteraction = async (): Promise<never> => {
             throw new Error("History replay must not request interaction");
         };
+        let capabilities = unsupportedSessionCapabilities();
         const runtime = adapter.connectSession({
             agent,
             cwd,
+            additionalDirectories: [],
+            capabilities: () => capabilities,
             sessionId: () => "opened",
             configOptions: () => [],
             onEvent: async (event) => {
@@ -70,7 +74,8 @@ export async function loadCodexHistory(agent: AcpAgentDefinition, cwd: string, n
             },
         });
         try {
-            await initializeAgentConnection(runtime, agent.id, agent.agentVersion, signal);
+            const initialized = await initializeAgentConnection(runtime, agent.id, agent.agentVersion, signal);
+            capabilities = initialized.capabilities;
             events.reset("opened");
             runtime.events.select(nativeSessionId);
             await runtime.race(

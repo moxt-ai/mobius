@@ -11,6 +11,7 @@ export type {
     InProcessAcpEndpointFactory,
     InProcessAcpEndpointOptions,
 } from "./acp/agent/in-process-endpoint.ts";
+export { RuntimeAgentDependencies } from "./agent/runtime-agents.ts";
 export {
     type MobiusRuntimePairingOptions,
     type PairedRuntime,

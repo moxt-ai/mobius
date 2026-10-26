@@ -1,14 +1,18 @@
 import type {
+    AgentPromptResponse,
     SessionCapabilities,
+    SessionConfigOption,
     SessionEvent,
     SessionEventPayload,
     SessionLiveEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { AgentProcessPool } from "../../session/process/agent-process-pool.ts";
-import type { AdapterSessionConnection, AdapterSessionConnectionOptions } from "../adapter/session-events.ts";
+import type { AdapterSessionConnection, LiveSessionConnectionOptions } from "../adapter/session-events.ts";
 import type { AcpAgentDefinition } from "../agent/agent-definition.ts";
+import type { PromptContent } from "../client/prompt-content.ts";
 import type { AcpContentExternalizer } from "../content/content-externalizer.ts";
-import type { NativeSessionPage } from "../protocol/native-session.ts";
+import type { NativeSessionInfo, NativeSessionPage } from "../protocol/native-session.ts";
+import type { SessionConfigurationSelection } from "../protocol/session-config-protocol.ts";
 import type { ProjectedToolCall } from "../tool-call-projection.ts";
 
 /** One page of a saved native session's events. */
@@ -68,12 +72,49 @@ export interface NativeSessionQuery {
     readonly signal: AbortSignal;
 }
 
-/** Business-facing saved-session operations. Transport and initialization belong to the adapter. */
+/** Application lookup budget; null allows all entries within the page budget. */
+export interface NativeSessionLookupBudget {
+    readonly maximumPages: number;
+    readonly maximumEntries: number | null;
+}
+
+export interface AdapterSessionTarget {
+    readonly nativeSessionId: string;
+    readonly cwd: string;
+    readonly additionalDirectories: readonly string[];
+}
+
+/** Business-facing session operations. Transport and initialization belong to the adapter. */
 export interface Adapter {
-    readonly connectSession: (options: AdapterSessionConnectionOptions) => AdapterSessionConnection;
-    readonly capabilities: (query: NativeSessionQuery) => Promise<SessionCapabilities>;
-    readonly listNativeSessions: (query: NativeSessionQuery, cursor: string | null) => Promise<NativeSessionPage>;
-    readonly previewSessionEvents: (
+    readonly connectSession: (options: LiveSessionConnectionOptions) => AdapterSessionConnection;
+    readonly prompt: (
+        target: AdapterSessionTarget,
+        content: PromptContent,
+        signal: AbortSignal,
+    ) => Promise<AgentPromptResponse>;
+    readonly steer: (
+        target: AdapterSessionTarget,
+        content: PromptContent,
+        signal: AbortSignal,
+    ) => Promise<"injected" | "startedNewTurn">;
+    readonly renameSession: (
+        target: AdapterSessionTarget,
+        title: string,
+        signal: AbortSignal,
+    ) => Promise<{ readonly nativeRenameApplied: boolean }>;
+    readonly configureSession: (
+        target: AdapterSessionTarget,
+        selection: SessionConfigurationSelection,
+        signal: AbortSignal,
+    ) => Promise<readonly SessionConfigOption[]>;
+    readonly getCapabilities: (query: NativeSessionQuery) => Promise<SessionCapabilities>;
+    readonly listSessions: (query: NativeSessionQuery, cursor: string | null) => Promise<NativeSessionPage>;
+    readonly findSession: (
+        query: NativeSessionQuery,
+        nativeSessionId: string,
+        budget: NativeSessionLookupBudget,
+    ) => Promise<NativeSessionInfo>;
+    readonly readSessionHistory: (
         query: NativeSessionQuery,
         request: NativeSessionPreviewRequest,
     ) => Promise<SessionEventPage>;

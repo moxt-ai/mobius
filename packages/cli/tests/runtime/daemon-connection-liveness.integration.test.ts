@@ -27,6 +27,7 @@ import {
 import { listen, port as readPort, sendText as writeServerTextFrame } from "@moxt-ai/mobius-test/websocket";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
+import { RuntimeAgentDependencies } from "../../src/agent/runtime-agents.ts";
 import { createRuntimeConfig } from "../../src/runtime/config.ts";
 import { RuntimeRelayRevokedError } from "../../src/runtime/relay/runtime-revocation.ts";
 import { SESSION_EVENT_BATCH_WINDOW_MILLISECONDS } from "../../src/runtime/relay/session-event-publisher.ts";
@@ -954,7 +955,9 @@ describe("daemon relay connection liveness", () => {
                     `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/reconciliation-channel/daemon?token=reconciliation-secret`,
                 ),
             },
-            [new LocalAgentDefinition("codex", "Codex", process.execPath, [fakeAgentPath])],
+            new RuntimeAgentDependencies([
+                new LocalAgentDefinition("codex", "Codex", process.execPath, [fakeAgentPath]),
+            ]),
         );
 
         vi.useFakeTimers({ toFake: ["Date"] });

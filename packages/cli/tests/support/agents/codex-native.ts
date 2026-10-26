@@ -6,6 +6,7 @@ import { InProcessAcpAgentDefinition } from "../../../src/acp/agent/agent-defini
 import { AcpContentExternalizer } from "../../../src/acp/content/content-externalizer.ts";
 import { CodexAcpAgent } from "../../../src/acp/harness/codex/agent.ts";
 import type { AdapterResolver } from "../../../src/acp/native-history/preview-contract.ts";
+import { RuntimeAgentDependencies } from "../../../src/agent/runtime-agents.ts";
 import { createRuntimeConfig } from "../../../src/runtime/config.ts";
 import { NullSessionObserver } from "../../../src/session/api/session-api.ts";
 import { NativeSessionService } from "../../../src/session/native/native-session-browser.ts";
@@ -62,7 +63,7 @@ export async function codexFixture(
             channelId: "test-channel",
             relayUrl: new URL("ws://localhost/"),
         },
-        [agent],
+        new RuntimeAgentDependencies([agent]),
     );
     const directories = new WorkspaceDirectoryService("workspace", workspace);
     const service = new NativeSessionService(
@@ -116,6 +117,7 @@ export async function codexFixture(
         return result;
     };
     const close = async (): Promise<void> => {
+        await service.close();
         await sessions.close();
         await codex[Symbol.asyncDispose]();
         await provider[Symbol.asyncDispose]();

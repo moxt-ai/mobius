@@ -37,6 +37,7 @@ import { expect, test } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { InProcessAcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { CodexAcpAgent } from "../../src/acp/harness/codex/agent.ts";
+import { RuntimeAgentDependencies } from "../../src/agent/runtime-agents.ts";
 import { createRuntimeConfig, RuntimeLocalContext } from "../../src/runtime/config.ts";
 import { runRuntime } from "../../src/runtime/run.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
@@ -108,7 +109,7 @@ test("Given real Codex streams commentary after a tool, When clients watch and r
     );
     const config = createRuntimeConfig(
         { channelId: "real-codex", defaultWorkspace: workspace, relayUrl },
-        [agent],
+        new RuntimeAgentDependencies([agent]),
         new RuntimeLocalContext(stateDirectory),
     );
     const cancellation = new AbortController();
