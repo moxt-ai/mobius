@@ -138,6 +138,14 @@ it("Given Codex sends an individual protocol message above 32 MiB, When Mobius r
     }
 });
 
+it("Given a non-Codex agent, When its history is requested through the Codex adapter, Then the adapter reports an agent mismatch rather than an executable change", async () => {
+    const command = await historyAppServer();
+    const agent = new LocalAgentDefinition("claude", "Claude", command, []);
+    await expect(previewCodexHistory(agent, process.cwd(), "saved-thread")).rejects.toMatchObject({
+        code: "agent_adapter_mismatch",
+    });
+});
+
 it("Given paginated Codex history exceeds 32 MiB across consumed responses, When Mobius reads every page, Then the bounded history reader completes", async () => {
     const command = await historyAppServer();
     const agent = new LocalAgentDefinition("codex", "Codex", command, []);

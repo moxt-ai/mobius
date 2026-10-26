@@ -65,7 +65,14 @@ export class CodexAdapter implements Adapter {
         const { sessionId } = request;
         signal.throwIfAborted();
         nativeSessionIdSchema.parse(request.nativeSessionId);
-        if (agent.id !== "codex" || !(await revalidateExecutable(agent.agentIdentity))) {
+        if (agent.id !== "codex") {
+            throw new AcpExecutionError(
+                "The Codex adapter cannot preview history for another agent.",
+                {},
+                "agent_adapter_mismatch",
+            );
+        }
+        if (!(await revalidateExecutable(agent.agentIdentity))) {
             throw new AcpExecutionError(
                 "The local Codex executable changed. Restart Mobius to discover it again.",
                 {},
