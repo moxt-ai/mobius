@@ -317,9 +317,9 @@ test.each([true, false])(
     async (flushed) => {
         await using runtime = await startRuntime();
         const turn = await runtime.prompt(runtime.initial, "tail-session");
-        await turn.write("Reply prefix; ");
         const pending = await runtime.timer.next(100);
         if (flushed) {
+            await turn.write("Reply prefix; ");
             pending.run();
             while (answer(runtime.initial.events, "tail-session") !== "Reply prefix; ") {
                 await runtime.initial.next();
@@ -328,6 +328,9 @@ test.each([true, false])(
         const retry = await runtime.disconnect(runtime.initial);
         // A cancelled batching task must not discard events retained for reconnection.
         pending.run();
+        if (!flushed) {
+            await turn.write("Reply prefix; ");
+        }
         await turn.write("the final 161 characters remain available.");
         turn.finish();
         using _idle = await runtime.activity.reserveWhenIdle(runtime.cancellation.signal);
