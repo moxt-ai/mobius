@@ -188,12 +188,13 @@ it("Given an open Codex conversation with fifteen turns, When history is read wh
     }
 });
 
-it("Given Codex saved tools and a reply exceeding the history budget, When history is opened, Then truncation is disclosed and the tool activities survive", async () => {
-    const f = await codexFixture("native", "Large reply ".repeat(30_000));
+it("Given Codex saved tools and a large reply, When history is previewed, Then the complete reply and tool activities remain available as when opened", async () => {
+    const answer = "Large reply ".repeat(30_000);
+    const f = await codexFixture("native", answer);
     try {
         const id = await f.seed("Use two shell tools successfully, then reply");
         const history = await previewCodexHistory(f.agent, f.workspace, id);
-        expect(history.truncated).toBe(true);
+        expect(history.truncated).toBe(false);
         const updates = history.events.flatMap((event) => (event.type === "acp" ? [event.payload] : []));
         const tools = updates.filter((update) => update.sessionUpdate === "tool_call");
         expect(tools.length).toBeGreaterThanOrEqual(2);
@@ -202,10 +203,9 @@ it("Given Codex saved tools and a reply exceeding the history budget, When histo
                 (update) =>
                     update.sessionUpdate === "agent_message_chunk" &&
                     update.content.type === "text" &&
-                    update.content.text.includes("Large reply"),
+                    update.content.text.includes(answer),
             ),
         ).toBe(true);
-        expect(JSON.stringify(history).length).toBeLessThan(300_000);
     } finally {
         await f.close();
     }

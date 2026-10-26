@@ -1,10 +1,5 @@
 import { createHash } from "node:crypto";
-import {
-    decodeAcpSessionUpdate,
-    SESSION_HISTORY_CHARACTER_LIMIT,
-    SESSION_HISTORY_MESSAGE_LIMIT,
-    type SessionEventPayload,
-} from "@moxt-ai/mobius-sdk/protocol";
+import { decodeAcpSessionUpdate, type SessionEventPayload } from "@moxt-ai/mobius-sdk/protocol";
 import { revalidateExecutable, stopProcessTree } from "../../../util/process/executable.ts";
 import { AcpExecutionError } from "../../acp-error.ts";
 import { CodexAppServerClient } from "../../harness/codex/app-server-client.ts";
@@ -67,12 +62,8 @@ export class CodexAdapter implements Adapter {
             );
         }
         this.#previewCache ??= openPreviewEventCache();
-        const retainedEvents = new Map<number, { readonly event: SessionEventPayload; readonly characters: number }>();
-        let nextEvent = 0;
-        let oldestEvent = 0;
-        let characters = 0;
-        let dropped = false;
-        const replay = await this.#dependencies.processes.runTransient(
+        const events: SessionEventPayload[] = [];
+        await this.#dependencies.processes.runTransient(
             signal,
             async () => {
                 const client = new CodexAppServerClient({
@@ -109,39 +100,22 @@ export class CodexAdapter implements Adapter {
                             update,
                             signal,
                         );
-                        const event: SessionEventPayload = {
+                        events.push({
                             type: "acp",
                             payload: decodeAcpSessionUpdate(JSON.stringify(externalized.event)),
-                        };
-                        const eventCharacters = JSON.stringify(event).length;
-                        retainedEvents.set(nextEvent++, { event, characters: eventCharacters });
-                        characters += eventCharacters;
-                        while (
-                            retainedEvents.size > SESSION_HISTORY_MESSAGE_LIMIT ||
-                            characters > SESSION_HISTORY_CHARACTER_LIMIT
-                        ) {
-                            const removed = retainedEvents.get(oldestEvent);
-                            if (removed === undefined) {
-                                break;
-                            }
-                            retainedEvents.delete(oldestEvent++);
-                            characters -= removed.characters;
-                            dropped = true;
-                        }
+                        });
                     },
                     signal,
                 );
             },
             async (runtime) => await runtime.closeProcess(),
         );
-        const events = Array.from(retainedEvents.values(), ({ event }) => event);
         const generationId = createHash("sha256")
             .update(request.nativeSessionId)
             .update("\0")
             .update(JSON.stringify(events))
             .digest("hex");
         this.#previewCache.events.materialize(sessionId, generationId, events);
-        const page = this.#previewCache.events.page(sessionId, request.eventLimit, request.cursor);
-        return { ...page, truncated: page.truncated || replay.truncated || dropped };
+        return this.#previewCache.events.page(sessionId, request.eventLimit, request.cursor);
     };
 }

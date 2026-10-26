@@ -2,10 +2,11 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
+import { InProcessAcpAgentDefinition, LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
+import { CodexAcpAgent } from "../../src/acp/harness/codex/agent.ts";
 import { CodexAppServerClient } from "../../src/acp/harness/codex/app-server-client.ts";
 import { stopProcessTree } from "../../src/util/process/executable.ts";
-import { previewCodexHistory } from "../support/codex-history-preview.ts";
+import { loadCodexHistory, previewCodexHistory } from "../support/codex-history-preview.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -37,7 +38,7 @@ input.on("line", (line) => {
     return executable;
 }
 
-async function historyAppServer(): Promise<string> {
+async function historyAppServer(savedItems: readonly unknown[] | null = null): Promise<string> {
     const directory = await mkdtemp(join(tmpdir(), "mobius-codex-history-server-"));
     temporaryDirectories.push(directory);
     const executable = join(directory, "codex");
@@ -46,6 +47,7 @@ async function historyAppServer(): Promise<string> {
         `#!/usr/bin/env node
 const readline = require("node:readline");
 const input = readline.createInterface({ input: process.stdin });
+const savedItems = ${JSON.stringify(savedItems)};
 input.on("line", (line) => {
     const message = JSON.parse(line);
     if (message.id === undefined) return;
@@ -57,19 +59,28 @@ input.on("line", (line) => {
         process.stdout.write(JSON.stringify({ id: message.id, result: { thread: { id: message.params.threadId, cwd: ${JSON.stringify(process.cwd())} } } }) + "\\n");
         return;
     }
+    if (message.method === "thread/resume") {
+        process.stdout.write(JSON.stringify({ id: message.id, result: { thread: { id: message.params.threadId, turns: [] } } }) + "\\n");
+        return;
+    }
+    if (message.method === "model/list" || message.method === "thread/settings/update") {
+        process.stdout.write(JSON.stringify({ id: message.id, result: { data: [] } }) + "\\n");
+        return;
+    }
     const page = Number(message.params.cursor ?? 0);
     const result = {
         data: [{
             id: "turn-" + page,
             status: "completed",
             error: null,
-            padding: "x".repeat(9 * 1024 * 1024),
-            items: [{ id: "message-" + page, phase: "final_answer", text: "Reply " + page, type: "agentMessage" }],
+            padding: savedItems === null ? "x".repeat(9 * 1024 * 1024) : "",
+            items: savedItems ?? [{ id: "message-" + page, phase: "final_answer", text: "Reply " + page, type: "agentMessage" }],
         }],
-        nextCursor: page < 3 ? String(page + 1) : null,
+        nextCursor: savedItems === null && page < 3 ? String(page + 1) : null,
     };
     process.stdout.write(JSON.stringify({ id: message.id, result }) + "\\n");
 });
+
 `,
         "utf8",
     );
@@ -130,3 +141,64 @@ it("Given paginated Codex history exceeds 32 MiB across consumed responses, When
     const page = await previewCodexHistory(agent, process.cwd(), "large-history");
     expect(page.events).toHaveLength(4);
 });
+
+it.each([
+    {
+        name: "250-item turn",
+        extra: Array.from({ length: 248 }, (_, index) => ({ id: `unknown-${index}`, type: "futureItem" })),
+    },
+    {
+        name: "large tool snapshot",
+        extra: [
+            {
+                id: "tool",
+                type: "mcpToolCall",
+                server: "saved",
+                tool: "read",
+                status: "completed",
+                result: { text: "x".repeat(300_000) },
+            },
+        ],
+    },
+])(
+    "Given a saved Codex $name, When it is previewed and opened, Then both retain identical prompt, answer and tool content",
+    async ({ extra }) => {
+        const items = [
+            { id: "user", type: "userMessage", content: [{ type: "text", text: "Saved prompt" }] },
+            { id: "answer", type: "agentMessage", text: "Saved answer", phase: "final_answer" },
+            ...extra,
+        ];
+        const command = await historyAppServer(items);
+        const agent = new InProcessAcpAgentDefinition(
+            "codex",
+            "Codex",
+            command,
+            (options) => new CodexAcpAgent(options),
+        );
+        const preview = await previewCodexHistory(agent, process.cwd(), "saved-thread");
+        const opened = await loadCodexHistory(agent, process.cwd(), "saved-thread");
+        const updates = (page: typeof preview) =>
+            page.events.flatMap((event) =>
+                event.type === "acp" &&
+                (event.payload.sessionUpdate === "user_message_chunk" ||
+                    event.payload.sessionUpdate === "agent_message_chunk" ||
+                    event.payload.sessionUpdate === "tool_call")
+                    ? [event.payload]
+                    : [],
+            );
+        expect(updates(preview)).toEqual(updates(opened));
+        expect(updates(preview)).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    sessionUpdate: "user_message_chunk",
+                    content: { type: "text", text: "Saved prompt" },
+                }),
+                expect.objectContaining({
+                    sessionUpdate: "agent_message_chunk",
+                    content: { type: "text", text: "Saved answer" },
+                }),
+            ]),
+        );
+        expect(preview.truncated).toBe(false);
+    },
+);
