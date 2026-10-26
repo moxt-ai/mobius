@@ -122,6 +122,7 @@ export class SessionManager {
     #retention(sessionId: string): AgentProcessRetention<AgentSession> {
         return {
             isBusy: () =>
+                this.#executionProcesses.get(sessionId)?.hasBackgroundActivity() === true ||
                 this.#executions.isBusy(sessionId) ||
                 this.#executionProcesses.isBusy(sessionId) ||
                 this.#isNativeSessionOperationActive(sessionId),

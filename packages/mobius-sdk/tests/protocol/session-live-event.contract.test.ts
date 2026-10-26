@@ -21,6 +21,27 @@ const eventWithoutProvenance = {
 const sharedEvent = eventWithoutProvenance;
 
 describe("Session Event V2 contracts", () => {
+    it.each(["running", "completed", "failed", "stopped", "unknown"])(
+        "Given a %s background task, When a tool update crosses the recorded event boundary, Then its explicit task status survives",
+        (status) => {
+            const event = {
+                ...sharedEvent,
+                payload: {
+                    sessionUpdate: "tool_call_update",
+                    toolCallId: "tool-1",
+                    backgroundTask: { id: "task-1", status },
+                },
+            };
+            expect(decodeSessionEvent(event)).toEqual(event);
+            expect(() =>
+                decodeSessionEvent({
+                    ...event,
+                    payload: { ...event.payload, backgroundTask: { id: "task-1", status: "invented" } },
+                }),
+            ).toThrow();
+        },
+    );
+
     it("Given a session event, When it crosses the protocol boundary, Then it is accepted", () => {
         expect(decodeSessionEvent(eventWithoutProvenance)).toEqual(eventWithoutProvenance);
     });

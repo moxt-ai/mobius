@@ -1,6 +1,11 @@
 import { getSessionMessages, importSessionToStore, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { withDeadline, withEnvironment } from "./utils.js";
 
+export type EnvironmentSessionMessage = SessionMessage & {
+    readonly nativeOrigin?: unknown;
+    readonly nativeToolUseResult?: unknown;
+};
+
 const SESSION_MESSAGES_TIMEOUT_MILLISECONDS = 30_000;
 
 /**
@@ -16,33 +21,31 @@ export function getEnvironmentSessionMessages(
     environment: Readonly<NodeJS.ProcessEnv>,
     sessionId: string,
     signal: AbortSignal,
-): Promise<readonly SessionMessage[]> {
+): Promise<readonly EnvironmentSessionMessage[]> {
     return withEnvironment(environment, () =>
         withDeadline(signal, SESSION_MESSAGES_TIMEOUT_MILLISECONDS, async () => {
             const messages = await getSessionMessages(sessionId);
-            if (
-                !messages.some(
-                    ({ type, message }) =>
-                        type === "assistant" &&
-                        typeof message === "object" &&
-                        message !== null &&
-                        "model" in message &&
-                        message.model === "<synthetic>",
-                )
-            ) {
-                return messages;
-            }
-            // The SDK's message projection omits the structured error category.
-            // Read that metadata through its transcript API; keep ordering and
+            // The SDK projection omits native provenance, structured tool results, and error categories.
+            // Read those through its transcript API; keep ordering and
             // conversation-chain selection in getSessionMessages, and never
             // classify a diagnostic by its human-readable text.
             const authenticationFailures = new Set<string>();
+            const nativeMetadata = new Map<
+                string,
+                { readonly nativeOrigin?: unknown; readonly nativeToolUseResult?: unknown }
+            >();
             await importSessionToStore(
                 sessionId,
                 {
                     append: async (_key, entries) => {
                         signal.throwIfAborted();
                         for (const entry of entries) {
+                            if (entry.type === "user" && typeof entry.uuid === "string") {
+                                nativeMetadata.set(entry.uuid, {
+                                    nativeOrigin: entry["origin"],
+                                    nativeToolUseResult: entry["toolUseResult"],
+                                });
+                            }
                             if (
                                 entry.type === "assistant" &&
                                 entry["error"] === "authentication_failed" &&
@@ -57,7 +60,9 @@ export function getEnvironmentSessionMessages(
                 { includeSubagents: false },
             );
             signal.throwIfAborted();
-            return messages.filter((message) => !authenticationFailures.has(message.uuid));
+            return messages
+                .filter((message) => !authenticationFailures.has(message.uuid))
+                .map((message) => ({ ...message, ...nativeMetadata.get(message.uuid) }));
         }),
     );
 }

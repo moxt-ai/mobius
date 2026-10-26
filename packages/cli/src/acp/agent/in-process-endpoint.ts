@@ -48,6 +48,8 @@ export interface InProcessAcpEndpoint {
 /** The verified local inputs an endpoint is allowed to launch from. */
 export interface InProcessAcpEndpointOptions {
     /** The vendor executable, already resolved and revalidated by discovery. */
+    /** Local lifecycle evidence only; never inferred from persisted or remote ACP metadata. */
+    readonly onBackgroundActivity?: (active: boolean) => void;
     readonly command: string;
     readonly cwd: string;
     readonly environment: Readonly<Record<string, string>>;

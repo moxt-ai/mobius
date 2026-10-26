@@ -37,6 +37,7 @@ const COMPACT_TIMEOUT_MILLISECONDS = 3_600_000;
 const COMPACT_ITEM_WAIT_MILLISECONDS = 600_000;
 
 interface OwnedAgentContext {
+    readonly onBackgroundActivity?: (active: boolean) => void;
     readonly client: CodexAppServerClient;
     readonly settings: CodexSettings;
     readonly threadId: () => string;
@@ -180,6 +181,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
     readonly #agentMessages = new Map<string, "started" | "streaming">();
     #turn: ActiveTurn | null = null;
     #nativeTurnId: string | null = null;
+    readonly #runningCommands = new Map<string, "foreground" | "background">();
     #updateTail: Promise<void> = Promise.resolve();
     // The compaction whose contextCompaction item/started has been reported but whose
     // terminal state has not. Exactly one may be open: Codex compacts sequentially,
@@ -360,6 +362,19 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
         if (method === "turn/completed") {
             const decoded = turnNotificationSchema.safeParse(params);
             if (decoded.success && decoded.data.threadId === this.#context.threadId()) {
+                await this.#enqueue(async () => {
+                    for (const [id, mode] of this.#runningCommands) {
+                        if (mode === "background") {
+                            continue;
+                        }
+                        this.#runningCommands.set(id, "background");
+                        await this.#context.emit({
+                            sessionUpdate: "tool_call_update",
+                            toolCallId: id,
+                            _meta: { "mobius.backgroundTask": { id, status: "running" } },
+                        });
+                    }
+                });
                 await this.#completeTurn(decoded.data.turn);
             }
             return;
@@ -533,10 +548,32 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
         const update = toolCallUpdate(item, method === "item/completed" ? "completed" : "started");
         if (update !== null) {
             await this.#enqueue(async () => {
+                if (item.type === "commandExecution" && method === "item/started") {
+                    this.#runningCommands.set(item.id, "foreground");
+                    this.#context.onBackgroundActivity?.(true);
+                }
                 if (method === "item/started") {
                     await this.#context.emit({ ...update, sessionUpdate: "tool_call" });
                 } else {
-                    await this.#context.emit({ ...update, sessionUpdate: "tool_call_update" });
+                    await this.#context.emit({
+                        ...update,
+                        sessionUpdate: "tool_call_update",
+                        ...(this.#runningCommands.get(item.id) === "background"
+                            ? {
+                                  _meta: {
+                                      ...update._meta,
+                                      "mobius.backgroundTask": {
+                                          id: item.id,
+                                          status: update.status === "completed" ? "completed" : "failed",
+                                      },
+                                  },
+                              }
+                            : {}),
+                    });
+                }
+                if (item.type === "commandExecution" && method === "item/completed") {
+                    this.#runningCommands.delete(item.id);
+                    this.#context.onBackgroundActivity?.(this.#runningCommands.size > 0);
                 }
             });
         }

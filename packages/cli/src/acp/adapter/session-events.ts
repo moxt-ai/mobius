@@ -66,6 +66,7 @@ interface SessionConnectionScope {
 }
 
 export interface AdapterSessionConnectionOptions extends SessionConnectionScope {
+    readonly onBackgroundActivity?: (active: boolean) => void;
     readonly interactions: Pick<AcpClientHandler, "onPermission" | "onElicitation" | "onElicitationComplete">;
 }
 
@@ -82,6 +83,9 @@ export interface AdapterSessionConnector {
 /** ACP subscription lifetime, ordered delivery and harness normalization belong to the adapter. */
 export class AdapterSessionConnection {
     readonly #connection: AgentConnection;
+    readonly #onBackgroundActivity: (active: boolean) => void;
+    #backgroundActivity = false;
+    readonly hasBackgroundActivity = (): boolean => this.#backgroundActivity;
     readonly #updates: AgentUpdateStream;
     readonly #lifetime = new AbortController();
     readonly #onClosed: () => void;
@@ -94,6 +98,7 @@ export class AdapterSessionConnection {
         onClosed: () => void = () => undefined,
     ) {
         this.#onClosed = onClosed;
+        this.#onBackgroundActivity = options.onBackgroundActivity ?? (() => {});
         const protocol = sessionConfigProtocolForAgent(options.agent.id);
         this.#updates = new AgentUpdateStream(async (notification: SessionNotification) => {
             this.#lifetime.signal.throwIfAborted();
@@ -105,7 +110,20 @@ export class AdapterSessionConnection {
                 const externalized = await externalizer.update(options.sessionId(), incoming, signal);
                 signal.throwIfAborted();
                 const update = externalized.agent;
-                const payload = decodeAcpSessionUpdate(JSON.stringify(normalizeEvent(externalized.event)));
+                const eventUpdate = externalized.event;
+                const backgroundTask = update._meta?.["mobius.backgroundTask"];
+                const payload = decodeAcpSessionUpdate(
+                    JSON.stringify(
+                        normalizeEvent(
+                            (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") &&
+                                backgroundTask !== undefined &&
+                                typeof eventUpdate === "object" &&
+                                eventUpdate !== null
+                                ? { ...eventUpdate, backgroundTask }
+                                : eventUpdate,
+                        ),
+                    ),
+                );
                 let event: AdapterSessionEvent;
                 switch (update.sessionUpdate) {
                     case "available_commands_update":
@@ -187,7 +205,13 @@ export class AdapterSessionConnection {
             onElicitation: options.interactions.onElicitation,
             onElicitationComplete: options.interactions.onElicitationComplete,
         };
-        this.#connection = new AgentConnection(options.agent, options.cwd, client);
+        this.#connection = new AgentConnection(options.agent, options.cwd, client, (active) => {
+            if (this.#lifetime.signal.aborted) {
+                return;
+            }
+            this.#backgroundActivity = active;
+            this.#onBackgroundActivity(active);
+        });
     }
 
     get connection() {
@@ -210,6 +234,8 @@ export class AdapterSessionConnection {
                 await this.#updates.drained().catch(() => undefined);
             } finally {
                 this.#onClosed();
+                this.#backgroundActivity = false;
+                this.#onBackgroundActivity(false);
             }
         }
     };

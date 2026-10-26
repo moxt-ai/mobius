@@ -113,7 +113,12 @@ export class AgentConnection {
     readonly connection: ClientConnection;
     readonly termination: Promise<AcpEndpointTermination>;
     readonly #process: EndpointProcess;
-    constructor(agent: AcpAgentDefinition, cwd: string, client: AcpClientHandler) {
+    constructor(
+        agent: AcpAgentDefinition,
+        cwd: string,
+        client: AcpClientHandler,
+        onBackgroundActivity: (active: boolean) => void = () => {},
+    ) {
         if (agent.kind === "in-process-acp") {
             // Mobius hosts the ACP Agent in-process and drives the vendor's own protocol, so there is
             // no adapter process to spawn or supervise here. The endpoint owns its own resources.
@@ -122,6 +127,7 @@ export class AgentConnection {
                 cwd,
                 environment: agent.environment,
                 onSessionUpdate: client.onUpdate,
+                onBackgroundActivity,
             });
             this.#process = { kind: "in-process", endpoint: inProcess };
             this.termination = inProcess.terminated;

@@ -5,14 +5,30 @@ type UpgradeAdmission =
     | { readonly kind: "waiting"; readonly reserve: () => void }
     | { readonly kind: "reserved" };
 
-/** Shared by every Runtime in a worker, including turns waiting for input or queue admission. */
+/** Worker upgrade admission: foreground turns, queued input, and live native background work. */
 export class RuntimeTurnActivity {
     readonly #turns = new Set<ActiveRuntimeTurn>();
+    readonly #backgroundSources = new Set<object>();
     #admission: UpgradeAdmission = { kind: "open" };
 
     readonly acceptsPrompts = (): boolean => this.#admission.kind !== "reserved";
 
-    readonly count = (): number => this.#turns.size;
+    readonly count = (): number => this.#turns.size + this.#backgroundSources.size;
+
+    readonly setBackgroundActivity = (source: object, active: boolean): void => {
+        if (active) {
+            this.#backgroundSources.add(source);
+        } else {
+            this.#backgroundSources.delete(source);
+        }
+        this.#reserveIfIdle();
+    };
+
+    #reserveIfIdle(): void {
+        if (this.count() === 0 && this.#admission.kind === "waiting") {
+            this.#admission.reserve();
+        }
+    }
 
     readonly start = (turn: ActiveRuntimeTurn): void => {
         this.#turns.add(turn);
@@ -20,10 +36,8 @@ export class RuntimeTurnActivity {
 
     readonly finish = (turn: ActiveRuntimeTurn): void => {
         this.#turns.delete(turn);
-        if (this.#turns.size === 0 && this.#admission.kind === "waiting") {
-            // Close admission synchronously with the last completion, before another prompt can start.
-            this.#admission.reserve();
-        }
+        // Close admission synchronously with the last completion.
+        this.#reserveIfIdle();
     };
 
     readonly reserveWhenIdle = (signal: AbortSignal): Promise<Disposable> => {
@@ -48,7 +62,7 @@ export class RuntimeTurnActivity {
             };
             this.#admission = { kind: "waiting", reserve };
             signal.addEventListener("abort", abort, { once: true });
-            if (this.#turns.size === 0) {
+            if (this.count() === 0) {
                 reserve();
             }
         });

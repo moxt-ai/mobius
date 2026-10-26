@@ -111,6 +111,7 @@ export class AgentSession implements AgentSessionRestore {
         return this.#store;
     }
 
+    readonly hasBackgroundActivity = (): boolean => this.#connection.hasBackgroundActivity();
     readonly #connection: AdapterSessionConnection;
     readonly #adapter: Adapter;
     readonly #additionalDirectories: readonly string[];
@@ -182,6 +183,7 @@ export class AgentSession implements AgentSessionRestore {
             ...scope,
             additionalDirectories: this.#additionalDirectories,
             capabilities: () => this.#capabilities,
+            onBackgroundActivity: (active) => this.#getObserver().onBackgroundActivity?.(this, active),
             interactions: {
                 onPermission: this.#interactions.onPermission,
                 onElicitation: this.#interactions.onElicitation,

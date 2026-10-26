@@ -9,13 +9,20 @@ export async function writeCodexFaultLauncher(codex: CodexFixture, path: string,
         path,
         `#!${process.execPath}
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync, watch } from "node:fs";
+import { dirname } from "node:path";
 import { createInterface } from "node:readline";
 const child = spawn(${JSON.stringify(launch.command)}, [...${JSON.stringify(launch.arguments)}, ...process.argv.slice(2)], {
     stdio: ["pipe", "pipe", "inherit"], env: { ...process.env, ...${JSON.stringify(codex.environment)} },
 });
 let pending;
 const faultPath = ${JSON.stringify(faultPath)};
+watch(dirname(faultPath), () => {
+    if (existsSync(faultPath) && readFileSync(faultPath, "utf8") === "idle-exit") {
+        unlinkSync(faultPath);
+        child.kill("SIGKILL");
+    }
+});
 createInterface({input: process.stdin}).on("line", line => {
     const message = JSON.parse(line);
     if (message.method === "turn/start" && existsSync(faultPath)) {

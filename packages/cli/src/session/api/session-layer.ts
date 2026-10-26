@@ -25,14 +25,24 @@ import { NullSessionObserver } from "./session-api.ts";
 
 /** Records live session events through the projection and publishes info updates through the sink. */
 export class SessionLayerObserver extends NullSessionObserver {
+    readonly #backgroundActivity: (source: object, active: boolean) => void;
     readonly #publishInfo: (event: SessionInfoUpdatedEvent) => void;
     readonly #record: (event: SessionLiveEvent) => void;
 
-    constructor(record: (event: SessionLiveEvent) => void, publishInfo: (event: SessionInfoUpdatedEvent) => void) {
+    constructor(
+        record: (event: SessionLiveEvent) => void,
+        publishInfo: (event: SessionInfoUpdatedEvent) => void,
+        backgroundActivity: (source: object, active: boolean) => void = () => {},
+    ) {
         super();
+        this.#backgroundActivity = backgroundActivity;
         this.#publishInfo = publishInfo;
         this.#record = record;
     }
+
+    override readonly onBackgroundActivity = (source: object, active: boolean): void => {
+        this.#backgroundActivity(source, active);
+    };
 
     override readonly onSessionEvent = (event: SessionLiveEvent): Promise<void> => {
         this.#record(event);
@@ -80,10 +90,17 @@ export function buildSessionLayer(options: SessionLayerOptions) {
     const activeSessions = new SessionTurns(operations, options.turnActivity);
     const directories = new WorkspaceDirectoryService(bindingId, defaultWorkspace);
     const manager = new SessionManager({
-        observer: new SessionLayerObserver((event) => {
-            operations.recordOutcome(event);
-            eventProjection.record(event);
-        }, sink.publishInfo),
+        observer: new SessionLayerObserver(
+            (event) => {
+                operations.recordOutcome(event);
+                eventProjection.record(event);
+            },
+            sink.publishInfo,
+            (source, active) => {
+                options.turnActivity?.setBackgroundActivity(source, active);
+                options.processes.notifyChanged();
+            },
+        ),
         store: sessionStore,
         processes: options.processes,
         sessionIdentity: "native",

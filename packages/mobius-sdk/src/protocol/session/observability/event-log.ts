@@ -153,7 +153,14 @@ export const toolKindSchema = z.enum([
     "other",
 ]);
 export const toolStatusSchema = z.enum(["pending", "in_progress", "completed", "failed"]);
+const backgroundTaskSchema = z
+    .object({
+        id: shortString,
+        status: z.enum(["running", "completed", "failed", "stopped", "unknown"]),
+    })
+    .readonly();
 const toolPatchFields = {
+    backgroundTask: backgroundTaskSchema.optional(),
     content: z.array(toolCallContentSchema).max(MAX_COLLECTION_SIZE).readonly().nullable().optional(),
     kind: toolKindSchema.nullable().optional(),
     locations: z.array(toolCallLocationSchema).max(MAX_COLLECTION_SIZE).readonly().nullable().optional(),
@@ -245,6 +252,7 @@ export const acpSessionUpdateSchema = z.discriminatedUnion("sessionUpdate", [
         .readonly(),
     z
         .object({
+            backgroundTask: backgroundTaskSchema.optional(),
             content: z.array(toolCallContentSchema).max(MAX_COLLECTION_SIZE).readonly().optional(),
             kind: toolKindSchema.optional(),
             locations: z.array(toolCallLocationSchema).max(MAX_COLLECTION_SIZE).readonly().optional(),
