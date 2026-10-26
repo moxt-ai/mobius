@@ -85,21 +85,22 @@ test("Given real Codex has accepted a steering prompt, When V2 recovery reloads 
                     sessionId: peer.sessionId,
                 }),
             );
+            let steeringEventId: string | undefined;
             for (;;) {
                 const message = await peer.nextMessage();
                 if (decodeMessageKind(message) !== "session.event.v2") {
                     continue;
                 }
-                if (
-                    decodeSessionEventEnvelope(message).events.some(
-                        (event) =>
-                            event.type === "lifecycle-metadata" &&
-                            event.payload.kind === "prompt.requested" &&
-                            event.payload.content.some(
-                                (content) => content.type === "text" && content.text === steeringPrompt,
-                            ),
-                    )
-                ) {
+                const requested = decodeSessionEventEnvelope(message).events.find(
+                    (event) =>
+                        event.type === "lifecycle-metadata" &&
+                        event.payload.kind === "prompt.requested" &&
+                        event.payload.content.some(
+                            (content) => content.type === "text" && content.text === steeringPrompt,
+                        ),
+                );
+                if (requested !== undefined) {
+                    steeringEventId = requested.eventId;
                     break;
                 }
             }
@@ -125,13 +126,15 @@ test("Given real Codex has accepted a steering prompt, When V2 recovery reloads 
                 expect(
                     recovered.events.events.events.some(
                         (event) =>
-                            event.type === "lifecycle-metadata" &&
-                            event.payload.kind === "prompt.requested" &&
-                            event.payload.content.some(
-                                (content) => content.type === "text" && content.text === steeringPrompt,
-                            ),
+                            event.type === "acp" &&
+                            event.payload.sessionUpdate === "user_message_chunk" &&
+                            event.payload.content.type === "text" &&
+                            event.payload.content.text === steeringPrompt &&
+                            event.eventId === steeringEventId &&
+                            event.payload.messageId === steeringEventId,
                     ),
                 ).toBe(true);
+                expect(recovered.events.events.events.every((event) => event.type === "acp")).toBe(true);
                 break;
             }
         });
@@ -140,7 +143,7 @@ test("Given real Codex has accepted a steering prompt, When V2 recovery reloads 
     }
 });
 
-test("Given real Codex advances between repeated prompts, When V2 recovery paginates the active stream, Then every ACP update remains ordered without reconciliation", async () => {
+test("Given real Codex advances between repeated prompts, When V2 recovery paginates the active stream, Then both user messages remain distinct and projected events stay ordered", async () => {
     const activeEntered = Promise.withResolvers<void>();
     const queuedEntered = Promise.withResolvers<void>();
     const releaseActive = Promise.withResolvers<void>();
@@ -254,41 +257,19 @@ test("Given real Codex advances between repeated prompts, When V2 recovery pagin
                         break;
                     }
                 }
-                expect(
-                    historyEvents.filter(
-                        (event) =>
-                            event.type === "lifecycle-metadata" &&
-                            event.payload.kind === "prompt.requested" &&
-                            event.payload.content.some(
-                                (content) => content.type === "text" && content.text === repeatedPrompt,
-                            ),
-                    ),
-                ).toHaveLength(2);
-                expect(
-                    historyEvents.find(
-                        (event) =>
-                            event.type === "lifecycle-metadata" &&
-                            event.payload.kind === "prompt.requested" &&
-                            event.payload.commandId === queued,
-                    ),
-                ).toMatchObject({
-                    payload: {
-                        disposition: SessionPromptDisposition.Queue,
-                        targetCommandId: active,
-                    },
-                });
-                expect(
-                    historyEvents.filter(
-                        (event) =>
-                            event.type === "acp" &&
-                            event.payload.sessionUpdate === "user_message_chunk" &&
-                            event.payload.content.type === "text" &&
-                            event.payload.content.text === repeatedPrompt,
-                    ),
-                ).toHaveLength(0);
-                expect(
-                    historyEvents.flatMap((event) => (event.type === "lifecycle-metadata" ? [event.payload.kind] : [])),
-                ).toEqual(expect.arrayContaining(["prompt.requested", "prompt.started", "prompt.completed"]));
+                const userMessages = historyEvents.filter(
+                    (event) =>
+                        event.type === "acp" &&
+                        event.payload.sessionUpdate === "user_message_chunk" &&
+                        event.payload.content.type === "text" &&
+                        event.payload.content.text === repeatedPrompt,
+                );
+                expect(userMessages).toHaveLength(2);
+                expect(new Set(userMessages.map((event) => event.eventId)).size).toBe(2);
+                for (const event of userMessages) {
+                    expect(event).toMatchObject({ payload: { messageId: event.eventId } });
+                }
+                expect(historyEvents.every((event) => event.type === "acp")).toBe(true);
                 expect(historyEvents.map((event) => event.eventId)).toEqual(
                     historyEvents.map((event) => event.eventId).toSorted(),
                 );

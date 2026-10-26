@@ -81,14 +81,6 @@ export function registerTurns(agent: ReturnType<typeof acp.agent>) {
                 ),
             });
             nativeHistory.set(context.params.sessionId, transcript);
-            await context.client.notify(acp.methods.client.session.update, {
-                sessionId: context.params.sessionId,
-                update: {
-                    content: { text: prompt, type: "text" },
-                    messageId: `user-${turnNumber.toString()}`,
-                    sessionUpdate: "user_message_chunk",
-                },
-            });
             if (process.env["MOBIUS_FAKE_ACP_OVERSIZED_HISTORY_IMAGE"] === "1") {
                 await context.client.notify(acp.methods.client.session.update, {
                     sessionId: context.params.sessionId,

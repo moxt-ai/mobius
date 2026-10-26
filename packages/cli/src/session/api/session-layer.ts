@@ -71,8 +71,6 @@ export function buildSessionLayer(options: SessionLayerOptions) {
         events = new CachedSessionEventStore(
             new SessionEventCacheTable(openSessionEventCacheDatabase(databases.events)),
             new SqliteSessionLiveEventPosition(new LiveEventPositionTable(sessionDatabase)),
-            undefined,
-            (sessionId) => operations.terminalOutcomes(sessionId),
         );
     } catch (error) {
         sessionDatabase.close();

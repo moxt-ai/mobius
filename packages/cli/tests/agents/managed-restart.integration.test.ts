@@ -180,7 +180,8 @@ async function interruptedJourney(
                     targetCommandId: "",
                 }),
             );
-        sendPrompt(commandId, "Begin work that will be interrupted by the runtime restart");
+        const interruptedPrompt = "Begin work that will be interrupted by the runtime restart";
+        sendPrompt(commandId, interruptedPrompt);
         stage = "waiting for the original provider request";
         await awaitPeerOperation(entered, peer.signal);
         stage = "restarting the managed runtime";
@@ -213,7 +214,7 @@ async function interruptedJourney(
                 break;
             }
         }
-        stage = "reading restored execution facts";
+        stage = "reading restored conversation history";
         const historyId = randomUUID();
         peer.send(
             encodeSessionHistoryPageLoad({
@@ -239,12 +240,13 @@ async function interruptedJourney(
             expect(
                 history.events.events.events.some(
                     (event) =>
-                        event.type === "lifecycle-metadata" &&
-                        event.payload.kind === "prompt.failed" &&
-                        event.payload.commandId === commandId &&
-                        event.payload.code === "runtime_restarted",
+                        event.type === "acp" &&
+                        event.payload.sessionUpdate === "user_message_chunk" &&
+                        event.payload.content.type === "text" &&
+                        event.payload.content.text === interruptedPrompt,
                 ),
             ).toBe(true);
+            expect(history.events.events.events.every((event) => event.type === "acp")).toBe(true);
             break;
         }
         stage = "completing the continuation";
