@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
@@ -19,7 +19,12 @@ test("Given an installed release, When a user imports its APIs and starts the CL
     skip: unsupported,
 }, async () => {
     const directory = await mkdtemp(join(tmpdir(), "mobius-installed-release-"));
-    const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: join(directory, "state") };
+    const environment = {
+        ...process.env,
+        MOBIUS_STATE_DIRECTORY: join(directory, "state"),
+        NPM_CONFIG_OFFLINE: "true",
+        NPM_CONFIG_CACHE: join(directory, "npm-cache"),
+    };
     const run = (args) =>
         execute(process.execPath, args, {
             cwd: root,
@@ -29,6 +34,13 @@ test("Given an installed release, When a user imports its APIs and starts the CL
             windowsHide: true,
         });
     try {
+        // Exercise this exact, potentially unpublished archive, not a registry release
+        // with the same version. Missing-release downloads have their own registry journey.
+        await cp(
+            join(root, "node_modules"),
+            join(environment.MOBIUS_STATE_DIRECTORY, "npm", metadata.version, "node_modules"),
+            { recursive: true },
+        );
         await run([
             "--input-type=module",
             "--eval",
