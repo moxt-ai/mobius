@@ -24,6 +24,7 @@ import {
 } from "../../src/daemon/pairing/pair-local-machine.ts";
 import { ClaudeFixture } from "../support/agents/claude.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
+import { writeCodexFaultLauncher } from "../support/agents/codex-process-fault.ts";
 import { PiFixture } from "../support/agents/pi.ts";
 import { installWorkspaceDaemonRelease } from "../support/installed-daemon-release.ts";
 import { FakeAnthropicProvider } from "../support/llm/anthropic.ts";
@@ -38,12 +39,14 @@ test.each([
     { agentId: "claude", mode: "background", exitCode: 1, taskCount: 1 },
     { agentId: "codex", mode: "background", exitCode: 0, taskCount: 1 },
     { agentId: "codex", mode: "background", exitCode: 1, taskCount: 1 },
+    { agentId: "codex", mode: "endpoint-exit", exitCode: 0, taskCount: 1 },
     { agentId: "pi", mode: "foreground", exitCode: 0, taskCount: 1 },
 ])(
-    "Given $agentId has $mode work with $taskCount tasks exiting with $exitCode, When an automatic release is downloaded, Then work and its result handling finish before the daemon switches",
+    "Given $agentId has $mode work with $taskCount tasks exiting with $exitCode, When an automatic release is downloaded, Then the daemon waits for native work and result handling or owner cleanup before switching",
     async ({ agentId, mode, exitCode, taskCount }) => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-active-upgrade-"));
         const signal = AbortSignal.timeout(180_000);
+        const faultPath = join(directory, "codex-fault");
         const answering = Promise.withResolvers<void>();
         const releaseAnswer = Promise.withResolvers<void>();
         const taskStarted = Promise.withResolvers<void>();
@@ -121,9 +124,16 @@ test.each([
                     ],
                 }),
             );
-            return agentId === "codex"
-                ? resources.use(await CodexFixture.create(provider))
-                : resources.use(await PiFixture.create(provider));
+            if (agentId !== "codex") {
+                return resources.use(await PiFixture.create(provider));
+            }
+            const fixture = resources.use(await CodexFixture.create(provider));
+            if (mode !== "endpoint-exit") {
+                return fixture;
+            }
+            const launcher = join(directory, "codex.mjs");
+            await writeCodexFaultLauncher(fixture, launcher, faultPath);
+            return { environment: { ...fixture.environment, MOBIUS_CODEX_PATH: launcher } };
         })();
         const environment = {
             ...process.env,
@@ -371,7 +381,7 @@ test.each([
                 permission = await wait(permitted.promise);
             } else {
                 await wait(taskStarted.promise);
-                if (mode === "background") {
+                if (mode !== "foreground") {
                     await wait(completions.get(first)?.promise ?? Promise.reject(new Error("Missing completion")));
                 }
             }
@@ -382,7 +392,7 @@ test.each([
                     Promise.race([deferred.promise.then(() => "deferred"), upgraded.promise.then(() => "upgraded")]),
                 ),
             ).toBe("deferred");
-            if (mode === "background") {
+            if (mode !== "foreground") {
                 expect(taskStatuses).toContain("running");
                 const sessionId = nativeSessions.get(first);
                 if (sessionId === undefined) {
@@ -395,7 +405,11 @@ test.each([
                 expect(await readFile(join(control.stateDirectory, "worker.lock"), "utf8")).toBe(worker);
             }
             holdAnswer = true;
-            releaseTask.resolve();
+            if (mode === "endpoint-exit") {
+                await writeFile(faultPath, "idle-exit");
+            } else {
+                releaseTask.resolve();
+            }
             if (mode === "background" && agentId === "claude") {
                 await wait(answering.promise);
                 expect(await readFile(join(control.stateDirectory, "worker.lock"), "utf8")).toBe(worker);

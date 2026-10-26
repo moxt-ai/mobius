@@ -81,11 +81,13 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
     #connection: AgentConnection | null = null;
     readonly #settings: CodexSettings;
     readonly #onSessionUpdate: (notification: SessionNotification) => Promise<void>;
+    readonly #onBackgroundActivity: InProcessAcpEndpointOptions["onBackgroundActivity"];
     #nativeSessionId = "";
     #sessionAgent: CodexSessionAgent;
 
     constructor(options: InProcessAcpEndpointOptions) {
         this.#onSessionUpdate = options.onSessionUpdate;
+        this.#onBackgroundActivity = options.onBackgroundActivity;
         this.#appServer = new CodexAppServerClient({
             command: options.command,
             cwd: options.cwd,
@@ -106,7 +108,13 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             threadId: () => this.#nativeSessionId,
             connection: () => this.#connection,
             emit: this.#emit,
-            onBackgroundActivity: (active) => options.onBackgroundActivity?.(active),
+            onBackgroundActivity: (active) => {
+                // Closure owns the final release after process cleanup. Queued native
+                // items must not reacquire activity once that cleanup has started.
+                if (this.#closePromise === null) {
+                    this.#onBackgroundActivity?.(active);
+                }
+            },
             close: this.close,
         });
         this.terminated = this.#appServer.terminated;
@@ -270,6 +278,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                     await stopProcessTree(child, captured);
                 } finally {
                     this.#connection?.close();
+                    this.#onBackgroundActivity?.(false);
                 }
             })();
         }
