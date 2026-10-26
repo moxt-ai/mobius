@@ -7,6 +7,7 @@ import {
     type PromptResource,
     type SessionCapabilities,
     type SessionConfigurationSelection,
+    type SessionHistoryPolicy,
     type TurnRequest,
 } from "@moxt-ai/mobius-sdk/protocol";
 
@@ -234,6 +235,7 @@ export interface SubmitMobiusTurnRequest {
     readonly disposition?: string;
     readonly idempotencyKey: string;
     readonly images: readonly PromptImage[];
+    readonly historyPolicy?: SessionHistoryPolicy;
     readonly resources: readonly PromptResource[];
     readonly sessionConfigurations?: readonly SessionConfigurationSelection[];
     readonly targetCommandId?: string;

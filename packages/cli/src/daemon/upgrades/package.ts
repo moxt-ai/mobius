@@ -1,6 +1,6 @@
 import { isAbsolute, join, relative } from "node:path";
 import { runtimeUpgradeVersionSchema } from "@moxt-ai/mobius-sdk/protocol";
-import { gt } from "semver";
+import { gt, satisfies, validRange } from "semver";
 import { z } from "zod";
 import { readInstalledRelease, releasePrefix } from "../../storage/daemon/release-files.ts";
 import { canonicalPath, ensurePrivateDirectory } from "../../storage/files/local-files.ts";
@@ -53,6 +53,7 @@ export async function installDaemonReleaseVersion(version: string, signal: Abort
                 name: z.literal("@moxt-ai/mobius"),
                 version: z.literal(version),
                 bin: z.object({ mobius: z.literal("dist/cli.js") }),
+                engines: z.object({ node: z.string().refine((value) => validRange(value) !== null) }),
             })
             .parse(JSON.parse(installed.manifest));
         const entry = await canonicalPath(join(installed.packageRoot, metadata.bin.mobius));
@@ -60,9 +61,41 @@ export async function installDaemonReleaseVersion(version: string, signal: Abort
         if (resolved.startsWith("..") || isAbsolute(resolved)) {
             throw new Error("Installed entry escaped npm prefix");
         }
+        if (!satisfies(process.versions.node, metadata.engines.node)) {
+            throw new DaemonReleaseUpgradeError(
+                "node_incompatible",
+                `Mobius ${version} requires Node.js ${metadata.engines.node}; the running daemon uses ${process.versions.node} at ${process.execPath}. Update Node.js before retrying.`,
+            );
+        }
+        // Run with the worker's actual executable before requesting any switch.
+        // An engines declaration alone cannot detect unsupported syntax or missing dependencies.
+        try {
+            const result = await runBoundedProcess({
+                command: process.execPath,
+                arguments: [entry, "--version"],
+                cwd: prefix,
+                environment: process.env,
+                signal,
+                timeoutMilliseconds: 30_000,
+                outputLimitBytes: 16 * 1024,
+            });
+            if (!result.stdout.split(/\r?\n/u).includes(`CLI: ${version}`)) {
+                throw new Error("Candidate did not report the requested CLI version");
+            }
+        } catch (cause) {
+            signal.throwIfAborted();
+            throw new DaemonReleaseUpgradeError(
+                "release_startup_failed",
+                `Mobius ${version} startup check failed; the current daemon is unchanged.`,
+                { cause },
+            );
+        }
         return await decodeWorkerLaunch({ executable: process.execPath, entry, version });
     } catch (cause) {
         signal.throwIfAborted();
+        if (cause instanceof DaemonReleaseUpgradeError) {
+            throw cause;
+        }
         throw new DaemonReleaseUpgradeError(
             "npm_install_failed",
             "npm could not install and verify the requested Mobius version",

@@ -15,11 +15,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
-    name: npm
+  detect:
+    name: Detect release
     if: github.repository == 'moxt-ai/mobius'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      changed: ${{ steps.cli-version.outputs.changed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -38,14 +40,28 @@ jobs:
           BEFORE_SHA: ${{ github.event.before }}
         run: node scripts/ci-detect-mobius-cli-version.cjs
 
-      - name: Enable pnpm
-        if: steps.cli-version.outputs.changed == 'true'
-        run: corepack enable
+  verify:
+    needs: detect
+    if: needs.detect.outputs.changed == 'true'
+    uses: ./.github/workflows/cli-compatibility.yml
 
-      - name: Install release dependencies
-        if: steps.cli-version.outputs.changed == 'true'
-        run: pnpm install --frozen-lockfile
-
-      - name: Publish CLI
-        if: steps.cli-version.outputs.changed == 'true'
+  publish:
+    name: npm
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v4
+        with:
+          name: mobius-cli-release
+          path: ${{ runner.temp }}
+      - name: Publish verified CLI archive
         run: node scripts/ci-publish-mobius-release.cjs cli

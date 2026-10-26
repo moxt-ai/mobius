@@ -208,6 +208,27 @@ describe("Daemon hourly npm upgrade", () => {
             expect(await readFile(join(stateRoot, "versions", reuse, "retained-data"), "utf8")).toBe(
                 "existing-target-data",
             );
+            // Reject candidates before replacing the current worker or its data.
+            const workerBeforePreflight = await readFile(join(control.stateDirectory, "worker.lock"), "utf8");
+            for (const candidate of [
+                { version: "99.0.4", node: ">=99.0.0", broken: false, message: "requires Node.js" },
+                { version: "99.0.5", node: cliPackage.engines.node, broken: true, message: "startup check failed" },
+            ]) {
+                packages.set(
+                    candidate.version,
+                    await packedRelease(directory, candidate.version, candidate.broken, signal, {
+                        node: candidate.node,
+                        smokeFailure: candidate.broken,
+                    }),
+                );
+                latest = candidate.version;
+                await expect(cli(["upgrade"])).rejects.toThrow(candidate.message);
+                expect(await readFile(join(control.stateDirectory, "worker.lock"), "utf8")).toBe(workerBeforePreflight);
+                expect((await readFile(join(stateRoot, "current-data.txt"), "utf8")).trim()).toBe(`versions/${reuse}`);
+                expect(
+                    await sendLocalRequest(control.stateDirectory, "manager", { kind: "status" }, signal),
+                ).toMatchObject({ worker: { version: reuse } });
+            }
             latest = bad;
             await tick(manager, 2_000);
             await tick(await readFile(join(control.stateDirectory, "worker.lock"), "utf8"), 3_600_000);

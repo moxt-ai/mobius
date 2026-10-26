@@ -275,6 +275,10 @@ export class CodexSettings {
             approvalPolicy: mode.approvalPolicy,
             approvalsReviewer: mode.approvalsReviewer,
             sandboxPolicy: mode.sandboxPolicy,
+            // Codex only streams its provider-authored reasoning summary when the turn opts in.
+            // Keep the summary channel enabled so Thinking has visible content even when no raw
+            // reasoning text is available.
+            summary: "auto",
             // The collaboration mode rides on the turn: Codex applies it to the
             // thread, where it persists until changed. "Build" is Codex's `default`
             // mode, so it is only sent once a choice exists to apply.

@@ -1,0 +1,66 @@
+import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { test } from "node:test";
+import { promisify } from "node:util";
+
+const execute = promisify(execFile);
+const installation = process.env.MOBIUS_INSTALL_DIRECTORY;
+assert.ok(installation, "MOBIUS_INSTALL_DIRECTORY must identify an installed release");
+const root = resolve(installation);
+const unsupported = process.env.MOBIUS_EXPECT_UNSUPPORTED === "true";
+const entry = join(root, "node_modules/@moxt-ai/mobius/dist/cli.js");
+const metadata = JSON.parse(await readFile(join(root, "node_modules/@moxt-ai/mobius/package.json"), "utf8"));
+
+test("Given an installed release, When a user imports its APIs and starts the CLI, Then help, version and daemon lifecycle work", {
+    timeout: 120_000,
+    skip: unsupported,
+}, async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mobius-installed-release-"));
+    const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: join(directory, "state") };
+    const run = (args) =>
+        execute(process.execPath, args, {
+            cwd: root,
+            env: environment,
+            timeout: 30_000,
+            maxBuffer: 1024 * 1024,
+            windowsHide: true,
+        });
+    try {
+        await run([
+            "--input-type=module",
+            "--eval",
+            "await import('@moxt-ai/mobius/runtime'); await import('@moxt-ai/mobius/process'); await import('@moxt-ai/mobius/filesystem');",
+        ]);
+        assert.match((await run([entry, "--help"])).stdout, /Usage: mobius/);
+        assert.equal((await run([entry, "--version"])).stdout, `CLI: ${metadata.version}\nDaemon: not running\n`);
+        assert.match((await run([entry, "start"])).stdout, /Mobius daemon is running/);
+        assert.equal(
+            (await run([entry, "--version"])).stdout,
+            `CLI: ${metadata.version}\nDaemon: ${metadata.version}\n`,
+        );
+        await run([entry, "quit"]);
+        assert.equal((await run([entry, "--version"])).stdout, `CLI: ${metadata.version}\nDaemon: not running\n`);
+    } finally {
+        await run([entry, "quit"]).catch(() => undefined);
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test("Given an unsupported Node version, When a user launches the installed CLI, Then it reports the requirement without a syntax crash", {
+    skip: !unsupported,
+}, async () => {
+    await assert.rejects(
+        execute(process.execPath, [entry, "--help"], { cwd: root, timeout: 30_000, windowsHide: true }),
+        (error) => {
+            assert.equal(error.code, 1);
+            assert.match(error.stderr, /Mobius requires Node.js/);
+            assert.ok(error.stderr.includes(process.versions.node));
+            assert.ok(error.stderr.includes(process.execPath));
+            assert.doesNotMatch(error.stderr, /SyntaxError/);
+            return true;
+        },
+    );
+});
