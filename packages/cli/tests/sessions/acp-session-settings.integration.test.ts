@@ -4,10 +4,10 @@ import { describe, expect, it } from "vitest";
 import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
 import { NullSessionObserver } from "../../src/session/api/session-api.ts";
-import { SessionManager } from "../../src/session/manager/session-manager.ts";
 import { MemorySessionStore } from "../../src/session/record/session-store.ts";
 import { systemTimer } from "../../src/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
+import { SessionRuntimeFixture as SessionManager } from "../support/session-runtime.ts";
 import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
 
 import { createControlledSession } from "./acp-controls-fixture.ts";

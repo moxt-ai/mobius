@@ -16,7 +16,6 @@ import { AccumulatingOperationMetrics } from "../../src/infra/operation-metrics.
 import { NullSessionObserver } from "../../src/session/api/session-api.ts";
 import { SqliteSessionLiveEventPosition } from "../../src/session/history/live-event-positions.ts";
 import { CachedSessionEventStore } from "../../src/session/history/session-event-store.ts";
-import { SessionManager } from "../../src/session/manager/session-manager.ts";
 import { FoundStoredSession, MemorySessionStore, SqliteSessionStore } from "../../src/session/record/session-store.ts";
 import { AcpSessionTable } from "../../src/storage/session/acp-session-table.ts";
 import { LiveEventPositionTable } from "../../src/storage/session/live-event-position-table.ts";
@@ -24,6 +23,7 @@ import { SessionEventCacheTable } from "../../src/storage/session/session-event-
 import { openAcpSessionDatabase, openSessionEventCacheDatabase } from "../../src/storage/sqlite/local-databases.ts";
 import { systemTimer } from "../../src/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
+import { SessionRuntimeFixture as SessionManager } from "../support/session-runtime.ts";
 import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
 import { RecordingObserver } from "./acp-feature-fixture.ts";
 

@@ -1,17 +1,18 @@
 import { AGENT_SETTINGS_DISCOVERY_FAILED_KIND, type AgentSettingsDiscoverCommand } from "@moxt-ai/mobius-sdk/protocol";
 import { WebSocket } from "undici";
 import { OperationError, operationErrorCode, operationErrorMessage } from "../../infra/operation-error.ts";
+import type { ResolveAgent } from "../../session/api/session-api.ts";
 import { SessionError } from "../../session/api/session-error.ts";
 import type { SessionManager } from "../../session/manager/session-manager.ts";
 import { agentSettingsFailureDetails, discoverAgentSettings } from "../../session/settings/discover-agent-settings.ts";
 import type { WorkspaceDirectoryService } from "../../session/workspace/workspace-directory.ts";
 import type { Timer } from "../../util/timer.ts";
-import { resolveCatalogAgent } from "../catalog/resolve-catalog-agent.ts";
 import type { RuntimeConfig } from "../config.ts";
 import type { RelayConnectionDiagnostics } from "../relay/diagnostics.ts";
 import { send } from "./transport.ts";
 
 interface SettingsDiscoveryDependencies {
+    readonly resolveAgent: ResolveAgent;
     readonly config: RuntimeConfig;
     readonly directories: WorkspaceDirectoryService;
     readonly sessions: SessionManager;
@@ -88,7 +89,7 @@ export function createAgentSettingsDiscoveryHandler(dependencies: SettingsDiscov
             try {
                 const result = await discoverAgentSettings(
                     command,
-                    (agentId, agentSignal) => resolveCatalogAgent(config, agentId, agentSignal),
+                    dependencies.resolveAgent,
                     config.bindingId,
                     directories,
                     sessions,
