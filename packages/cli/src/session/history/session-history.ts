@@ -2,10 +2,7 @@ import type { SessionNotification } from "@agentclientprotocol/sdk";
 import type { AcpSessionUpdate, SessionEventPayload, SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
 import type { SessionEventPage, SessionEventStore } from "./session-event-store.ts";
 
-/**
- * Captures ACP load replay into the V2 session event log without turning
- * historical updates into live turns.
- */
+/** Captures ACP updates into the V2 session event log. */
 export class HistoryReplayCapture {
     readonly #events: SessionEventStore;
     readonly #sessionId: string;

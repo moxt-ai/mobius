@@ -29,9 +29,14 @@ export interface SessionPrepareOptions {
     readonly sessionId: string;
     readonly signal: AbortSignal;
     readonly origin?: NativeSessionOrigin;
+    /** The prompt's native-history behavior when this preparation starts a Session. */
+    readonly recovery?: SessionRecovery;
 }
 
-export type SessionRecovery = { readonly kind: "history-required" } | { readonly kind: "interactive-only" };
+export type SessionRecovery =
+    | { readonly kind: "history-required" }
+    | { readonly kind: "interactive-only" }
+    | { readonly kind: "execution-only" };
 
 export interface AgentSettingsInspectionOptions {
     readonly additionalDirectories: readonly string[];

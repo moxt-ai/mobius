@@ -86,6 +86,10 @@ type SessionLoadState =
           readonly history: HistoryReplayCapture;
           readonly kind: "capturing";
       }
+    | {
+          readonly history: HistoryReplayCapture;
+          readonly kind: "execution-only";
+      }
     | LoadedSession;
 
 type NativeHistoryOwnership =
@@ -414,6 +418,17 @@ export class AgentSession implements AcpClientHandler, AgentSessionRestore {
         await this.#completedHistory(signal, "ACP agent exited while loading history");
     };
 
+    /** Starts live event capture without asking the native Agent to replay its persisted history. */
+    readonly startExecutionOnlyCapture = (): void => {
+        if (this.#sessionLoad.kind !== "not-requested") {
+            return;
+        }
+        this.#sessionLoad = {
+            history: new HistoryReplayCapture(this.#store.events, this.#mobiusSessionId),
+            kind: "execution-only",
+        };
+    };
+
     readonly loadHistoryEvents = async (
         eventLimit: number,
         cursor: string | null,
@@ -699,7 +714,7 @@ export class AgentSession implements AcpClientHandler, AgentSessionRestore {
                 response: {},
             };
         }
-        if (this.#capabilities.loadSession) {
+        if (this.#capabilities.loadSession && this.#sessionLoad.kind !== "execution-only") {
             await this.#completedHistory(options.signal, "ACP agent exited while loading history before a prompt");
         }
         const prompt = this.buildPrompt(options);
@@ -922,7 +937,7 @@ export class AgentSession implements AcpClientHandler, AgentSessionRestore {
     readonly onUpdate = (notification: SessionNotification): Promise<void> => this.#updates.receive(notification);
 
     readonly recordControlEvent = async (event: SessionEventPayload): Promise<boolean> => {
-        if (this.#sessionLoad.kind !== "loaded") {
+        if (this.#sessionLoad.kind !== "loaded" && this.#sessionLoad.kind !== "execution-only") {
             return false;
         }
         await this.recordLifecycleEvent(event);
@@ -930,7 +945,10 @@ export class AgentSession implements AcpClientHandler, AgentSessionRestore {
     };
 
     readonly recordLifecycleEvent = async (event: SessionEventPayload): Promise<void> => {
-        if (event.type !== "lifecycle-metadata" || this.#sessionLoad.kind !== "loaded") {
+        if (
+            event.type !== "lifecycle-metadata" ||
+            (this.#sessionLoad.kind !== "loaded" && this.#sessionLoad.kind !== "execution-only")
+        ) {
             return;
         }
         const liveEvent = this.#sessionLoad.history.recordLifecycle(event);
@@ -953,7 +971,7 @@ export class AgentSession implements AcpClientHandler, AgentSessionRestore {
         const rawUpdate = decodeAcpSessionUpdate(JSON.stringify(externalized.event));
         if (this.#sessionLoad.kind === "capturing") {
             await this.#sessionLoad.history.record(update, rawUpdate);
-        } else if (this.#sessionLoad.kind === "loaded") {
+        } else if (this.#sessionLoad.kind === "loaded" || this.#sessionLoad.kind === "execution-only") {
             const onSessionEvent = this.#getObserver().onSessionEvent;
             await this.#sessionLoad.history.record(update, rawUpdate, async (liveEvent) => {
                 await onSessionEvent?.(liveEvent);
