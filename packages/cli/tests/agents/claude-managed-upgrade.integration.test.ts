@@ -32,30 +32,44 @@ import { fakeProviderPrompts } from "../support/llm/scenarios.ts";
 import { packedRelease } from "../support/packed-daemon-release.ts";
 
 test.each([
-    { agentId: "claude", mode: "foreground", exitCode: 0 },
-    { agentId: "claude", mode: "background", exitCode: 0 },
-    { agentId: "claude", mode: "background", exitCode: 1 },
-    { agentId: "codex", mode: "background", exitCode: 0 },
-    { agentId: "codex", mode: "background", exitCode: 1 },
-    { agentId: "pi", mode: "foreground", exitCode: 0 },
+    { agentId: "claude", mode: "background", exitCode: 0, taskCount: 2 },
+    { agentId: "claude", mode: "foreground", exitCode: 0, taskCount: 1 },
+    { agentId: "claude", mode: "background", exitCode: 0, taskCount: 1 },
+    { agentId: "claude", mode: "background", exitCode: 1, taskCount: 1 },
+    { agentId: "codex", mode: "background", exitCode: 0, taskCount: 1 },
+    { agentId: "codex", mode: "background", exitCode: 1, taskCount: 1 },
+    { agentId: "pi", mode: "foreground", exitCode: 0, taskCount: 1 },
 ])(
-    "Given $agentId has $mode work exiting with $exitCode, When an automatic release is downloaded, Then work and its result handling finish before the daemon switches",
-    async ({ agentId, mode, exitCode }) => {
+    "Given $agentId has $mode work with $taskCount tasks exiting with $exitCode, When an automatic release is downloaded, Then work and its result handling finish before the daemon switches",
+    async ({ agentId, mode, exitCode, taskCount }) => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-active-upgrade-"));
         const signal = AbortSignal.timeout(180_000);
         const answering = Promise.withResolvers<void>();
         const releaseAnswer = Promise.withResolvers<void>();
         const taskStarted = Promise.withResolvers<void>();
         const releaseTask = Promise.withResolvers<void>();
+        const releaseSecondTask = Promise.withResolvers<void>();
+        const secondAnswering = Promise.withResolvers<void>();
+        const releaseSecondAnswer = Promise.withResolvers<void>();
+        const tasksCompleted = Promise.withResolvers<void>();
+        const terminalTasks = new Set<string>();
+        let startedTasks = 0;
+        let heldAnswers = 0;
         const taskServer = createServer(async (_request, response) => {
-            taskStarted.resolve();
-            await releaseTask.promise;
+            startedTasks++;
+            const taskIndex = startedTasks;
+            if (startedTasks === taskCount) {
+                taskStarted.resolve();
+            }
+            await (taskIndex === 1 ? releaseTask.promise : releaseSecondTask.promise);
             response.end("BACKGROUND_COMPLETED");
         });
         await using resources = new AsyncDisposableStack();
         resources.defer(async () => {
             releaseTask.resolve();
+            releaseSecondTask.resolve();
             releaseAnswer.resolve();
+            releaseSecondAnswer.resolve();
             taskServer.closeAllConnections();
             await new Promise<void>((done) => taskServer.close(() => done()));
         });
@@ -71,8 +85,14 @@ test.each([
                             if (!holdAnswer || scenario.toolCalls === 0) {
                                 return;
                             }
-                            answering.resolve();
-                            await releaseAnswer.promise;
+                            heldAnswers++;
+                            if (heldAnswers === 1 || taskCount === 1) {
+                                answering.resolve();
+                                await releaseAnswer.promise;
+                            } else {
+                                secondAnswering.resolve();
+                                await releaseSecondAnswer.promise;
+                            }
                         },
                     }),
                 );
@@ -220,6 +240,15 @@ test.each([
                             event.payload.backgroundTask !== undefined
                         ) {
                             taskStatuses.push(event.payload.backgroundTask.status);
+                            if (
+                                event.payload.backgroundTask.status === "completed" ||
+                                event.payload.backgroundTask.status === "failed"
+                            ) {
+                                terminalTasks.add(event.payload.backgroundTask.id);
+                                if (terminalTasks.size === taskCount) {
+                                    tasksCompleted.resolve();
+                                }
+                            }
                         }
                         if (
                             event.type === "acp" &&
@@ -324,7 +353,7 @@ test.each([
                     () => undefined,
                 );
             });
-            const first = prompt(fakeProviderPrompts.successfulTool);
+            const first = prompt(taskCount === 2 ? fakeProviderPrompts.twoTools : fakeProviderPrompts.successfulTool);
             let second: string | undefined;
             let permission: Awaited<typeof permitted.promise> | undefined;
             if (mode === "foreground" && agentId === "claude") {
@@ -371,6 +400,36 @@ test.each([
                 await wait(answering.promise);
                 expect(await readFile(join(control.stateDirectory, "worker.lock"), "utf8")).toBe(worker);
             }
+            if (taskCount === 2) {
+                releaseSecondTask.resolve();
+                await wait(tasksCompleted.promise);
+                releaseAnswer.resolve();
+                expect(
+                    await wait(
+                        Promise.race([
+                            secondAnswering.promise.then(() => "processing"),
+                            upgraded.promise.then(() => "upgraded"),
+                        ]),
+                    ),
+                ).toBe("processing");
+                // The second result is already held. Let a different session finish
+                // to observe that upgrade admission remains open during that hold.
+                holdAnswer = false;
+                const concurrent = prompt("Say hello");
+                expect(
+                    await wait(
+                        Promise.race([
+                            (
+                                completions.get(concurrent)?.promise ??
+                                Promise.reject(new Error("Missing concurrent completion"))
+                            ).then(() => "completed"),
+                            upgraded.promise.then(() => "upgraded"),
+                        ]),
+                    ),
+                ).toBe("completed");
+                expect(await readFile(join(control.stateDirectory, "worker.lock"), "utf8")).toBe(worker);
+                releaseSecondAnswer.resolve();
+            }
             releaseAnswer.resolve();
             await wait(completions.get(first)?.promise ?? Promise.reject(new Error("Missing first completion")));
             if (second !== undefined && permission !== undefined) {
@@ -396,7 +455,9 @@ test.each([
             expect(await readFile(join(control.stateDirectory, "worker.lock"), "utf8")).not.toBe(worker);
         } finally {
             releaseTask.resolve();
+            releaseSecondTask.resolve();
             releaseAnswer.resolve();
+            releaseSecondAnswer.resolve();
             watcher?.close();
             signal.removeEventListener("abort", abort);
             await cli(["quit"], AbortSignal.timeout(20_000)).catch(() => undefined);

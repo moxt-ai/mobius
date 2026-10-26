@@ -2313,6 +2313,7 @@ export class ClaudeAcpAgent {
     private async runConsumer(session: Session, params: { sessionId: string }): Promise<void> {
         const backgroundTasks = new Set<string>();
         const awaitingBackgroundResults = new Set<string>();
+        let processingBackgroundResults = new Set<string>();
         let hasBackgroundLevel = false;
         const reportBackgroundActivity = () =>
             this.reportBackgroundActivity(session, backgroundTasks.size > 0 || awaitingBackgroundResults.size > 0);
@@ -3046,6 +3047,10 @@ export class ClaudeAcpAgent {
                     case "system":
                         switch (message.subtype) {
                             case "init":
+                                // Init starts a native turn. Its result can only drain notices
+                                // already pending here; tasks finishing during this turn belong
+                                // to a later cycle and must keep process activity reserved.
+                                processingBackgroundResults = new Set(awaitingBackgroundResults);
                                 // Latch the lifecycle capability so cancel() routes orphan
                                 // accounting through `orphanCommands` (per-uuid, exact)
                                 // instead of the coalescing-blind count. Never unlatch: init
@@ -4158,7 +4163,10 @@ export class ClaudeAcpAgent {
                             }
                         } finally {
                             if (message.origin?.kind === "task-notification") {
-                                awaitingBackgroundResults.clear();
+                                for (const id of processingBackgroundResults) {
+                                    awaitingBackgroundResults.delete(id);
+                                }
+                                processingBackgroundResults.clear();
                                 reportBackgroundActivity();
                             }
                             if (!isAutonomousResult) {
