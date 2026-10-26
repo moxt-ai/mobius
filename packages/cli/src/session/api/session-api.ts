@@ -180,6 +180,7 @@ export class AgentSettingsSnapshot {
 export type ResolveAgent = (
     agentId: string,
     signal: AbortSignal,
+    sessionId?: string,
 ) => Promise<{
     readonly agent: AcpAgentDefinition;
     readonly adapter: Adapter;

@@ -109,8 +109,13 @@ export async function runRuntime(
     const adapters = createRuntimeAdapterRegistry(config.adapters, processes, (sessionId, content, contentSignal) =>
         externalContent.put({ ...content, sessionId, signal: contentSignal }),
     );
-    const resolveAgent = async (agentId: string, resolveSignal: AbortSignal) => {
-        const agent = await resolveCatalogAgent(config, agentId, resolveSignal);
+    const resolveAgent = async (agentId: string, resolveSignal: AbortSignal, sessionId?: string) => {
+        const catalogAgent = await resolveCatalogAgent(config, agentId, resolveSignal);
+        const environment = sessionId === undefined ? undefined : config.sessionEnvironment?.({ sessionId, agentId });
+        const agent =
+            environment === undefined
+                ? catalogAgent
+                : catalogAgent.withEnvironment({ ...catalogAgent.environment, ...environment });
         return { agent, adapter: adapters.resolve(agent) };
     };
     const layer = buildSessionLayer({

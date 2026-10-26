@@ -127,7 +127,7 @@ export class NativeSessionService {
         signal.throwIfAborted();
         const options: SessionPrepareOptions = {
             additionalDirectories,
-            ...(await this.#resolveAgent(command.agentId, signal)),
+            ...(await this.#resolveAgent(command.agentId, signal, command.sessionId)),
             cwd,
             sessionId: command.sessionId,
             signal,
