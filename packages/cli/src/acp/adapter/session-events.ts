@@ -121,7 +121,22 @@ export class AdapterSessionConnection {
         });
         this.events = this.#updates;
         const client: AcpClientHandler = {
-            onUpdate: this.#updates.receive,
+            onUpdate: async (notification) => {
+                if (this.#lifetime.signal.aborted) {
+                    return;
+                }
+                try {
+                    await this.#updates.receive(notification);
+                } catch (error) {
+                    // Closing this subscription cancels delivery, not the harness's
+                    // background notification producer. Observe our own cancellation
+                    // here; operational failures still reach the caller and drain.
+                    if (this.#lifetime.signal.aborted && error === this.#lifetime.signal.reason) {
+                        return;
+                    }
+                    throw error;
+                }
+            },
             onPermission: async (request, signal) => {
                 // ACP dispatches requests concurrently. Apply preceding tool updates before describing the permission.
                 await yieldToRuntime(undefined, { signal });
