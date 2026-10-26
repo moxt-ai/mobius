@@ -25,7 +25,7 @@ export interface PromptContent {
  * Builds the ACP content blocks of a prompt: text, images, and linked or embedded resources.
  * Capability gates reject what the selected Agent cannot accept before anything is sent.
  */
-export function buildPromptContent(options: PromptContent, capabilities: SessionCapabilities): ContentBlock[] {
+export function validatePromptContent(options: PromptContent, capabilities: SessionCapabilities): void {
     if (options.images.length > 0 && !capabilities.imagePrompt) {
         throw new AcpExecutionError(
             "The selected agent does not accept image prompts",
@@ -40,6 +40,13 @@ export function buildPromptContent(options: PromptContent, capabilities: Session
             "unsupported_prompt_content",
         );
     }
+    if (options.prompt.length === 0 && options.images.length === 0 && options.resources.length === 0) {
+        throw new AcpExecutionError("A prompt must contain text or an attachment", {}, "empty_prompt");
+    }
+}
+
+export function buildPromptContent(options: PromptContent, capabilities: SessionCapabilities): ContentBlock[] {
+    validatePromptContent(options, capabilities);
     const prompt: ContentBlock[] = [];
     if (options.prompt.length > 0) {
         prompt.push({ text: options.prompt, type: "text" });
@@ -70,9 +77,6 @@ export function buildPromptContent(options: PromptContent, capabilities: Session
                 uri: resource.uri,
             });
         }
-    }
-    if (prompt.length === 0) {
-        throw new AcpExecutionError("A prompt must contain text or an attachment", {}, "empty_prompt");
     }
     return prompt;
 }

@@ -4,6 +4,10 @@ import type { SessionConfigOption, SessionConfigValue } from "@moxt-ai/mobius-sd
 export const AGENT_DEFAULT_REASONING_EFFORT = "agent_default";
 const MAXIMUM_CONFIG_OPTIONS = 100;
 
+export type SessionConfigurationSelection =
+    | { readonly type: "boolean"; readonly configId: string; readonly booleanValue: boolean }
+    | { readonly type: "select"; readonly configId: string; readonly value: string };
+
 export interface SessionConfigChange {
     readonly booleanValue: boolean;
     readonly configId: string;

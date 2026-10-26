@@ -1,6 +1,5 @@
-import { type ContentBlock, methods } from "@agentclientprotocol/sdk";
+import { methods } from "@agentclientprotocol/sdk";
 import {
-    decodeAgentPromptResponse,
     SESSION_COMMANDS_UPDATED_KIND,
     SESSION_CONFIG_UPDATED_KIND,
     SESSION_INFO_UPDATED_KIND,
@@ -9,7 +8,7 @@ import {
     type SessionConfigOption,
     type SessionEventPayload,
 } from "@moxt-ai/mobius-sdk/protocol";
-import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "../../acp/acp-error.ts";
+import { AcpExecutionError } from "../../acp/acp-error.ts";
 import {
     initializeAgentConnection,
     RetryableAcpInitializationError,
@@ -17,8 +16,8 @@ import {
 } from "../../acp/adapter/agent-initialization.ts";
 import type { AdapterSessionConnection, AdapterSessionEvent } from "../../acp/adapter/session-events.ts";
 import type { AcpAgentDefinition } from "../../acp/agent/agent-definition.ts";
-import { buildPromptContent } from "../../acp/client/prompt-content.ts";
-import type { Adapter } from "../../acp/native-history/preview-contract.ts";
+import { validatePromptContent } from "../../acp/client/prompt-content.ts";
+import type { Adapter, AdapterSessionTarget } from "../../acp/native-history/preview-contract.ts";
 import type { NativeSessionOrigin } from "../../acp/protocol/native-session.ts";
 import {
     restrictAcpSessionCapabilities,
@@ -26,16 +25,15 @@ import {
 } from "../../acp/protocol/session-capabilities.ts";
 import {
     type SessionConfigProtocol,
-    SessionConfigProtocolError,
+    type SessionConfigurationSelection,
     sessionConfigProtocolForAgent,
 } from "../../acp/protocol/session-config-protocol.ts";
 import type { OperationMetrics } from "../../infra/operation-metrics.ts";
-import { arraysEqual, isRecord, recordsEqual, truncate } from "../../util/value-utils.ts";
+import { arraysEqual, recordsEqual, truncate } from "../../util/value-utils.ts";
 import {
     type ElicitationResponseOptions,
     type PermissionResponseOptions,
     PreparedSession,
-    type PromptContentOptions,
     type PromptResult,
     type SessionConfigureOptions,
     type SessionObserver,
@@ -182,6 +180,8 @@ export class AgentSession implements AgentSessionRestore {
         };
         this.#connection = this.#adapter.connectSession({
             ...scope,
+            additionalDirectories: this.#additionalDirectories,
+            capabilities: () => this.#capabilities,
             interactions: {
                 onPermission: this.#interactions.onPermission,
                 onElicitation: this.#interactions.onElicitation,
@@ -300,28 +300,8 @@ export class AgentSession implements AgentSessionRestore {
             throw new AcpExecutionError("The Session title cannot be empty", {}, "invalid_session_title");
         }
         const nativeSessionId = this.#updates.sessionId();
-        if (this.#capabilities.renameSession && nativeSessionId.length > 0) {
-            try {
-                await this.race(
-                    this.#connection.connection.agent.request(
-                        "_session/rename",
-                        { sessionId: nativeSessionId, title: normalized },
-                        { cancellationSignal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]) },
-                    ),
-                    "ACP agent exited while renaming the Session",
-                    signal,
-                );
-            } catch (error) {
-                signal.throwIfAborted();
-                if (error instanceof AcpExecutionError) {
-                    throw error;
-                }
-                throw new AcpExecutionError(
-                    "The Agent could not rename the Session",
-                    { cause: error },
-                    "session_rename_failed",
-                );
-            }
+        if (nativeSessionId.length > 0) {
+            await this.#adapter.renameSession(this.#target(), normalized, signal);
         }
         const updatedAt = new Date().toISOString();
         await this.#processEvent({
@@ -346,14 +326,7 @@ export class AgentSession implements AgentSessionRestore {
         await this.#sessionConfigurations.restore(
             session.configurations,
             this.#configOptions,
-            async (selection, signal) =>
-                await this.#applyConfiguration(
-                    selection.configId,
-                    selection.type === "select" ? selection.value : "",
-                    selection.type === "boolean" ? selection.booleanValue : false,
-                    selection.type,
-                    signal,
-                ),
+            this.#applyConfiguration,
             signal,
         );
     };
@@ -515,84 +488,21 @@ export class AgentSession implements AgentSessionRestore {
     };
 
     readonly #applyConfiguration = async (
-        configId: string,
-        value: string,
-        booleanValue: boolean,
-        valueType: SessionConfigOption["type"],
+        selection: SessionConfigurationSelection,
         signal: AbortSignal,
     ): Promise<void> => {
-        const existing = this.#configOptions.find((option) => option.id === configId);
-        if (existing === undefined || existing.type !== valueType) {
-            throw new AcpExecutionError(
-                "The requested ACP configuration option is unavailable",
-                {},
-                "invalid_session_configuration",
-            );
-        }
-        if (existing.type === "select") {
-            if (existing.values.length < 2) {
-                throw new AcpExecutionError(
-                    "The requested ACP configuration option is unavailable",
-                    {},
-                    "invalid_session_configuration",
-                );
-            }
-            if (!existing.values.some((entry) => entry.value === value)) {
-                throw new AcpConfigurationValueUnavailableError(
-                    configId,
-                    value,
-                    existing.values.map((entry) => entry.value),
-                );
-            }
-        }
         const configRevision = this.#configRevision;
-        try {
-            const configured = await this.#sessionConfigProtocol.configure(
-                this.#configOptions,
-                { booleanValue, configId, signal, value },
-                this.#updates.sessionId(),
-                {
-                    request: async (method, params, failureMessage, signal) =>
-                        await this.race(
-                            this.#connection.connection.agent.request(method, params, {
-                                cancellationSignal: signal,
-                            }),
-                            failureMessage,
-                            signal,
-                        ),
-                },
-            );
-            const applied = configured.find((option) => option.id === configId);
-            if (
-                applied === undefined ||
-                applied.type !== valueType ||
-                (applied.type === "boolean" && applied.booleanValue !== booleanValue) ||
-                (applied.type === "select" && applied.currentValue !== value)
-            ) {
-                throw new AcpExecutionError(
-                    "The Agent did not apply the requested session configuration",
-                    {},
-                    "invalid_session_configuration",
-                );
-            }
-            await this.#updates.drained();
-            if (this.#configRevision === configRevision) {
-                this.#configOptions = configured;
-            }
-        } catch (error) {
-            if (error instanceof SessionConfigProtocolError) {
-                throw new AcpExecutionError(error.message, { cause: error }, error.code);
-            }
-            throw error;
+        const configured = await this.#adapter.configureSession(this.#target(), selection, signal);
+        if (this.#configRevision === configRevision) {
+            this.#configOptions = configured;
         }
     };
 
     readonly configure = async (options: SessionConfigureOptions): Promise<readonly SessionConfigOption[]> => {
         await this.#applyConfiguration(
-            options.configId,
-            options.value,
-            options.booleanValue,
-            options.valueType,
+            options.valueType === "boolean"
+                ? { type: "boolean", configId: options.configId, booleanValue: options.booleanValue }
+                : { type: "select", configId: options.configId, value: options.value },
             options.signal,
         );
         const applied = this.#configOptions.find((option) => option.id === options.configId);
@@ -604,8 +514,11 @@ export class AgentSession implements AgentSessionRestore {
         return this.#configOptions;
     };
 
-    readonly buildPrompt = (options: PromptContentOptions): ContentBlock[] =>
-        buildPromptContent(options, this.#capabilities);
+    readonly #target = (): AdapterSessionTarget => ({
+        nativeSessionId: this.#updates.sessionId(),
+        cwd: this.#cwd,
+        additionalDirectories: this.#additionalDirectories,
+    });
 
     readonly prompt = async (options: SessionTurnOptions): Promise<PromptResult> => {
         if (this.#turn.running) {
@@ -621,7 +534,7 @@ export class AgentSession implements AgentSessionRestore {
         if (this.#capabilities.loadSession && this.#sessionLoad.kind !== "execution-only") {
             await this.#completedHistory(options.signal, "ACP agent exited while loading history before a prompt");
         }
-        const prompt = this.buildPrompt(options);
+        validatePromptContent(options, this.#capabilities);
         if (this.#sessionTitle === null || this.#sessionTitle.length === 0) {
             this.#sessionTitle = truncate(options.prompt, 500);
         }
@@ -653,26 +566,7 @@ export class AgentSession implements AgentSessionRestore {
             });
         }
         try {
-            const response: unknown = await this.race(
-                this.#connection.connection.agent.request(
-                    methods.agent.session.prompt,
-                    { prompt, sessionId: this.#updates.sessionId() },
-                    { cancellationSignal: options.signal },
-                ),
-                "ACP agent exited during a prompt",
-                options.signal,
-            );
-            await this.#updates.drained();
-            let result: PromptResult;
-            try {
-                result = decodeAgentPromptResponse(response);
-            } catch (cause) {
-                throw new AcpExecutionError(
-                    "ACP agent returned an invalid prompt response",
-                    { cause },
-                    "acp_invalid_prompt_response",
-                );
-            }
+            const result = await this.#adapter.prompt(this.#target(), options, options.signal);
             this.writeStoredSession(new Date().toISOString());
             if (lifecycle !== undefined) {
                 await this.recordLifecycleEvent({
@@ -721,7 +615,7 @@ export class AgentSession implements AgentSessionRestore {
         if (!this.#turn.running || this.#turn.commandId !== options.targetCommandId) {
             throw new AcpExecutionError("The target turn is no longer active", {}, "steering_target_unavailable");
         }
-        const prompt = this.buildPrompt(options);
+        validatePromptContent(options, this.#capabilities);
         const lifecycle = options.lifecycle;
         if (lifecycle !== undefined) {
             await this.recordLifecycleEvent({
@@ -746,47 +640,14 @@ export class AgentSession implements AgentSessionRestore {
             });
         }
         try {
-            const response: unknown = await this.race(
-                this.#connection.connection.agent.request("_session/steering", {
-                    _meta: { steering: { idleBehavior: "promptRequired" } },
-                    prompt,
-                    sessionId: this.#updates.sessionId(),
-                }),
-                "ACP agent exited during steering",
-                options.signal,
-            );
-            if (!isRecord(response)) {
-                throw new AcpExecutionError(
-                    "ACP agent returned an invalid steering response",
-                    {},
-                    "acp_invalid_steering_response",
-                );
+            const outcome = await this.#adapter.steer(this.#target(), options, options.signal);
+            if (lifecycle !== undefined) {
+                await this.recordLifecycleEvent({
+                    payload: { commandId: options.commandId, kind: "prompt.completed", stopReason: "steered" },
+                    type: "lifecycle-metadata",
+                });
             }
-            const outcome = response["outcome"];
-            if (outcome === "injected" || outcome === "startedNewTurn") {
-                if (lifecycle !== undefined) {
-                    await this.recordLifecycleEvent({
-                        payload: { commandId: options.commandId, kind: "prompt.completed", stopReason: "steered" },
-                        type: "lifecycle-metadata",
-                    });
-                }
-                return outcome;
-            }
-            if (outcome === "promptRequired") {
-                throw new AcpExecutionError(
-                    "The target turn finished before steering could be injected",
-                    {},
-                    "steering_target_unavailable",
-                );
-            }
-            if (outcome === "failed") {
-                throw new AcpExecutionError("The Agent could not inject steering", {}, "steering_failed");
-            }
-            throw new AcpExecutionError(
-                "ACP agent returned an invalid steering response",
-                {},
-                "acp_invalid_steering_response",
-            );
+            return outcome;
         } catch (error) {
             const failure =
                 error instanceof AcpExecutionError

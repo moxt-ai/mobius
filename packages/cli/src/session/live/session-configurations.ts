@@ -1,17 +1,8 @@
 import type { SessionConfigOption } from "@moxt-ai/mobius-sdk/protocol";
 import { z } from "zod";
+import type { SessionConfigurationSelection } from "../../acp/protocol/session-config-protocol.ts";
 
-export type StoredSessionConfiguration =
-    | {
-          readonly booleanValue: boolean;
-          readonly configId: string;
-          readonly type: "boolean";
-      }
-    | {
-          readonly configId: string;
-          readonly type: "select";
-          readonly value: string;
-      };
+export type StoredSessionConfiguration = SessionConfigurationSelection;
 
 const storedSessionConfigurationsSchema = z
     .array(

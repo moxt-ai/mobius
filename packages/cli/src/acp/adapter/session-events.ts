@@ -3,6 +3,7 @@ import type { SessionNotification, SessionUpdate } from "@agentclientprotocol/sd
 import {
     type AcpSessionUpdate,
     decodeAcpSessionUpdate,
+    type SessionCapabilities,
     type SessionCommand,
     type SessionConfigOption,
 } from "@moxt-ai/mobius-sdk/protocol";
@@ -68,6 +69,11 @@ export interface AdapterSessionConnectionOptions extends SessionConnectionScope 
     readonly interactions: Pick<AcpClientHandler, "onPermission" | "onElicitation" | "onElicitationComplete">;
 }
 
+export interface LiveSessionConnectionOptions extends AdapterSessionConnectionOptions {
+    readonly additionalDirectories: readonly string[];
+    readonly capabilities: () => SessionCapabilities;
+}
+
 /** Internal execution port shared by the live session and adapter-owned history capture. */
 export interface AdapterSessionConnector {
     readonly connectSession: (options: AdapterSessionConnectionOptions) => AdapterSessionConnection;
@@ -78,13 +84,16 @@ export class AdapterSessionConnection {
     readonly #connection: AgentConnection;
     readonly #updates: AgentUpdateStream;
     readonly #lifetime = new AbortController();
+    readonly #onClosed: () => void;
     readonly events: Pick<AgentUpdateStream, "sessionId" | "select" | "drained">;
 
     constructor(
         options: AdapterSessionConnectionOptions,
         externalizer: Pick<AcpContentExternalizer, "update">,
         normalizeEvent: (event: unknown) => unknown,
+        onClosed: () => void = () => undefined,
     ) {
+        this.#onClosed = onClosed;
         const protocol = sessionConfigProtocolForAgent(options.agent.id);
         this.#updates = new AgentUpdateStream(async (notification: SessionNotification) => {
             this.#lifetime.signal.throwIfAborted();
@@ -197,7 +206,11 @@ export class AdapterSessionConnection {
             await this.#connection.closeProcess();
         } finally {
             // Every queued delivery is observed before releasing this subscription.
-            await this.#updates.drained().catch(() => undefined);
+            try {
+                await this.#updates.drained().catch(() => undefined);
+            } finally {
+                this.#onClosed();
+            }
         }
     };
 }
