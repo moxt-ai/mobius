@@ -1,4 +1,3 @@
-import type { SessionNotification } from "@agentclientprotocol/sdk";
 import type { AcpSessionUpdate, SessionEventPayload, SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
 import type { SessionEventPage, SessionEventStore } from "./session-event-store.ts";
 
@@ -13,7 +12,6 @@ export class HistoryReplayCapture {
     }
 
     readonly record = async (
-        _update: SessionNotification["update"],
         rawUpdate: AcpSessionUpdate,
         onRecorded: (event: SessionLiveEvent) => Promise<void> = () => Promise.resolve(),
     ): Promise<void> => {

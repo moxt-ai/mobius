@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { SessionConfigOption, SessionConfigurationSelection } from "@moxt-ai/mobius-sdk/protocol";
 import { AcpExecutionError } from "../../acp/acp-error.ts";
 import type { AcpAgentDefinition } from "../../acp/agent/agent-definition.ts";
+import type { Adapter } from "../../acp/native-history/preview-contract.ts";
 import { applyAgentLaunchSettings } from "../../agent/settings/agent-settings-adapter.ts";
 import type { SessionManager } from "../manager/session-manager.ts";
 
@@ -112,6 +113,7 @@ async function applySessionConfigurationSelection(
     options: readonly SessionConfigOption[],
     selection: SessionConfigurationSelection,
     agent: AcpAgentDefinition,
+    adapter: Adapter,
     cwd: string,
     additionalDirectories: readonly string[],
     commandId: string,
@@ -174,6 +176,7 @@ async function applySessionConfigurationSelection(
         return options;
     }
     return await sessions.configureSession({
+        adapter,
         additionalDirectories,
         agent,
         booleanValue: selection.booleanValue,
@@ -192,6 +195,7 @@ export async function applyCompleteSessionConfiguration(
     initialOptions: readonly SessionConfigOption[],
     selections: readonly SessionConfigurationSelection[],
     agent: AcpAgentDefinition,
+    adapter: Adapter,
     cwd: string,
     additionalDirectories: readonly string[],
     commandId: string,
@@ -210,6 +214,7 @@ export async function applyCompleteSessionConfiguration(
             options,
             selection,
             agent,
+            adapter,
             cwd,
             additionalDirectories,
             commandId,

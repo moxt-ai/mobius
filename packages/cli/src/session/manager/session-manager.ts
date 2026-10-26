@@ -1,6 +1,7 @@
 import {
     SESSION_CLOSE_NOTICE_KIND,
     SESSION_CLOSED_ERROR_CODE,
+    type SessionCapabilities,
     type SessionCloseNoticeEvent,
     type SessionConfigOption,
     type SessionEventPayload,
@@ -8,14 +9,12 @@ import {
     type SessionStatusChangedEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { AcpExecutionError } from "../../acp/acp-error.ts";
-import type { AcpContentExternalizer } from "../../acp/content/content-externalizer.ts";
 import type { NativeSessionOrigin, NativeSessionPage } from "../../acp/protocol/native-session.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../../infra/operation-metrics.ts";
 import type { Timer } from "../../util/timer.ts";
 import { AgentSession } from "../live/agent-session.ts";
 import { isNativeChatSessionId } from "../native/native-chat-agent.ts";
-import { AgentProcessPool, type AgentProcessRetention } from "../process/agent-process-pool.ts";
-import { AgentQueryProcesses } from "../process/agent-query-processes.ts";
+import type { AgentProcessPool, AgentProcessRetention } from "../process/agent-process-pool.ts";
 import { RetainedAgentProcesses } from "../process/retained-agent-processes.ts";
 import {
     FoundStoredSession,
@@ -33,11 +32,6 @@ const SESSION_CLOSE_TIMEOUT_MILLISECONDS = 30_000;
 /** What preparing does with a closed Session: a prepare or restore reopens it, a read must keep it closed. */
 export type ClosedSessionHandling = "reopen" | "keep-closed";
 
-import type {
-    AdapterContext,
-    AdapterResolver,
-    NativeSessionPreviewRequest,
-} from "../../acp/native-history/preview-contract.ts";
 import {
     type AgentSettingsInspectionOptions,
     AgentSettingsSnapshot,
@@ -58,11 +52,10 @@ import type { SessionEventPage } from "../history/session-event-store.ts";
 export class SessionManager {
     readonly #operations = new RuntimeOperations();
     readonly #processes: AgentProcessPool;
-    readonly #executionProcesses = new RetainedAgentProcesses({
+    readonly #executionProcesses = new RetainedAgentProcesses<AgentSession>({
         touch: (runtime) => this.#processes.touch(runtime),
         changed: () => this.#processes.notifyChanged(),
     });
-    readonly #queryProcesses: AgentQueryProcesses;
     readonly #executions = new ActiveExecutions();
     readonly #agentSettingsObserver = new NullSessionObserver();
     readonly #nativeOperations = new Set<string>();
@@ -71,46 +64,37 @@ export class SessionManager {
     /** Sessions that were closed and not reopened since. Only a prepare or restore of the Session reopens it. */
     readonly #closedSessions = new Set<string>();
     readonly #store: SessionStore;
-    readonly #adapters: AdapterResolver;
     readonly #sessionIdentity: "assigned" | "native";
     readonly #onSessionStatusChanged: (event: SessionStatusChangedEvent) => void;
     readonly #onSessionClosed: (event: SessionCloseNoticeEvent) => void;
-    readonly #contentExternalizer: AcpContentExternalizer;
     readonly #timer: Timer;
     #observer: SessionObserver;
 
     constructor({
         observer,
         store,
-        adapters,
+        processes,
         sessionIdentity,
         onSessionStatusChanged,
         onSessionClosed = () => undefined,
-        contentExternalizer,
         timer,
-        maxProcesses,
     }: {
         readonly observer: SessionObserver;
         readonly store: SessionStore;
-        readonly adapters: AdapterResolver;
+        readonly processes: AgentProcessPool;
         readonly sessionIdentity: "assigned" | "native";
         readonly onSessionStatusChanged: (event: SessionStatusChangedEvent) => void;
         /** Called once each time a Session becomes closed, so every client learns of it. */
         readonly onSessionClosed?: (event: SessionCloseNoticeEvent) => void;
-        readonly contentExternalizer: AcpContentExternalizer;
         readonly timer: Timer;
-        readonly maxProcesses: number | null;
     }) {
         this.#observer = observer;
-        this.#processes = new AgentProcessPool(maxProcesses ?? undefined, timer);
+        this.#processes = processes;
         this.#store = store;
-        this.#adapters = adapters;
         this.#sessionIdentity = sessionIdentity;
         this.#onSessionStatusChanged = onSessionStatusChanged;
         this.#onSessionClosed = onSessionClosed;
-        this.#contentExternalizer = contentExternalizer;
         this.#timer = timer;
-        this.#queryProcesses = new AgentQueryProcesses(this.#processes, contentExternalizer);
     }
 
     readonly recordLifecycleEvent = async (sessionId: string, event: SessionEventPayload): Promise<boolean> => {
@@ -136,7 +120,7 @@ export class SessionManager {
         );
     }
 
-    #retention(sessionId: string): AgentProcessRetention {
+    #retention(sessionId: string): AgentProcessRetention<AgentSession> {
         return {
             isBusy: () =>
                 this.#executions.isBusy(sessionId) ||
@@ -243,7 +227,7 @@ export class SessionManager {
                         () => this.#observer,
                         this.#store,
                         metrics,
-                        this.#contentExternalizer,
+                        options.adapter,
                     ),
             );
         });
@@ -271,7 +255,7 @@ export class SessionManager {
                         () => this.#observer,
                         this.#store,
                         metrics,
-                        this.#contentExternalizer,
+                        options.adapter,
                     ),
             );
         });
@@ -291,7 +275,7 @@ export class SessionManager {
                         () => this.#observer,
                         this.#store,
                         unmeasuredOperationMetrics,
-                        this.#contentExternalizer,
+                        options.adapter,
                     ),
             );
             try {
@@ -438,7 +422,7 @@ export class SessionManager {
                         () => this.#agentSettingsObserver,
                         new MemorySessionStore(),
                         unmeasuredOperationMetrics,
-                        this.#contentExternalizer,
+                        options.adapter,
                     ),
                 async (runtime) => {
                     const prepared = runtime.prepared();
@@ -542,8 +526,8 @@ export class SessionManager {
             return (await this.#replaceExecutionPreparation(existing, options)).prepared();
         });
 
-    readonly prepareNativeSessionBrowser = (options: SessionPrepareOptions): Promise<PreparedSession> =>
-        this.#operations.run(options, (scoped) => this.#queryProcesses.prepare(scoped));
+    readonly nativeSessionCapabilities = (options: SessionPrepareOptions): Promise<SessionCapabilities> =>
+        this.#operations.run(options, (scoped) => scoped.adapter.capabilities(scoped));
 
     readonly configureSession = async (options: SessionConfigureOptions): Promise<readonly SessionConfigOption[]> =>
         this.#operations.run(options, async (options) => {
@@ -793,7 +777,6 @@ export class SessionManager {
                         await this.#retireSessionProcess(sessionId, runtime, async () => await runtime.close()),
                 ),
                 ...this.#sessionClosures.values(),
-                this.#queryProcesses.close(),
             ]);
         });
     };
@@ -898,10 +881,7 @@ export class SessionManager {
         cursor: string | null,
     ): Promise<NativeSessionPage> =>
         this.#operations.run(options, async (options) => {
-            return await this.#queryProcesses.use(
-                options,
-                async (runtime) => await runtime.listNativeSessions(cursor, options.signal),
-            );
+            return await options.adapter.listNativeSessions(options, cursor);
         });
 
     readonly previewNativeSessionEvents = async (
@@ -922,24 +902,12 @@ export class SessionManager {
             this.#nativeOperations.add(key);
             this.#processes.notifyChanged();
             try {
-                const context: AdapterContext = {
-                    additionalDirectories: options.additionalDirectories,
-                    agent: options.agent,
-                    cwd: options.cwd,
-                    signal: options.signal,
-                    events: this.#store.events,
-                    previewThroughAcp: async (request: NativeSessionPreviewRequest) =>
-                        await this.#queryProcesses.previewEvents(
-                            options,
-                            request.nativeSessionId,
-                            request.eventLimit,
-                            request.cursor,
-                        ),
-                };
-                return await this.#adapters(options.agent).previewSessionEvents(
-                    { nativeSessionId, eventLimit, cursor, sessionId: options.sessionId },
-                    context,
-                );
+                return await options.adapter.previewSessionEvents(options, {
+                    nativeSessionId,
+                    eventLimit,
+                    cursor,
+                    sessionId: options.sessionId,
+                });
             } finally {
                 this.#nativeOperations.delete(key);
                 this.#processes.notifyChanged();

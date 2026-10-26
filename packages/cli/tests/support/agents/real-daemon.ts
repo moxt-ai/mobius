@@ -17,7 +17,10 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { type WebSocket, WebSocketServer } from "ws";
+import { harnessAdapters } from "../../../src/acp/adapter/registry.ts";
+import type { AdapterResolver } from "../../../src/acp/native-history/preview-contract.ts";
 import { discoverLocalAgentInventory } from "../../../src/agent/discovery/discover-local-agents.ts";
+import { RuntimeAgentDependencies } from "../../../src/agent/runtime-agents.ts";
 import type { LocalAgentSpecification } from "../../../src/agent/specification/agent-specification.ts";
 import { sendLocalRequest } from "../../../src/daemon/control/local-client.ts";
 import { lifecycleResponse } from "../../../src/daemon/control/protocol.ts";
@@ -28,6 +31,7 @@ import {
 import { createRuntimeConfig, RuntimeLocalContext } from "../../../src/runtime/config.ts";
 import { runRuntime } from "../../../src/runtime/run.ts";
 import { systemTimer, type Timer } from "../../../src/util/timer.ts";
+import { acpAdapters } from "../acp-adapters.ts";
 import { installWorkspaceDaemonRelease } from "../installed-daemon-release.ts";
 
 export interface RealDaemonPeer {
@@ -42,6 +46,17 @@ export interface RealDaemonPeer {
     readonly nextMessage: () => Promise<string>;
 }
 
+/** Controlled ACP harness registered explicitly, without changing real-Agent compatibility wiring. */
+export const withControlledDaemon = (
+    specification: LocalAgentSpecification,
+    environment: Readonly<Record<string, string>>,
+    scenario: (peer: RealDaemonPeer) => Promise<void>,
+    launch: "embedded" | "managed" = "embedded",
+    workspaceDirectory?: string,
+    timer: Timer = systemTimer,
+): Promise<void> =>
+    withRealDaemon(specification, environment, scenario, launch, workspaceDirectory, timer, acpAdapters);
+
 /** Production daemon and discovery; the peer only sends and observes the public protocol. */
 export async function withRealDaemon(
     specification: LocalAgentSpecification,
@@ -50,6 +65,7 @@ export async function withRealDaemon(
     launch: "embedded" | "managed" = "embedded",
     workspaceDirectory?: string,
     timer: Timer = systemTimer,
+    adapters: AdapterResolver = harnessAdapters,
 ): Promise<void> {
     const directory = await mkdtemp(join(tmpdir(), `mobius-real-${specification.id}-`));
     const workspace = workspaceDirectory ?? join(directory, "workspace");
@@ -149,7 +165,7 @@ export async function withRealDaemon(
         relayUrl.searchParams.set("token", "r".repeat(43));
         const config = createRuntimeConfig(
             { channelId: "real-agent", defaultWorkspace: workspace, relayUrl },
-            [agent],
+            new RuntimeAgentDependencies([agent], adapters),
             new RuntimeLocalContext(directory, { ...process.env, ...environment }),
         );
         if (launch === "managed") {

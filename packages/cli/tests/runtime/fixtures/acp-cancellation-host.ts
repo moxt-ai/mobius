@@ -12,12 +12,12 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { WebSocketServer } from "ws";
 import {
-    createRuntimeConfig,
     InProcessAcpAgentDefinition,
     type InProcessAcpEndpoint,
     MobiusRuntimeEngine,
     RuntimeLocalContext,
 } from "../../../src/runtime.ts";
+import { createControlledRuntimeConfig as createRuntimeConfig } from "../../support/controlled-runtime-config.ts";
 
 // External Agent failure modes: cancellation before its initialization promise is
 // observed, cancellation while initialization is pending, and ordinary startup failure.

@@ -25,7 +25,11 @@ import {
 } from "../../src/agent/specification/agent-specification.ts";
 import { ControlledSessionAgent } from "../support/agents/controlled-session-agent.ts";
 import { waitForAgentFile } from "../support/agents/observed-process.ts";
-import { prepareNewRealSession, type RealDaemonPeer, withRealDaemon } from "../support/agents/real-daemon.ts";
+import {
+    prepareNewRealSession,
+    type RealDaemonPeer,
+    withControlledDaemon as withRealDaemon,
+} from "../support/agents/real-daemon.ts";
 import { IdleTimeoutTimer } from "../support/idle-timeout-timer.ts";
 
 class IdleAgentSpecification extends DirectAcpAgentSpecification {

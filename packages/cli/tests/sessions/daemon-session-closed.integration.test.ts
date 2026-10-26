@@ -25,7 +25,7 @@ import { expect, test } from "vitest";
 import type { InProcessAcpEndpointFactory } from "../../src/acp/agent/in-process-endpoint.ts";
 import { InProcessAcpAgentSpecification } from "../../src/agent/specification/agent-specification.ts";
 import { ControlledSessionAgent } from "../support/agents/controlled-session-agent.ts";
-import { type RealDaemonPeer, withRealDaemon } from "../support/agents/real-daemon.ts";
+import { type RealDaemonPeer, withControlledDaemon as withRealDaemon } from "../support/agents/real-daemon.ts";
 
 // A native chat Agent id makes a UUID Session id the Agent's own Session id, which is how the daemon runs
 // Claude, Codex and Pi conversations.

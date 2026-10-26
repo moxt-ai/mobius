@@ -1,7 +1,11 @@
 import { styleText } from "node:util";
 import type { RuntimeUpgradeResult } from "@moxt-ai/mobius-sdk/protocol";
+import { createRuntimeAdapterRegistry } from "../agent/runtime-agents.ts";
 import { buildSessionLayer } from "../session/api/session-layer.ts";
+import { LocalExternalContentStore } from "../session/content/external-content-store.ts";
+import { AgentProcessPool, resolveMaxAcpProcesses } from "../session/process/agent-process-pool.ts";
 import type { RuntimeTurnActivity } from "../session/turn/runtime-turn-activity.ts";
+import { runCleanup } from "../util/run-cleanup.ts";
 import { systemTimer, type Timer } from "../util/timer.ts";
 import { publishAgentCatalog } from "./catalog/publish-agent-catalog.ts";
 import { resolveCatalogAgent } from "./catalog/resolve-catalog-agent.ts";
@@ -99,13 +103,23 @@ export async function runRuntime(
         }),
     );
     const publisher = new RuntimeSessionEventPublisher(timer);
+    // Dispose media only after session and adapter operations have drained.
+    await using externalContent = new LocalExternalContentStore(stateDirectory);
+    const processes = new AgentProcessPool(resolveMaxAcpProcesses(config.localContext.environment) ?? undefined, timer);
+    const adapters = createRuntimeAdapterRegistry(config.adapters, processes, (sessionId, content, contentSignal) =>
+        externalContent.put({ ...content, sessionId, signal: contentSignal }),
+    );
+    const resolveAgent = async (agentId: string, resolveSignal: AbortSignal) => {
+        const agent = await resolveCatalogAgent(config, agentId, resolveSignal);
+        return { agent, adapter: adapters.resolve(agent) };
+    };
     const layer = buildSessionLayer({
+        processes,
         ...(options.turnActivity === undefined ? {} : { turnActivity: options.turnActivity }),
         bindingId: config.bindingId,
         channelId: config.channelId,
         defaultWorkspace: config.defaultWorkspace,
-        environment: config.localContext.environment,
-        resolveAgent: (agentId, resolveSignal) => resolveCatalogAgent(config, agentId, resolveSignal),
+        resolveAgent,
         sink: publisher,
         stateDirectory: config.localContext.stateDirectory,
         timer,
@@ -120,9 +134,6 @@ export async function runRuntime(
         operations,
         sessionStore,
     } = layer;
-    // The media cache is owned by this scope: when runRuntime returns, its cleanup
-    // timer stops and its private directory is removed, after the other resources settle.
-    await using externalContent = layer.externalContent;
     let connectionEpoch = 0;
     let connectionAnnounced = false;
     let catalogPublished = false;
@@ -167,6 +178,7 @@ export async function runRuntime(
             try {
                 await runRelayConnection({
                     config,
+                    resolveAgent,
                     directories,
                     sessions: agentRuntime,
                     nativeSessions,
@@ -205,22 +217,13 @@ export async function runRuntime(
         shutdown.abort();
         operations.beginShutdown();
         await activeSessions.close();
-        try {
-            await catalogPublication;
-        } finally {
-            try {
-                await agentRuntime.close();
-            } finally {
-                try {
-                    sessionStore.close();
-                } finally {
-                    try {
-                        publisher.close();
-                    } finally {
-                        operations.close();
-                    }
-                }
-            }
-        }
+        await runCleanup(
+            () => catalogPublication,
+            () => agentRuntime.close(),
+            () => adapters.close(),
+            () => sessionStore.close(),
+            () => publisher.close(),
+            () => operations.close(),
+        );
     }
 }

@@ -8,6 +8,7 @@ import {
     UnsupportedProtocolMessageKindError,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { type MessageEvent, WebSocket } from "undici";
+import type { ResolveAgent } from "../../session/api/session-api.ts";
 import type { ExternalContentStore } from "../../session/content/external-content-store.ts";
 import type { SessionManager } from "../../session/manager/session-manager.ts";
 import type { NativeSessionService } from "../../session/native/native-session-browser.ts";
@@ -89,6 +90,7 @@ function rejectUnsupportedCommand(
 }
 
 export interface RelayConnectionOptions {
+    readonly resolveAgent: ResolveAgent;
     readonly config: RuntimeConfig;
     /** Reports a finished daemon upgrade to the relay. The daemon worker supplies it. */
     readonly reportUpgradeAvailability: (
@@ -111,6 +113,7 @@ export interface RelayConnectionOptions {
 }
 
 export async function runRelayConnection({
+    resolveAgent,
     config,
     reportUpgradeAvailability,
     directories,
@@ -134,6 +137,7 @@ export async function runRelayConnection({
     diagnostics.connectionOpened(connectionEpoch);
     const connectionController = new AbortController();
     const commands = createRuntimeCommandDispatcher({
+        resolveAgent,
         config,
         directories,
         sessions,

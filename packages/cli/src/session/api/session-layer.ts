@@ -1,6 +1,4 @@
 import type { SessionInfoUpdatedEvent, SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
-import { harnessAdapters } from "../../acp/adapter/registry.ts";
-import { AcpContentExternalizer } from "../../acp/content/content-externalizer.ts";
 import { AcpSessionTable } from "../../storage/session/acp-session-table.ts";
 import { ExecutionReceiptTable } from "../../storage/session/execution-receipt-table.ts";
 import { LiveEventPositionTable } from "../../storage/session/live-event-position-table.ts";
@@ -11,12 +9,11 @@ import {
     openSessionEventCacheDatabase,
 } from "../../storage/sqlite/local-databases.ts";
 import type { Timer } from "../../util/timer.ts";
-import { LocalExternalContentStore } from "../content/external-content-store.ts";
 import { SqliteSessionLiveEventPosition } from "../history/live-event-positions.ts";
 import { CachedSessionEventStore } from "../history/session-event-store.ts";
 import { SessionManager } from "../manager/session-manager.ts";
 import { NativeSessionService } from "../native/native-session-browser.ts";
-import { resolveMaxAcpProcesses } from "../process/agent-process-pool.ts";
+import type { AgentProcessPool } from "../process/agent-process-pool.ts";
 import { PromptLifecycle } from "../prompt/prompt-lifecycle.ts";
 import { SqliteSessionStore } from "../record/session-store.ts";
 import { ExecutionReceipts } from "../turn/execution-receipts.ts";
@@ -50,12 +47,12 @@ export class SessionLayerObserver extends NullSessionObserver {
 
 /** What the session layer needs to wire itself: the runtime's identity, its agent source, and its sink. */
 export interface SessionLayerOptions {
+    readonly processes: AgentProcessPool;
     readonly turnActivity?: RuntimeTurnActivity;
     readonly onExecutionCountChange?: (count: number) => void;
     readonly bindingId: string;
     readonly channelId: string;
     readonly defaultWorkspace: string;
-    readonly environment: Readonly<NodeJS.ProcessEnv>;
     readonly resolveAgent: ResolveAgent;
     readonly sink: SessionEventSink;
     readonly stateDirectory: string;
@@ -64,7 +61,7 @@ export interface SessionLayerOptions {
 
 /** Wires the session layer for one runtime: its stores, manager, turns, and native session browsing. */
 export function buildSessionLayer(options: SessionLayerOptions) {
-    const { bindingId, channelId, defaultWorkspace, environment, resolveAgent, sink, stateDirectory, timer } = options;
+    const { bindingId, channelId, defaultWorkspace, resolveAgent, sink, stateDirectory, timer } = options;
     const databases = channelSessionDatabasePaths(stateDirectory, channelId);
     const sessionDatabase = openAcpSessionDatabase(databases.sessions);
     let events: CachedSessionEventStore;
@@ -82,7 +79,6 @@ export function buildSessionLayer(options: SessionLayerOptions) {
         throw error;
     }
     const sessionStore = new SqliteSessionStore(new AcpSessionTable(sessionDatabase), events);
-    const externalContent = new LocalExternalContentStore(stateDirectory);
     const activeSessions = new SessionTurns(operations, options.turnActivity);
     const directories = new WorkspaceDirectoryService(bindingId, defaultWorkspace);
     const manager = new SessionManager({
@@ -91,22 +87,11 @@ export function buildSessionLayer(options: SessionLayerOptions) {
             eventProjection.record(event);
         }, sink.publishInfo),
         store: sessionStore,
-        adapters: harnessAdapters,
+        processes: options.processes,
         sessionIdentity: "native",
         onSessionStatusChanged: sink.publishStatus,
         onSessionClosed: sink.publishClosed,
-        contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
-            externalContent.put({
-                bytes: content.bytes,
-                kind: content.kind,
-                mediaType: content.mediaType,
-                name: content.name,
-                sessionId,
-                signal,
-            }),
-        ),
         timer,
-        maxProcesses: resolveMaxAcpProcesses(environment),
     });
     const eventProjection = new PromptLifecycle(
         sink,
@@ -158,7 +143,6 @@ export function buildSessionLayer(options: SessionLayerOptions) {
         activeSessions,
         directories,
         eventProjection,
-        externalContent,
         manager,
         nativeSessions,
         operations,

@@ -64,9 +64,10 @@ export async function discoverAgentSettings(
     sessions: SessionManager,
     signal: AbortSignal,
 ): Promise<AgentSettingsDiscovery> {
-    const agent = await resolveAgent(command.agentId, signal);
+    const { agent, adapter: harnessAdapter } = await resolveAgent(command.agentId, signal);
     const cwd = await directories.resolve(bindingId, "default", signal);
     const inspectedBaseSnapshot = await sessions.inspectAgentSettings({
+        adapter: harnessAdapter,
         additionalDirectories: [],
         agent,
         cwd,
@@ -97,6 +98,7 @@ export async function discoverAgentSettings(
         } else {
             try {
                 selectedSnapshot = await sessions.inspectAgentSettings({
+                    adapter: harnessAdapter,
                     additionalDirectories: [],
                     agent,
                     cwd,
@@ -116,6 +118,7 @@ export async function discoverAgentSettings(
     const modelEffort = await discoverModelEffort(
         command,
         agent,
+        harnessAdapter,
         adapter.modelEffortResolution,
         baseSnapshot.configOptions,
         selectedSnapshot.configOptions,
@@ -230,6 +233,7 @@ function unavailableModelEffort(): AgentModelEffort {
 async function discoverModelEffort(
     command: AgentSettingsDiscoverCommand,
     agent: AcpAgentDefinition,
+    harnessAdapter: Awaited<ReturnType<ResolveAgent>>["adapter"],
     resolution: string,
     initialOptions: readonly SessionConfigOption[],
     selectedOptions: readonly SessionConfigOption[],
@@ -260,6 +264,7 @@ async function discoverModelEffort(
     const inspectModel = async (modelValue: string): Promise<readonly SessionConfigOption[]> =>
         (
             await sessions.inspectAgentSettings({
+                adapter: harnessAdapter,
                 additionalDirectories: [],
                 agent,
                 cwd,

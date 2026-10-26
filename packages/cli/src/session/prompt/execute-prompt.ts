@@ -65,7 +65,7 @@ export async function executePrompt({
             command.additionalDirectoryIds,
             signal,
         );
-        const agent = await resolveAgent(command.agentId, signal);
+        const { agent, adapter } = await resolveAgent(command.agentId, signal);
         const availability = await waitForSessionAvailability(signal);
         if (availability.kind === "busy") {
             throw new AcpExecutionError("Another prompt is already running in this conversation", {}, "session_busy");
@@ -88,6 +88,7 @@ export async function executePrompt({
                 ? ({ kind: "execution-only" } as const)
                 : ({ kind: "interactive-only" } as const);
         const preparation = {
+            adapter,
             additionalDirectories: resolved.additionalDirectories,
             agent: executionAgent,
             cwd: resolved.cwd,
@@ -109,6 +110,7 @@ export async function executePrompt({
                     prepared.configOptions,
                     sessionConfigurations ?? [],
                     executionAgent,
+                    adapter,
                     resolved.cwd,
                     resolved.additionalDirectories,
                     command.commandId,
@@ -140,6 +142,7 @@ export async function executePrompt({
         let stopReason: string;
         if (availability.disposition === SessionPromptDisposition.Steer) {
             await sessions.steerPrompt({
+                adapter,
                 additionalDirectories: resolved.additionalDirectories,
                 agent: executionAgent,
                 commandId: command.commandId,
@@ -155,6 +158,7 @@ export async function executePrompt({
             stopReason = "steered";
         } else {
             const result = await sessions.runPrompt({
+                adapter,
                 additionalDirectories: resolved.additionalDirectories,
                 agent: executionAgent,
                 commandId: command.commandId,

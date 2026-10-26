@@ -20,9 +20,11 @@ import type {
     SessionStatusChangedEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { AcpAgentDefinition } from "../../acp/agent/agent-definition.ts";
+import type { Adapter } from "../../acp/native-history/preview-contract.ts";
 import type { NativeSessionOrigin } from "../../acp/protocol/native-session.ts";
 
 export interface SessionPrepareOptions {
+    readonly adapter: Adapter;
     readonly additionalDirectories: readonly string[];
     readonly agent: AcpAgentDefinition;
     readonly cwd: string;
@@ -39,6 +41,7 @@ export type SessionRecovery =
     | { readonly kind: "execution-only" };
 
 export interface AgentSettingsInspectionOptions {
+    readonly adapter: Adapter;
     readonly additionalDirectories: readonly string[];
     readonly agent: AcpAgentDefinition;
     readonly cwd: string;
@@ -171,8 +174,14 @@ export class AgentSettingsSnapshot {
 
 // What the runtime supplies to the session layer. The session layer never imports the runtime.
 
-/** Finds the launch definition for a catalog Agent, re-discovering it when its executable changed. */
-export type ResolveAgent = (agentId: string, signal: AbortSignal) => Promise<AcpAgentDefinition>;
+/** Resolves a catalog Agent's current launch definition and its Runtime-owned adapter. */
+export type ResolveAgent = (
+    agentId: string,
+    signal: AbortSignal,
+) => Promise<{
+    readonly agent: AcpAgentDefinition;
+    readonly adapter: Adapter;
+}>;
 
 /** Records a failure's code and correlation identifiers in the local diagnostics log, never its text. */
 export type ReportFailure = (event: string, requestId: string, details: Readonly<Record<string, string>>) => void;

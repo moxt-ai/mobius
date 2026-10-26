@@ -1,16 +1,5 @@
-import { setImmediate as yieldToRuntime } from "node:timers/promises";
+import { type ContentBlock, methods } from "@agentclientprotocol/sdk";
 import {
-    type CompleteElicitationNotification,
-    type ContentBlock,
-    type CreateElicitationRequest,
-    type CreateElicitationResponse,
-    methods,
-    PROTOCOL_VERSION,
-    type RequestPermissionRequest,
-    type SessionNotification,
-} from "@agentclientprotocol/sdk";
-import {
-    decodeAcpSessionUpdate,
     decodeAgentPromptResponse,
     SESSION_COMMANDS_UPDATED_KIND,
     SESSION_CONFIG_UPDATED_KIND,
@@ -21,19 +10,20 @@ import {
     type SessionEventPayload,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "../../acp/acp-error.ts";
+import {
+    initializeAgentConnection,
+    RetryableAcpInitializationError,
+    validateAgentRuntime,
+} from "../../acp/adapter/agent-initialization.ts";
+import type {
+    AdapterSessionConnection,
+    AdapterSessionConnector,
+    AdapterSessionEvent,
+} from "../../acp/adapter/session-events.ts";
 import type { AcpAgentDefinition } from "../../acp/agent/agent-definition.ts";
 import { buildPromptContent } from "../../acp/client/prompt-content.ts";
-import { AgentConnection } from "../../acp/connection/agent-connection.ts";
-import { AgentUpdateStream } from "../../acp/connection/agent-update-stream.ts";
-import type { AcpClientHandler } from "../../acp/connection/create-client.ts";
-import type { AcpContentExternalizer } from "../../acp/content/content-externalizer.ts";
+import type { NativeSessionOrigin } from "../../acp/protocol/native-session.ts";
 import {
-    type NativeSessionOrigin,
-    type NativeSessionPage,
-    nativeSessionPageSchema,
-} from "../../acp/protocol/native-session.ts";
-import {
-    normalizeAcpCapabilities,
     restrictAcpSessionCapabilities,
     unsupportedSessionCapabilities,
 } from "../../acp/protocol/session-capabilities.ts";
@@ -42,8 +32,7 @@ import {
     SessionConfigProtocolError,
     sessionConfigProtocolForAgent,
 } from "../../acp/protocol/session-config-protocol.ts";
-import { type OperationMetrics, unmeasuredOperationMetrics } from "../../infra/operation-metrics.ts";
-import { revalidateExecutable } from "../../util/process/executable.ts";
+import type { OperationMetrics } from "../../infra/operation-metrics.ts";
 import { arraysEqual, isRecord, recordsEqual, truncate } from "../../util/value-utils.ts";
 import {
     type ElicitationResponseOptions,
@@ -72,13 +61,6 @@ const PROCESS_STOP_TIMEOUT_MILLISECONDS = 1_000;
 
 export { AcpConfigurationValueUnavailableError, AcpExecutionError } from "../../acp/acp-error.ts";
 
-class RetryableAcpInitializationError extends AcpExecutionError {
-    constructor(cause: unknown) {
-        super("ACP agent initialization failed", { cause });
-        this.name = "RetryableAcpInitializationError";
-    }
-}
-
 type SessionLoadState =
     | { readonly kind: "not-requested" }
     | {
@@ -103,7 +85,7 @@ interface LoadedSession {
     readonly response: unknown;
 }
 
-export class AgentSession implements AcpClientHandler, AgentSessionRestore {
+export class AgentSession implements AgentSessionRestore {
     // The restore surface: AgentSessionRestore members expose private state to
     // session-restore.ts only. The class keeps the fields private.
     get additionalDirectories(): readonly string[] {
@@ -134,16 +116,15 @@ export class AgentSession implements AcpClientHandler, AgentSessionRestore {
         return this.#store;
     }
 
-    readonly #connection: AgentConnection;
-    readonly #contentExternalizer: AcpContentExternalizer;
-    readonly #interactions: SessionInteractions;
+    readonly #connection: AdapterSessionConnection;
     readonly #additionalDirectories: readonly string[];
     readonly #agentId: string;
     readonly #cwd: string;
     readonly #environment: Readonly<Record<string, string>>;
     readonly #getObserver: () => SessionObserver;
+    readonly #interactions: SessionInteractions;
     #mobiusSessionId: string;
-    readonly #updates: AgentUpdateStream;
+    readonly #updates: AdapterSessionConnection["events"];
     readonly #metrics: OperationMetrics;
     readonly #sessionConfigProtocol: SessionConfigProtocol;
     readonly #store: SessionStore;
@@ -171,31 +152,44 @@ export class AgentSession implements AcpClientHandler, AgentSessionRestore {
         getObserver: () => SessionObserver,
         store: SessionStore,
         metrics: OperationMetrics,
-        contentExternalizer: AcpContentExternalizer,
+        connector: AdapterSessionConnector,
     ) {
-        this.#updates = new AgentUpdateStream((notification) => this.#processUpdate(notification));
         this.#additionalDirectories = [...additionalDirectories];
         this.#agentId = agent.id;
         this.#commands = [];
         this.#cwd = cwd;
         this.#environment = agent.environment;
-        this.#getObserver = getObserver;
         this.#mobiusSessionId = mobiusSessionId;
         this.#metrics = metrics;
         this.#sessionConfigProtocol = sessionConfigProtocolForAgent(agent.id);
         this.#store = store;
         this.#verifiedAgentVersion = agent.agentVersion;
+        this.#getObserver = getObserver;
         this.#interactions = new SessionInteractions({
             cwd: () => this.#cwd,
             getToolCall: (toolCallId) => this.#store.events.getToolCall(this.#mobiusSessionId, toolCallId),
             sessionId: () => this.#mobiusSessionId,
             commandId: () => this.#turn.commandId,
-            assertNativeSession: (sessionId) => this.assertNativeSession(sessionId),
+            assertNativeSession: this.assertNativeSession,
             observer: getObserver,
             recordSessionEvent: this.recordLifecycleEvent,
         });
-        this.#connection = new AgentConnection(agent, cwd, this);
-        this.#contentExternalizer = contentExternalizer;
+        const scope = {
+            agent,
+            cwd,
+            sessionId: () => this.#mobiusSessionId,
+            configOptions: () => this.#configOptions,
+            onEvent: this.#processEvent,
+        };
+        this.#connection = connector.connectSession({
+            ...scope,
+            interactions: {
+                onPermission: this.#interactions.onPermission,
+                onElicitation: this.#interactions.onElicitation,
+                onElicitationComplete: this.#interactions.onElicitationComplete,
+            },
+        });
+        this.#updates = this.#connection.events;
     }
 
     static async #start(
@@ -204,29 +198,13 @@ export class AgentSession implements AcpClientHandler, AgentSessionRestore {
         store: SessionStore,
         initialize: (runtime: AgentSession) => Promise<void>,
         metrics: OperationMetrics,
-        contentExternalizer: AcpContentExternalizer,
+        connector: AdapterSessionConnector,
     ): Promise<AgentSession> {
         for (let attempt = 1; attempt <= 2; attempt += 1) {
-            options.signal.throwIfAborted();
-            const unchanged = await metrics.measure(
+            await metrics.measure(
                 "executable-validation",
-                async () =>
-                    await Promise.all([
-                        // Only the adapter topology has an adapter executable to revalidate.
-                        options.agent.kind === "acp-adapter-process"
-                            ? revalidateExecutable(options.agent.adapterIdentity)
-                            : Promise.resolve(true),
-                        revalidateExecutable(options.agent.agentIdentity),
-                    ]),
+                async () => await validateAgentRuntime(options.agent, options.signal),
             );
-            options.signal.throwIfAborted();
-            if (unchanged.some((result) => !result)) {
-                throw new AcpExecutionError(
-                    "The local Agent runtime changed; restart Mobius before starting a new conversation",
-                    {},
-                    "agent_runtime_changed",
-                );
-            }
             const runtime = metrics.measureSync(
                 "process-spawn",
                 () =>
@@ -238,7 +216,7 @@ export class AgentSession implements AcpClientHandler, AgentSessionRestore {
                         getObserver,
                         store,
                         metrics,
-                        contentExternalizer,
+                        connector,
                     ),
             );
             try {
@@ -268,7 +246,7 @@ export class AgentSession implements AcpClientHandler, AgentSessionRestore {
         getObserver: () => SessionObserver,
         store: SessionStore,
         metrics: OperationMetrics,
-        contentExternalizer: AcpContentExternalizer,
+        connector: AdapterSessionConnector,
     ): Promise<AgentSession> =>
         await AgentSession.#start(
             options,
@@ -276,22 +254,7 @@ export class AgentSession implements AcpClientHandler, AgentSessionRestore {
             store,
             async (runtime) => await runtime.initialize(options.signal, recovery, options.origin),
             metrics,
-            contentExternalizer,
-        );
-
-    static readonly startNativeSessionBrowser = async (
-        options: SessionPrepareOptions,
-        getObserver: () => SessionObserver,
-        store: SessionStore,
-        contentExternalizer: AcpContentExternalizer,
-    ): Promise<AgentSession> =>
-        await AgentSession.#start(
-            options,
-            getObserver,
-            store,
-            async (runtime) => await runtime.#initializeAgent(options.signal),
-            unmeasuredOperationMetrics,
-            contentExternalizer,
+            connector,
         );
 
     readonly belongsTo = (agentId: string, cwd: string, additionalDirectories: readonly string[]): boolean =>
@@ -362,9 +325,13 @@ export class AgentSession implements AcpClientHandler, AgentSessionRestore {
             }
         }
         const updatedAt = new Date().toISOString();
-        await this.#processUpdate({
-            sessionId: nativeSessionId,
-            update: { sessionUpdate: "session_info_update", title: normalized, updatedAt },
+        await this.#processEvent({
+            kind: "info",
+            changes: [
+                { kind: "title", value: normalized },
+                { kind: "updated-at", value: updatedAt },
+            ],
+            payload: { sessionUpdate: "session_info_update", title: normalized, updatedAt },
         });
         return { title: this.#sessionTitle ?? normalized, updatedAt };
     };
@@ -507,51 +474,15 @@ export class AgentSession implements AcpClientHandler, AgentSessionRestore {
     }
 
     async #initializeAgentOperation(signal: AbortSignal): Promise<void> {
-        if (this.#connection.inProcessAgent !== null) {
-            // The ACP agent runs in this process, but it still owns an app-server child that must
-            // start and complete its own handshake before the ACP conversation can begin.
-            await this.race(
-                this.#connection.inProcessAgent.initialize(signal),
-                "The Codex app-server exited during initialization",
-                signal,
-            ).catch((cause: unknown) => {
-                signal.throwIfAborted();
-                throw new RetryableAcpInitializationError(cause);
-            });
-        }
-        const initialized = await this.race(
-            this.#connection.connection.agent.request(
-                methods.agent.initialize,
-                {
-                    clientCapabilities: {
-                        elicitation: { form: {}, url: {} },
-                        plan: {},
-                        session: { compaction: {}, configOptions: { boolean: {} } },
-                    },
-                    clientInfo: { name: "mobius", version: "0.0.3" },
-                    protocolVersion: PROTOCOL_VERSION,
-                },
-                { cancellationSignal: signal },
-            ),
-            "ACP agent exited during initialization",
+        const initialized = await initializeAgentConnection(
+            this.#connection,
+            this.#agentId,
+            this.#verifiedAgentVersion,
             signal,
-        ).catch((cause: unknown) => {
-            signal.throwIfAborted();
-            throw new RetryableAcpInitializationError(cause);
-        });
-        if (initialized.protocolVersion !== PROTOCOL_VERSION) {
-            throw new AcpExecutionError(
-                "ACP agent selected an unsupported protocol version",
-                {},
-                "unsupported_acp_protocol",
-            );
-        }
-        this.#capabilities = normalizeAcpCapabilities(initialized);
-        this.#agentName = truncate(initialized.agentInfo?.title ?? initialized.agentInfo?.name ?? this.#agentId, 255);
-        this.#agentVersion = truncate(
-            this.#verifiedAgentVersion.length > 0 ? this.#verifiedAgentVersion : (initialized.agentInfo?.version ?? ""),
-            128,
         );
+        this.#capabilities = initialized.capabilities;
+        this.#agentName = initialized.agentName;
+        this.#agentVersion = initialized.agentVersion;
     }
 
     readonly initialize = async (
@@ -559,32 +490,6 @@ export class AgentSession implements AcpClientHandler, AgentSessionRestore {
         recovery: SessionRecovery,
         origin?: NativeSessionOrigin,
     ): Promise<void> => await restoreSession(this, signal, recovery, origin);
-
-    readonly listNativeSessions = async (cursor: string | null, signal: AbortSignal): Promise<NativeSessionPage> => {
-        if (!this.#capabilities.listSessions) {
-            throw new AcpExecutionError(
-                "This Agent does not support native session listing",
-                {},
-                "native_session_unsupported",
-            );
-        }
-        const response: unknown = await this.race(
-            this.#connection.connection.agent.request(methods.agent.session.list, cursor === null ? {} : { cursor }, {
-                cancellationSignal: signal,
-            }),
-            "ACP agent exited while listing sessions",
-            signal,
-        );
-        const decoded = nativeSessionPageSchema.safeParse(response);
-        if (!decoded.success) {
-            throw new AcpExecutionError(
-                "The Agent returned an invalid native session list",
-                { cause: decoded.error },
-                "invalid_native_session_response",
-            );
-        }
-        return decoded.data;
-    };
 
     readonly nativeSessionId = (): string => this.#updates.sessionId();
 
@@ -913,28 +818,12 @@ export class AgentSession implements AcpClientHandler, AgentSessionRestore {
         }
     };
 
-    readonly respondPermission = (options: PermissionResponseOptions) => this.#interactions.respondPermission(options);
-    readonly respondElicitation = (options: ElicitationResponseOptions) =>
-        this.#interactions.respondElicitation(options);
-    readonly onPermission = async (request: RequestPermissionRequest, signal: AbortSignal) => {
-        // The ACP connection dispatches incoming messages concurrently, so this
-        // request can reach its handler before updates the Agent wrote earlier.
-        // Those updates were already read; one turn of the event loop lets them
-        // reach the update stream, and draining it applies the tool call this
-        // request references before the permission is described.
-        await yieldToRuntime(undefined, { signal });
-        await this.#updates.drained();
-        signal.throwIfAborted();
-        return await this.#interactions.onPermission(request, signal);
+    readonly respondPermission = async (options: PermissionResponseOptions): Promise<void> => {
+        await this.#interactions.respondPermission(options);
     };
-    readonly onElicitation = (
-        request: CreateElicitationRequest,
-        signal: AbortSignal,
-    ): Promise<CreateElicitationResponse> => this.#interactions.onElicitation(request, signal);
-    readonly onElicitationComplete = (notification: CompleteElicitationNotification) =>
-        this.#interactions.onElicitationComplete(notification);
-
-    readonly onUpdate = (notification: SessionNotification): Promise<void> => this.#updates.receive(notification);
+    readonly respondElicitation = async (options: ElicitationResponseOptions): Promise<void> => {
+        await this.#interactions.respondElicitation(options);
+    };
 
     readonly recordControlEvent = async (event: SessionEventPayload): Promise<boolean> => {
         if (this.#sessionLoad.kind !== "loaded" && this.#sessionLoad.kind !== "execution-only") {
@@ -960,89 +849,61 @@ export class AgentSession implements AcpClientHandler, AgentSessionRestore {
         this.#nativeHistoryOwnership = { kind: "agent-owned" };
     };
 
-    readonly #processUpdate = async (notification: SessionNotification): Promise<void> => {
-        this.assertNativeSession(notification.sessionId);
-        const externalized = await this.#contentExternalizer.update(
-            this.#mobiusSessionId,
-            notification.update,
-            AbortSignal.timeout(30_000),
-        );
-        const update = externalized.agent;
-        const rawUpdate = decodeAcpSessionUpdate(JSON.stringify(externalized.event));
+    readonly #processEvent = async (event: AdapterSessionEvent): Promise<void> => {
         if (this.#sessionLoad.kind === "capturing") {
-            await this.#sessionLoad.history.record(update, rawUpdate);
+            await this.#sessionLoad.history.record(event.payload);
         } else if (this.#sessionLoad.kind === "loaded" || this.#sessionLoad.kind === "execution-only") {
-            const onSessionEvent = this.#getObserver().onSessionEvent;
-            await this.#sessionLoad.history.record(update, rawUpdate, async (liveEvent) => {
-                await onSessionEvent?.(liveEvent);
+            await this.#sessionLoad.history.record(event.payload, async (liveEvent) => {
+                await this.#getObserver().onSessionEvent?.(liveEvent);
             });
         }
-        if (
-            this.#sessionLoad.kind === "capturing" &&
-            (update.sessionUpdate === "user_message_chunk" ||
-                update.sessionUpdate === "agent_message_chunk" ||
-                update.sessionUpdate === "agent_thought_chunk" ||
-                update.sessionUpdate === "tool_call" ||
-                update.sessionUpdate === "tool_call_update" ||
-                update.sessionUpdate === "plan" ||
-                update.sessionUpdate === "plan_update" ||
-                update.sessionUpdate === "plan_removed")
-        ) {
-            return;
-        }
-        if (update.sessionUpdate === "available_commands_update") {
-            const commands: SessionCommand[] = update.availableCommands
-                .slice(0, 500)
-                .map((command) => ({
-                    description: truncate(command.description, 500),
-                    inputHint: truncate(command.input?.hint ?? "", 255),
-                    name: truncate(command.name, 128),
-                }))
-                .filter((command) => command.name.length > 0);
-            this.#commands = commands;
-            await this.#getObserver().onCommands({
-                commands: this.#commands,
-                kind: SESSION_COMMANDS_UPDATED_KIND,
-                sessionId: this.#mobiusSessionId,
-            });
-            return;
-        }
-        if (update.sessionUpdate === "config_option_update") {
-            this.#configOptions = this.#sessionConfigProtocol.normalizeUpdate(
-                this.#configOptions,
-                update.configOptions,
-            );
-            this.#configRevision += 1;
-            this.#captureSelectedConfigurationValues();
-            await this.emitConfigUpdate();
-            return;
-        }
-        if (update.sessionUpdate === "current_mode_update") {
-            this.#configOptions = this.#configOptions.map((option) =>
-                option.category === "mode" ? { ...option, currentValue: update.currentModeId } : option,
-            );
-            this.#configRevision += 1;
-            this.#captureSelectedConfigurationValues();
-            await this.emitConfigUpdate();
-            return;
-        }
-        if (update.sessionUpdate === "session_info_update") {
-            if (Object.hasOwn(update, "title")) {
-                this.#sessionTitle = truncate(update.title ?? "", 500);
-            }
-            if (Object.hasOwn(update, "updatedAt")) {
-                this.#sessionUpdatedAt = truncate(update.updatedAt ?? "", 128);
-            }
-            if (this.#updates.sessionId().length > 0) {
-                this.writeStoredSession(new Date().toISOString());
-            }
-            await this.#getObserver().onInfo({
-                kind: SESSION_INFO_UPDATED_KIND,
-                sessionId: this.#mobiusSessionId,
-                title: this.#sessionTitle,
-                updatedAt: this.#sessionUpdatedAt,
-            });
-            return;
+        switch (event.kind) {
+            case "content":
+            case "other":
+                return;
+            case "commands":
+                this.#commands = event.commands;
+                await this.#getObserver().onCommands({
+                    commands: this.#commands,
+                    kind: SESSION_COMMANDS_UPDATED_KIND,
+                    sessionId: this.#mobiusSessionId,
+                });
+                return;
+            case "configuration":
+                this.#configOptions = event.configOptions;
+                this.#configRevision += 1;
+                this.#captureSelectedConfigurationValues();
+                await this.emitConfigUpdate();
+                return;
+            case "mode":
+                this.#configOptions = this.#configOptions.map((option) =>
+                    option.category === "mode" ? { ...option, currentValue: event.modeId } : option,
+                );
+                this.#configRevision += 1;
+                this.#captureSelectedConfigurationValues();
+                await this.emitConfigUpdate();
+                return;
+            case "info":
+                for (const change of event.changes) {
+                    switch (change.kind) {
+                        case "title":
+                            this.#sessionTitle = change.value;
+                            break;
+                        case "updated-at":
+                            this.#sessionUpdatedAt = change.value;
+                            break;
+                    }
+                }
+                if (this.#updates.sessionId().length > 0) {
+                    this.writeStoredSession(new Date().toISOString());
+                }
+                await this.#getObserver().onInfo({
+                    kind: SESSION_INFO_UPDATED_KIND,
+                    sessionId: this.#mobiusSessionId,
+                    title: this.#sessionTitle,
+                    updatedAt: this.#sessionUpdatedAt,
+                });
+                return;
         }
     };
 
@@ -1069,7 +930,7 @@ export class AgentSession implements AcpClientHandler, AgentSessionRestore {
 
     readonly closeProcess = (): Promise<void> => this.#connection.closeProcess();
 
-    readonly agentSettingsModelEffort = () => this.#connection.inProcessAgent?.agentSettingsModelEffort?.() ?? null;
+    readonly agentSettingsModelEffort = () => this.#connection.agentSettingsModelEffort();
     readonly race = <T>(operation: Promise<T>, exitMessage: string, signal: AbortSignal): Promise<T> =>
         this.#connection.race(operation, exitMessage, signal);
 

@@ -1,4 +1,5 @@
 import type { WebSocket } from "undici";
+import type { ResolveAgent } from "../../session/api/session-api.ts";
 import type { ExternalContentStore } from "../../session/content/external-content-store.ts";
 import type { SessionManager } from "../../session/manager/session-manager.ts";
 import type { NativeSessionService } from "../../session/native/native-session-browser.ts";
@@ -11,6 +12,7 @@ import type { RuntimeConfig } from "../config.ts";
 import type { RelayConnectionDiagnostics } from "../relay/diagnostics.ts";
 
 export interface CommandContext {
+    readonly resolveAgent: ResolveAgent;
     readonly config: RuntimeConfig;
     readonly directories: WorkspaceDirectoryService;
     readonly sessions: SessionManager;

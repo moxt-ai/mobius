@@ -7,12 +7,12 @@ import { AcpContentExternalizer } from "../../src/acp/content/content-externaliz
 import type { AdapterResolver } from "../../src/acp/native-history/preview-contract.ts";
 import { createRuntimeConfig } from "../../src/runtime/config.ts";
 import { NullSessionObserver } from "../../src/session/api/session-api.ts";
-import { SessionManager } from "../../src/session/manager/session-manager.ts";
 import { NativeSessionService } from "../../src/session/native/native-session-browser.ts";
 import { MemorySessionStore } from "../../src/session/record/session-store.ts";
 import { WorkspaceDirectoryService } from "../../src/session/workspace/workspace-directory.ts";
 import { systemTimer } from "../../src/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
+import { SessionRuntimeFixture as SessionManager } from "../support/session-runtime.ts";
 import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
 
 const acpUrl = new URL("./fixtures/acp-peer.ts", import.meta.url).toString();
@@ -104,9 +104,9 @@ export async function fixture(
     const directories = new WorkspaceDirectoryService("workspace", workspace);
     let service = new NativeSessionService(
         config.bindingId,
-        (agentId) => Promise.resolve(config.catalog.find(agentId)),
+        (agentId) => sessions.resolveAgent(config.catalog.find(agentId)),
         directories,
-        sessions,
+        sessions.sessions,
         async () => ({
             turn: null,
             queued: [],
@@ -222,9 +222,9 @@ export async function fixture(
             });
             service = new NativeSessionService(
                 config.bindingId,
-                (agentId) => Promise.resolve(config.catalog.find(agentId)),
+                (agentId) => sessions.resolveAgent(config.catalog.find(agentId)),
                 directories,
-                sessions,
+                sessions.sessions,
                 async () => ({
                     turn: null,
                     queued: [],

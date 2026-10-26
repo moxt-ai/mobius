@@ -11,6 +11,7 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { WebSocket } from "undici";
 import { operationErrorCode } from "../../../infra/operation-error.ts";
+import type { ResolveAgent } from "../../../session/api/session-api.ts";
 import { SessionError } from "../../../session/api/session-error.ts";
 import type { SessionEventPage } from "../../../session/history/session-event-store.ts";
 import type { SessionManager } from "../../../session/manager/session-manager.ts";
@@ -18,7 +19,6 @@ import type { NativeSessionService } from "../../../session/native/native-sessio
 import type { PromptLifecycle } from "../../../session/prompt/prompt-lifecycle.ts";
 import { resolveSessionDirectories } from "../../../session/workspace/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "../../../session/workspace/workspace-directory.ts";
-import { resolveCatalogAgent } from "../../catalog/resolve-catalog-agent.ts";
 import type { RuntimeConfig } from "../../config.ts";
 import type { RelayConnectionDiagnostics } from "../../relay/diagnostics.ts";
 import type { RuntimeCommand } from "../definition.ts";
@@ -128,6 +128,7 @@ export async function executeSessionHistoryPageLoad(
     socket: WebSocket,
     command: ReturnType<typeof decodeSessionHistoryPageLoad>,
     config: RuntimeConfig,
+    resolveAgent: ResolveAgent,
     directories: WorkspaceDirectoryService,
     diagnostics: RelayConnectionDiagnostics,
     sessions: SessionManager,
@@ -151,7 +152,7 @@ export async function executeSessionHistoryPageLoad(
         );
         const loadOptions = {
             additionalDirectories: resolved.additionalDirectories,
-            agent: await resolveCatalogAgent(config, entry.agentId, signal),
+            ...(await resolveAgent(entry.agentId, signal)),
             cwd: resolved.cwd,
             sessionId: command.sessionId,
             signal,
@@ -193,6 +194,7 @@ export async function executeSessionPreviewHistoryPageLoad(
     socket: WebSocket,
     command: ReturnType<typeof decodeSessionPreviewHistoryPageLoad>,
     config: RuntimeConfig,
+    resolveAgent: ResolveAgent,
     directories: WorkspaceDirectoryService,
     diagnostics: RelayConnectionDiagnostics,
     sessions: SessionManager,
@@ -208,7 +210,7 @@ export async function executeSessionPreviewHistoryPageLoad(
         );
         const loadOptions = {
             additionalDirectories: resolved.additionalDirectories,
-            agent: await resolveCatalogAgent(config, command.agentId, signal),
+            ...(await resolveAgent(command.agentId, signal)),
             cwd: resolved.cwd,
             sessionId: command.sessionId,
             signal,
@@ -256,6 +258,7 @@ export const sessionHistoryPageLoadCommand: RuntimeCommand = {
             context.socket,
             message,
             context.config,
+            context.resolveAgent,
             context.directories,
             context.diagnostics,
             context.sessions,
@@ -276,6 +279,7 @@ export const previewHistoryPageLoadCommand: RuntimeCommand = {
             context.socket,
             message,
             context.config,
+            context.resolveAgent,
             context.directories,
             context.diagnostics,
             context.sessions,

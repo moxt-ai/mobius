@@ -1,5 +1,14 @@
-import type { SessionEvent, SessionEventPayload, SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
+import type {
+    SessionCapabilities,
+    SessionEvent,
+    SessionEventPayload,
+    SessionLiveEvent,
+} from "@moxt-ai/mobius-sdk/protocol";
+import type { AgentProcessPool } from "../../session/process/agent-process-pool.ts";
+import type { AdapterSessionConnection, AdapterSessionConnectionOptions } from "../adapter/session-events.ts";
 import type { AcpAgentDefinition } from "../agent/agent-definition.ts";
+import type { AcpContentExternalizer } from "../content/content-externalizer.ts";
+import type { NativeSessionPage } from "../protocol/native-session.ts";
 import type { ProjectedToolCall } from "../tool-call-projection.ts";
 
 /** One page of a saved native session's events. */
@@ -41,36 +50,32 @@ export interface NativeSessionPreviewRequest {
     readonly sessionId: string;
 }
 
-/** Per-preview services an Adapter may use. */
-export interface AdapterContext {
-    /**
-     * The preview's preparation inputs. The full session preparation options stay in the
-     * session layer; adapters receive only the agent, cwd, directories and signal here.
-     */
+/** Shared runtime resources; each adapter owns the query resources it acquires. */
+export interface AdapterDependencies {
+    readonly processes: AgentProcessPool;
+    readonly contentExternalizer: AcpContentExternalizer;
+}
+
+/** Constructs one harness adapter for a runtime. */
+export type AdapterResolver = (agent: AcpAgentDefinition, dependencies: AdapterDependencies) => Adapter;
+
+/** Validated query scope; contains no execution-session recovery or process controls. */
+export interface NativeSessionQuery {
     readonly agent: AcpAgentDefinition;
     readonly cwd: string;
     readonly additionalDirectories: readonly string[];
+    readonly sessionId: string;
     readonly signal: AbortSignal;
-    /** The session's event store, for adapters that materialize projected history. */
-    readonly events: SessionEventStore;
-    /**
-     * Previews by resuming the native session over ACP `session/load` through a transient
-     * agent process. Adapters whose harness replays history only on resume use this.
-     */
-    readonly previewThroughAcp: (request: NativeSessionPreviewRequest) => Promise<SessionEventPage>;
 }
 
-/**
- * How a harness serves reads of a saved native session. Previews are read-only: an
- * adapter must not resume the source session or require its writer lock unless it
- * goes through `previewThroughAcp`, which owns the session/load lifecycle.
- */
+/** Business-facing saved-session operations. Transport and initialization belong to the adapter. */
 export interface Adapter {
+    readonly connectSession: (options: AdapterSessionConnectionOptions) => AdapterSessionConnection;
+    readonly capabilities: (query: NativeSessionQuery) => Promise<SessionCapabilities>;
+    readonly listNativeSessions: (query: NativeSessionQuery, cursor: string | null) => Promise<NativeSessionPage>;
     readonly previewSessionEvents: (
+        query: NativeSessionQuery,
         request: NativeSessionPreviewRequest,
-        context: AdapterContext,
     ) => Promise<SessionEventPage>;
+    readonly close: () => Promise<void>;
 }
-
-/** Resolves the adapter that owns a preview for the given agent. */
-export type AdapterResolver = (agent: AcpAgentDefinition) => Adapter;

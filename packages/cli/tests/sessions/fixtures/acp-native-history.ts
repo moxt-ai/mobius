@@ -60,6 +60,35 @@ export function registerHistory(agent: ReturnType<typeof acp.agent>) {
         }
         acquireWriter(context.params.sessionId);
         const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+        if (directory !== undefined && existsSync(join(directory, "interactions-during-preview"))) {
+            const requests = [
+                async () =>
+                    await context.client.request(acp.methods.client.session.requestPermission, {
+                        sessionId: context.params.sessionId,
+                        toolCall: { toolCallId: "preview-read", title: "Read saved history" },
+                        options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
+                    }),
+                async () =>
+                    await context.client.request(acp.methods.client.elicitation.create, {
+                        sessionId: context.params.sessionId,
+                        mode: "form",
+                        message: "Provide input for preview",
+                        requestedSchema: { type: "object", properties: {} },
+                    }),
+            ];
+            for (const request of requests) {
+                let text = "Preview interaction unexpectedly accepted";
+                try {
+                    await request();
+                } catch {
+                    text = "Preview interaction rejected";
+                }
+                await context.client.notify(acp.methods.client.session.update, {
+                    sessionId: context.params.sessionId,
+                    update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
+                });
+            }
+        }
         const pausePath = directory === undefined ? null : join(directory, "pause-load");
         const pauseTarget = pausePath !== null && existsSync(pausePath) ? readFileSync(pausePath, "utf8").trim() : null;
         if (

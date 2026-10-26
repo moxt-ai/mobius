@@ -20,13 +20,13 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { runRuntime } from "../../src/runtime/run.ts";
 import {
-    createRuntimeConfig,
     InProcessAcpAgentDefinition,
     type InProcessAcpEndpointFactory,
     RuntimeLocalContext,
 } from "../../src/runtime.ts";
 import { RuntimeTurnActivity } from "../../src/session/turn/runtime-turn-activity.ts";
 import type { ScheduledTask, Timer } from "../../src/util/timer.ts";
+import { createControlledRuntimeConfig as createRuntimeConfig } from "../support/controlled-runtime-config.ts";
 
 // Failure modes exercised through the production daemon and its real WebSocket transport:
 // - a disconnect discards a batch whose delivery timer has not fired;

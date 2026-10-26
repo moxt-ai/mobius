@@ -41,8 +41,9 @@ import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { expect, test } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
-import { createRuntimeConfig, RuntimeLocalContext } from "../../src/runtime/config.ts";
+import { RuntimeLocalContext } from "../../src/runtime/config.ts";
 import { runRuntime } from "../../src/runtime/run.ts";
+import { createControlledRuntimeConfig as createRuntimeConfig } from "../support/controlled-runtime-config.ts";
 
 class Messages {
     readonly #buffered: string[] = [];
