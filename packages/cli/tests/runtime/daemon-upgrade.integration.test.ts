@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -18,7 +18,7 @@ import {
 import { packedRelease } from "../support/packed-daemon-release.ts";
 
 describe("Daemon hourly npm upgrade", () => {
-    it("Given a paired managed daemon, When hourly checks discover a release and then a broken release, Then it switches, rolls back, reports the error and blocks subsequent upgrades", async () => {
+    it("Given a CLI outside the managed installation, When start and upgrade run, Then both use managed releases and failed upgrades roll back", async () => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-upgrade-journey-"));
         const signal = AbortSignal.timeout(240_000);
         const stateRoot = join(directory, "state");
@@ -148,7 +148,7 @@ describe("Daemon hourly npm upgrade", () => {
             await response.text();
         };
         try {
-            packages.set(cliPackage.version, Buffer.from("not downloaded"));
+            packages.set(cliPackage.version, await packedRelease(directory, cliPackage.version, false, signal));
             packages.set(good, await packedRelease(directory, good, false, signal));
             packages.set(bad, await packedRelease(directory, bad, true, signal));
             await listen(server);
@@ -170,16 +170,41 @@ describe("Daemon hourly npm upgrade", () => {
             await writeFile(join(stateRoot, "versions", cliPackage.version, "retained-data"), "original-data");
             await cli(["start"]);
             await connected.promise;
+            const managedEntry = join(
+                stateRoot,
+                "npm",
+                cliPackage.version,
+                "node_modules",
+                "@moxt-ai",
+                "mobius",
+                "dist",
+                "cli.js",
+            );
+            expect(await readFile(managedEntry, "utf8")).toContain("entrypoint.ts");
             const control = await openMobiusControlInstallation(signal, environment);
             const manager = await readFile(join(control.stateDirectory, "manager.lock"), "utf8");
             const originalWorker = await readFile(join(control.stateDirectory, "worker.lock"), "utf8");
+            const downloadsAtStart = downloads;
+            await cli(["start"]);
+            expect(await readFile(join(control.stateDirectory, "worker.lock"), "utf8")).toBe(originalWorker);
+            expect(downloads).toBe(downloadsAtStart);
             // A leftover file, even with a live PID, must not block this process.
             await writeFile(join(control.stateDirectory, "upgrade.lock"), String(process.pid));
-            expect(queries).toBe(0);
+            const startupQueries = queries;
             await tick(originalWorker, 3_599_999);
-            expect(queries).toBe(0);
+            expect(queries).toBe(startupQueries);
             await tick(originalWorker, 1);
             expect(await next()).toMatchObject({ version: good, outcome: { status: "succeeded" } });
+            expect(
+                await sendLocalRequest(
+                    control.stateDirectory,
+                    "manager",
+                    { kind: "switch-status", wait: true },
+                    signal,
+                ),
+            ).toMatchObject({
+                state: { previous: { entry: await realpath(managedEntry) } },
+            });
             expect(await readFile(join(control.stateDirectory, "manager.lock"), "utf8")).toBe(manager);
             expect(await readFile(join(stateRoot, "versions", good, "retained-data"), "utf8")).toBe("original-data");
             await writeFile(join(stateRoot, "versions", good, "retained-data"), "upgraded-data");
@@ -277,6 +302,20 @@ describe("Daemon hourly npm upgrade", () => {
                     signal,
                 ),
             ).toEqual({ kind: "switch-status", state: null });
+            await cli(["quit"]);
+            latest = reuse;
+            await cli(["upgrade"]);
+            expect(await sendLocalRequest(control.stateDirectory, "manager", { kind: "status" }, signal)).toMatchObject(
+                { worker: { version: reuse } },
+            );
+            expect(
+                await sendLocalRequest(
+                    control.stateDirectory,
+                    "manager",
+                    { kind: "switch-status", wait: true },
+                    signal,
+                ),
+            ).toMatchObject({ state: { previous: { entry: await realpath(managedEntry) } } });
         } finally {
             await cli(["quit"], AbortSignal.timeout(20_000)).catch(() => undefined);
             signal.removeEventListener("abort", aborted);

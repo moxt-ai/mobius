@@ -167,7 +167,12 @@ export async function runManager(stateDirectory: string, signal: AbortSignal): P
                 }
                 case "ensure": {
                     const launch = await decodeWorkerLaunch(command.launch);
-                    if (!worker?.running || worker.launch.version !== launch.version) {
+                    if (
+                        !worker?.running ||
+                        worker.launch.version !== launch.version ||
+                        worker.launch.entry !== launch.entry ||
+                        worker.launch.executable !== launch.executable
+                    ) {
                         await start(launch);
                     }
                     await worker?.ready;

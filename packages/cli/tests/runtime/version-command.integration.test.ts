@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import cliPackage from "../../package.json" with { type: "json" };
+import { installWorkspaceDaemonRelease } from "../support/installed-daemon-release.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -61,6 +62,7 @@ describe("Mobius version command", () => {
         temporaryDirectories.push(directory);
         const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: join(directory, "state") };
         const signal = AbortSignal.timeout(60_000);
+        await installWorkspaceDaemonRelease(environment.MOBIUS_STATE_DIRECTORY);
         try {
             const started = await runCli(["start"], environment, signal);
             expect(started.code).toBe(0);

@@ -23,6 +23,7 @@ import {
     openMobiusControlInstallation,
 } from "../../src/daemon/pairing/pair-local-machine.ts";
 import { ClaudeFixture } from "../support/agents/claude.ts";
+import { installWorkspaceDaemonRelease } from "../support/installed-daemon-release.ts";
 import { FakeAnthropicProvider } from "../support/llm/anthropic.ts";
 import { fakeProviderPrompts } from "../support/llm/scenarios.ts";
 import { packedRelease } from "../support/packed-daemon-release.ts";
@@ -217,6 +218,7 @@ test("Given Claude is answering and another conversation awaits tool permission,
     };
     signal.addEventListener("abort", abort, { once: true });
     try {
+        await installWorkspaceDaemonRelease(environment.MOBIUS_STATE_DIRECTORY);
         await listen(server);
         origin = `http://127.0.0.1:${port(server)}`;
         environment.NPM_CONFIG_REGISTRY = origin;

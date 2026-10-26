@@ -1,21 +1,9 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute } from "node:path";
 
 import { resolveLaunchFiles } from "../../util/process/local-executable.ts";
 import { isRecord } from "../../util/value-utils.ts";
 import { type WorkerLaunch, workerLaunch } from "../control/protocol.ts";
-
-export function currentWorkerLaunch(version: string): WorkerLaunch {
-    const entry = process.argv[1];
-    if (entry === undefined || entry.length === 0) {
-        throw new Error("The Mobius CLI entry path is unavailable");
-    }
-    return {
-        executable: process.execPath,
-        entry: resolve(entry),
-        version,
-    };
-}
 
 export async function decodeWorkerLaunch(value: unknown): Promise<WorkerLaunch> {
     const { entry, executable, version } = workerLaunch.parse(value);
