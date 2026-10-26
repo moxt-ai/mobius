@@ -1,4 +1,3 @@
-import { MemorySessionEventStore } from "../../../session/history/session-event-store.ts";
 import { AcpExecutionError } from "../../acp-error.ts";
 import { readCodexFullHistory } from "../../native-history/codex/codex-history.ts";
 import { nativeHistoryEvents } from "../../native-history/codex/native-history-events.ts";
@@ -9,6 +8,7 @@ import type {
     NativeSessionQuery,
     SessionEventPage,
 } from "../../native-history/preview-contract.ts";
+import { openPreviewEventCache, type PreviewEventCache } from "../preview-event-cache.ts";
 import { AgentQueryProcesses } from "../query-processes.ts";
 import { AcpSessionConnector, type AdapterSessionConnectionOptions } from "../session-events.ts";
 
@@ -20,7 +20,7 @@ import { AcpSessionConnector, type AdapterSessionConnectionOptions } from "../se
 export class CodexAdapter implements Adapter {
     readonly #queryProcesses: AgentQueryProcesses;
     readonly #connector: AcpSessionConnector;
-    readonly #events = new MemorySessionEventStore();
+    #previewCache: PreviewEventCache | null = null;
 
     constructor(dependencies: AdapterDependencies) {
         this.#connector = new AcpSessionConnector(dependencies.contentExternalizer);
@@ -35,7 +35,7 @@ export class CodexAdapter implements Adapter {
         try {
             await this.#queryProcesses.close();
         } finally {
-            this.#events.close();
+            this.#previewCache?.close();
         }
     };
 
@@ -45,6 +45,7 @@ export class CodexAdapter implements Adapter {
     ): Promise<SessionEventPage> => {
         const { agent, cwd, signal } = query;
         const { sessionId } = request;
+        this.#previewCache ??= openPreviewEventCache();
         const snapshot = await readCodexFullHistory(agent, cwd, request.nativeSessionId, signal);
         if (snapshot.history.status === "unavailable") {
             throw new AcpExecutionError(snapshot.history.cause.message, {}, snapshot.history.cause.code);
@@ -55,7 +56,7 @@ export class CodexAdapter implements Adapter {
             snapshot.history,
             request.eventLimit,
             request.cursor,
-            this.#events,
+            this.#previewCache.events,
         );
     };
 }

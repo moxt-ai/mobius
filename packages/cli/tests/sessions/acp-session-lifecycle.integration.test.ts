@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import { SESSION_CLOSED_ERROR_CODE, type SessionStatusChangedEvent } from "@moxt-ai/mobius-sdk/protocol";
 import { describe, expect, it, vi } from "vitest";
+import { openPreviewEventCache } from "../../src/acp/adapter/preview-event-cache.ts";
 import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { createWritableAcpStream } from "../../src/acp/connection/agent-connection.ts";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
@@ -246,63 +247,72 @@ describe("ACP conversation sessions", () => {
         }
     });
 
-    it("Given projected history far beyond the memory tier, When terminal tool calls accumulate across flushes, Then materialized event payloads stay bounded", async () => {
-        vi.useFakeTimers({ toFake: ["clearImmediate", "setImmediate"] });
-        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-bounded-"));
-        const sessionDatabase = openAcpSessionDatabase(join(temporaryDirectory, "sessions.sqlite"));
-        const store = new CachedSessionEventStore(
-            new SessionEventCacheTable(openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite"))),
-            new SqliteSessionLiveEventPosition(new LiveEventPositionTable(sessionDatabase)),
-        );
-        try {
-            for (let number = 1; number <= 3000; number += 1) {
-                if (number % 10 === 1) {
-                    store.append("session-1", {
-                        payload: {
-                            sessionUpdate: "tool_call",
-                            title: "Run command",
-                            toolCallId: `tool-${number.toString()}`,
-                        },
-                        type: "acp",
-                    });
-                    store.append("session-1", {
-                        payload: {
-                            sessionUpdate: "tool_call_update",
-                            status: "completed",
-                            toolCallId: `tool-${number.toString()}`,
-                        },
-                        type: "acp",
-                    });
-                } else {
-                    store.append("session-1", {
-                        payload: { kind: "session.queue.changed" },
-                        type: "lifecycle-metadata",
-                    });
+    it.each(["session", "adapter preview"])(
+        "Given %s history far beyond the memory tier, When terminal tool calls accumulate across flushes, Then materialized event payloads stay bounded",
+        async (kind) => {
+            vi.useFakeTimers({ toFake: ["clearImmediate", "setImmediate"] });
+            const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-bounded-"));
+            const sessionDatabase = openAcpSessionDatabase(join(temporaryDirectory, "sessions.sqlite"));
+            const previewCache = kind === "adapter preview" ? openPreviewEventCache() : null;
+            const store =
+                previewCache?.events ??
+                new CachedSessionEventStore(
+                    new SessionEventCacheTable(
+                        openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite")),
+                    ),
+                    new SqliteSessionLiveEventPosition(new LiveEventPositionTable(sessionDatabase)),
+                );
+            try {
+                for (let number = 1; number <= 3000; number += 1) {
+                    if (number % 10 === 1) {
+                        store.append("session-1", {
+                            payload: {
+                                sessionUpdate: "tool_call",
+                                title: "Run command",
+                                toolCallId: `tool-${number.toString()}`,
+                            },
+                            type: "acp",
+                        });
+                        store.append("session-1", {
+                            payload: {
+                                sessionUpdate: "tool_call_update",
+                                status: "completed",
+                                toolCallId: `tool-${number.toString()}`,
+                            },
+                            type: "acp",
+                        });
+                    } else {
+                        store.append("session-1", {
+                            payload: { kind: "session.queue.changed" },
+                            type: "lifecycle-metadata",
+                        });
+                    }
                 }
-            }
-            await vi.runAllTimersAsync();
+                await vi.runAllTimersAsync();
 
-            expect(store.materializedEventCount("session-1")).toBeLessThanOrEqual(256);
+                expect(store.materializedEventCount("session-1")).toBeLessThanOrEqual(256);
 
-            const page = store.page("session-1", 4000, null);
-            const eventIds = page.events.map((event) => event.eventId);
-            expect(new Set(eventIds).size).toBe(page.events.length);
-            expect(page.events).toHaveLength(3000);
-            const toolEvents = page.events.filter((event) => event.type === "acp");
-            expect(toolEvents).toHaveLength(300);
-            for (const event of toolEvents) {
-                if (event.type !== "acp" || event.payload.sessionUpdate !== "tool_call") {
-                    throw new Error("Expected merged terminal tool calls");
+                const page = store.page("session-1", 4000, null);
+                const eventIds = page.events.map((event) => event.eventId);
+                expect(new Set(eventIds).size).toBe(page.events.length);
+                expect(page.events).toHaveLength(3000);
+                const toolEvents = page.events.filter((event) => event.type === "acp");
+                expect(toolEvents).toHaveLength(300);
+                for (const event of toolEvents) {
+                    if (event.type !== "acp" || event.payload.sessionUpdate !== "tool_call") {
+                        throw new Error("Expected merged terminal tool calls");
+                    }
+                    expect(event.payload.status).toBe("completed");
                 }
-                expect(event.payload.status).toBe("completed");
+            } finally {
+                store.close();
+                previewCache?.close();
+                sessionDatabase.close();
+                vi.useRealTimers();
+                await rm(temporaryDirectory, { force: true, recursive: true });
             }
-        } finally {
-            store.close();
-            sessionDatabase.close();
-            vi.useRealTimers();
-            await rm(temporaryDirectory, { force: true, recursive: true });
-        }
-    });
+        },
+    );
 
     it("Given a previous process filled the event cache database, When a new process opens it, Then the cache file is compact again", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-cache-vacuum-"));
