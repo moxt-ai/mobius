@@ -108,7 +108,17 @@ function mergeTextChunk(previous: AcpSessionUpdate, incoming: AcpSessionUpdate):
     ) {
         return null;
     }
-    return { ...previous, content: { text: `${previous.content.text}${incoming.content.text}`, type: "text" } };
+    const content = { text: `${previous.content.text}${incoming.content.text}`, type: "text" as const };
+    if (previous.sessionUpdate === "agent_thought_chunk" && incoming.sessionUpdate === "agent_thought_chunk") {
+        return {
+            ...previous,
+            content,
+            ...(previous.meta?.truncated === true || incoming.meta?.truncated === true
+                ? { meta: { ...previous.meta, ...incoming.meta, truncated: true } }
+                : {}),
+        };
+    }
+    return { ...previous, content };
 }
 
 export class SessionEventHistoryProjection {

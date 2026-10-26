@@ -6,6 +6,8 @@ import { type AgentConnection, agent, methods, PROTOCOL_VERSION } from "@agentcl
 import {
     decodeMessageKind,
     decodeSessionEventEnvelope,
+    decodeSessionHistoryPageLoaded,
+    encodeSessionHistoryPageLoad,
     encodeSessionPromptCommand,
     encodeWorkspaceListCommand,
     RUNTIME_HEARTBEAT_ACK_MESSAGE,
@@ -92,6 +94,7 @@ interface ControlledTurn {
 }
 
 class StreamingAgent {
+    readonly #reasoning = new Map<string, string[]>();
     readonly #turns: ControlledTurn[] = [];
     readonly #waiters: Array<(turn: ControlledTurn) => void> = [];
     readonly #completions: Array<() => void> = [];
@@ -105,17 +108,33 @@ class StreamingAgent {
             })
             .onRequest(methods.agent.initialize, () => ({
                 protocolVersion: PROTOCOL_VERSION,
-                agentCapabilities: {},
+                agentCapabilities: { loadSession: true },
                 agentInfo: { name: "controlled-offline-output", version: "1.0.0" },
                 authMethods: [],
             }))
             .onRequest(methods.agent.session.new, () => ({ sessionId: crypto.randomUUID() }))
+            .onRequest(methods.agent.session.load, async (context) => {
+                for (const text of this.#reasoning.get(context.params.sessionId) ?? []) {
+                    await context.client.notify(methods.client.session.update, {
+                        sessionId: context.params.sessionId,
+                        update: {
+                            content: { type: "text", text },
+                            messageId: context.params.sessionId,
+                            sessionUpdate: "agent_thought_chunk",
+                        },
+                    });
+                }
+                return {};
+            })
             .onRequest(methods.agent.session.prompt, async (context) => {
+                const reasoning: string[] = [];
+                this.#reasoning.set(context.params.sessionId, reasoning);
                 const completion = Promise.withResolvers<void>();
                 this.#completions.push(completion.resolve);
                 const turn: ControlledTurn = {
                     finish: completion.resolve,
-                    writeThought: async (text) =>
+                    writeThought: async (text) => {
+                        reasoning.push(text);
                         await onSessionUpdate({
                             sessionId: context.params.sessionId,
                             update: {
@@ -123,7 +142,8 @@ class StreamingAgent {
                                 messageId: context.params.sessionId,
                                 sessionUpdate: "agent_thought_chunk",
                             },
-                        }),
+                        });
+                    },
                     write: async (text) =>
                         await onSessionUpdate({
                             sessionId: context.params.sessionId,
@@ -322,14 +342,58 @@ beforeEach(() => {
 
 afterEach(() => vi.useRealTimers());
 
+test("Given short reasoning followed by a truncated chunk and more short text, When a client loads the daemon history page, Then the coalesced reasoning retains its truncation flag", async () => {
+    await using runtime = await startRuntime();
+    const turn = await runtime.prompt(runtime.initial, "reasoning-history");
+    await turn.writeThought("short prefix ");
+    await turn.writeThought(`discarded${"r".repeat(24 * 1024)}`);
+    await turn.writeThought(" short suffix");
+    (await runtime.timer.next(100)).run();
+    await runtime.initial.barrier();
+    runtime.initial.socket.send(
+        encodeSessionHistoryPageLoad({
+            kind: "session.live-history.v2.page.load",
+            sessionId: "reasoning-history",
+            requestId: "reasoning-history-page",
+            cursor: null,
+            eventLimit: 50,
+        }),
+    );
+    for (;;) {
+        const message = await runtime.initial.next();
+        const kind = decodeMessageKind(message);
+        if (kind === "session.operation.failed") {
+            throw new Error(message);
+        }
+        if (kind !== "session.live-history.v2.page.loaded") {
+            continue;
+        }
+        const page = decodeSessionHistoryPageLoaded(message);
+        const thoughts = page.events.events.events.flatMap((event) =>
+            event.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk" ? [event.payload] : [],
+        );
+        expect(thoughts).toEqual([
+            {
+                sessionUpdate: "agent_thought_chunk",
+                messageId: expect.any(String),
+                content: { type: "text", text: `short prefix ${"r".repeat(24 * 1024)} short suffix` },
+                meta: { truncated: true },
+            },
+        ]);
+        break;
+    }
+    turn.finish();
+    using _idle = await runtime.activity.reserveWhenIdle(runtime.cancellation.signal);
+});
+
 test("Given oversized reasoning chunks, When the daemon streams them to the Relay, Then each retains its last 24 KiB and marks truncation without changing answers", async () => {
     await using runtime = await startRuntime();
     const turn = await runtime.prompt(runtime.initial, "reasoning-tail");
-    const oversized = "discarded prefix" + "\u601d\u{1f600}r".repeat(12_000) + " tail-0!!";
+    const oversized = `discarded prefix${"\u601d\u{1f600}r".repeat(12_000)} tail-0!!`;
     await turn.writeThought("short thought");
     await turn.writeThought(oversized);
     await turn.writeThought("x".repeat(24 * 1024));
-    await turn.writeThought("prefix" + "y".repeat(24 * 1024));
+    await turn.writeThought(`prefix${"y".repeat(24 * 1024)}`);
     await turn.write(oversized);
     turn.finish();
     using _idle = await runtime.activity.reserveWhenIdle(runtime.cancellation.signal);
@@ -341,7 +405,7 @@ test("Given oversized reasoning chunks, When the daemon streams them to the Rela
     expect(thoughts.map((thought) => ({ content: thought.content, meta: thought.meta }))).toEqual([
         { content: { type: "text", text: "short thought" }, meta: undefined },
         {
-            content: { type: "text", text: "\u{1f600}r" + "\u601d\u{1f600}r".repeat(3_070) + " tail-0!!" },
+            content: { type: "text", text: `\u{1f600}r${"\u601d\u{1f600}r".repeat(3_070)} tail-0!!` },
             meta: { truncated: true },
         },
         { content: { type: "text", text: "x".repeat(24 * 1024) }, meta: undefined },
