@@ -1,5 +1,6 @@
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-sdk/protocol";
 import { type HttpError, toHttpError } from "../../entity/http-error.ts";
+import { diagnosticText, serializeDiagnosticError } from "../../infra/log-diagnostics.ts";
 import { logger } from "../../infra/logger.ts";
 
 const REQUEST_KIND = "http.request";
@@ -10,6 +11,7 @@ const EVENT_UNSUBSCRIBE_KIND = "session.events.unsubscribe";
 const MAX_BODY_BYTES = 12_582_912;
 const IDLE_TIMEOUT_MILLISECONDS = 60_000;
 const LIVE_EVENT_HEARTBEAT_MILLISECONDS = 20_000;
+const MAX_SUBSCRIPTION_DIAGNOSTICS = 8;
 const FORBIDDEN_HEADERS = new Set([
     "connection",
     "content-length",
@@ -21,6 +23,9 @@ const FORBIDDEN_HEADERS = new Set([
 ]);
 
 type DispatchRequest = (request: Request) => Promise<Response>;
+type SubscriptionEnd =
+    | { readonly kind: "error"; readonly error: unknown }
+    | { readonly kind: "close"; readonly code: number; readonly reason: string; readonly wasClean: boolean };
 type WebSocketTransportErrorCode =
     | "invalid_headers"
     | "invalid_message"
@@ -192,6 +197,7 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
         | { readonly kind: "open"; readonly socket: WebSocket }
     >();
     const browserOrigin = request.headers.get("origin");
+    let subscriptionDiagnosticCount = 0;
     let idleTimeout = setTimeout(() => {
         controller.abort(new Error("WebSocket transport became inactive"));
         server.close(1001, "WebSocket transport idle timeout");
@@ -340,7 +346,9 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                     }
                     subscriptions.set(subscriptionId, { kind: "open", socket: subscription });
                     let nextSequenceId = 1;
-                    const finish = (): void => {
+                    const openedAt = Date.now();
+                    let lastMessageAt: number | null = null;
+                    const finish = (end: SubscriptionEnd): void => {
                         const current = subscriptions.get(subscriptionId);
                         if (
                             current?.kind === "open" &&
@@ -348,6 +356,35 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                             subscriptions.delete(subscriptionId) &&
                             server.readyState === WebSocket.OPEN
                         ) {
+                            const unexpected =
+                                end.kind === "error" || !end.wasClean || (end.code !== 1000 && end.code !== 1001);
+                            // A flapping subscription must not produce an unbounded log stream.
+                            // Normal unsubscribe, browser close, and clean upstream close remain quiet.
+                            if (unexpected && subscriptionDiagnosticCount < MAX_SUBSCRIPTION_DIAGNOSTICS) {
+                                subscriptionDiagnosticCount += 1;
+                                const now = Date.now();
+                                logger.warn(
+                                    {
+                                        event: "session_event_subscription_disconnected",
+                                        source: end.kind === "error" ? "upstream_error" : "upstream_close",
+                                        cfRay: request.headers.get("cf-ray")?.slice(0, 128) ?? null,
+                                        path: new URL(converted.request.url).pathname,
+                                        subscriptionId,
+                                        elapsedMilliseconds: Math.max(0, now - openedAt),
+                                        lastMessageAgeMilliseconds:
+                                            lastMessageAt === null ? null : Math.max(0, now - lastMessageAt),
+                                        messageCount: nextSequenceId - 1,
+                                        ...(end.kind === "error"
+                                            ? { error: serializeDiagnosticError(end.error) }
+                                            : {
+                                                  closeCode: end.code,
+                                                  closeReason: diagnosticText(end.reason, 256),
+                                                  wasClean: end.wasClean,
+                                              }),
+                                    },
+                                    "Session event subscription disconnected",
+                                );
+                            }
                             scheduleHeartbeat();
                             server.send(JSON.stringify({ kind: "session.events.end", subscriptionId }));
                         }
@@ -358,6 +395,7 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                             server.readyState === WebSocket.OPEN &&
                             subscriptions.get(subscriptionId)?.kind === "open"
                         ) {
+                            lastMessageAt = Date.now();
                             server.send(
                                 JSON.stringify({
                                     data: subscriptionEvent.data,
@@ -371,8 +409,17 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                             touch();
                         }
                     });
-                    subscription.addEventListener("close", finish, { once: true });
-                    subscription.addEventListener("error", finish, { once: true });
+                    subscription.addEventListener(
+                        "close",
+                        (event) =>
+                            finish({ kind: "close", code: event.code, reason: event.reason, wasClean: event.wasClean }),
+                        { once: true },
+                    );
+                    subscription.addEventListener(
+                        "error",
+                        (event) => finish({ kind: "error", error: "error" in event ? event.error : undefined }),
+                        { once: true },
+                    );
                     subscription.accept();
                     server.send(JSON.stringify({ kind: "session.events.ready", subscriptionId }));
                     touch();
