@@ -6,6 +6,7 @@ import {
     decodeMessageKind,
     decodeSessionEvent,
     decodeSessionPreviewHistoryPageLoaded,
+    encodeSessionPermissionRespondCommand,
     encodeSessionPreviewHistoryPageLoad,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
@@ -194,6 +195,12 @@ test("Given Claude is running a background command, When two idle hours pass and
             bash: { command, runInBackground: true },
         });
         await using agent = await ClaudeFixture.create(provider);
+        const config = agent.environment["CLAUDE_CONFIG_DIR"];
+        if (config === undefined) {
+            throw new Error("Missing isolated Claude home");
+        }
+        await mkdir(config, { recursive: true });
+        await writeFile(join(config, "settings.json"), JSON.stringify({ permissions: { ask: ["Bash"] } }));
         const timer = new IdleTimeoutTimer();
         vi.useFakeTimers({ now: new Date("2026-10-26T00:00:00Z"), toFake: ["Date"] });
         await withRealDaemon(
@@ -203,6 +210,7 @@ test("Given Claude is running a background command, When two idle hours pass and
                 const sessionId = await prepareNewRealSession(peer, "claude");
                 const statuses: string[] = [];
                 const users: string[] = [];
+                let permissions = 0;
                 const run = async (prompt: string) => {
                     const commandId = randomUUID();
                     peer.send(
@@ -238,6 +246,26 @@ test("Given Claude is running a background command, When two idle hours pass and
                                 users.push(event.payload.content.text);
                             }
                         }
+                        if (
+                            event.type === "lifecycle-metadata" &&
+                            event.payload.kind === "session.permission.requested"
+                        ) {
+                            const request = event.payload.event;
+                            const option = request.options.find((entry) => entry.kind === "allow_once");
+                            if (option === undefined) {
+                                throw new Error("Native command has no one-time approval option");
+                            }
+                            permissions++;
+                            peer.send(
+                                encodeSessionPermissionRespondCommand({
+                                    kind: "session.permission.respond",
+                                    interactionId: request.interactionId,
+                                    optionId: option.optionId,
+                                    sessionId: request.sessionId,
+                                    outcome: "selected",
+                                }),
+                            );
+                        }
                         if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
                             throw new Error(JSON.stringify(event));
                         }
@@ -251,6 +279,7 @@ test("Given Claude is running a background command, When two idle hours pass and
                     }
                 };
                 await run(fakeProviderPrompts.successfulTool);
+                expect(permissions).toBeGreaterThan(0);
                 const pid = await entered.promise;
                 expect(statuses).toContain("running");
                 timer.advance(2 * 60 * 60 * 1_000);
