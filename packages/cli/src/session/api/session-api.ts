@@ -100,6 +100,7 @@ export interface ElicitationResponseOptions {
 export type PromptResult = AgentPromptResponse;
 
 export interface SessionObserver {
+    readonly onBackgroundActivity?: (source: object, active: boolean) => void;
     readonly onSessionEvent?: (event: SessionLiveEvent) => Promise<void>;
     readonly onCommands: (event: SessionCommandsUpdatedEvent) => Promise<void>;
     readonly onConfig: (event: SessionConfigUpdatedEvent) => Promise<void>;
@@ -111,6 +112,7 @@ export interface SessionObserver {
 }
 
 export class NullSessionObserver implements SessionObserver {
+    readonly onBackgroundActivity = (_source: object, _active: boolean): void => {};
     readonly onSessionEvent = (_event: SessionLiveEvent): Promise<void> => Promise.resolve();
     readonly onCommands = (): Promise<void> => Promise.resolve();
     readonly onConfig = (): Promise<void> => Promise.resolve();

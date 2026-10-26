@@ -60,6 +60,7 @@ function selectTool(
     scenario: FakeProviderScenario,
     completedToolCalls: number,
     readPath?: string,
+    bash?: { readonly command: string; readonly runInBackground: boolean },
 ): { readonly id: string; readonly input: JsonObject; readonly name: string } | undefined {
     const id = `toolu_mobius_${(completedToolCalls + 1).toString()}`;
     if (readPath !== undefined && tools.length > 0) {
@@ -76,7 +77,14 @@ function selectTool(
     if (shell !== undefined) {
         const command = stringProperty(shell, ["command", "cmd"]);
         if (command !== undefined) {
-            return { id, input: { [command]: scenario.command }, name: shell.name };
+            return {
+                id,
+                input: {
+                    [command]: bash?.command ?? scenario.command,
+                    ...(bash === undefined ? {} : { run_in_background: bash.runInBackground }),
+                },
+                name: shell.name,
+            };
         }
     }
     const read = tools.find((tool) => /(?:^|_)(?:read|read_file)$/iu.test(tool.name));
@@ -239,6 +247,7 @@ export class FakeAnthropicProvider implements AsyncDisposable {
             readonly beforeFirstText?: (scenario: FakeProviderScenario, signal: AbortSignal) => Promise<void>;
             readonly disconnectsBeforeSuccess?: number;
             readonly readPath?: string;
+            readonly bash?: { readonly command: string; readonly runInBackground: boolean };
             readonly subagent?: SubagentScript;
         } = {},
     ): Promise<FakeAnthropicProvider> {
@@ -275,7 +284,7 @@ export class FakeAnthropicProvider implements AsyncDisposable {
             const tool =
                 scripted?.tool ??
                 (completedToolCalls < scenario.toolCalls
-                    ? selectTool(tools, scenario, completedToolCalls, options.readPath)
+                    ? selectTool(tools, scenario, completedToolCalls, options.readPath, options.bash)
                     : undefined);
             const selectedAnswer = scripted?.text ?? fakeProviderResponse(answer, scenario);
             requests.push({

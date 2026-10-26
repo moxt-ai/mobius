@@ -106,6 +106,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             threadId: () => this.#nativeSessionId,
             connection: () => this.#connection,
             emit: this.#emit,
+            onBackgroundActivity: (active) => options.onBackgroundActivity?.(active),
             close: this.close,
         });
         this.terminated = this.#appServer.terminated;

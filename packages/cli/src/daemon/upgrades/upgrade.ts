@@ -172,7 +172,7 @@ async function checkDaemonReleaseUpgrade(signal: AbortSignal, activity: RuntimeT
                 timestamp: new Date().toISOString(),
                 event: "daemon_upgrade_deferred",
                 version,
-                activeTurns: activity.count(),
+                activeWork: activity.count(),
             })}`,
         );
     }

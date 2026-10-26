@@ -96,6 +96,12 @@ import {
 import type { ContentBlockParam } from "@anthropic-ai/sdk/resources";
 import type { BetaContentBlock, BetaRawContentBlockDelta } from "@anthropic-ai/sdk/resources/beta.mjs";
 import {
+    backgroundTaskId,
+    backgroundTaskUpdate,
+    isTaskNotificationOrigin,
+    parseTaskNotifications,
+} from "./background-task-notifications.js";
+import {
     applyAskElicitationResponse,
     askUserQuestionsToCreateRequest,
     createElicitationResponseToElicitResult,
@@ -1003,6 +1009,7 @@ type ProviderConfig = {
  * Extra metadata that the agent provides for each tool_call / tool_update update.
  */
 export type ToolUpdateMeta = {
+    "mobius.backgroundTask"?: { readonly id: string; readonly status: "running" | "unknown" };
     claudeCode?: {
         /* The name of the tool that was used in Claude Code. */
         toolName: string;
@@ -1572,6 +1579,15 @@ export class ClaudeAcpAgent {
     private providerUpdate: Promise<void> | null = null;
     private readonly exitPlan: ExitPlanCoordinator<Session, Turn>;
     private readonly environment: Readonly<NodeJS.ProcessEnv>;
+    private readonly backgroundSessions = new Set<Session>();
+    private reportBackgroundActivity(session: Session, active: boolean): void {
+        if (active) {
+            this.backgroundSessions.add(session);
+        } else {
+            this.backgroundSessions.delete(session);
+        }
+        this.onBackgroundActivity?.(this.backgroundSessions.size > 0);
+    }
     /** Grace period before a `session/cancel` forces a wedged prompt loop to
      *  return "cancelled". See {@link DEFAULT_FORCE_CANCEL_GRACE_MS}. Mutable so
      *  tests can shrink it. */
@@ -1582,6 +1598,7 @@ export class ClaudeAcpAgent {
         logger?: Logger,
         environment: Readonly<NodeJS.ProcessEnv> = process.env,
         private readonly spawnClaudeCodeProcess?: Options["spawnClaudeCodeProcess"],
+        private readonly onBackgroundActivity?: (active: boolean) => void,
     ) {
         this.sessions = {};
         this.client = client;
@@ -2294,6 +2311,11 @@ export class ClaudeAcpAgent {
      *  Turn's deferred when that turn ends. Replaces the per-prompt message loop;
      *  `params` only carries the (session-invariant) `sessionId`. */
     private async runConsumer(session: Session, params: { sessionId: string }): Promise<void> {
+        const backgroundTasks = new Set<string>();
+        const awaitingBackgroundResults = new Set<string>();
+        let hasBackgroundLevel = false;
+        const reportBackgroundActivity = () =>
+            this.reportBackgroundActivity(session, backgroundTasks.size > 0 || awaitingBackgroundResults.size > 0);
         // Per-turn scratch, reset whenever a turn becomes active. Kept as consumer
         // locals (rather than per-Turn fields) because they describe the message
         // currently being processed, which is sequential — exactly one turn is
@@ -3433,6 +3455,24 @@ export class ClaudeAcpAgent {
                             case "task_progress":
                                 break;
                             case "task_started":
+                                if (message.is_backgrounded === true && !message.ambient && !message.skip_transcript) {
+                                    await sendUpdate({
+                                        sessionId: params.sessionId,
+                                        update: backgroundTaskUpdate(
+                                            {
+                                                id: message.task_id,
+                                                ...(message.tool_use_id ? { toolUseId: message.tool_use_id } : {}),
+                                                status: "running",
+                                                summary: message.description,
+                                            },
+                                            message.tool_use_id !== undefined,
+                                        ),
+                                    });
+                                }
+                                if (!hasBackgroundLevel && message.is_backgrounded === true) {
+                                    backgroundTasks.add(message.task_id);
+                                    reportBackgroundActivity();
+                                }
                                 // For subagent tasks `task_id` is the subagent's agent id (the
                                 // SDK keys its task registry by agent id) and `tool_use_id` is
                                 // the Agent/Task tool_use that spawned it — recorded so the
@@ -3461,6 +3501,27 @@ export class ClaudeAcpAgent {
                                 }
                                 break;
                             case "task_notification":
+                                if (!message.ambient && !message.skip_transcript) {
+                                    await sendUpdate({
+                                        sessionId: params.sessionId,
+                                        update: backgroundTaskUpdate(
+                                            {
+                                                id: message.task_id,
+                                                ...(message.tool_use_id ? { toolUseId: message.tool_use_id } : {}),
+                                                status: message.status,
+                                                summary: message.summary,
+                                            },
+                                            message.tool_use_id !== undefined,
+                                        ),
+                                    });
+                                }
+                                backgroundTasks.delete(message.task_id);
+                                if (message.skip_transcript) {
+                                    awaitingBackgroundResults.delete(message.task_id);
+                                } else {
+                                    awaitingBackgroundResults.add(message.task_id);
+                                }
+                                reportBackgroundActivity();
                                 // The task settled — no further tool calls can originate
                                 // from it, so its registry entry can be dropped.
                                 session.liveBackgroundTasks.delete(message.task_id);
@@ -3477,6 +3538,10 @@ export class ClaudeAcpAgent {
                                     message.patch.status === "killed"
                                 ) {
                                     session.liveBackgroundTasks.delete(message.task_id);
+                                    if (backgroundTasks.delete(message.task_id)) {
+                                        awaitingBackgroundResults.add(message.task_id);
+                                        reportBackgroundActivity();
+                                    }
                                 }
                                 break;
                             case "worker_shutting_down":
@@ -3579,6 +3644,19 @@ export class ClaudeAcpAgent {
                             case "control_request_progress":
                                 break;
                             case "background_tasks_changed":
+                                // The level is authoritative for liveness. Keep a separate drain
+                                // hold across completion -> notification -> model result delivery.
+                                hasBackgroundLevel = true;
+                                for (const id of backgroundTasks) {
+                                    if (!message.tasks.some((task) => task.task_id === id)) {
+                                        awaitingBackgroundResults.add(id);
+                                    }
+                                }
+                                backgroundTasks.clear();
+                                for (const task of message.tasks) {
+                                    backgroundTasks.add(task.task_id);
+                                }
+                                reportBackgroundActivity();
                                 // A level signal: the full live background-task set on every
                                 // membership change, with REPLACE semantics. Used only to
                                 // reconcile `liveBackgroundTasks` — dropping (or, for
@@ -4079,6 +4157,10 @@ export class ClaudeAcpAgent {
                                 settleOrDefer(turnOutcome(session, stopReason));
                             }
                         } finally {
+                            if (message.origin?.kind === "task-notification") {
+                                awaitingBackgroundResults.clear();
+                                reportBackgroundActivity();
+                            }
                             if (!isAutonomousResult) {
                                 session.emittedAssistantText = false;
                             }
@@ -4231,6 +4313,18 @@ export class ClaudeAcpAgent {
                     }
                     case "user":
                     case "assistant": {
+                        if (message.type === "user" && isTaskNotificationOrigin(message.origin)) {
+                            const tasks = parseTaskNotifications(message.message.content, message.uuid ?? "unknown");
+                            for (const task of tasks) {
+                                await sendUpdate({
+                                    sessionId: params.sessionId,
+                                    update: backgroundTaskUpdate(task, task.toolUseId !== undefined),
+                                });
+                            }
+                            if (tasks.length > 0) {
+                                break;
+                            }
+                        }
                         // A frame from inside a subagent (parent_tool_use_id set). Clients
                         // that have not opted into nested transcripts see the subagent
                         // only through the Agent/Task call that spawned it — its dispatch,
@@ -4953,6 +5047,7 @@ export class ClaudeAcpAgent {
         session.settingsManager.dispose();
         session.input.end();
         session.query.close();
+        this.reportBackgroundActivity(session, false);
     }
 
     /** Cleanly tear down a session: cancel in-flight work, release stream
@@ -5122,7 +5217,26 @@ export class ClaudeAcpAgent {
         const forwardSubagentText =
             this.sessions[sessionId]?.forwardSubagentText ?? supportsSubagentTranscript(this.clientCapabilities);
 
+        const seenTools = new Set<string>();
         for (const message of messages) {
+            if (isTaskNotificationOrigin(message.nativeOrigin)) {
+                const body = message.message;
+                const content =
+                    typeof body === "object" && body !== null && "content" in body ? body.content : undefined;
+                const tasks = parseTaskNotifications(content, message.uuid);
+                for (const task of tasks) {
+                    await this.client.sessionUpdate({
+                        sessionId,
+                        update: backgroundTaskUpdate(
+                            task,
+                            task.toolUseId !== undefined && seenTools.has(task.toolUseId),
+                        ),
+                    });
+                }
+                if (tasks.length > 0) {
+                    continue;
+                }
+            }
             // Backfill the ACP messageId -> SDK uuid mapping for messages we didn't
             // observe live (resumed/loaded sessions), so rewind/resume can translate
             // a client-supplied id without an extra getSessionMessages read. Not read
@@ -5164,6 +5278,8 @@ export class ClaudeAcpAgent {
                 this.logger,
                 {
                     registerHooks: false,
+                    toolUseResult: message.nativeToolUseResult,
+                    historical: true,
                     clientCapabilities: this.clientCapabilities,
                     cwd: this.sessions[sessionId]?.cwd,
                     taskState: this.sessions[sessionId]?.taskState,
@@ -5171,6 +5287,9 @@ export class ClaudeAcpAgent {
                     parentToolUseId,
                 },
             )) {
+                if (notification.update.sessionUpdate === "tool_call") {
+                    seenTools.add(notification.update.toolCallId);
+                }
                 await this.client.sessionUpdate(notification);
             }
         }
@@ -7983,6 +8102,7 @@ export function toAcpNotifications(
         // Agent/Task results from the structured subagent report instead of the raw
         // text (which ends in a model-directed agentId/usage trailer).
         toolUseResult?: unknown;
+        historical?: boolean;
         // The SDK user message's `tool_result_meta` sidecar, passed raw (it's
         // untyped in sdk.d.ts) and validated by `parseToolResultMeta`. Stamps
         // denied/interrupted tool_call_updates with why the tool never ran.
@@ -8294,6 +8414,7 @@ export function toAcpNotifications(
                         toolUseResult,
                     );
 
+                    const launchedTaskId = backgroundTaskId(toolUseResult);
                     // When terminal output is supported, send terminal_output as a
                     // separate notification to match codex-acp's streaming lifecycle:
                     //   1. tool_call       → _meta.terminal_info  (already sent above)
@@ -8321,7 +8442,17 @@ export function toAcpNotifications(
                                 toolName: toolUse.name,
                                 ...(nonExecution ?? {}),
                             },
-                            ...(toolMeta?.terminal_exit ? { terminal_exit: toolMeta.terminal_exit } : {}),
+                            ...(launchedTaskId === undefined && toolMeta?.terminal_exit
+                                ? { terminal_exit: toolMeta.terminal_exit }
+                                : {}),
+                            ...(launchedTaskId === undefined
+                                ? {}
+                                : {
+                                      "mobius.backgroundTask": {
+                                          id: launchedTaskId,
+                                          status: options?.historical ? "unknown" : "running",
+                                      },
+                                  }),
                         } satisfies ToolUpdateMeta,
                         toolCallId: chunk.tool_use_id,
                         sessionUpdate: "tool_call_update",
@@ -8333,6 +8464,7 @@ export function toAcpNotifications(
                             ? {}
                             : { rawOutput: exitPlanModeRawOutput(toolUse.name, chunk.content) }),
                         ...toolUpdate,
+                        ...(launchedTaskId === undefined ? {} : { status: options?.historical ? null : "in_progress" }),
                     };
                 }
                 // The tool_use is fully resolved now — drop it so a long session doesn't
@@ -8579,6 +8711,7 @@ export interface ClaudeAcpAppOptions {
     readonly onConnect?: (connection: AgentConnection) => void;
     /** In-process delivery waits for consumption; standalone ACP uses the wire transport. */
     readonly onSessionUpdate?: (params: SessionNotification) => Promise<void>;
+    readonly onBackgroundActivity?: (active: boolean) => void;
 }
 
 export function createClaudeAcpApp(options: ClaudeAcpAppOptions = {}): ClaudeAcpApp {
@@ -8590,6 +8723,7 @@ export function createClaudeAcpApp(options: ClaudeAcpAppOptions = {}): ClaudeAcp
                 options.logger,
                 options.environment,
                 options.spawnClaudeCodeProcess,
+                options.onBackgroundActivity,
             );
             options.onConnect?.(connection);
         })
