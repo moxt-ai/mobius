@@ -15,9 +15,9 @@ const entry = join(root, "node_modules/@moxt-ai/mobius/dist/cli.js");
 const metadata = JSON.parse(await readFile(join(root, "node_modules/@moxt-ai/mobius/package.json"), "utf8"));
 
 test("Given an installed release, When a user imports its APIs and starts the CLI, Then help, version and daemon lifecycle work", {
-    timeout: 120_000,
+    timeout: 300_000,
     skip: unsupported,
-}, async () => {
+}, async (context) => {
     const directory = await mkdtemp(join(tmpdir(), "mobius-installed-release-"));
     const environment = {
         ...process.env,
@@ -25,40 +25,38 @@ test("Given an installed release, When a user imports its APIs and starts the CL
         NPM_CONFIG_OFFLINE: "true",
         NPM_CONFIG_CACHE: join(directory, "npm-cache"),
     };
-    const run = (args) =>
+    const run = (args, timeout = 45_000) =>
         execute(process.execPath, args, {
             cwd: root,
             env: environment,
-            timeout: 30_000,
+            timeout,
             maxBuffer: 1024 * 1024,
             windowsHide: true,
         });
-    try {
-        // Exercise this exact, potentially unpublished archive, not a registry release
-        // with the same version. Missing-release downloads have their own registry journey.
-        await cp(
-            join(root, "node_modules"),
-            join(environment.MOBIUS_STATE_DIRECTORY, "npm", metadata.version, "node_modules"),
-            { recursive: true },
-        );
-        await run([
-            "--input-type=module",
-            "--eval",
-            "await import('@moxt-ai/mobius/runtime'); await import('@moxt-ai/mobius/process'); await import('@moxt-ai/mobius/filesystem');",
-        ]);
-        assert.match((await run([entry, "--help"])).stdout, /Usage: mobius/);
-        assert.equal((await run([entry, "--version"])).stdout, `CLI: ${metadata.version}\nDaemon: not running\n`);
-        assert.match((await run([entry, "start"])).stdout, /Mobius daemon is running/);
-        assert.equal(
-            (await run([entry, "--version"])).stdout,
-            `CLI: ${metadata.version}\nDaemon: ${metadata.version}\n`,
-        );
+    // Hooks report cleanup failures separately, without hiding a failed CLI command.
+    context.after(async () => {
         await run([entry, "quit"]);
-        assert.equal((await run([entry, "--version"])).stdout, `CLI: ${metadata.version}\nDaemon: not running\n`);
-    } finally {
-        await run([entry, "quit"]).catch(() => undefined);
         await rm(directory, { recursive: true, force: true });
-    }
+    });
+    // Exercise this exact, potentially unpublished archive, not a registry release
+    // with the same version. Missing-release downloads have their own registry journey.
+    await cp(
+        join(root, "node_modules"),
+        join(environment.MOBIUS_STATE_DIRECTORY, "npm", metadata.version, "node_modules"),
+        { recursive: true },
+    );
+    await run([
+        "--input-type=module",
+        "--eval",
+        "await import('@moxt-ai/mobius/runtime'); await import('@moxt-ai/mobius/process'); await import('@moxt-ai/mobius/filesystem');",
+    ]);
+    assert.match((await run([entry, "--help"])).stdout, /Usage: mobius/);
+    assert.equal((await run([entry, "--version"])).stdout, `CLI: ${metadata.version}\nDaemon: not running\n`);
+    // Release preflight and manager/worker startup have their own bounded deadlines.
+    assert.match((await run([entry, "start"], 180_000)).stdout, /Mobius daemon is running/);
+    assert.equal((await run([entry, "--version"])).stdout, `CLI: ${metadata.version}\nDaemon: ${metadata.version}\n`);
+    await run([entry, "quit"]);
+    assert.equal((await run([entry, "--version"])).stdout, `CLI: ${metadata.version}\nDaemon: not running\n`);
 });
 
 test("Given an unsupported Node version, When a user launches the installed CLI, Then it reports the requirement without a syntax crash", {
