@@ -36,6 +36,16 @@ function toolStatus(value: string): Extract<AcpSessionUpdate, { readonly session
 }
 
 function activityEvent(activity: NativeHistoryActivity): SessionEventPayload {
+    if (activity.activityType === "reasoning") {
+        return {
+            payload: {
+                content: { text: activity.output, type: "text" },
+                messageId: activity.activityId,
+                sessionUpdate: "agent_thought_chunk",
+            },
+            type: "acp",
+        };
+    }
     return {
         payload: {
             content: activity.content,
