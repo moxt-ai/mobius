@@ -6,7 +6,8 @@ type AcpSessionEvent = Extract<SessionEvent, { readonly type: "acp" }>;
 type ToolCall = Extract<AcpSessionUpdate, { readonly sessionUpdate: "tool_call" | "tool_call_update" }>;
 
 export type SessionEventHistoryProjectionMutation =
-    | { readonly event: SessionEvent; readonly kind: "append" }
+    | { readonly kind: "skip" }
+    | { readonly events: readonly AcpSessionEvent[]; readonly kind: "append" }
     | { readonly event: SessionEvent; readonly kind: "replace"; readonly replacedEventId: string };
 
 /**
@@ -16,7 +17,10 @@ export type SessionEventHistoryProjectionMutation =
  */
 export type MaterializedEventsResolver = (eventIds: readonly string[]) => ReadonlyMap<string, SessionEvent>;
 
-function projectNewEvent(liveEvent: SessionLiveEvent, eventId: string): SessionEvent {
+function projectNewEvent(
+    liveEvent: Extract<SessionLiveEvent, { readonly type: "acp" }>,
+    eventId: string,
+): AcpSessionEvent {
     const { position: _position, eventId: _liveEventId, ...event } = liveEvent;
     return { ...event, eventId };
 }
@@ -129,6 +133,26 @@ export class SessionEventHistoryProjection {
         liveEvent: SessionLiveEvent,
         resolve: MaterializedEventsResolver,
     ): SessionEventHistoryProjectionMutation => {
+        if (liveEvent.type === "lifecycle-metadata") {
+            this.#latestEvent = null;
+            const prompt = liveEvent.payload;
+            if (prompt.kind === "prompt.requested") {
+                // Retain user content, not the execution lifecycle envelope. Keep the
+                // first identity so a history handoff replaces the live prompt bubble.
+                const events = prompt.content.map(
+                    (content, index): AcpSessionEvent => ({
+                        eventId: index === 0 ? liveEvent.eventId : `${liveEvent.eventId}-content-${index}`,
+                        payload: { content, messageId: prompt.commandId, sessionUpdate: "user_message_chunk" },
+                        recordedAt: liveEvent.recordedAt,
+                        sessionGenerationId: liveEvent.sessionGenerationId,
+                        sessionId: liveEvent.sessionId,
+                        type: "acp",
+                    }),
+                );
+                return { events, kind: "append" };
+            }
+            return { kind: "skip" };
+        }
         if (liveEvent.type === "acp" && liveEvent.payload.sessionUpdate === "tool_call_update") {
             const targetEventId = this.#toolCallEventIds.get(liveEvent.payload.toolCallId);
             const current = targetEventId === undefined ? undefined : resolve([targetEventId]).get(targetEventId);
@@ -156,7 +180,7 @@ export class SessionEventHistoryProjection {
         const event = projectNewEvent(liveEvent, liveEvent.eventId);
         this.#latestEvent = event;
         this.#indexToolCall(event);
-        return { event, kind: "append" };
+        return { events: [event], kind: "append" };
     };
 
     /**

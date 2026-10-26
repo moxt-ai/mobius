@@ -49,6 +49,9 @@ class SessionEvents {
     readonly apply = (event: SessionLiveEvent, resolve: MaterializedEventsResolver): void => {
         const projected = this.#projection.apply(event, resolve);
         this.#throughPosition = event.position;
+        if (projected.kind === "skip") {
+            return;
+        }
         if (projected.kind === "replace") {
             const current = this.#cachedItemsByEventId.get(projected.replacedEventId);
             if (current === undefined) {
@@ -57,10 +60,12 @@ class SessionEvents {
             current.replaceEvent(projected.event);
             return;
         }
-        const item = new ProjectedSessionEvent(projected.event);
-        this.#eventIndexById.set(projected.event.eventId, this.#eventIds.length);
-        this.#cachedItemsByEventId.set(projected.event.eventId, item);
-        this.#eventIds.push(projected.event.eventId);
+        for (const projectedEvent of projected.events) {
+            const item = new ProjectedSessionEvent(projectedEvent);
+            this.#eventIndexById.set(projectedEvent.eventId, this.#eventIds.length);
+            this.#cachedItemsByEventId.set(projectedEvent.eventId, item);
+            this.#eventIds.push(projectedEvent.eventId);
+        }
     };
 
     get throughPosition(): string {
@@ -323,9 +328,6 @@ export class MemorySessionEventStore implements SessionEventStore {
 }
 
 export class CachedSessionEventStore implements SessionEventStore {
-    readonly #terminalOutcomes: (
-        sessionId: string,
-    ) => readonly { readonly event: SessionEventPayload; readonly recordedAt: string }[];
     readonly #cacheTable: SessionEventCacheTable;
     readonly #eventIds: SessionEventIdAllocator;
     readonly #liveEventPositions: SessionLiveEventPosition;
@@ -336,11 +338,7 @@ export class CachedSessionEventStore implements SessionEventStore {
         cacheTable: SessionEventCacheTable,
         liveEventPositions: SessionLiveEventPosition,
         eventIds: SessionEventIdAllocator = new InMemorySessionEventIdAllocator(),
-        terminalOutcomes: (
-            sessionId: string,
-        ) => readonly { readonly event: SessionEventPayload; readonly recordedAt: string }[] = () => [],
     ) {
-        this.#terminalOutcomes = terminalOutcomes;
         this.#eventIds = eventIds;
         this.#liveEventPositions = liveEventPositions;
         this.#cacheTable = cacheTable;
@@ -493,10 +491,6 @@ export class CachedSessionEventStore implements SessionEventStore {
         this.#deletePersisted(sessionId, previous?.sessionGenerationId);
         const sessionGenerationId = randomUUID();
         this.#sessions.set(sessionId, new SessionEvents(sessionGenerationId));
-        // Native replay replaces content, while execution facts remain owned by the ledger.
-        for (const { event, recordedAt } of this.#terminalOutcomes(sessionId)) {
-            this.append(sessionId, event, recordedAt);
-        }
     };
 
     readonly materializedEventCount = (sessionId: string): number =>

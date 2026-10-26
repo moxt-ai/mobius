@@ -413,6 +413,155 @@ async function activeTurn(fixture: Fixture, command: SessionPromptCommand) {
     }
 }
 describe("daemon V2 live delivery", () => {
+    it("Given a running turn with a queued follow-up, When another prompt steers the turn, Then history retains executed user messages once and omits queue lifecycle metadata", async () => {
+        const fixture = await startControlledDaemon();
+        try {
+            const running = prompt(fixture, "wait for steering");
+            sendText(fixture.socket, encodeSessionPromptCommand(running));
+            for (;;) {
+                const event = await nextLive(fixture);
+                if (event.type === "acp" && event.payload.sessionUpdate === "agent_message_chunk") {
+                    break;
+                }
+            }
+            const queued: SessionPromptCommand = {
+                ...running,
+                commandId: "queued-follow-up",
+                disposition: SessionPromptDisposition.Queue,
+                prompt: "Execute the queued follow-up",
+                targetCommandId: running.commandId,
+            };
+            sendText(fixture.socket, encodeSessionPromptCommand(queued));
+            for (;;) {
+                const event = await nextLive(fixture);
+                if (event.type === "lifecycle-metadata" && event.payload.kind === "session.queue.changed") {
+                    break;
+                }
+            }
+            const pending = await history(fixture, running);
+            expect(pending.events.every((event) => event.type === "acp")).toBe(true);
+            expect(
+                pending.events.flatMap((event) =>
+                    event.type === "acp" && event.payload.sessionUpdate === "user_message_chunk"
+                        ? [event.payload.messageId]
+                        : [],
+                ),
+            ).toEqual([running.commandId]);
+
+            const steering: SessionPromptCommand = {
+                ...running,
+                commandId: "steering-follow-up",
+                disposition: SessionPromptDisposition.Steer,
+                prompt: "Finish using the steering instruction",
+                targetCommandId: running.commandId,
+            };
+            sendText(fixture.socket, encodeSessionPromptCommand(steering));
+            const completed = new Set<string>();
+            while (completed.size < 3) {
+                const event = await nextLive(fixture);
+                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
+                    completed.add(event.payload.commandId);
+                }
+            }
+            expect(completed).toEqual(new Set([running.commandId, steering.commandId, queued.commandId]));
+            const page = await history(fixture, running);
+            expect(page.events.every((event) => event.type === "acp")).toBe(true);
+            expect(
+                page.events.flatMap((event) =>
+                    event.type === "acp" && event.payload.sessionUpdate === "user_message_chunk" ? [event.payload] : [],
+                ),
+            ).toEqual(
+                [running, steering, queued].map((command) => ({
+                    content: { text: command.prompt, type: "text" },
+                    messageId: command.commandId,
+                    sessionUpdate: "user_message_chunk",
+                })),
+            );
+            expect(await activeTurn(fixture, running)).toBeNull();
+        } finally {
+            await fixture.close();
+        }
+    });
+
+    it.each(["text-only", "with attachment"])(
+        "Given a %s prompt publishes lifecycle metadata, When a viewer reads history after completion, Then the prompt appears once as ACP content while lifecycle events remain live-only",
+        async (scenario) => {
+            const fixture = await startControlledDaemon();
+            try {
+                const command: SessionPromptCommand = {
+                    ...prompt(fixture, "stream token burst"),
+                    resources:
+                        scenario === "text-only"
+                            ? []
+                            : [
+                                  {
+                                      mimeType: "text/plain",
+                                      name: "context.txt",
+                                      text: "attached context",
+                                      type: "embedded",
+                                      uri: "attachment:///context.txt",
+                                  },
+                              ],
+                };
+                sendText(fixture.socket, encodeSessionPromptCommand(command));
+                const live: SessionLiveEvent[] = [];
+                for (;;) {
+                    const event = await nextLive(fixture);
+                    live.push(event);
+                    if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
+                        break;
+                    }
+                }
+                const lifecycleKinds = live.flatMap((event) =>
+                    event.type === "lifecycle-metadata" ? [event.payload.kind] : [],
+                );
+                expect(lifecycleKinds).toEqual(
+                    expect.arrayContaining(["prompt.requested", "prompt.started", "prompt.completed"]),
+                );
+
+                const page = await history(fixture, command);
+                expect(page.events.length).toBeGreaterThan(0);
+                expect(page.events.every((event) => event.type === "acp")).toBe(true);
+                const userMessages = page.events.flatMap((event) =>
+                    event.type === "acp" && event.payload.sessionUpdate === "user_message_chunk" ? [event] : [],
+                );
+                expect(userMessages).toHaveLength(scenario === "text-only" ? 1 : 2);
+                expect(userMessages[0]).toMatchObject({
+                    eventId: live.find(
+                        (event) => event.type === "lifecycle-metadata" && event.payload.kind === "prompt.requested",
+                    )?.eventId,
+                    payload: {
+                        content: { text: command.prompt, type: "text" },
+                        messageId: command.commandId,
+                        sessionUpdate: "user_message_chunk",
+                    },
+                });
+                if (scenario === "with attachment") {
+                    expect(userMessages[1]).toMatchObject({
+                        payload: {
+                            content: {
+                                resource: {
+                                    mimeType: "text/plain",
+                                    text: "attached context",
+                                    uri: "attachment:///context.txt",
+                                },
+                                type: "resource",
+                            },
+                            messageId: command.commandId,
+                            sessionUpdate: "user_message_chunk",
+                        },
+                    });
+                    expect(userMessages[1]?.eventId).not.toBe(userMessages[0]?.eventId);
+                }
+                expect((await history(fixture, command)).events).toEqual(page.events);
+                expect(page.throughPosition).toBe(live.at(-1)?.position);
+                expect(await activeTurn(fixture, command)).toBeNull();
+            } finally {
+                await fixture.close();
+            }
+        },
+    );
+
     // @no-uc: Performance; the first answer must reach the Relay while the ordinary batching clock is paused.
     it("delivers the first answer of each Turn before the batching clock advances", async () => {
         const fixture = await startControlledDaemon();

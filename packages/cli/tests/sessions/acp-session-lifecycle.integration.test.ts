@@ -202,8 +202,12 @@ describe("ACP conversation sessions", () => {
             );
             for (let remaining = 298; remaining > 0; remaining -= 1) {
                 store.append("session-1", {
-                    payload: { kind: "session.queue.changed" },
-                    type: "lifecycle-metadata",
+                    payload: {
+                        content: { text: "history", type: "text" },
+                        messageId: `message-${remaining}`,
+                        sessionUpdate: "user_message_chunk",
+                    },
+                    type: "acp",
                 });
             }
             await vi.runAllTimersAsync();
@@ -283,8 +287,12 @@ describe("ACP conversation sessions", () => {
                         });
                     } else {
                         store.append("session-1", {
-                            payload: { kind: "session.queue.changed" },
-                            type: "lifecycle-metadata",
+                            payload: {
+                                content: { text: "history", type: "text" },
+                                messageId: `message-${number}`,
+                                sessionUpdate: "user_message_chunk",
+                            },
+                            type: "acp",
                         });
                     }
                 }
@@ -296,7 +304,9 @@ describe("ACP conversation sessions", () => {
                 const eventIds = page.events.map((event) => event.eventId);
                 expect(new Set(eventIds).size).toBe(page.events.length);
                 expect(page.events).toHaveLength(3000);
-                const toolEvents = page.events.filter((event) => event.type === "acp");
+                const toolEvents = page.events.filter(
+                    (event) => event.type === "acp" && event.payload.sessionUpdate === "tool_call",
+                );
                 expect(toolEvents).toHaveLength(300);
                 for (const event of toolEvents) {
                     if (event.type !== "acp" || event.payload.sessionUpdate !== "tool_call") {
@@ -327,11 +337,11 @@ describe("ACP conversation sessions", () => {
             for (let number = 1; number <= 2000; number += 1) {
                 first.append("session-1", {
                     payload: {
-                        commandId: `command-${number.toString()}`,
-                        content: [{ text: "x".repeat(600), type: "text" }],
-                        kind: "prompt.requested",
+                        messageId: `command-${number.toString()}`,
+                        content: { text: "x".repeat(600), type: "text" },
+                        sessionUpdate: "user_message_chunk",
                     },
-                    type: "lifecycle-metadata",
+                    type: "acp",
                 });
             }
         } finally {
@@ -372,11 +382,11 @@ describe("ACP conversation sessions", () => {
             (_unused, index) =>
                 ({
                     payload: {
-                        commandId: `command-${(index + 1).toString()}`,
-                        content: [{ text: `prompt ${(index + 1).toString()}`, type: "text" }],
-                        kind: "prompt.requested",
+                        messageId: `command-${(index + 1).toString()}`,
+                        content: { text: `prompt ${(index + 1).toString()}`, type: "text" },
+                        sessionUpdate: "user_message_chunk",
                     },
-                    type: "lifecycle-metadata",
+                    type: "acp",
                 }) as const,
         );
         try {
@@ -388,8 +398,8 @@ describe("ACP conversation sessions", () => {
                 const page = store.page(conversation, 300, null);
                 expect(page.events).toHaveLength(300);
                 expect(page.sessionGenerationId).toBe(sharedGeneration);
-                expect(page.events[0]).toMatchObject({ payload: { commandId: "command-1" } });
-                expect(page.events.at(-1)).toMatchObject({ payload: { commandId: "command-300" } });
+                expect(page.events[0]).toMatchObject({ payload: { messageId: "command-1" } });
+                expect(page.events.at(-1)).toMatchObject({ payload: { messageId: "command-300" } });
             }
         } finally {
             store.close();
@@ -412,19 +422,19 @@ describe("ACP conversation sessions", () => {
             for (let position = 1; position <= 300; position += 1) {
                 store.append("session-1", {
                     payload: {
-                        commandId: `command-${position.toString()}`,
-                        content: [{ text: `prompt ${position.toString()}`, type: "text" }],
-                        kind: "prompt.requested",
+                        messageId: `command-${position.toString()}`,
+                        content: { text: `prompt ${position.toString()}`, type: "text" },
+                        sessionUpdate: "user_message_chunk",
                     },
-                    type: "lifecycle-metadata",
+                    type: "acp",
                 });
             }
             await vi.runAllTimersAsync();
 
             const page = store.page("session-1", 200, null);
             expect(page.events).toHaveLength(200);
-            expect(page.events[0]).toMatchObject({ payload: { commandId: "command-101" } });
-            expect(page.events.at(-1)).toMatchObject({ payload: { commandId: "command-300" } });
+            expect(page.events[0]).toMatchObject({ payload: { messageId: "command-101" } });
+            expect(page.events.at(-1)).toMatchObject({ payload: { messageId: "command-300" } });
         } finally {
             store.close();
             sessionDatabase.close();
@@ -446,32 +456,32 @@ describe("ACP conversation sessions", () => {
             for (let eventNumber = 1; eventNumber <= 300; eventNumber += 1) {
                 store.append("session-1", {
                     payload: {
-                        commandId: `command-${eventNumber.toString()}`,
-                        content: [{ text: `prompt ${eventNumber.toString()}`, type: "text" }],
-                        kind: "prompt.requested",
+                        messageId: `command-${eventNumber.toString()}`,
+                        content: { text: `prompt ${eventNumber.toString()}`, type: "text" },
+                        sessionUpdate: "user_message_chunk",
                     },
-                    type: "lifecycle-metadata",
+                    type: "acp",
                 });
             }
             await vi.runAllTimersAsync();
 
             const newest = store.page("session-1", 150, null);
-            expect(newest.events[0]).toMatchObject({ payload: { commandId: "command-151" } });
+            expect(newest.events[0]).toMatchObject({ payload: { messageId: "command-151" } });
             expect(newest.nextCursor).toBe(newest.events[0]?.eventId);
 
             store.append("session-1", {
                 payload: {
-                    commandId: "command-301",
-                    content: [{ text: "newer prompt", type: "text" }],
-                    kind: "prompt.requested",
+                    messageId: "command-301",
+                    content: { text: "newer prompt", type: "text" },
+                    sessionUpdate: "user_message_chunk",
                 },
-                type: "lifecycle-metadata",
+                type: "acp",
             });
 
             const older = store.page("session-1", 150, newest.nextCursor);
             expect(older.events).toHaveLength(150);
-            expect(older.events[0]).toMatchObject({ payload: { commandId: "command-1" } });
-            expect(older.events.at(-1)).toMatchObject({ payload: { commandId: "command-150" } });
+            expect(older.events[0]).toMatchObject({ payload: { messageId: "command-1" } });
+            expect(older.events.at(-1)).toMatchObject({ payload: { messageId: "command-150" } });
             expect(older.nextCursor).toBeNull();
         } finally {
             store.close();
@@ -523,11 +533,11 @@ describe("ACP conversation sessions", () => {
             ).toEqual([
                 {
                     payload: {
-                        commandId: "command-1",
-                        content: [{ text: "cached prompt", type: "text" }],
-                        kind: "prompt.requested",
+                        content: { text: "cached prompt", type: "text" },
+                        messageId: "command-1",
+                        sessionUpdate: "user_message_chunk",
                     },
-                    type: "lifecycle-metadata",
+                    type: "acp",
                 },
                 {
                     payload: {

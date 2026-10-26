@@ -240,6 +240,11 @@ describe("native session identity", () => {
                     sessionId: nativeSessionId,
                     commandId: crypto.randomUUID(),
                     prompt: "Continue this chat",
+                    lifecycle: {
+                        attemptId: crypto.randomUUID(),
+                        content: [{ type: "text", text: "Continue this chat" }],
+                        epoch: crypto.randomUUID(),
+                    },
                     images: [],
                     resources: [],
                 });
@@ -297,6 +302,11 @@ describe("native session identity", () => {
                 sessionId: targetSessionId,
                 commandId: crypto.randomUUID(),
                 prompt: "Post-fork turn",
+                lifecycle: {
+                    attemptId: crypto.randomUUID(),
+                    content: [{ type: "text", text: "Post-fork turn" }],
+                    epoch: crypto.randomUUID(),
+                },
                 images: [],
                 resources: [],
             });
