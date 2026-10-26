@@ -217,7 +217,11 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 const decoded = threadListResponseSchema.parse(
                     await this.#appServer.request(
                         "thread/list",
-                        { cursor: context.params.cursor ?? null },
+                        {
+                            cursor: context.params.cursor ?? null,
+                            // Codex defaults to interactive sources and otherwise hides exec handoffs.
+                            sourceKinds: ["cli", "vscode", "exec", "appServer"],
+                        },
                         AbortSignal.any([context.signal, AbortSignal.timeout(SESSION_LIST_TIMEOUT_MILLISECONDS)]),
                     ),
                 );
