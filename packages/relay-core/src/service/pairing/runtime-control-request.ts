@@ -8,24 +8,9 @@ import {
     decodeFileEndEvent,
     decodeFileFailedEvent,
     decodeMessageKind,
-    decodeNativeSessionResult,
-    decodeRuntimeDiagnosticsResult,
-    decodeRuntimePongEvent,
     decodeRuntimeStatusEvent,
-    decodeSessionClosedEvent,
-    decodeSessionConfigReadResult,
-    decodeSessionConfigUpdatedEvent,
-    decodeSessionElicitationResolvedEvent,
     decodeSessionEventEnvelope,
-    decodeSessionHistoryPageLoaded,
     decodeSessionOperationFailedEvent,
-    decodeSessionPermissionResolvedEvent,
-    decodeSessionPreviewHistoryPageLoaded,
-    decodeSessionReadyEvent,
-    decodeSessionRenamedEvent,
-    decodeSessionRestoredEvent,
-    decodeSessionsListedEvent,
-    decodeSessionsQueriedEvent,
     decodeWorkspaceEntriesEvent,
     encodeNativeSessionRequest,
     encodeServiceToDaemonMessage,
@@ -73,6 +58,7 @@ import {
     type WorkspaceListCommand,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { SessionRuntimeError } from "../../entity/do/session.ts";
+import { runtimeControlRegistry } from "./runtime-control-registry.ts";
 
 export interface RuntimeReplyConnection {
     readonly readyState: number;
@@ -150,23 +136,6 @@ export type RuntimeControlResult =
 interface LifecycleExpectation {
     /** Resolve as soon as any of these V2 lifecycle kinds appears. */
     readonly resolveOn: readonly LifecycleMetadata["kind"][];
-}
-
-/** V2 lifecycle kinds that answer each Turn-shaped control command. */
-function lifecycleExpectation(command: RuntimeControlCommand): LifecycleExpectation | null {
-    if (command.kind === "session.prompt" || command.kind === "session.prompt.disposition") {
-        return { resolveOn: ["prompt.started"] };
-    }
-    if (command.kind === "session.cancel") {
-        return { resolveOn: ["prompt.completed"] };
-    }
-    if (command.kind === "session.permission.respond") {
-        return { resolveOn: ["session.permission.resolved"] };
-    }
-    if (command.kind === "session.elicitation.respond") {
-        return { resolveOn: ["session.elicitation.resolved"] };
-    }
-    return null;
 }
 
 type LifecycleReply =
@@ -501,6 +470,7 @@ export async function requestRuntimeControl(
     command: RuntimeControlCommand,
     signal: AbortSignal,
 ): Promise<RuntimeControlResult> {
+    const { reply } = runtimeControlRegistry[command.kind];
     const timeout = new AbortController();
     const timer = setTimeout(
         () => timeout.abort(new DOMException("Runtime request timed out", "TimeoutError")),
@@ -540,34 +510,33 @@ export async function requestRuntimeControl(
                     if (typeof event.data !== "string") {
                         return;
                     }
-                    if (decodeMessageKind(event.data) === SESSION_EVENT_KIND) {
-                        const expectation = lifecycleExpectation(command);
-                        if (expectation === null) {
+                    const kind = decodeMessageKind(event.data);
+                    if (kind === SESSION_EVENT_KIND) {
+                        if (reply.kind !== "lifecycle") {
                             return;
                         }
                         for (const lifecycleEvent of decodeSessionEventEnvelope(event.data).events) {
                             if (lifecycleEvent.type !== "lifecycle-metadata") {
                                 continue;
                             }
-                            const reply = lifecycleReply(
+                            const lifecycle = lifecycleReply(
                                 command,
-                                expectation,
+                                reply,
                                 requestId,
                                 lifecycleEvent.sessionId,
                                 lifecycleEvent.payload,
                             );
-                            if (reply.kind === "reject") {
-                                reject(reply.error);
+                            if (lifecycle.kind === "reject") {
+                                reject(lifecycle.error);
                                 return;
                             }
-                            if (reply.kind === "resolve") {
-                                resolve(reply.result);
+                            if (lifecycle.kind === "resolve") {
+                                resolve(lifecycle.result);
                                 return;
                             }
                         }
                         return;
                     }
-                    const kind = decodeMessageKind(event.data);
                     if (kind === "runtime.status") {
                         if (!decodeRuntimeStatusEvent(event.data).online) {
                             reject(new SessionRuntimeError("runtime_offline", "The Runtime connection closed"));
@@ -585,49 +554,14 @@ export async function requestRuntimeControl(
                         }
                         return;
                     }
-                    const result =
-                        command.kind === "runtime.diagnostics.read" && kind === "runtime.diagnostics.result"
-                            ? decodeRuntimeDiagnosticsResult(event.data)
-                            : command.kind === "runtime.ping" && kind === "runtime.pong"
-                              ? decodeRuntimePongEvent(event.data)
-                              : command.kind === "native.session.request" && kind === "native.session.result"
-                                ? decodeNativeSessionResult(event.data)
-                                : command.kind === "session.list" && kind === "session.listed"
-                                  ? decodeSessionsListedEvent(event.data)
-                                  : command.kind === "session.query" && kind === "session.queried"
-                                    ? decodeSessionsQueriedEvent(event.data)
-                                    : command.kind === "session.restore" && kind === "session.restored"
-                                      ? decodeSessionRestoredEvent(event.data)
-                                      : command.kind === "session.close" && kind === "session.closed"
-                                        ? decodeSessionClosedEvent(event.data)
-                                        : command.kind === "session.prepare" && kind === "session.ready"
-                                          ? decodeSessionReadyEvent(event.data)
-                                          : command.kind === "session.configure" && kind === "session.config.updated"
-                                            ? decodeSessionConfigUpdatedEvent(event.data)
-                                            : command.kind === "session.config.read" &&
-                                                kind === "session.config.read.result"
-                                              ? decodeSessionConfigReadResult(event.data)
-                                              : command.kind === "session.rename" && kind === "session.renamed"
-                                                ? decodeSessionRenamedEvent(event.data)
-                                                : null;
-                    const resolved =
-                        result ??
-                        (command.kind === "session.preview-history.page.load" &&
-                        kind === "session.preview-history.page.loaded"
-                            ? decodeSessionPreviewHistoryPageLoaded(event.data)
-                            : command.kind === "session.live-history.v2.page.load" &&
-                                kind === "session.live-history.v2.page.loaded"
-                              ? decodeSessionHistoryPageLoaded(event.data)
-                              : command.kind === "session.permission.respond" && kind === "session.permission.resolved"
-                                ? decodeSessionPermissionResolvedEvent(event.data)
-                                : command.kind === "session.elicitation.respond" &&
-                                    kind === "session.elicitation.resolved"
-                                  ? decodeSessionElicitationResolvedEvent(event.data)
-                                  : null);
+                    const direct = reply.kind === "direct" ? reply : reply.direct;
+                    if (direct === null || kind !== direct.eventKind) {
+                        return;
+                    }
+                    const resolved = direct.decode(event.data);
                     if (
-                        resolved !== null &&
-                        (("requestId" in resolved && resolved.requestId === requestId) ||
-                            ("interactionId" in resolved && resolved.interactionId === requestId))
+                        ("requestId" in resolved && resolved.requestId === requestId) ||
+                        ("interactionId" in resolved && resolved.interactionId === requestId)
                     ) {
                         resolve(resolved);
                     }
