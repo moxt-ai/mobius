@@ -385,6 +385,103 @@ describe("daemon session configuration boundary", () => {
         }
     });
 
+    it("Given an Agent offers a single model and withholds its effort, When settings are discovered without a model, Then that model is reported without effort", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-single-model-"));
+        const workspace = join(stateDirectory, "workspace");
+        const nativeStateDirectory = join(stateDirectory, "native");
+        await Promise.all([mkdir(workspace), mkdir(nativeStateDirectory)]);
+
+        const socketReady = Promise.withResolvers<Duplex>();
+        const relaySockets = new Set<Duplex>();
+        const relay = createServer((request, response) => {
+            if (request.method === "PUT" && request.url?.includes("/catalog") === true) {
+                request.resume();
+                response.writeHead(204);
+                response.end();
+                return;
+            }
+            response.writeHead(404);
+            response.end();
+        });
+        relay.on("connection", (socket) => {
+            relaySockets.add(socket);
+            socket.once("close", () => relaySockets.delete(socket));
+            socket.on("error", () => undefined);
+        });
+        relay.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            const accept = createHash("sha1")
+                .update(`${key ?? ""}${websocketGuid}`)
+                .digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            sendText(socket, JSON.stringify({ kind: "runtime.liveness.ready" }));
+            socketReady.resolve(socket);
+        });
+        await listen(relay);
+
+        const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
+        relayUrl.searchParams.set("token", "d".repeat(43));
+        // A Pi user with one configured non-reasoning model: the model cannot be
+        // switched and no effort is offered, so discovery must still succeed.
+        const agent = new LocalAgentDefinition(
+            "controlled-acp",
+            "Controlled ACP",
+            process.execPath,
+            [fakeAgentPath, "--agent-name", "Controlled ACP", "--without-reasoning-effort", "--acp-omits-custom-model"],
+            {
+                MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory,
+            },
+        );
+        const config = createRuntimeConfig(
+            {
+                channelId: "channel_alpha",
+                defaultWorkspace: workspace,
+                relayUrl,
+            },
+            [agent],
+            new RuntimeLocalContext(stateDirectory),
+        );
+        const cancellation = new AbortController();
+        const runtime = runRuntime(config, cancellation.signal);
+
+        try {
+            const frames = new ClientFrames(await socketReady.promise);
+            const noEffortRequestId = "controlled-settings-single-model";
+            sendText(
+                await socketReady.promise,
+                encodeAgentSettingsDiscoverCommand({
+                    agentId: agent.id,
+                    kind: AGENT_SETTINGS_DISCOVER_KIND,
+                    requestId: noEffortRequestId,
+                }),
+            );
+            const withoutEffort = await readAgentSettings(frames, noEffortRequestId);
+            expect(withoutEffort.modelEffort).toEqual({
+                effortSettingId: "",
+                modelSettingId: "model",
+                resolution: "on_model_selection",
+                unsupportedModelIds: [],
+                valuesByModel: { "test-small": [] },
+            });
+            expect(withoutEffort.settings).not.toEqual(
+                expect.arrayContaining([expect.objectContaining({ id: "reasoning_effort" })]),
+            );
+        } finally {
+            cancellation.abort();
+            for (const socket of relaySockets) {
+                socket.destroy();
+            }
+            relay.close();
+            await runtime;
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
+    });
+
     it("Given an Agent offers effort for its default model, When settings are discovered without a model, Then the session can adjust effort without switching models", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-default-effort-offered-"));
         const workspace = join(stateDirectory, "workspace");
