@@ -1,8 +1,12 @@
 import {
+    AGENT_CATALOG_DISCOVER_KIND,
+    AGENT_CATALOG_DISCOVERED_KIND,
+    AGENT_CATALOG_DISCOVERY_FAILED_KIND,
     AGENT_SETTINGS_DISCOVER_KIND,
     AGENT_SETTINGS_DISCOVERED_KIND,
     AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
     type DaemonToServiceMessage,
+    decodeAgentCatalogDiscoverCommand,
     decodeAgentSettingsDiscoverCommand,
     decodeFileReadCommand,
     decodeMessageKind,
@@ -358,6 +362,10 @@ export class ChannelActor {
                 return;
             case AGENT_SETTINGS_DISCOVERY_FAILED_KIND:
                 return;
+            case AGENT_CATALOG_DISCOVERED_KIND:
+                return;
+            case AGENT_CATALOG_DISCOVERY_FAILED_KIND:
+                return;
             case FILE_BEGIN_KIND:
                 return;
             case FILE_CHUNK_KIND:
@@ -429,6 +437,10 @@ export class ChannelActor {
             }
             case WORKSPACE_LIST_KIND: {
                 const command = decodeWorkspaceListCommand(message);
+                return { message: command, requestId: command.requestId, sessionId: "" };
+            }
+            case AGENT_CATALOG_DISCOVER_KIND: {
+                const command = decodeAgentCatalogDiscoverCommand(message);
                 return { message: command, requestId: command.requestId, sessionId: "" };
             }
             case SESSION_QUERY_KIND: {

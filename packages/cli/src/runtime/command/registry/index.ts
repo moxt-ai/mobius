@@ -1,6 +1,7 @@
 import type { ServiceToDaemonMessage } from "@moxt-ai/mobius-sdk/protocol";
 import type { CommandContext } from "../context.ts";
 import type { RuntimeCommand } from "../definition.ts";
+import { createAgentCatalogCommands } from "./agent-catalog.ts";
 import { createAgentSettingsCommands } from "./agent-settings.ts";
 import { fileReadCommand } from "./file-read/index.ts";
 import { previewHistoryPageLoadCommand, sessionHistoryPageLoadCommand } from "./history.ts";
@@ -33,6 +34,7 @@ export function createCommandRegistry(context: CommandContext): {
         sessionHistoryPageLoadCommand,
         previewHistoryPageLoadCommand,
         ...createNativeSessionCommands(context),
+        ...createAgentCatalogCommands(context),
         ...createAgentSettingsCommands(context),
         fileReadCommand,
         sessionCancelCommand,

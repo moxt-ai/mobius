@@ -32,3 +32,5 @@ export async function discoverLocalAgentInventory(
     );
     return new LocalAgentInventory(results);
 }
+
+export { staticLocalAgentInventory } from "./agent-discovery.ts";

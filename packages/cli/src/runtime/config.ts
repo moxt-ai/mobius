@@ -59,6 +59,11 @@ export interface RuntimeConfig {
      * snapshot: a changed executable fails the command instead of being re-discovered.
      */
     readonly resolveAgent?: (agent: CatalogAgent, signal: AbortSignal) => Promise<CatalogAgent>;
+    /**
+     * Re-runs the ready Agent inventory this config was built from, serving the Agent catalog
+     * discovery command. Undefined keeps the boot-time catalog: the command fails instead.
+     */
+    readonly rediscoverAgents?: (signal: AbortSignal) => Promise<readonly CatalogAgent[]>;
 }
 
 export interface RuntimeConnectionConfig {
@@ -73,6 +78,7 @@ export function createRuntimeConfig(
     localContext: RuntimeLocalContext = new RuntimeLocalContext(readStateDirectory(), process.env),
     reconnectTarget: RuntimeReconnectTarget | null = null,
     resolveAgent?: RuntimeConfig["resolveAgent"],
+    rediscoverAgents?: RuntimeConfig["rediscoverAgents"],
 ): RuntimeConfig {
     const runtimeAgents = agents.map((agent) => withRuntimeEnvironment(agent, localContext.environment));
     return {
@@ -85,5 +91,6 @@ export function createRuntimeConfig(
         reconnectTarget,
         relayUrl: connection.relayUrl,
         ...(resolveAgent === undefined ? {} : { resolveAgent }),
+        ...(rediscoverAgents === undefined ? {} : { rediscoverAgents }),
     };
 }
