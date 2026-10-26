@@ -127,7 +127,7 @@ export class NativeSessionService {
         signal.throwIfAborted();
         const options: SessionPrepareOptions = {
             additionalDirectories,
-            ...(await this.#resolveAgent(command.agentId, signal, command.sessionId)),
+            ...(await this.#resolveAgent(command.agentId, signal)),
             cwd,
             sessionId: command.sessionId,
             signal,
@@ -294,6 +294,7 @@ export class NativeSessionService {
             action === "fork"
                 ? { kind: "fork", nativeSessionId: target.info.sessionId, title }
                 : { kind: "import", nativeSessionId: target.info.sessionId, title },
+            this.#resolveAgent,
         );
         signal.throwIfAborted();
         const ready: SessionReadyEvent = {

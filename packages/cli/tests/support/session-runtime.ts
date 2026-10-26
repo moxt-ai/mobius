@@ -109,7 +109,12 @@ export class SessionRuntimeFixture {
     readonly openNativeSession = (
         options: TestSessionPrepareOptions,
         origin: Parameters<SessionManager["openNativeSession"]>[1],
-    ) => this.sessions.openNativeSession({ ...options, adapter: this.adapters.resolve(options.agent) }, origin);
+    ) =>
+        this.sessions.openNativeSession(
+            { ...options, adapter: this.adapters.resolve(options.agent) },
+            origin,
+            async () => ({ agent: options.agent, adapter: this.adapters.resolve(options.agent) }),
+        );
 
     readonly close = async (): Promise<void> => {
         try {
