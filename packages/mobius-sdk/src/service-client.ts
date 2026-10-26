@@ -1255,7 +1255,6 @@ export class MobiusSessionResources {
                 ...identity,
                 cursor: page.cursor,
                 eventLimit: page.eventLimit,
-                ...(page.omit === undefined ? {} : { omit: page.omit }),
             },
             signal,
         );
@@ -1281,9 +1280,6 @@ export class MobiusSessionResources {
         path.searchParams.set("eventLimit", page.eventLimit.toString());
         if (page.cursor !== null) {
             path.searchParams.set("cursor", page.cursor);
-        }
-        for (const omission of page.omit ?? []) {
-            path.searchParams.append("omit", omission);
         }
         for (const directoryId of identity.additionalDirectoryIds) {
             path.searchParams.append("additionalDirectoryId", directoryId);
@@ -1637,7 +1633,9 @@ export class MobiusEventResources {
         sessionId: string,
         page: MobiusPageRequest,
         signal: AbortSignal,
-        options: { readonly omit?: readonly SessionEventOmission[] } = {},
+        options: {
+            /** @deprecated Reasoning is always included; retained for older callers. */ readonly omit?: readonly SessionEventOmission[];
+        } = {},
     ): Promise<SessionEventLogPage> => {
         const path = requestUrl(
             new URL("https://mobius.invalid/"),
@@ -1652,9 +1650,6 @@ export class MobiusEventResources {
             (options.omit.length > 1 || options.omit.some((value) => value !== "agent-reasoning"))
         ) {
             throw new MobiusValidationError("The Session event omission is invalid");
-        }
-        for (const omission of options.omit ?? []) {
-            path.searchParams.append("omit", omission);
         }
         return decodeSessionEventLogPage(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
     };

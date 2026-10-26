@@ -1250,7 +1250,7 @@ describe.sequential("Platform Session-only boundary", () => {
             if (historyLoad.kind !== "session.live-history.v2.page.load") {
                 throw new Error("Expected history loading without a preceding Session query");
             }
-            expect(historyLoad.omit).toEqual(["agent-reasoning"]);
+            expect(historyLoad.omit).toBeUndefined();
 
             daemon.send(
                 encodeSessionStatusChangedEvent({
@@ -1310,7 +1310,7 @@ describe.sequential("Platform Session-only boundary", () => {
             daemon.send(historyPage);
             const previewHistoryResponse = worker.fetch(
                 new Request(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/native-events-preview?agentId=codex&directoryId=root&eventLimit=50`,
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/native-events-preview?agentId=codex&directoryId=root&eventLimit=50&omit=agent-reasoning`,
                     { headers: { authorization: `Bearer ${text(browserAccess, "credential")}` } },
                 ),
                 environment,
@@ -1319,6 +1319,7 @@ describe.sequential("Platform Session-only boundary", () => {
             if (previewHistoryLoad.kind !== "session.preview-history.page.load") {
                 throw new Error("Expected a native Session preview history request");
             }
+            expect(previewHistoryLoad.omit).toBeUndefined();
 
             const previewHistoryPage = encodeSessionPreviewHistoryPageLoaded({
                 events: {
@@ -2341,7 +2342,7 @@ describe.sequential("Platform Turn submission", () => {
         }
     });
 
-    // @no-uc: Compatibility; execution recovery must retain event identities, generation, cursor, and omissions under App access.
+    // @no-uc: Compatibility; legacy omission options must not reach older Runtimes under App access.
     it("App access restores a Runtime event page with read permission", async () => {
         const runtime = await connectRuntimeDaemon("app-history");
         try {
@@ -2361,11 +2362,11 @@ describe.sequential("Platform Turn submission", () => {
                 sessionId: runtime.sessionId,
                 eventLimit: 2,
                 cursor: "previous-event",
-                omit: ["agent-reasoning"],
             });
             if (command.kind !== "session.live-history.v2.page.load") {
                 throw new Error("Expected a history request");
             }
+            expect(command.omit).toBeUndefined();
             const page = {
                 events: [],
                 nextCursor: "next-event",

@@ -69,6 +69,7 @@ const nativeEventsSchema = v.strictObject({
     ...sessionIdentitySchema.entries,
     cursor: v.nullable(v.string()),
     eventLimit: v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(10_000)),
+    // Accepted only for older clients; never forward it to a Runtime.
     omit: v.optional(v.pipe(v.array(v.literal("agent-reasoning")), v.maxLength(1))),
 });
 const sessionQuerySchema = v.strictObject({
@@ -401,10 +402,13 @@ export function createProjectRuntimeRoutes() {
                 const body = validated(nativeEventsSchema, context.req.valid("json"));
                 const command = decodeSessionPreviewHistoryPageLoad(
                     JSON.stringify({
-                        ...body,
+                        additionalDirectoryIds: body.additionalDirectoryIds,
+                        agentId: body.agentId,
+                        cursor: body.cursor,
+                        directoryId: body.directoryId,
+                        eventLimit: body.eventLimit,
                         bindingId: "workspace",
                         kind: "session.preview-history.page.load",
-                        ...(body.omit === undefined ? {} : { omit: body.omit }),
                         requestId: crypto.randomUUID(),
                         sessionId: validateIdentifier(context.req.param("sessionId"), "session_id"),
                     }),

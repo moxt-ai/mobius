@@ -488,12 +488,15 @@ export const sessionEventLogPageSchema = z
     })
     .readonly();
 export type SessionEventLogPage = z.infer<typeof sessionEventLogPageSchema>;
+/** @deprecated Accepted for wire compatibility only; reasoning is always included. */
 export const sessionEventOmissionSchema = z.literal("agent-reasoning");
+/** @deprecated Reasoning omission is no longer supported. */
 export type SessionEventOmission = z.infer<typeof sessionEventOmissionSchema>;
 export const nativeEventPageRequestSchema = z
     .object({
         cursor: z.string().min(1).max(512).nullable(),
         eventLimit: z.number().int().min(1).max(10_000),
+        // Legacy callers may still send this option; readers must ignore it.
         omit: z.array(sessionEventOmissionSchema).max(1).readonly().optional(),
     })
     .readonly();
