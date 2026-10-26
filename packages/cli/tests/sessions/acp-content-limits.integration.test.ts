@@ -164,7 +164,7 @@ describe("acp content limits", () => {
         }
     });
 
-    it("Given an Agent streams a long reasoning turn, When it completes, Then every reasoning chunk lands in the event log", async () => {
+    it("Given an Agent streams oversized UTF-8 reasoning chunks, When it completes, Then the event log retains only each chunk's last 24 KiB without splitting characters", async () => {
         const observer = new RecordingObserver();
         const manager = new SessionManager({
             observer,
@@ -201,15 +201,30 @@ describe("acp content limits", () => {
                 .acpUpdates()
                 .map((update) =>
                     update.sessionUpdate === "agent_thought_chunk" && update.content.type === "text"
-                        ? update.content.text.length
+                        ? update.content.text
                         : null,
                 )
-                .filter((length): length is number => length !== null);
+                .filter((text): text is string => text !== null);
             expect(reasoning).toEqual([
-                "Inspecting ".length,
-                "the workspace".length,
-                ...Array.from({ length: 8 }, () => 100_000),
+                "Inspecting ",
+                "the workspace",
+                ...Array.from({ length: 8 }, (_, index) => {
+                    const prefix = ["r", "", "\u{1f600}r"][index % 3];
+                    return (
+                        prefix +
+                        "\u601d\u{1f600}r".repeat(index % 3 === 2 ? 3_070 : 3_071) +
+                        ` tail-${index.toString()}${"!".repeat(index % 3)}`
+                    );
+                }),
             ]);
+            for (const text of reasoning) {
+                expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(24 * 1024);
+            }
+            expect(
+                observer
+                    .acpUpdates()
+                    .flatMap((update) => (update.sessionUpdate === "agent_thought_chunk" ? [update.meta] : [])),
+            ).toEqual([undefined, undefined, ...Array.from({ length: 8 }, () => ({ truncated: true }))]);
         } finally {
             await manager.close();
         }

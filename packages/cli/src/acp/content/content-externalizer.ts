@@ -18,6 +18,20 @@ export type StoreExtractedContent = (
 import { sniffRasterMime } from "./raster.ts";
 
 const MAXIMUM_ENCODED_CONTENT_CHARACTERS = 4_000_000;
+const MAXIMUM_REASONING_CHUNK_BYTES = 24 * 1024;
+
+function reasoningTail(text: string): string {
+    if (Buffer.byteLength(text, "utf8") <= MAXIMUM_REASONING_CHUNK_BYTES) {
+        return text;
+    }
+    const bytes = Buffer.from(text, "utf8");
+    let start = bytes.length - MAXIMUM_REASONING_CHUNK_BYTES;
+    // Drop a partial leading code point rather than decoding it as a replacement character.
+    while (start < bytes.length && (bytes.readUInt8(start) & 0xc0) === 0x80) {
+        start += 1;
+    }
+    return bytes.toString("utf8", start);
+}
 
 function decodeBase64(data: string): Uint8Array {
     if (
@@ -276,9 +290,26 @@ export class AcpContentExternalizer {
         signal: AbortSignal,
     ): Promise<PreparedAcpUpdate> => {
         switch (update.sessionUpdate) {
+            case "agent_thought_chunk": {
+                if (update.content.type === "text") {
+                    const text = reasoningTail(update.content.text);
+                    const bounded = { ...update, content: { ...update.content, text } };
+                    return {
+                        agent: bounded,
+                        event: {
+                            ...bounded,
+                            ...(text === update.content.text ? {} : { meta: { truncated: true } }),
+                        },
+                    };
+                }
+                const content = await this.#content(sessionId, update.content, signal);
+                return {
+                    agent: { ...update, content: content.agent },
+                    event: { ...update, content: content.event },
+                };
+            }
             case "user_message_chunk":
             case "agent_message_chunk":
-            case "agent_thought_chunk":
             case "compaction_summary_chunk": {
                 const content = await this.#content(sessionId, update.content, signal);
                 return {

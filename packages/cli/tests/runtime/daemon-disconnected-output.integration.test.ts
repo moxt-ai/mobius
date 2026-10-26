@@ -88,6 +88,7 @@ class ManualTimer implements Timer {
 interface ControlledTurn {
     readonly finish: () => void;
     readonly write: (text: string) => Promise<void>;
+    readonly writeThought: (text: string) => Promise<void>;
 }
 
 class StreamingAgent {
@@ -114,6 +115,15 @@ class StreamingAgent {
                 this.#completions.push(completion.resolve);
                 const turn: ControlledTurn = {
                     finish: completion.resolve,
+                    writeThought: async (text) =>
+                        await onSessionUpdate({
+                            sessionId: context.params.sessionId,
+                            update: {
+                                content: { type: "text", text },
+                                messageId: context.params.sessionId,
+                                sessionUpdate: "agent_thought_chunk",
+                            },
+                        }),
                     write: async (text) =>
                         await onSessionUpdate({
                             sessionId: context.params.sessionId,
@@ -311,6 +321,34 @@ beforeEach(() => {
 });
 
 afterEach(() => vi.useRealTimers());
+
+test("Given oversized reasoning chunks, When the daemon streams them to the Relay, Then each retains its last 24 KiB and marks truncation without changing answers", async () => {
+    await using runtime = await startRuntime();
+    const turn = await runtime.prompt(runtime.initial, "reasoning-tail");
+    const oversized = "discarded prefix" + "\u601d\u{1f600}r".repeat(12_000) + " tail-0!!";
+    await turn.writeThought("short thought");
+    await turn.writeThought(oversized);
+    await turn.writeThought("x".repeat(24 * 1024));
+    await turn.writeThought("prefix" + "y".repeat(24 * 1024));
+    await turn.write(oversized);
+    turn.finish();
+    using _idle = await runtime.activity.reserveWhenIdle(runtime.cancellation.signal);
+    (await runtime.timer.next(100)).run();
+    await runtime.initial.barrier();
+    const thoughts = runtime.initial.events.flatMap((event) =>
+        event.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk" ? [event.payload] : [],
+    );
+    expect(thoughts.map((thought) => ({ content: thought.content, meta: thought.meta }))).toEqual([
+        { content: { type: "text", text: "short thought" }, meta: undefined },
+        {
+            content: { type: "text", text: "\u{1f600}r" + "\u601d\u{1f600}r".repeat(3_070) + " tail-0!!" },
+            meta: { truncated: true },
+        },
+        { content: { type: "text", text: "x".repeat(24 * 1024) }, meta: undefined },
+        { content: { type: "text", text: "y".repeat(24 * 1024) }, meta: { truncated: true } },
+    ]);
+    expect(answer(runtime.initial.events, "reasoning-tail")).toBe(oversized);
+});
 
 test.each([true, false])(
     "Given a reply prefix was flushed=%s, When the Agent finishes while disconnected, Then reconnection delivers the complete reply and completion exactly once",
