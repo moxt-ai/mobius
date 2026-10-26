@@ -76,12 +76,27 @@ class ControllableTimer implements Timer {
         return task;
     };
 
-    readonly nextBatch = (): Promise<ControllableDaemonTask> => {
+    readonly nextBatch = (signal: AbortSignal): Promise<ControllableDaemonTask> => {
+        signal.throwIfAborted();
         const task = this.#scheduled.shift();
         if (task !== undefined) {
             return Promise.resolve(task);
         }
-        return new Promise((resolve) => this.#waiters.push(resolve));
+        return new Promise((resolve, reject) => {
+            const ready = (scheduled: ControllableDaemonTask): void => {
+                signal.removeEventListener("abort", abort);
+                resolve(scheduled);
+            };
+            const abort = (): void => {
+                const index = this.#waiters.indexOf(ready);
+                if (index !== -1) {
+                    this.#waiters.splice(index, 1);
+                }
+                reject(signal.reason);
+            };
+            signal.addEventListener("abort", abort, { once: true });
+            this.#waiters.push(ready);
+        });
     };
 }
 
@@ -156,13 +171,26 @@ class ClientFrames {
         return payload.toString("utf8");
     }
 
-    readonly next = (): Promise<string> => {
+    readonly next = (signal?: AbortSignal): Promise<string> => {
+        signal?.throwIfAborted();
         const buffered = this.#messages.shift();
         if (buffered !== undefined) {
             return Promise.resolve(buffered);
         }
-        return new Promise<string>((resolve) => {
-            this.#resolvers.push(resolve);
+        return new Promise<string>((resolve, reject) => {
+            const ready = (message: string): void => {
+                signal?.removeEventListener("abort", abort);
+                resolve(message);
+            };
+            const abort = (): void => {
+                const index = this.#resolvers.indexOf(ready);
+                if (index !== -1) {
+                    this.#resolvers.splice(index, 1);
+                }
+                reject(signal?.reason);
+            };
+            signal?.addEventListener("abort", abort, { once: true });
+            this.#resolvers.push(ready);
         });
     };
 }
@@ -272,10 +300,24 @@ async function nextLive(fixture: Fixture): Promise<SessionLiveEvent> {
     if (buffered !== undefined) {
         return buffered;
     }
-    const task = await fixture.timer.nextBatch();
-    task.run();
     for (;;) {
-        const frame = await fixture.frames.next();
+        const advanceSignal = new AbortController();
+        const pendingFrame = fixture.frames.next();
+        const advancing = fixture.timer.nextBatch(advanceSignal.signal).then(
+            (task) => task.run(),
+            (error: unknown) => {
+                if (!advanceSignal.signal.aborted) {
+                    throw error;
+                }
+            },
+        );
+        let frame: string;
+        try {
+            frame = await Promise.race([pendingFrame, advancing.then(() => pendingFrame)]);
+        } finally {
+            advanceSignal.abort();
+            await advancing;
+        }
         expect(decodeMessageKind(frame)).not.toBe("session.event");
         if (decodeMessageKind(frame) === "session.operation.failed") {
             throw new Error(frame);
@@ -371,6 +413,49 @@ async function activeTurn(fixture: Fixture, command: SessionPromptCommand) {
     }
 }
 describe("daemon V2 live delivery", () => {
+    // @no-uc: Performance; the first answer must reach the Relay while the ordinary batching clock is paused.
+    it("delivers the first answer of each Turn before the batching clock advances", async () => {
+        const fixture = await startControlledDaemon();
+        try {
+            let previousPosition = 0;
+            for (const commandId of ["first-unbuffered-answer", "second-unbuffered-answer"]) {
+                const command = { ...prompt(fixture, commandId), commandId };
+                sendText(fixture.socket, encodeSessionPromptCommand(command));
+                let firstAnswer: SessionLiveEvent | undefined;
+                for (;;) {
+                    const frame = await fixture.frames.next(AbortSignal.timeout(5_000));
+                    if (decodeMessageKind(frame) !== SESSION_EVENT_KIND) {
+                        continue;
+                    }
+                    const events = decodeSessionEventEnvelope(frame).events;
+                    firstAnswer = events.find(
+                        (event) =>
+                            event.type === "acp" &&
+                            event.payload.sessionUpdate === "agent_message_chunk" &&
+                            event.payload.content.type === "text" &&
+                            event.payload.content.text.length > 0,
+                    );
+                    if (firstAnswer !== undefined) {
+                        const positions = events.map((event) => Number(event.position));
+                        expect(positions).toEqual([...positions].sort((a, b) => a - b));
+                        break;
+                    }
+                }
+                expect(firstAnswer.sessionId).toBe(command.sessionId);
+                expect(Number(firstAnswer.position)).toBeGreaterThan(previousPosition);
+                previousPosition = Number(firstAnswer.position);
+                for (;;) {
+                    const event = await nextLive(fixture);
+                    if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
+                        break;
+                    }
+                }
+            }
+        } finally {
+            await fixture.close();
+        }
+    }, 15_000);
+
     it("Given a Session emits events before a daemon restart, When Sessions emit after restart, Then event IDs restart per generation and positions stay monotonic per Session", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-event-id-"));
         let firstGenerationId = "";

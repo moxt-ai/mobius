@@ -5,6 +5,15 @@ import { identifierStringSchema } from "../../shared/identifier.ts";
 import { decodeZodMessage as decode, encodeZodMessage as encode } from "../../shared/message-codec.ts";
 import { sessionEventEnvelopeSchema, sessionLiveEventSchema } from "../observability/event-log.ts";
 
+/** An optional event-read wait budget is bounded independently of the page's event budget. */
+export function parseSessionRecordingWaitMilliseconds(value: string): number | null {
+    if (!/^(?:0|[1-9][0-9]{0,4})$/u.test(value)) {
+        return null;
+    }
+    const milliseconds = Number(value);
+    return milliseconds <= 10_000 ? milliseconds : null;
+}
+
 const sessionRecordingWriteSchema = z
     .object({
         envelope: sessionEventEnvelopeSchema,

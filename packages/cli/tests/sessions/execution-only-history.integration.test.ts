@@ -123,7 +123,10 @@ test("execution-only prompt propagation keeps the run path out of eager recovery
         resolveAgent: async () => ({ id: "agent-1", environment: {} }),
         downloadArtifact: async () => new Uint8Array(),
         reportFailure: () => undefined,
-        directories: { resolve: async () => "/workspace" },
+        directories: {
+            describe: async () => ({ label: "workspace", path: "/workspace" }),
+            resolve: async () => "/workspace",
+        },
         sessions: {
             prepareExecutionSession: async () => ({ configOptions: [] }),
             runPrompt: async (options: Record<string, unknown>) => {

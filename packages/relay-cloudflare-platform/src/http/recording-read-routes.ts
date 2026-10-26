@@ -4,6 +4,7 @@ import {
     parseSessionRecordingPageLimit,
     parseSessionRecordingTurnCursor,
     parseSessionRecordingTurnItemCursor,
+    parseSessionRecordingWaitMilliseconds,
     SESSION_RECORDING_TURN_ITEM_ID_MAX_LENGTH,
     SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT,
     SESSION_RECORDING_TURN_PAGE_MAX_LIMIT,
@@ -65,6 +66,12 @@ const turnItemPageQuery = v.pipe(
 const recordingIncrementalQuery = v.object({
     after: v.optional(recordingCursor),
     limit: v.optional(v.pipe(v.string(), v.regex(/^[1-9][0-9]{0,4}$/u))),
+    waitMs: v.optional(
+        v.pipe(
+            v.string(),
+            v.check((value) => parseSessionRecordingWaitMilliseconds(value) !== null),
+        ),
+    ),
 });
 
 function decodedIdentifier(value: string | undefined): string | null {
@@ -178,6 +185,7 @@ export const recordingReadRoutes = new Hono<PlatformApplicationEnvironment>()
         const incremental = v.safeParse(recordingIncrementalQuery, {
             ...(context.req.query("after") === undefined ? {} : { after: context.req.query("after") }),
             ...(context.req.query("limit") === undefined ? {} : { limit: context.req.query("limit") }),
+            ...(context.req.query("waitMs") === undefined ? {} : { waitMs: context.req.query("waitMs") }),
         });
         const projectId = decodedIdentifier(context.req.param("projectId"));
         const sessionId = decodedIdentifier(context.req.param("sessionId"));
@@ -193,6 +201,9 @@ export const recordingReadRoutes = new Hono<PlatformApplicationEnvironment>()
         }
         if (incremental.output.limit !== undefined) {
             forwarded.set("limit", incremental.output.limit);
+        }
+        if (incremental.output.waitMs !== undefined) {
+            forwarded.set("waitMs", incremental.output.waitMs);
         }
         const recordingPath = `/v1/projects/${encodeURIComponent(projectId)}/runtimes/${encodeURIComponent(
             query.output.runtimeId,

@@ -31,7 +31,7 @@ import { createRuntimeConfig } from "../../src/runtime/config.ts";
 import { RuntimeRelayRevokedError } from "../../src/runtime/relay/runtime-revocation.ts";
 import { SESSION_EVENT_BATCH_WINDOW_MILLISECONDS } from "../../src/runtime/relay/session-event-publisher.ts";
 import { runRuntime } from "../../src/runtime/run.ts";
-import type { ScheduledTask, Timer } from "../../src/util/timer.ts";
+import { type ScheduledTask, systemTimer, type Timer } from "../../src/util/timer.ts";
 
 const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const fakeAgentPath = fileURLToPath(new URL("../sessions/fixtures/acp-peer.ts", import.meta.url));
@@ -930,6 +930,14 @@ describe("daemon relay connection liveness", () => {
         await listen(relay);
         let cancellation = new AbortController();
         const timer = new ControllableTimer();
+        // Batching is independent of liveness: frames can now arrive before a batch task is scheduled.
+        const runtimeTimer: Timer = {
+            schedule: (callback, milliseconds) =>
+                (milliseconds === SESSION_EVENT_BATCH_WINDOW_MILLISECONDS ? systemTimer : timer).schedule(
+                    callback,
+                    milliseconds,
+                ),
+        };
         const previousFakeAcpStateDirectory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
         const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
         const previousNoProxy = process.env["NO_PROXY"];
@@ -952,7 +960,7 @@ describe("daemon relay connection liveness", () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         vi.setSystemTime(new Date("2026-09-08T00:00:00.000Z"));
         const firstConnection = waitForUpgrade();
-        let runtime = runRuntime(config, cancellation.signal, timer);
+        let runtime = runRuntime(config, cancellation.signal, runtimeTimer);
 
         try {
             await firstConnection;
@@ -970,7 +978,6 @@ describe("daemon relay connection liveness", () => {
                     (event) => event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed",
                 )
             ) {
-                (await timer.waitForTask(SESSION_EVENT_BATCH_WINDOW_MILLISECONDS)).run();
                 let frame = await firstFrame.next();
                 if (frame.text === RUNTIME_HEARTBEAT_MESSAGE) {
                     writeServerTextFrame(firstSocket, RUNTIME_HEARTBEAT_ACK_MESSAGE);
@@ -1017,7 +1024,6 @@ describe("daemon relay connection liveness", () => {
                         targetCommandId: "",
                     }),
                 );
-                (await timer.waitForTask(SESSION_EVENT_BATCH_WINDOW_MILLISECONDS)).run();
                 let terminal = false;
                 let answer = "";
                 while (!terminal) {
@@ -1034,9 +1040,6 @@ describe("daemon relay connection liveness", () => {
                             answer += event.payload.content.text;
                         }
                         terminal ||= event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed";
-                    }
-                    if (!terminal) {
-                        (await timer.waitForTask(SESSION_EVENT_BATCH_WINDOW_MILLISECONDS)).run();
                     }
                 }
                 expect(answer).toContain("keep broadcasting");
@@ -1068,9 +1071,8 @@ describe("daemon relay connection liveness", () => {
             await runtime;
             cancellation = new AbortController();
             const restarted = waitForUpgrade();
-            runtime = runRuntime(config, cancellation.signal, timer);
+            runtime = runRuntime(config, cancellation.signal, runtimeTimer);
             await restarted;
-            (await timer.waitForTask(SESSION_EVENT_BATCH_WINDOW_MILLISECONDS)).run();
             const freshFrames = clientFrames[2];
             if (freshFrames === undefined) {
                 throw new Error("Test relay did not observe the restarted daemon");
@@ -1091,7 +1093,6 @@ describe("daemon relay connection liveness", () => {
                         event.payload.kind === "prompt.requested",
                 )
             ) {
-                (await timer.waitForTask(SESSION_EVENT_BATCH_WINDOW_MILLISECONDS)).run();
                 freshFrame = await freshFrames.next();
                 if (decodeMessageKind(freshFrame.text) === SESSION_EVENT_KIND) {
                     freshEvents.push(...decodeSessionEventEnvelope(freshFrame.text).events);

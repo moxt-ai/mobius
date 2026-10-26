@@ -73,6 +73,63 @@ function text(value: Readonly<Record<string, unknown>>, name: string): string {
     return field;
 }
 
+async function readWithin(read: Promise<Response>, milliseconds: number): Promise<Response | undefined> {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+        return await Promise.race([
+            read,
+            new Promise<undefined>((resolve) => {
+                timeout = setTimeout(() => resolve(undefined), milliseconds);
+            }),
+        ]);
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
+async function readAfterCancelledWaits(
+    read: (signal: AbortSignal) => Promise<Response>,
+    append: () => Promise<void>,
+): Promise<ReturnType<typeof decodeSessionRecordingHistoryPage>> {
+    // One overflow response establishes that all 64 durable waiter slots were occupied before cancellation.
+    const controllers = Array.from({ length: 65 }, () => new AbortController());
+    const readers = controllers.map((controller) => read(controller.signal));
+    const completed = Promise.allSettled(readers);
+    try {
+        const overflow = await readWithin(Promise.race(readers), 2000);
+        if (overflow === undefined) {
+            throw new Error("Expected all 64 Recording waiters to fill before their 10-second timeout");
+        }
+        expect(overflow.status).toBe(200);
+        expect(decodeSessionRecordingHistoryPage(await overflow.text()).events).toEqual([]);
+    } finally {
+        for (const controller of controllers) {
+            controller.abort(new DOMException("The reader cancelled its live read", "AbortError"));
+        }
+        await completed;
+    }
+    // Allow cancellation to propagate through both service boundaries before declaring the pool leaked.
+    for (let attempt = 0; attempt < 10; attempt++) {
+        const controller = new AbortController();
+        try {
+            const next = read(controller.signal);
+            const immediate = await readWithin(next, 100);
+            if (immediate !== undefined) {
+                expect(immediate.status).toBe(200);
+                expect(decodeSessionRecordingHistoryPage(await immediate.text()).events).toEqual([]);
+                continue;
+            }
+            await append();
+            const response = await next;
+            expect(response.status).toBe(200);
+            return decodeSessionRecordingHistoryPage(await response.text());
+        } finally {
+            controller.abort();
+        }
+    }
+    throw new Error("No waiter capacity was released after caller cancellation");
+}
+
 async function recordThroughRelay(projectId: string, sessionId: string, textContent: string) {
     return await runInDurableObject(env.RUNTIME_RELAY.getByName(projectId), async (_instance, state) => {
         const pending: Promise<void>[] = [];
@@ -374,6 +431,38 @@ describe.sequential("Platform Recording read route", () => {
             generationReset: false,
             version: 2,
         });
+        const waited = await worker.fetch(
+            new Request(`${readUrl}&waitMs=1`, { headers: credentialHeaders(credential) }),
+            environment,
+        );
+        expect(waited.status).toBe(200);
+        expect(waited.headers.get("Mobius-Recording-Wait-Supported")).toBe("1");
+        expect(decodeSessionRecordingHistoryPage(await waited.text())).toMatchObject({
+            events: [],
+            tailCursor: "v2:1:1",
+        });
+        expect(
+            (
+                await worker.fetch(
+                    new Request(`${readUrl}&waitMs=10001`, { headers: credentialHeaders(credential) }),
+                    environment,
+                )
+            ).status,
+        ).toBe(400);
+        const afterCancellation = await readAfterCancelledWaits(
+            async (signal) =>
+                await worker.fetch(
+                    new Request(`${readUrl}&waitMs=10000`, { headers: credentialHeaders(credential), signal }),
+                    environment,
+                ),
+            () =>
+                recordSessionEvents(projectId, sessionId, "session-generation-1", [
+                    { position: "2", text: "answer after cancelled reads" },
+                ]),
+        );
+        expect(afterCancellation.events).toMatchObject([
+            { position: "2", payload: { content: { text: "answer after cancelled reads" } } },
+        ]);
     });
 
     it("Given an enabled Project policy, When a Platform app reads Turn history through the production boundary, Then Recording serves the projected page", async () => {
