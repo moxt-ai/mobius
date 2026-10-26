@@ -1,6 +1,6 @@
 import type { SessionInfoUpdatedEvent, SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
-import { harnessAdapters } from "../../acp/adapter/registry.ts";
 import { AcpContentExternalizer } from "../../acp/content/content-externalizer.ts";
+import type { AdapterResolver } from "../../acp/native-history/preview-contract.ts";
 import { AcpSessionTable } from "../../storage/session/acp-session-table.ts";
 import { ExecutionReceiptTable } from "../../storage/session/execution-receipt-table.ts";
 import { LiveEventPositionTable } from "../../storage/session/live-event-position-table.ts";
@@ -50,6 +50,7 @@ export class SessionLayerObserver extends NullSessionObserver {
 
 /** What the session layer needs to wire itself: the runtime's identity, its agent source, and its sink. */
 export interface SessionLayerOptions {
+    readonly adapters: AdapterResolver;
     readonly turnActivity?: RuntimeTurnActivity;
     readonly onExecutionCountChange?: (count: number) => void;
     readonly bindingId: string;
@@ -91,7 +92,7 @@ export function buildSessionLayer(options: SessionLayerOptions) {
             eventProjection.record(event);
         }, sink.publishInfo),
         store: sessionStore,
-        adapters: harnessAdapters,
+        adapters: options.adapters,
         sessionIdentity: "native",
         onSessionStatusChanged: sink.publishStatus,
         onSessionClosed: sink.publishClosed,

@@ -1,45 +1,43 @@
-import type { AgentSession } from "../live/agent-session.ts";
-
-type Resource = { readonly kind: "empty" } | { readonly kind: "ready"; readonly runtime: AgentSession };
-type Lifecycle =
-    | Resource
+type Resource<P> = { readonly kind: "empty" } | { readonly kind: "ready"; readonly runtime: P };
+type Lifecycle<P> =
+    | Resource<P>
     | {
           readonly kind: "preparing";
-          readonly completion: Promise<AgentSession>;
-          readonly resource: Resource;
+          readonly completion: Promise<P>;
+          readonly resource: Resource<P>;
       };
-interface Entry {
-    readonly lifecycle: Lifecycle;
+interface Entry<P> {
+    readonly lifecycle: Lifecycle<P>;
     readonly users: number;
 }
-interface RetainedSessionEvents {
-    readonly touch: (runtime: AgentSession) => void;
+interface RetainedSessionEvents<P> {
+    readonly touch: (runtime: P) => void;
     readonly changed: () => void;
 }
 
 /** Tracks reusable Agent processes and their preparation/borrow lifetimes. */
-export class RetainedAgentProcesses {
-    readonly #entries = new Map<string, Entry>();
-    readonly #events: RetainedSessionEvents;
-    constructor(events: RetainedSessionEvents) {
+export class RetainedAgentProcesses<P> {
+    readonly #entries = new Map<string, Entry<P>>();
+    readonly #events: RetainedSessionEvents<P>;
+    constructor(events: RetainedSessionEvents<P>) {
         this.#events = events;
     }
 
-    readonly #entry = (id: string): Entry => this.#entries.get(id) ?? { lifecycle: { kind: "empty" }, users: 0 };
-    readonly #write = (id: string, entry: Entry): void => {
+    readonly #entry = (id: string): Entry<P> => this.#entries.get(id) ?? { lifecycle: { kind: "empty" }, users: 0 };
+    readonly #write = (id: string, entry: Entry<P>): void => {
         if (entry.lifecycle.kind === "empty" && entry.users === 0) {
             this.#entries.delete(id);
         } else {
             this.#entries.set(id, entry);
         }
     };
-    readonly #resource = (entry: Entry): Resource =>
+    readonly #resource = (entry: Entry<P>): Resource<P> =>
         entry.lifecycle.kind === "preparing" ? entry.lifecycle.resource : entry.lifecycle;
-    readonly get = (id: string): AgentSession | undefined => {
+    readonly get = (id: string): P | undefined => {
         const resource = this.#resource(this.#entry(id));
         return resource.kind === "ready" ? resource.runtime : undefined;
     };
-    readonly pending = (id: string): Promise<AgentSession> | undefined => {
+    readonly pending = (id: string): Promise<P> | undefined => {
         const state = this.#entry(id).lifecycle;
         return state.kind === "preparing" ? state.completion : undefined;
     };
@@ -52,25 +50,25 @@ export class RetainedAgentProcesses {
             this.#events.touch(expected);
         }
     };
-    readonly #setResource = (id: string, resource: Resource): void => {
+    readonly #setResource = (id: string, resource: Resource<P>): void => {
         const entry = this.#entry(id);
         this.#write(id, {
             ...entry,
             lifecycle: entry.lifecycle.kind === "preparing" ? { ...entry.lifecycle, resource } : resource,
         });
     };
-    readonly retain = (id: string, runtime: AgentSession): void => {
+    readonly retain = (id: string, runtime: P): void => {
         this.#setResource(id, { kind: "ready", runtime });
     };
-    readonly detach = (id: string, expected: AgentSession): boolean => {
+    readonly detach = (id: string, expected: P): boolean => {
         if (this.get(id) !== expected) {
             return false;
         }
         this.#setResource(id, { kind: "empty" });
         return true;
     };
-    readonly entries = (): readonly (readonly [string, AgentSession])[] => {
-        const result: (readonly [string, AgentSession])[] = [];
+    readonly entries = (): readonly (readonly [string, P])[] => {
+        const result: (readonly [string, P])[] = [];
         for (const id of this.#entries.keys()) {
             const runtime = this.get(id);
             if (runtime !== undefined) {
@@ -79,12 +77,12 @@ export class RetainedAgentProcesses {
         }
         return result;
     };
-    readonly prepare = (id: string, start: () => Promise<AgentSession>): Promise<AgentSession> => {
+    readonly prepare = (id: string, start: () => Promise<P>): Promise<P> => {
         const pending = this.pending(id);
         if (pending !== undefined) {
             return pending;
         }
-        const completion = Promise.withResolvers<AgentSession>();
+        const completion = Promise.withResolvers<P>();
         const entry = this.#entry(id);
         this.#write(id, {
             ...entry,
@@ -94,7 +92,7 @@ export class RetainedAgentProcesses {
                 resource: this.#resource(entry),
             },
         });
-        const run = async (): Promise<AgentSession> => {
+        const run = async (): Promise<P> => {
             try {
                 return await start();
             } finally {

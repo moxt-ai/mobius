@@ -4,12 +4,13 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
-import { createRuntimeConfig, RuntimeLocalContext } from "../../src/runtime/config.ts";
+import { RuntimeLocalContext } from "../../src/runtime/config.ts";
 import { NullSessionObserver } from "../../src/session/api/session-api.ts";
 import { SessionManager } from "../../src/session/manager/session-manager.ts";
 import { MemorySessionStore } from "../../src/session/record/session-store.ts";
 import { systemTimer } from "../../src/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
+import { createControlledRuntimeConfig as createRuntimeConfig } from "../support/controlled-runtime-config.ts";
 import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
 
 import { fakeAgent, fakeAgentPath, RecordingObserver } from "./acp-feature-fixture.ts";

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { mobiusApiPath } from "@moxt-ai/mobius-sdk/protocol";
 import { MobiusClient, StaticMobiusCredentialProvider } from "@moxt-ai/mobius-sdk/server";
 import * as v from "valibot";
-import { createRuntimeConfig, RuntimeLocalContext } from "../../src/runtime/config.ts";
+import { RuntimeLocalContext } from "../../src/runtime/config.ts";
 import { runRuntime } from "../../src/runtime/run.ts";
 import {
     defaultFakeAgentHarness,
@@ -12,6 +12,7 @@ import {
     fakeAgentHarness,
     fakeAgentHarnessCapabilities,
 } from "./agent-harness.ts";
+import { createControlledRuntimeConfig as createRuntimeConfig } from "./controlled-runtime-config.ts";
 
 type TestServerApp = { readonly request: (request: Request) => Response | Promise<Response> };
 

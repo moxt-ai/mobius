@@ -2,6 +2,7 @@ import { join, resolve } from "node:path";
 import { RUNTIME_WORKSPACE_BINDING_ID } from "@moxt-ai/mobius-sdk/protocol";
 import type { CatalogAgent } from "../agent/catalog.ts";
 import { LocalAgentCatalog } from "../agent/catalog.ts";
+import { RuntimeAgentDependencies } from "../agent/runtime-agents.ts";
 import { readStateDirectory } from "../storage/state-directory.ts";
 
 export function loadDefaultWorkspace(environment: Readonly<NodeJS.ProcessEnv> = process.env): string {
@@ -45,6 +46,7 @@ export class OpaqueRuntimeReconnectTarget extends RuntimeReconnectTarget {
 }
 
 export interface RuntimeConfig {
+    readonly adapters: RuntimeAgentDependencies["adapters"];
     readonly agents: readonly CatalogAgent[];
     readonly defaultWorkspace: string;
     readonly bindingId: string;
@@ -74,14 +76,16 @@ export interface RuntimeConnectionConfig {
 
 export function createRuntimeConfig(
     connection: RuntimeConnectionConfig,
-    agents: readonly CatalogAgent[] = [],
+    agents: readonly CatalogAgent[] | RuntimeAgentDependencies = [],
     localContext: RuntimeLocalContext = new RuntimeLocalContext(readStateDirectory(), process.env),
     reconnectTarget: RuntimeReconnectTarget | null = null,
     resolveAgent?: RuntimeConfig["resolveAgent"],
     rediscoverAgents?: RuntimeConfig["rediscoverAgents"],
 ): RuntimeConfig {
-    const runtimeAgents = agents.map((agent) => withRuntimeEnvironment(agent, localContext.environment));
+    const dependencies = agents instanceof RuntimeAgentDependencies ? agents : new RuntimeAgentDependencies(agents);
+    const runtimeAgents = dependencies.agents.map((agent) => withRuntimeEnvironment(agent, localContext.environment));
     return {
+        adapters: dependencies.adapters,
         agents: runtimeAgents,
         defaultWorkspace: connection.defaultWorkspace,
         bindingId: RUNTIME_WORKSPACE_BINDING_ID,

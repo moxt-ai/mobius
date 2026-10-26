@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { decodeSessionEvent, encodeSessionPromptCommand, SessionPromptDisposition } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
 import { ControlledAcpAgentSpecification } from "../support/agents/controlled-acp.ts";
-import { withRealDaemon } from "../support/agents/real-daemon.ts";
+import { withControlledDaemon as withRealDaemon } from "../support/agents/real-daemon.ts";
 import { writeControlledAcpExecutable } from "../support/controlled-acp-executable.ts";
 
 // @no-uc: Compatibility; restart receipts distinguish started, queued and completed commands through the daemon wire protocol.

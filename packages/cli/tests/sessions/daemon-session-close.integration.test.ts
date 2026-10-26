@@ -28,7 +28,7 @@ import type {
 } from "../../src/acp/agent/in-process-endpoint.ts";
 import { InProcessAcpAgentSpecification } from "../../src/agent/specification/agent-specification.ts";
 import { ControlledAcpAgentSpecification } from "../support/agents/controlled-acp.ts";
-import { prepareNewRealSession, withRealDaemon } from "../support/agents/real-daemon.ts";
+import { prepareNewRealSession, withControlledDaemon as withRealDaemon } from "../support/agents/real-daemon.ts";
 
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
 

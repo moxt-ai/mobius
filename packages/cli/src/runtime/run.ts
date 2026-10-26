@@ -100,6 +100,7 @@ export async function runRuntime(
     );
     const publisher = new RuntimeSessionEventPublisher(timer);
     const layer = buildSessionLayer({
+        adapters: config.adapters,
         ...(options.turnActivity === undefined ? {} : { turnActivity: options.turnActivity }),
         bindingId: config.bindingId,
         channelId: config.channelId,

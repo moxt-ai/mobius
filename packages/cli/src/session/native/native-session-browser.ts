@@ -118,8 +118,8 @@ export class NativeSessionService {
                 ...(await this.#activeTurn(command, options)),
             };
         }
-        const prepared = await this.#sessions.prepareNativeSessionBrowser(options);
-        if (!prepared.capabilities.listSessions) {
+        const capabilities = await this.#sessions.nativeSessionCapabilities(options);
+        if (!capabilities.listSessions) {
             throw new AcpExecutionError(
                 "This Agent does not support native session listing",
                 {},
@@ -204,7 +204,7 @@ export class NativeSessionService {
             return {
                 ...envelope,
                 action: "list",
-                capabilities: prepared.capabilities,
+                capabilities,
                 entries,
                 nextCursor,
             };
@@ -254,17 +254,17 @@ export class NativeSessionService {
         }
         const target = await this.resolveTarget(command, options, selected);
         const action = command.action;
-        if (action === "import" && !prepared.capabilities.loadSession && !prepared.capabilities.resumeSession) {
+        if (action === "import" && !capabilities.loadSession && !capabilities.resumeSession) {
             throw new AcpExecutionError("This Agent cannot import native sessions", {}, "native_session_unsupported");
         }
-        if (action === "fork" && !prepared.capabilities.unstableForkSession) {
+        if (action === "fork" && !capabilities.unstableForkSession) {
             throw new AcpExecutionError(
                 "This Agent does not support session forking",
                 {},
                 "native_session_unsupported",
             );
         }
-        if (target.additionalDirectories.length > 0 && !prepared.capabilities.additionalDirectories) {
+        if (target.additionalDirectories.length > 0 && !capabilities.additionalDirectories) {
             throw new AcpExecutionError(
                 "This Agent cannot restore additional working directories",
                 {},

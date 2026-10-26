@@ -21,7 +21,7 @@ class HistoryAgentSpecification extends DirectAcpAgentSpecification {
     }
 }
 
-import { withRealDaemon } from "../support/agents/real-daemon.ts";
+import { withControlledDaemon as withRealDaemon } from "../support/agents/real-daemon.ts";
 
 // Persisted native history is owned by the controlled ACP peer, not by Mobius.
 test.each([

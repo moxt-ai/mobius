@@ -13,7 +13,7 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
 import { ControlledAcpAgentSpecification } from "../support/agents/controlled-acp.ts";
-import { withRealDaemon } from "../support/agents/real-daemon.ts";
+import { withControlledDaemon as withRealDaemon } from "../support/agents/real-daemon.ts";
 import { writeControlledAcpExecutable } from "../support/controlled-acp-executable.ts";
 
 // @no-uc: Technical regression; a failed turn must leave a correlated local trace without persisting Agent free text.

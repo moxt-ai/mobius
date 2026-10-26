@@ -2,35 +2,78 @@ import { existsSync, watch } from "node:fs";
 import { readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { ClaudeAdapter } from "../../src/acp/adapter/claude/adapter.ts";
 import { nativeHistoryEvents } from "../../src/acp/native-history/codex/native-history-events.ts";
-import type { Adapter } from "../../src/acp/native-history/preview-contract.ts";
+import type { AdapterResolver } from "../../src/acp/native-history/preview-contract.ts";
+import { MemorySessionEventStore } from "../../src/session/history/session-event-store.ts";
 import { fixture } from "./native-session-fixture.ts";
 
 /** A direct-read adapter with canned history, standing in for the Codex app-server. */
-const cannedHistoryAdapter: Adapter = {
-    previewSessionEvents: async (request, context) =>
-        await nativeHistoryEvents(
-            request.sessionId,
-            request.nativeSessionId,
-            {
-                coveredCommandIds: [],
-                coveredMessageIds: [],
-                messages: [
-                    { role: "user", text: "Read without resuming" },
-                    { activities: [], content: [], role: "assistant", text: "Preview available" },
-                ],
-                status: "available",
-                truncated: false,
-            },
-            request.eventLimit,
-            request.cursor,
-            context.events,
-        ),
+const cannedHistoryAdapter: AdapterResolver = (_agent, dependencies) => {
+    const acp = new ClaudeAdapter(dependencies);
+    const events = new MemorySessionEventStore();
+    return {
+        capabilities: acp.capabilities,
+        connectSession: acp.connectSession,
+        listNativeSessions: acp.listNativeSessions,
+        close: async () => {
+            await acp.close();
+            events.close();
+        },
+        previewSessionEvents: async (_query, request) =>
+            await nativeHistoryEvents(
+                request.sessionId,
+                request.nativeSessionId,
+                {
+                    coveredCommandIds: [],
+                    coveredMessageIds: [],
+                    messages: [
+                        { role: "user", text: "Read without resuming" },
+                        { activities: [], content: [], role: "assistant", text: "Preview available" },
+                    ],
+                    status: "available",
+                    truncated: false,
+                },
+                request.eventLimit,
+                request.cursor,
+                events,
+            ),
+    };
 };
 
 describe("native session history", () => {
+    it("Given a saved session requests permission and input during preview, When its history is read, Then both interactions are rejected without publishing live events", async () => {
+        const f = await fixture("Claude Code", "load-only");
+        try {
+            const nativeSessionId = await f.seed("Preview requiring interaction");
+            await writeFile(join(f.native, "interactions-during-preview"), "");
+            const preview = await f.sessions.previewNativeSessionEvents(
+                {
+                    agent: f.agent,
+                    cwd: f.workspace,
+                    additionalDirectories: [],
+                    sessionId: "read-only-preview",
+                    signal: new AbortController().signal,
+                },
+                nativeSessionId,
+                50,
+                null,
+            );
+            const messages = preview.events.flatMap((event) =>
+                event.type === "acp" &&
+                event.payload.sessionUpdate === "agent_message_chunk" &&
+                event.payload.content.type === "text"
+                    ? [event.payload.content.text]
+                    : [],
+            );
+            expect(messages.join("").match(/Preview interaction rejected/g)).toHaveLength(2);
+            expect(f.observer.updates).toEqual([]);
+        } finally {
+            await f.close();
+        }
+    });
     it("Given Codex already owns a native session writer, When Chat previews that session, Then Runtime reads history without requesting another writer", async () => {
-        const f = await fixture("Codex", "exclusive-writer", "assigned", () => cannedHistoryAdapter);
+        const f = await fixture("Codex", "exclusive-writer", "assigned", cannedHistoryAdapter);
         const signal = new AbortController().signal;
         try {
             const nativeSessionId = await f.seed("Writer-owned Codex session");

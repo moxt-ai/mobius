@@ -1,22 +1,25 @@
 import { AcpExecutionError } from "../acp-error.ts";
 import type { AcpAgentDefinition } from "../agent/agent-definition.ts";
-import type { Adapter, AdapterResolver } from "../native-history/preview-contract.ts";
+import type { Adapter, AdapterDependencies, AdapterResolver } from "../native-history/preview-contract.ts";
 import { ClaudeAdapter } from "./claude/adapter.ts";
 import { CodexAdapter } from "./codex/adapter.ts";
 import { PiAdapter } from "./pi/adapter.ts";
 
-/** Daemon wiring: each known harness gets its own adapter; an unknown agent is an error. */
-export const harnessAdapters: AdapterResolver = (agent: AcpAgentDefinition): Adapter => {
+/** Each supported harness owns its adapter; unregistered harnesses are rejected. */
+export const harnessAdapters: AdapterResolver = (
+    agent: AcpAgentDefinition,
+    dependencies: AdapterDependencies,
+): Adapter => {
     switch (agent.id) {
         case "codex":
-            return new CodexAdapter();
+            return new CodexAdapter(dependencies);
         case "claude":
-            return new ClaudeAdapter();
+            return new ClaudeAdapter(dependencies);
         case "pi":
-            return new PiAdapter();
+            return new PiAdapter(dependencies);
         default:
             throw new AcpExecutionError(
-                `Agent "${agent.id}" has no adapter for previewing saved sessions.`,
+                `Agent "${agent.id}" has no registered harness adapter.`,
                 {},
                 "agent_adapter_not_found",
             );
