@@ -8,11 +8,13 @@ import { replayCodexHistory } from "../../harness/codex/history.ts";
 import type {
     Adapter,
     AdapterDependencies,
+    NativeSessionLookupBudget,
     NativeSessionPreviewRequest,
     NativeSessionQuery,
     SessionEventPage,
 } from "../../native-history/preview-contract.ts";
 import { nativeSessionIdSchema } from "../../protocol/native-session.ts";
+import { findNativeSession } from "../native-session-lookup.ts";
 import { openPreviewEventCache, type PreviewEventCache } from "../preview-event-cache.ts";
 import { AgentQueryProcesses } from "../query-processes.ts";
 import { AcpSessionConnector, type AdapterSessionConnectionOptions } from "../session-events.ts";
@@ -44,10 +46,12 @@ export class CodexAdapter implements Adapter {
         this.#queryProcesses = new AgentQueryProcesses(dependencies.processes, this.#connector);
     }
 
-    readonly capabilities = async (query: NativeSessionQuery) => await this.#queryProcesses.capabilities(query);
+    readonly getCapabilities = async (query: NativeSessionQuery) => await this.#queryProcesses.capabilities(query);
     readonly connectSession = (options: AdapterSessionConnectionOptions) => this.#connector.connectSession(options);
-    readonly listNativeSessions = async (query: NativeSessionQuery, cursor: string | null) =>
+    readonly listSessions = async (query: NativeSessionQuery, cursor: string | null) =>
         await this.#queryProcesses.listNativeSessions(query, cursor);
+    readonly findSession = (query: NativeSessionQuery, nativeSessionId: string, budget: NativeSessionLookupBudget) =>
+        findNativeSession(this.listSessions, query, nativeSessionId, budget);
     readonly close = async (): Promise<void> => {
         try {
             await this.#queryProcesses.close();
@@ -56,7 +60,7 @@ export class CodexAdapter implements Adapter {
         }
     };
 
-    readonly previewSessionEvents = async (
+    readonly readSessionHistory = async (
         query: NativeSessionQuery,
         request: NativeSessionPreviewRequest,
     ): Promise<SessionEventPage> => {

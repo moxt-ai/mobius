@@ -162,7 +162,7 @@ export async function executeSessionPreviewHistoryPageLoad(
     resolveAgent: ResolveAgent,
     directories: WorkspaceDirectoryService,
     diagnostics: RelayConnectionDiagnostics,
-    sessions: SessionManager,
+    nativeSessions: NativeSessionService,
     signal: AbortSignal,
 ): Promise<void> {
     try {
@@ -186,7 +186,7 @@ export async function executeSessionPreviewHistoryPageLoad(
             command.cursor,
             [],
             async (eventLimit, cursor) =>
-                await sessions.previewNativeSessionEvents(loadOptions, command.sessionId, eventLimit, cursor),
+                await nativeSessions.readSessionHistory(loadOptions, command.sessionId, eventLimit, cursor),
         );
         signal.throwIfAborted();
         send(socket, {
@@ -246,7 +246,7 @@ export const previewHistoryPageLoadCommand: RuntimeCommand = {
             context.resolveAgent,
             context.directories,
             context.diagnostics,
-            context.sessions,
+            context.nativeSessions,
             context.signal,
         );
     },

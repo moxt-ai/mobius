@@ -1,9 +1,11 @@
 import type {
     Adapter,
     AdapterDependencies,
+    NativeSessionLookupBudget,
     NativeSessionPreviewRequest,
     NativeSessionQuery,
 } from "../../native-history/preview-contract.ts";
+import { findNativeSession } from "../native-session-lookup.ts";
 import { AgentQueryProcesses } from "../query-processes.ts";
 import { AcpSessionConnector, type AdapterSessionConnectionOptions } from "../session-events.ts";
 
@@ -20,11 +22,13 @@ export class PiAdapter implements Adapter {
         this.#queryProcesses = new AgentQueryProcesses(dependencies.processes, this.#connector);
     }
 
-    readonly capabilities = async (query: NativeSessionQuery) => await this.#queryProcesses.capabilities(query);
+    readonly getCapabilities = async (query: NativeSessionQuery) => await this.#queryProcesses.capabilities(query);
     readonly connectSession = (options: AdapterSessionConnectionOptions) => this.#connector.connectSession(options);
-    readonly listNativeSessions = async (query: NativeSessionQuery, cursor: string | null) =>
+    readonly listSessions = async (query: NativeSessionQuery, cursor: string | null) =>
         await this.#queryProcesses.listNativeSessions(query, cursor);
-    readonly previewSessionEvents = async (query: NativeSessionQuery, request: NativeSessionPreviewRequest) =>
+    readonly findSession = (query: NativeSessionQuery, nativeSessionId: string, budget: NativeSessionLookupBudget) =>
+        findNativeSession(this.listSessions, query, nativeSessionId, budget);
+    readonly readSessionHistory = async (query: NativeSessionQuery, request: NativeSessionPreviewRequest) =>
         await this.#queryProcesses.previewSessionEvents(query, request);
     readonly close = async (): Promise<void> => await this.#queryProcesses.close();
 }

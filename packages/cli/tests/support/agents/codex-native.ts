@@ -117,6 +117,7 @@ export async function codexFixture(
         return result;
     };
     const close = async (): Promise<void> => {
+        await service.close();
         await sessions.close();
         await codex[Symbol.asyncDispose]();
         await provider[Symbol.asyncDispose]();

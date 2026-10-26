@@ -13,6 +13,7 @@ import { AcpExecutionError } from "../../acp/acp-error.ts";
 import type { NativeSessionInfo } from "../../acp/protocol/native-session.ts";
 import { nativeSessionIdSchema } from "../../acp/protocol/native-session.ts";
 import type { ResolveAgent, SessionPrepareOptions } from "../api/session-api.ts";
+import { RuntimeOperations } from "../manager/operation-drain.ts";
 import type { SessionManager } from "../manager/session-manager.ts";
 import type { StoredSession } from "../record/session-store.ts";
 import { LocalAuthorizationError } from "../workspace/local-authorization-error.ts";
@@ -63,6 +64,7 @@ function nextForkTitle(sourceTitle: string, sessions: readonly StoredSession[]):
 }
 
 export class NativeSessionService {
+    readonly #operations = new RuntimeOperations();
     readonly #entries = new Map<string, ListedTarget>();
     readonly #cursors = new Map<string, ListedCursor>();
     readonly #bindingId: string;
@@ -92,6 +94,29 @@ export class NativeSessionService {
     }
 
     readonly execute = async (command: NativeSessionCommand, signal: AbortSignal): Promise<NativeSessionResult> => {
+        return await this.#operations.run({ signal }, (scoped) => this.#execute(command, scoped.signal));
+    };
+
+    readonly close = (): Promise<void> => this.#operations.close(async () => undefined);
+
+    readonly readSessionHistory = async (
+        options: SessionPrepareOptions,
+        nativeSessionId: string,
+        eventLimit: number,
+        cursor: string | null,
+    ) =>
+        this.#operations.run(options, (scoped) =>
+            this.#sessions.withNativeSessionOperation(scoped, nativeSessionId, (target) =>
+                target.adapter.readSessionHistory(target, {
+                    nativeSessionId,
+                    eventLimit,
+                    cursor,
+                    sessionId: target.sessionId,
+                }),
+            ),
+        );
+
+    readonly #execute = async (command: NativeSessionCommand, signal: AbortSignal): Promise<NativeSessionResult> => {
         signal.throwIfAborted();
         const cwd = await this.#directories.resolve(this.#bindingId, command.directoryId, signal);
         const additionalDirectories = await this.#directories.resolveMany(
@@ -118,7 +143,7 @@ export class NativeSessionService {
                 ...(await this.#activeTurn(command, options)),
             };
         }
-        const capabilities = await this.#sessions.nativeSessionCapabilities(options);
+        const capabilities = await options.adapter.getCapabilities(options);
         if (!capabilities.listSessions) {
             throw new AcpExecutionError(
                 "This Agent does not support native session listing",
@@ -175,7 +200,7 @@ export class NativeSessionService {
                 }
                 cursor = known.cursor;
             }
-            const page = await this.#sessions.listNativeSessions(options, cursor);
+            const page = await options.adapter.listSessions(options, cursor);
             const entries: NativeSessionEntry[] = [];
             for (const info of page.sessions) {
                 const entry = await register(info);
@@ -210,30 +235,13 @@ export class NativeSessionService {
             };
         }
         if (command.action === "find") {
-            let cursor: string | null = null;
-            let inspected = 0;
-            for (let pageNumber = 0; pageNumber < 500; pageNumber += 1) {
-                const page = await this.#sessions.listNativeSessions(options, cursor);
-                inspected += page.sessions.length;
-                const found = page.sessions.find((session) => session.sessionId === command.nativeSessionId);
-                if (found !== undefined) {
-                    const entry = await register(found);
-                    if (entry !== null) {
-                        return { ...envelope, action: "find", entry };
-                    }
-                    break;
-                }
-                if (page.nextCursor == null || inspected >= 500) {
-                    break;
-                }
-                if (page.nextCursor === cursor) {
-                    throw new AcpExecutionError(
-                        "The Agent returned a repeated session cursor",
-                        {},
-                        "invalid_native_session_response",
-                    );
-                }
-                cursor = page.nextCursor;
+            const found = await options.adapter.findSession(options, command.nativeSessionId, {
+                maximumPages: 500,
+                maximumEntries: 500,
+            });
+            const entry = await register(found);
+            if (entry !== null) {
+                return { ...envelope, action: "find", entry };
             }
             throw new AcpExecutionError("The native session was not found", {}, "native_session_not_found");
         }
@@ -393,46 +401,37 @@ export class NativeSessionService {
         options: SessionPrepareOptions,
         selected: ListedTarget,
     ): Promise<AuthorizedNativeSession> => {
-        let cursor: string | null = null;
-        const visited = new Set<string>();
-        for (let index = 0; index < 100; index += 1) {
-            const page = await this.#sessions.listNativeSessions(options, cursor);
-            const info = page.sessions.find((entry) => entry.sessionId === selected.nativeSessionId);
-            if (info !== undefined) {
-                const target = await this.authorizeEntry(command, options, info);
-                if (target === null) {
-                    throw new LocalAuthorizationError("The selected native session is not authorized");
-                }
-                if (
-                    target.cwd !== selected.cwd ||
-                    target.additionalDirectories.length !== selected.additionalDirectories.length ||
-                    target.additionalDirectories.some((path, index) => path !== selected.additionalDirectories[index])
-                ) {
+        const info = await options.adapter
+            .findSession(options, selected.nativeSessionId, {
+                maximumPages: 100,
+                maximumEntries: null,
+            })
+            .catch((cause: unknown) => {
+                options.signal.throwIfAborted();
+                if (cause instanceof AcpExecutionError && cause.code === "native_session_not_found") {
                     throw new AcpExecutionError(
-                        "This session's directory changed. Refresh the list before continuing.",
-                        {},
-                        "native_session_target_changed",
+                        "The selected native session no longer exists. Refresh the list.",
+                        { cause },
+                        "native_session_not_found",
                     );
                 }
-                return target;
-            }
-            cursor = page.nextCursor ?? null;
-            if (cursor === null) {
-                break;
-            }
-            if (visited.has(cursor)) {
-                throw new AcpExecutionError(
-                    "The Agent returned a repeated session cursor",
-                    {},
-                    "invalid_native_session_response",
-                );
-            }
-            visited.add(cursor);
+                throw cause;
+            });
+        const target = await this.authorizeEntry(command, options, info);
+        if (target === null) {
+            throw new LocalAuthorizationError("The selected native session is not authorized");
         }
-        throw new AcpExecutionError(
-            "The selected native session no longer exists. Refresh the list.",
-            {},
-            "native_session_not_found",
-        );
+        if (
+            target.cwd !== selected.cwd ||
+            target.additionalDirectories.length !== selected.additionalDirectories.length ||
+            target.additionalDirectories.some((path, index) => path !== selected.additionalDirectories[index])
+        ) {
+            throw new AcpExecutionError(
+                "This session's directory changed. Refresh the list before continuing.",
+                {},
+                "native_session_target_changed",
+            );
+        }
+        return target;
     };
 }

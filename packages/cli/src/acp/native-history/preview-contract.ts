@@ -8,7 +8,7 @@ import type { AgentProcessPool } from "../../session/process/agent-process-pool.
 import type { AdapterSessionConnection, AdapterSessionConnectionOptions } from "../adapter/session-events.ts";
 import type { AcpAgentDefinition } from "../agent/agent-definition.ts";
 import type { AcpContentExternalizer } from "../content/content-externalizer.ts";
-import type { NativeSessionPage } from "../protocol/native-session.ts";
+import type { NativeSessionInfo, NativeSessionPage } from "../protocol/native-session.ts";
 import type { ProjectedToolCall } from "../tool-call-projection.ts";
 
 /** One page of a saved native session's events. */
@@ -68,12 +68,23 @@ export interface NativeSessionQuery {
     readonly signal: AbortSignal;
 }
 
+/** Application lookup budget; null allows all entries within the page budget. */
+export interface NativeSessionLookupBudget {
+    readonly maximumPages: number;
+    readonly maximumEntries: number | null;
+}
+
 /** Business-facing saved-session operations. Transport and initialization belong to the adapter. */
 export interface Adapter {
     readonly connectSession: (options: AdapterSessionConnectionOptions) => AdapterSessionConnection;
-    readonly capabilities: (query: NativeSessionQuery) => Promise<SessionCapabilities>;
-    readonly listNativeSessions: (query: NativeSessionQuery, cursor: string | null) => Promise<NativeSessionPage>;
-    readonly previewSessionEvents: (
+    readonly getCapabilities: (query: NativeSessionQuery) => Promise<SessionCapabilities>;
+    readonly listSessions: (query: NativeSessionQuery, cursor: string | null) => Promise<NativeSessionPage>;
+    readonly findSession: (
+        query: NativeSessionQuery,
+        nativeSessionId: string,
+        budget: NativeSessionLookupBudget,
+    ) => Promise<NativeSessionInfo>;
+    readonly readSessionHistory: (
         query: NativeSessionQuery,
         request: NativeSessionPreviewRequest,
     ) => Promise<SessionEventPage>;

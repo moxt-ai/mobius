@@ -177,6 +177,7 @@ export async function fixture(
         return result;
     };
     const close = async (): Promise<void> => {
+        await service.close();
         await sessions.close();
         if (previous === undefined) {
             delete process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
@@ -201,6 +202,7 @@ export async function fixture(
             return sessions;
         },
         restart: async () => {
+            await service.close();
             await sessions.close();
             sessions = new SessionManager({
                 observer,

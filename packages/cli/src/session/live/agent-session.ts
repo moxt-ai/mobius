@@ -15,13 +15,10 @@ import {
     RetryableAcpInitializationError,
     validateAgentRuntime,
 } from "../../acp/adapter/agent-initialization.ts";
-import type {
-    AdapterSessionConnection,
-    AdapterSessionConnector,
-    AdapterSessionEvent,
-} from "../../acp/adapter/session-events.ts";
+import type { AdapterSessionConnection, AdapterSessionEvent } from "../../acp/adapter/session-events.ts";
 import type { AcpAgentDefinition } from "../../acp/agent/agent-definition.ts";
 import { buildPromptContent } from "../../acp/client/prompt-content.ts";
+import type { Adapter } from "../../acp/native-history/preview-contract.ts";
 import type { NativeSessionOrigin } from "../../acp/protocol/native-session.ts";
 import {
     restrictAcpSessionCapabilities,
@@ -117,6 +114,7 @@ export class AgentSession implements AgentSessionRestore {
     }
 
     readonly #connection: AdapterSessionConnection;
+    readonly #adapter: Adapter;
     readonly #additionalDirectories: readonly string[];
     readonly #agentId: string;
     readonly #cwd: string;
@@ -152,9 +150,10 @@ export class AgentSession implements AgentSessionRestore {
         getObserver: () => SessionObserver,
         store: SessionStore,
         metrics: OperationMetrics,
-        connector: AdapterSessionConnector,
+        adapter: Adapter,
     ) {
         this.#additionalDirectories = [...additionalDirectories];
+        this.#adapter = adapter;
         this.#agentId = agent.id;
         this.#commands = [];
         this.#cwd = cwd;
@@ -181,7 +180,7 @@ export class AgentSession implements AgentSessionRestore {
             configOptions: () => this.#configOptions,
             onEvent: this.#processEvent,
         };
-        this.#connection = connector.connectSession({
+        this.#connection = this.#adapter.connectSession({
             ...scope,
             interactions: {
                 onPermission: this.#interactions.onPermission,
@@ -198,7 +197,7 @@ export class AgentSession implements AgentSessionRestore {
         store: SessionStore,
         initialize: (runtime: AgentSession) => Promise<void>,
         metrics: OperationMetrics,
-        connector: AdapterSessionConnector,
+        adapter: Adapter,
     ): Promise<AgentSession> {
         for (let attempt = 1; attempt <= 2; attempt += 1) {
             await metrics.measure(
@@ -216,7 +215,7 @@ export class AgentSession implements AgentSessionRestore {
                         getObserver,
                         store,
                         metrics,
-                        connector,
+                        adapter,
                     ),
             );
             try {
@@ -246,7 +245,7 @@ export class AgentSession implements AgentSessionRestore {
         getObserver: () => SessionObserver,
         store: SessionStore,
         metrics: OperationMetrics,
-        connector: AdapterSessionConnector,
+        adapter: Adapter,
     ): Promise<AgentSession> =>
         await AgentSession.#start(
             options,
@@ -254,7 +253,7 @@ export class AgentSession implements AgentSessionRestore {
             store,
             async (runtime) => await runtime.initialize(options.signal, recovery, options.origin),
             metrics,
-            connector,
+            adapter,
         );
 
     readonly belongsTo = (agentId: string, cwd: string, additionalDirectories: readonly string[]): boolean =>

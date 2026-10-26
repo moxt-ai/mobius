@@ -1,7 +1,6 @@
 import {
     SESSION_CLOSE_NOTICE_KIND,
     SESSION_CLOSED_ERROR_CODE,
-    type SessionCapabilities,
     type SessionCloseNoticeEvent,
     type SessionConfigOption,
     type SessionEventPayload,
@@ -9,7 +8,7 @@ import {
     type SessionStatusChangedEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { AcpExecutionError } from "../../acp/acp-error.ts";
-import type { NativeSessionOrigin, NativeSessionPage } from "../../acp/protocol/native-session.ts";
+import type { NativeSessionOrigin } from "../../acp/protocol/native-session.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../../infra/operation-metrics.ts";
 import type { Timer } from "../../util/timer.ts";
 import { AgentSession } from "../live/agent-session.ts";
@@ -526,9 +525,6 @@ export class SessionManager {
             return (await this.#replaceExecutionPreparation(existing, options)).prepared();
         });
 
-    readonly nativeSessionCapabilities = (options: SessionPrepareOptions): Promise<SessionCapabilities> =>
-        this.#operations.run(options, (scoped) => scoped.adapter.capabilities(scoped));
-
     readonly configureSession = async (options: SessionConfigureOptions): Promise<readonly SessionConfigOption[]> =>
         this.#operations.run(options, async (options) => {
             return await this.#executionProcesses.use(options.sessionId, async () => {
@@ -876,20 +872,12 @@ export class SessionManager {
             return started;
         });
 
-    readonly listNativeSessions = async (
-        options: SessionPrepareOptions,
-        cursor: string | null,
-    ): Promise<NativeSessionPage> =>
-        this.#operations.run(options, async (options) => {
-            return await options.adapter.listNativeSessions(options, cursor);
-        });
-
-    readonly previewNativeSessionEvents = async (
+    /** Coordinates native-reader conflicts without owning the harness query. */
+    readonly withNativeSessionOperation = async <Result>(
         options: SessionPrepareOptions,
         nativeSessionId: string,
-        eventLimit: number,
-        cursor: string | null,
-    ): Promise<SessionEventPage> =>
+        operation: (options: SessionPrepareOptions) => Promise<Result>,
+    ): Promise<Result> =>
         this.#operations.run(options, async (options) => {
             const key = `${options.agent.id}:${nativeSessionId}`;
             if (this.#nativeOperations.has(key)) {
@@ -902,12 +890,7 @@ export class SessionManager {
             this.#nativeOperations.add(key);
             this.#processes.notifyChanged();
             try {
-                return await options.adapter.previewSessionEvents(options, {
-                    nativeSessionId,
-                    eventLimit,
-                    cursor,
-                    sessionId: options.sessionId,
-                });
+                return await operation(options);
             } finally {
                 this.#nativeOperations.delete(key);
                 this.#processes.notifyChanged();
