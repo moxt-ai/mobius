@@ -1,14 +1,19 @@
 import { spawn } from "node:child_process";
 import { type FSWatcher, watch } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { afterEach, expect, it } from "vitest";
+import { WebSocketServer } from "ws";
 
 import { sendLocalRequest } from "../../src/daemon/control/local-client.ts";
-import { openMobiusControlInstallation } from "../../src/daemon/pairing/pair-local-machine.ts";
+import {
+    openMobiusCliInstallation,
+    openMobiusControlInstallation,
+} from "../../src/daemon/pairing/pair-local-machine.ts";
 import { installWorkspaceDaemonRelease } from "../support/installed-daemon-release.ts";
 
 const temporaryDirectories: string[] = [];
@@ -205,6 +210,90 @@ it("Given a managed daemon, When the user quits and removes its state, Then the 
         }
     }
 }, 90_000);
+
+it("Given a Relay that does not acknowledge closing, When the daemon stops, Then its worker exits without being killed", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mobius-worker-relay-close-"));
+    temporaryDirectories.push(directory);
+    const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: directory };
+    const catalogs = new Map<string, string>();
+    const relay = createServer((request, response) => {
+        const path = request.url ?? "/";
+        if (request.method === "PUT") {
+            let body = "";
+            request.setEncoding("utf8");
+            request.on("data", (chunk: string) => {
+                body += chunk;
+            });
+            request.on("end", () => {
+                catalogs.set(path, body);
+                response.writeHead(204).end();
+            });
+            return;
+        }
+        const catalog = catalogs.get(path);
+        if (catalog !== undefined) {
+            response.writeHead(200, { "content-type": "application/json" }).end(catalog);
+            return;
+        }
+        response.writeHead(404).end();
+    });
+    const sockets = new WebSocketServer({ server: relay });
+    const connected = Promise.withResolvers<void>();
+    sockets.on("connection", (socket, request) => {
+        socket.send(JSON.stringify({ kind: "runtime.liveness.ready" }), (error) => {
+            if (error !== undefined && error !== null) {
+                connected.reject(error);
+                return;
+            }
+            request.socket.pause();
+            connected.resolve();
+        });
+    });
+    await new Promise<void>((resolve_, reject) => {
+        relay.once("error", reject);
+        relay.listen(0, "127.0.0.1", resolve_);
+    });
+    const address = relay.address();
+    if (address === null || typeof address === "string") {
+        throw new Error("Relay did not bind a TCP port");
+    }
+    await installWorkspaceDaemonRelease(directory);
+    const installation = await openMobiusCliInstallation(AbortSignal.timeout(10_000), environment);
+    await installation.saveConnection(
+        {
+            appId: "app_relay_close",
+            channelId: "relay-close-channel",
+            runtimeId: "runtime_relay_close",
+            pairingId: "",
+            defaultWorkspace: directory,
+            relayOrigin: new URL(`http://127.0.0.1:${address.port}`),
+            runtimeCredential: "r".repeat(43),
+        },
+        AbortSignal.timeout(10_000),
+    );
+    try {
+        expect((await runCli(["start"], environment, AbortSignal.timeout(60_000))).code).toBe(0);
+        await connected.promise;
+        const control = await openMobiusControlInstallation(AbortSignal.timeout(10_000), environment);
+        const workerPid = Number(await readFile(join(control.stateDirectory, "worker.lock"), "utf8"));
+        expect((await runCli(["quit"], environment, AbortSignal.timeout(30_000))).code).toBe(0);
+        const entries = await readFile(join(control.stateDirectory, "logs", "worker-lifecycle.log"), "utf8");
+        const exit = entries
+            .split("\n")
+            .find((entry) => entry.includes('"kind":"worker_exited"') && entry.includes(`"pid":${workerPid}`));
+        expect(exit).toBeDefined();
+        expect(JSON.parse(exit?.slice(exit.indexOf("{")) ?? "{}")).toMatchObject({ exitCode: 0, signal: null });
+    } finally {
+        await runCli(["quit"], environment, AbortSignal.timeout(20_000)).catch(() => undefined);
+        for (const socket of sockets.clients) {
+            socket.terminate();
+        }
+        await new Promise<void>((resolve_) => sockets.close(() => resolve_()));
+        await new Promise<void>((resolve_, reject) => {
+            relay.close((error) => (error === undefined || error === null ? resolve_() : reject(error)));
+        });
+    }
+}, 120_000);
 
 it("Given a running daemon, When an unhandled rejection escapes inside its worker, Then the worker survives and the rejection is recorded", async () => {
     const directory = await mkdtemp(join(tmpdir(), "mobius-worker-unhandled-rejection-"));

@@ -1,4 +1,4 @@
-import { WebSocket } from "undici";
+import { type Dispatcher, WebSocket } from "undici";
 
 import { environmentProxyDispatcher } from "../../util/network/environment-proxy.ts";
 import { relayAuthorization } from "./relay-authentication.ts";
@@ -9,6 +9,12 @@ import { isRuntimeRelayRevocation, RuntimeRelayRevokedError } from "./runtime-re
 // A tight deadline made the daemon give up mid-accept, reconnect, and give up again, so allow enough room
 // for a large Project while still failing a genuinely dead Relay.
 const CONNECTION_TIMEOUT_MILLISECONDS = 60_000;
+
+export interface RelayConnection {
+    readonly socket: WebSocket;
+    /** Releases the underlying transport after the WebSocket close frame has been queued. */
+    readonly release: (reason: Error) => void;
+}
 
 class RelayConnectionError extends Error {
     readonly code: string;
@@ -27,17 +33,34 @@ class RelayConnectionError extends Error {
     }
 }
 
-export function connectRelay(url: URL, signal: AbortSignal): Promise<WebSocket> {
+export function connectRelay(url: URL, signal: AbortSignal): Promise<RelayConnection> {
     signal.throwIfAborted();
 
     return new Promise((resolve, reject) => {
+        let dispatchController: Dispatcher.DispatchController | undefined;
+        const dispatcher = environmentProxyDispatcher.compose((dispatch) => (options, handler) => {
+            const trackedHandler = Object.create(handler) as Dispatcher.DispatchHandler;
+            trackedHandler.onRequestStart = (controller, context): void => {
+                dispatchController = controller;
+                handler.onRequestStart?.(controller, context);
+            };
+            return dispatch(options, trackedHandler);
+        });
         const endpoint = new URL(url);
         const headers = relayAuthorization(endpoint);
         endpoint.searchParams.delete("token");
         const socket = new WebSocket(endpoint, {
-            dispatcher: environmentProxyDispatcher,
+            dispatcher,
             headers,
         });
+        let released = false;
+        const release = (reason: Error): void => {
+            if (released) {
+                return;
+            }
+            released = true;
+            dispatchController?.abort(reason);
+        };
         let finished = false;
         const timeout = setTimeout(onTimeout, CONNECTION_TIMEOUT_MILLISECONDS);
 
@@ -55,6 +78,7 @@ export function connectRelay(url: URL, signal: AbortSignal): Promise<WebSocket> 
             finished = true;
             cleanup();
             socket.close();
+            release(error);
             reject(error);
         };
         const onAbort = (): void => {
@@ -98,7 +122,7 @@ export function connectRelay(url: URL, signal: AbortSignal): Promise<WebSocket> 
             }
             finished = true;
             cleanup();
-            resolve(socket);
+            resolve({ release, socket });
         };
         function onTimeout(): void {
             fail(

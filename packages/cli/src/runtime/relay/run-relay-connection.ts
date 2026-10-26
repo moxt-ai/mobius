@@ -129,7 +129,8 @@ export async function runRelayConnection({
 }: RelayConnectionOptions): Promise<void> {
     const relayUrl = new URL(config.relayUrl);
     relayUrl.searchParams.set("liveness", "1");
-    const socket = await connectRelay(relayUrl, signal);
+    const relay = await connectRelay(relayUrl, signal);
+    const { socket } = relay;
     diagnostics.connectionOpened(connectionEpoch);
     const connectionController = new AbortController();
     const commands = createRuntimeCommandDispatcher({
@@ -318,5 +319,6 @@ export async function runRelayConnection({
     } finally {
         connectionController.abort();
         await commands.settle();
+        relay.release(new Error("Relay connection released"));
     }
 }
