@@ -21,6 +21,7 @@ export async function runManager(stateDirectory: string, signal: AbortSignal): P
     const shutdown = new AbortController();
     const combined = AbortSignal.any([signal, shutdown.signal]);
     const lifecycle = new WorkerLifecycleLog(stateDirectory);
+    const workerExits = new Set<Promise<void>>();
     let worker: WorkerProcess | undefined;
     let switchState: DaemonReleaseSwitchState | null = null;
     let queue: Promise<unknown> = Promise.resolve();
@@ -58,7 +59,7 @@ export async function runManager(stateDirectory: string, signal: AbortSignal): P
         if (pid !== null) {
             lifecycle.ready(pid, launch.version);
         }
-        void replacement.exited.then(async () => {
+        const exited = replacement.exited.then(async () => {
             // Wait for the stderr pipe to drain before freezing the tail into
             // the log; the restart below is not delayed by this.
             await replacement.streamsSettled;
@@ -82,6 +83,8 @@ export async function runManager(stateDirectory: string, signal: AbortSignal): P
                 }
             }
         });
+        workerExits.add(exited);
+        void exited.finally(() => workerExits.delete(exited));
     };
     const switchWorker = async (
         transition: Extract<DaemonReleaseSwitchState, { kind: "switching" }>,
@@ -167,7 +170,12 @@ export async function runManager(stateDirectory: string, signal: AbortSignal): P
                 }
                 case "ensure": {
                     const launch = await decodeWorkerLaunch(command.launch);
-                    if (!worker?.running || worker.launch.version !== launch.version) {
+                    if (
+                        !worker?.running ||
+                        worker.launch.version !== launch.version ||
+                        worker.launch.entry !== launch.entry ||
+                        worker.launch.executable !== launch.executable
+                    ) {
                         await start(launch);
                     }
                     await worker?.ready;
@@ -211,6 +219,9 @@ export async function runManager(stateDirectory: string, signal: AbortSignal): P
         shutdown.abort();
         await queue;
         await worker?.close();
+        // Exit observers drain output and write the final lifecycle entry. Keep
+        // ownership until they finish, before quit can report the manager gone.
+        await Promise.all(workerExits);
         rejectionGuard.release();
         await release();
     }

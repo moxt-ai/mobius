@@ -18,6 +18,7 @@ import {
     openMobiusControlInstallation,
 } from "../../src/daemon/pairing/pair-local-machine.ts";
 import { platformSupportFor } from "../../src/util/platform/index.ts";
+import { installWorkspaceDaemonRelease } from "../support/installed-daemon-release.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -36,6 +37,7 @@ describe("Mobius manager version compatibility", () => {
             const workspace = join(directory, "workspace");
             await mkdir(workspace);
             const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: join(directory, "state") };
+            await installWorkspaceDaemonRelease(environment.MOBIUS_STATE_DIRECTORY);
             const signal = AbortSignal.timeout(30_000);
             const installation = await openMobiusCliInstallation(signal, environment);
             const channelId = "channel_start_failure";
@@ -77,6 +79,7 @@ describe("Mobius manager version compatibility", () => {
         const stateRoot = await mkdtemp(join(tmpdir(), "mobius-manager-start-"));
         temporaryDirectories.push(stateRoot);
         const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: stateRoot };
+        await installWorkspaceDaemonRelease(stateRoot);
 
         try {
             const started = await runCli(["start"], environment, AbortSignal.timeout(60_000));
@@ -105,6 +108,7 @@ describe("Mobius manager version compatibility", () => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-worker-crash-"));
         temporaryDirectories.push(directory);
         const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: directory };
+        await installWorkspaceDaemonRelease(directory);
         const deadline = AbortSignal.timeout(60_000);
         try {
             expect((await runCli(["start"], environment, deadline)).code).toBe(0);
@@ -189,11 +193,17 @@ describe("Mobius manager version compatibility", () => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-worker-upgrade-"));
         temporaryDirectories.push(directory);
         const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: join(directory, "state") };
+        await installWorkspaceDaemonRelease(environment.MOBIUS_STATE_DIRECTORY);
         const deadline = AbortSignal.timeout(90_000);
         const release = join(directory, "release");
         await cp(resolve(import.meta.dirname, "../../src"), join(release, "src"), { recursive: true });
         await writeFile(join(release, "package.json"), JSON.stringify({ ...cliPackage, version: "0.0.227-test" }));
         await symlink(resolve(import.meta.dirname, "../../node_modules"), join(release, "node_modules"), "junction");
+        await installWorkspaceDaemonRelease(
+            environment.MOBIUS_STATE_DIRECTORY,
+            "0.0.227-test",
+            join(release, "src/cli/entrypoint.ts"),
+        );
         try {
             expect((await runCli(["start"], environment, deadline)).code).toBe(0);
             const control = await openMobiusControlInstallation(deadline, environment);
@@ -250,6 +260,7 @@ describe("Mobius manager version compatibility", () => {
         temporaryDirectories.push(directory);
         const stateRoot = join(directory, "state");
         const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: stateRoot };
+        await installWorkspaceDaemonRelease(stateRoot);
         const deadline = AbortSignal.timeout(90_000);
         const release = join(directory, "release");
         const nextVersion = "99.0.0";
@@ -257,6 +268,7 @@ describe("Mobius manager version compatibility", () => {
         await writeFile(join(release, "package.json"), JSON.stringify({ ...cliPackage, version: nextVersion }));
         await symlink(resolve(import.meta.dirname, "../../node_modules"), join(release, "node_modules"), "junction");
         const nextCli = join(release, "src/cli/entrypoint.ts");
+        await installWorkspaceDaemonRelease(stateRoot, nextVersion, nextCli);
         const pointer = join(stateRoot, "current-data.txt");
         try {
             const data = await openMobiusCliInstallation(deadline, environment);
@@ -300,6 +312,7 @@ describe("Mobius manager version compatibility", () => {
         const stateRoot = await mkdtemp(join(tmpdir(), "mobius-manager-quit-"));
         temporaryDirectories.push(stateRoot);
         const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: stateRoot };
+        await installWorkspaceDaemonRelease(stateRoot);
         const deadline = AbortSignal.timeout(60_000);
         let heldConnection: Socket | undefined;
         try {
@@ -331,6 +344,7 @@ describe("Mobius pairing lifecycle", () => {
         const workspace = join(stateRoot, "workspace");
         await Promise.all([mkdir(executableDirectory), mkdir(workspace)]);
         const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: stateRoot, PATH: executableDirectory };
+        await installWorkspaceDaemonRelease(stateRoot);
         const deadline = AbortSignal.timeout(60_000);
         const relay = await startRelay();
         const installation = await openMobiusCliInstallation(deadline, environment);

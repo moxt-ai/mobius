@@ -9,6 +9,7 @@ import { afterEach, expect, it } from "vitest";
 
 import { sendLocalRequest } from "../../src/daemon/control/local-client.ts";
 import { openMobiusControlInstallation } from "../../src/daemon/pairing/pair-local-machine.ts";
+import { installWorkspaceDaemonRelease } from "../support/installed-daemon-release.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -152,6 +153,7 @@ it("Given a running daemon, When its worker is killed by an unhandled signal, Th
     const directory = await mkdtemp(join(tmpdir(), "mobius-worker-lifecycle-"));
     temporaryDirectories.push(directory);
     const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: directory };
+    await installWorkspaceDaemonRelease(directory);
     const deadline = AbortSignal.timeout(60_000);
     try {
         expect((await runCli(["start"], environment, deadline)).code).toBe(0);
@@ -175,10 +177,40 @@ it("Given a running daemon, When its worker is killed by an unhandled signal, Th
     }
 }, 90_000);
 
+it("Given a managed daemon, When the user quits and removes its state, Then the final worker exit is recorded before quit completes", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mobius-worker-quit-drain-"));
+    temporaryDirectories.push(directory);
+    const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: directory };
+    await installWorkspaceDaemonRelease(directory);
+    const deadline = AbortSignal.timeout(60_000);
+    let removed = false;
+    try {
+        expect((await runCli(["start"], environment, deadline)).code).toBe(0);
+        const control = await openMobiusControlInstallation(deadline, environment);
+        const workerPid = Number(await readFile(join(control.stateDirectory, "worker.lock"), "utf8"));
+        expect((await runCli(["quit"], environment, deadline)).code).toBe(0);
+        const entries = (await readFile(join(control.stateDirectory, "logs", "worker-lifecycle.log"), "utf8")).split(
+            "\n",
+        );
+        expect(
+            entries.some((entry) => entry.includes('"kind":"worker_exited"') && entry.includes(`"pid":${workerPid}`)),
+        ).toBe(true);
+        await rm(directory, { recursive: true });
+        removed = true;
+        await expect(readFile(join(control.stateDirectory, "manager.lock"))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+        // Do not run quit after removal: opening the installation would recreate it.
+        if (!removed) {
+            await runCli(["quit"], environment, AbortSignal.timeout(20_000)).catch(() => undefined);
+        }
+    }
+}, 90_000);
+
 it("Given a running daemon, When an unhandled rejection escapes inside its worker, Then the worker survives and the rejection is recorded", async () => {
     const directory = await mkdtemp(join(tmpdir(), "mobius-worker-unhandled-rejection-"));
     temporaryDirectories.push(directory);
     const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: directory };
+    await installWorkspaceDaemonRelease(directory);
     const deadline = AbortSignal.timeout(60_000);
     try {
         expect((await runCli(["start"], environment, deadline)).code).toBe(0);
@@ -231,6 +263,7 @@ it("Given a state directory whose logs path is a regular file, When the manager 
     const directory = await mkdtemp(join(tmpdir(), "mobius-lifecycle-init-"));
     temporaryDirectories.push(directory);
     const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: directory };
+    await installWorkspaceDaemonRelease(directory);
     const deadline = AbortSignal.timeout(60_000);
     try {
         // The lifecycle log constructor must tolerate this: a file where the
@@ -258,6 +291,7 @@ it("Given a manager, When an ensured worker prints noise then dies before readin
     const directory = await mkdtemp(join(tmpdir(), "mobius-worker-stderr-tail-"));
     temporaryDirectories.push(directory);
     const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: directory };
+    await installWorkspaceDaemonRelease(directory);
     const deadline = AbortSignal.timeout(60_000);
     try {
         expect((await runCli(["start"], environment, deadline)).code).toBe(0);
@@ -304,6 +338,7 @@ it("Given a running daemon with an unwritable lifecycle log, When its worker is 
     const directory = await mkdtemp(join(tmpdir(), "mobius-worker-unwritable-"));
     temporaryDirectories.push(directory);
     const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: directory };
+    await installWorkspaceDaemonRelease(directory);
     const deadline = AbortSignal.timeout(60_000);
     let logsDirectory = "";
     try {

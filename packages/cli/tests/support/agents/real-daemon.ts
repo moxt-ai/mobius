@@ -28,6 +28,7 @@ import {
 import { createRuntimeConfig, RuntimeLocalContext } from "../../../src/runtime/config.ts";
 import { runRuntime } from "../../../src/runtime/run.ts";
 import { systemTimer, type Timer } from "../../../src/util/timer.ts";
+import { installWorkspaceDaemonRelease } from "../installed-daemon-release.ts";
 
 export interface RealDaemonPeer {
     readonly restart: (mode?: "crash") => Promise<void>;
@@ -152,6 +153,7 @@ export async function withRealDaemon(
             new RuntimeLocalContext(directory, { ...process.env, ...environment }),
         );
         if (launch === "managed") {
+            await installWorkspaceDaemonRelease(directory);
             const installation = await openMobiusCliInstallation(signal, cliEnvironment);
             await installation.saveConnection(
                 {
