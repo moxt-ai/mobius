@@ -1,5 +1,5 @@
 import { setImmediate as yieldToRuntime } from "node:timers/promises";
-import type { SessionNotification } from "@agentclientprotocol/sdk";
+import type { SessionNotification, SessionUpdate } from "@agentclientprotocol/sdk";
 import {
     type AcpSessionUpdate,
     decodeAcpSessionUpdate,
@@ -14,6 +14,31 @@ import { AgentUpdateStream } from "../connection/agent-update-stream.ts";
 import type { AcpClientHandler } from "../connection/create-client.ts";
 import type { AcpContentExternalizer } from "../content/content-externalizer.ts";
 import { sessionConfigProtocolForAgent } from "../protocol/session-config-protocol.ts";
+
+// The event wire schema limits text to one million UTF-16 code units.
+const MAXIMUM_REASONING_UPDATE_CHARACTERS = 1_000_000;
+
+function* reasoningWireUpdates(update: SessionUpdate): Generator<SessionUpdate> {
+    if (
+        update.sessionUpdate !== "agent_thought_chunk" ||
+        update.content.type !== "text" ||
+        update.content.text.length <= MAXIMUM_REASONING_UPDATE_CHARACTERS
+    ) {
+        yield update;
+        return;
+    }
+    const text = update.content.text;
+    for (let start = 0; start < text.length; ) {
+        let end = Math.min(start + MAXIMUM_REASONING_UPDATE_CHARACTERS, text.length);
+        const last = text.charCodeAt(end - 1);
+        const next = text.charCodeAt(end);
+        if (last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
+            end -= 1;
+        }
+        yield { ...update, content: { ...update.content, text: text.slice(start, end) } };
+        start = end;
+    }
+}
 
 type SessionInfoChange =
     | { readonly kind: "title"; readonly value: string }
@@ -67,61 +92,63 @@ export class AdapterSessionConnection {
                 throw new AcpExecutionError("ACP agent referenced an unknown session", {}, "invalid_agent_session");
             }
             const signal = AbortSignal.any([this.#lifetime.signal, AbortSignal.timeout(30_000)]);
-            const externalized = await externalizer.update(options.sessionId(), notification.update, signal);
-            signal.throwIfAborted();
-            const update = externalized.agent;
-            const payload = decodeAcpSessionUpdate(JSON.stringify(normalizeEvent(externalized.event)));
-            let event: AdapterSessionEvent;
-            switch (update.sessionUpdate) {
-                case "available_commands_update":
-                    event = {
-                        kind: "commands",
-                        payload,
-                        commands: update.availableCommands
-                            .slice(0, 500)
-                            .map((command) => ({
-                                description: truncate(command.description, 500),
-                                inputHint: truncate(command.input?.hint ?? "", 255),
-                                name: truncate(command.name, 128),
-                            }))
-                            .filter((command) => command.name.length > 0),
-                    };
-                    break;
-                case "config_option_update":
-                    event = {
-                        kind: "configuration",
-                        payload,
-                        configOptions: protocol.normalizeUpdate(options.configOptions(), update.configOptions),
-                    };
-                    break;
-                case "current_mode_update":
-                    event = { kind: "mode", payload, modeId: update.currentModeId };
-                    break;
-                case "session_info_update": {
-                    const changes: SessionInfoChange[] = [];
-                    if (Object.hasOwn(update, "title")) {
-                        changes.push({ kind: "title", value: truncate(update.title ?? "", 500) });
+            for (const incoming of reasoningWireUpdates(notification.update)) {
+                const externalized = await externalizer.update(options.sessionId(), incoming, signal);
+                signal.throwIfAborted();
+                const update = externalized.agent;
+                const payload = decodeAcpSessionUpdate(JSON.stringify(normalizeEvent(externalized.event)));
+                let event: AdapterSessionEvent;
+                switch (update.sessionUpdate) {
+                    case "available_commands_update":
+                        event = {
+                            kind: "commands",
+                            payload,
+                            commands: update.availableCommands
+                                .slice(0, 500)
+                                .map((command) => ({
+                                    description: truncate(command.description, 500),
+                                    inputHint: truncate(command.input?.hint ?? "", 255),
+                                    name: truncate(command.name, 128),
+                                }))
+                                .filter((command) => command.name.length > 0),
+                        };
+                        break;
+                    case "config_option_update":
+                        event = {
+                            kind: "configuration",
+                            payload,
+                            configOptions: protocol.normalizeUpdate(options.configOptions(), update.configOptions),
+                        };
+                        break;
+                    case "current_mode_update":
+                        event = { kind: "mode", payload, modeId: update.currentModeId };
+                        break;
+                    case "session_info_update": {
+                        const changes: SessionInfoChange[] = [];
+                        if (Object.hasOwn(update, "title")) {
+                            changes.push({ kind: "title", value: truncate(update.title ?? "", 500) });
+                        }
+                        if (Object.hasOwn(update, "updatedAt")) {
+                            changes.push({ kind: "updated-at", value: truncate(update.updatedAt ?? "", 128) });
+                        }
+                        event = { kind: "info", payload, changes };
+                        break;
                     }
-                    if (Object.hasOwn(update, "updatedAt")) {
-                        changes.push({ kind: "updated-at", value: truncate(update.updatedAt ?? "", 128) });
-                    }
-                    event = { kind: "info", payload, changes };
-                    break;
+                    case "user_message_chunk":
+                    case "agent_message_chunk":
+                    case "agent_thought_chunk":
+                    case "tool_call":
+                    case "tool_call_update":
+                    case "plan":
+                    case "plan_update":
+                    case "plan_removed":
+                        event = { kind: "content", payload };
+                        break;
+                    default:
+                        event = { kind: "other", payload };
                 }
-                case "user_message_chunk":
-                case "agent_message_chunk":
-                case "agent_thought_chunk":
-                case "tool_call":
-                case "tool_call_update":
-                case "plan":
-                case "plan_update":
-                case "plan_removed":
-                    event = { kind: "content", payload };
-                    break;
-                default:
-                    event = { kind: "other", payload };
+                await options.onEvent(event);
             }
-            await options.onEvent(event);
         });
         this.events = this.#updates;
         const client: AcpClientHandler = {

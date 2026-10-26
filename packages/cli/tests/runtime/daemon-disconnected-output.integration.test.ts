@@ -347,6 +347,30 @@ afterEach(() => vi.useRealTimers());
 
 test.each([
     {
+        label: "a single reasoning block above the wire string limit",
+        chunks: ["r".repeat(1_000_001)],
+        expected: "r".repeat(24 * 1024),
+        meta: { truncated: true },
+    },
+    {
+        label: "an oversized reasoning block with a surrogate pair at the split boundary",
+        chunks: [`${"r".repeat(999_999)}\u{1f600}${"z".repeat(24 * 1024 - 4)}`],
+        expected: `\u{1f600}${"z".repeat(24 * 1024 - 4)}`,
+        meta: { truncated: true },
+    },
+    {
+        label: "a multibyte reasoning block above the wire string limit",
+        chunks: ["\u601d".repeat(1_000_001)],
+        expected: "\u601d".repeat(8_192),
+        meta: { truncated: true },
+    },
+    {
+        label: "a single reasoning block exactly at the wire string limit",
+        chunks: ["r".repeat(1_000_000)],
+        expected: "r".repeat(24 * 1024),
+        meta: { truncated: true },
+    },
+    {
         label: "short chunks around oversized reasoning",
         chunks: ["short prefix ", `discarded${"r".repeat(24 * 1024)}`, " short suffix"],
         expected: `${"r".repeat(24 * 1024 - " short suffix".length)} short suffix`,
@@ -428,15 +452,21 @@ test.each([
                     }),
                 }),
             );
+            const liveThoughts = runtime.initial.events.flatMap((event) =>
+                event.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk" ? [event.payload] : [],
+            );
             expect(
-                runtime.initial.events
-                    .flatMap((event) =>
-                        event.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk"
-                            ? [event.payload]
-                            : [],
-                    )
-                    .map((thought) => ({ content: thought.content, meta: thought.meta })),
-            ).toEqual(chunks.map((text) => ({ content: { type: "text", text }, meta: undefined })));
+                liveThoughts.map((thought) => (thought.content.type === "text" ? thought.content.text : "")).join(""),
+            ).toBe(chunks.join(""));
+            for (const thought of liveThoughts) {
+                expect(thought.meta).toBeUndefined();
+                if (thought.content.type !== "text") {
+                    throw new Error("Expected text reasoning");
+                }
+                expect(thought.content.text.length).toBeLessThanOrEqual(1_000_000);
+                expect(thought.content.text).not.toContain("\ufffd");
+                expect(thought.content.text.isWellFormed()).toBe(true);
+            }
             break;
         }
         turn.finish();
