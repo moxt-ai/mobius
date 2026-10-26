@@ -9,7 +9,6 @@ import {
 } from "@agentclientprotocol/sdk";
 import { z } from "zod";
 import { captureProcessTree, type ProcessTreeIdentity, stopProcessTree } from "../../../util/process/executable.ts";
-import { AcpExecutionError } from "../../acp-error.ts";
 import type {
     AcpEndpointTermination,
     InProcessAcpEndpoint,
@@ -17,16 +16,14 @@ import type {
 } from "../../agent/in-process-endpoint.ts";
 import { CodexAppServerClient } from "./app-server-client.ts";
 import {
-    CODEX_HISTORY_TURN_PAGE_LIMIT,
     threadForkResponseSchema,
     threadListResponseSchema,
     threadResumeResponseSchema,
     threadStartResponseSchema,
-    threadTurnsPageSchema,
 } from "./app-server-protocol.ts";
 import { CodexBorrowedAcpAgent } from "./borrowed-agent.ts";
-import { decodeThreadItem, toolCallUpdate } from "./items.ts";
-import { agentMessageUpdate, CodexOwnedAcpAgent } from "./owned-agent.ts";
+import { replayCodexHistory } from "./history.ts";
+import { CodexOwnedAcpAgent } from "./owned-agent.ts";
 import type { CodexSessionAgent } from "./session-agent.ts";
 import { CodexSettings } from "./settings.ts";
 
@@ -331,91 +328,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
     // ACP load requires chronological replay. Resume only restores execution;
     // native pages supply history without a single full-transcript response.
     readonly #replaySavedHistory = async (signal: AbortSignal): Promise<void> => {
-        const deadline = AbortSignal.any([signal, AbortSignal.timeout(60_000)]);
-        const seenCursors = new Set<string>();
-        let cursor: string | null = null;
-        for (;;) {
-            deadline.throwIfAborted();
-            const page = threadTurnsPageSchema.parse(
-                await this.#appServer.request(
-                    "thread/turns/list",
-                    {
-                        threadId: this.#nativeSessionId,
-                        limit: CODEX_HISTORY_TURN_PAGE_LIMIT,
-                        sortDirection: "asc",
-                        itemsView: "full",
-                        ...(cursor === null ? {} : { cursor }),
-                    },
-                    deadline,
-                ),
-            );
-            await this.#replayHistory(page.data, deadline);
-            if (page.nextCursor == null) {
-                return;
-            }
-            if (page.data.length === 0 || seenCursors.has(page.nextCursor)) {
-                throw new AcpExecutionError(
-                    "Codex repeated a history page cursor",
-                    {},
-                    "invalid_native_session_response",
-                );
-            }
-            seenCursors.add(page.nextCursor);
-            cursor = page.nextCursor;
-        }
-    };
-
-    readonly #replayHistory = async (
-        turns: readonly { readonly items: readonly unknown[] }[],
-        signal: AbortSignal,
-    ): Promise<void> => {
-        for (const turn of turns) {
-            for (const rawItem of turn.items) {
-                signal.throwIfAborted();
-                const item = decodeThreadItem(rawItem);
-                if (item === null) {
-                    continue;
-                }
-                if (item.type === "userMessage") {
-                    const text = item.content
-                        .flatMap((content) => {
-                            if (typeof content !== "object" || content === null) {
-                                return [];
-                            }
-                            const type = Reflect.get(content, "type");
-                            const text = Reflect.get(content, "text");
-                            return type === "text" && typeof text === "string" ? [text] : [];
-                        })
-                        .join("");
-                    if (text.length > 0) {
-                        await this.#emit({
-                            content: { text, type: "text" },
-                            messageId: item.id,
-                            sessionUpdate: "user_message_chunk",
-                        });
-                    }
-                    continue;
-                }
-                if (item.type === "agentMessage") {
-                    await this.#emit(agentMessageUpdate(item.id, item.text));
-                    continue;
-                }
-                if (item.type === "contextCompaction") {
-                    // Replay settles the persisted compaction as completed — its
-                    // summary (if any) is not part of the turn items surface.
-                    await this.#emit({
-                        compactionId: item.id,
-                        sessionUpdate: "compaction_update",
-                        status: "completed",
-                    });
-                    continue;
-                }
-                const update = toolCallUpdate(item, "snapshot");
-                if (update !== null) {
-                    await this.#emit({ ...update, sessionUpdate: "tool_call" });
-                }
-            }
-        }
+        await replayCodexHistory(this.#appServer, this.#nativeSessionId, this.#emit, signal);
     };
 
     /** Announces the manual compact command after every session entry point —

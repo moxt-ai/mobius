@@ -279,6 +279,7 @@ export const threadStartResponseSchema = z.object({
 const threadTurnSchema = z.object({
     id: boundedText(256).optional(),
     status: turnStatusSchema.optional(),
+    error: z.object({ message: z.string().transform((message) => message.slice(0, 4_096)) }).nullish(),
     items: z.array(z.unknown()).max(100_000),
 });
 const threadTurnsSchema = z.array(threadTurnSchema).max(100_000);
