@@ -1,9 +1,10 @@
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+    decodeDaemonToServiceMessage,
     decodeNativeSessionResult,
     encodeNativeSessionCommand,
     encodeSessionCloseCommand,
@@ -18,7 +19,7 @@ import {
 import { expect, test, vi } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
-import { RuntimeLocalContext } from "../../src/runtime/config.ts";
+import { type RuntimeConfig, RuntimeLocalContext } from "../../src/runtime/config.ts";
 import { runRuntime } from "../../src/runtime/run.ts";
 import { fakeAgentHarness } from "../support/agent-harness.ts";
 import { createControlledRuntimeConfig } from "../support/controlled-runtime-config.ts";
@@ -120,7 +121,88 @@ test("Given native history, When it is imported, reopened and forked, Then execu
     }
 });
 
-async function runtimePeer(signal: AbortSignal) {
+// @no-uc: Technical regression; concurrent native openings must reject a destination identity collision.
+test.for(["import", "fork"] as const)(
+    "Given separate Agents, When concurrent native %s commands resolve one destination, Then only its owner succeeds",
+    async (action, { signal }) => {
+        const barrier = new EventEmitter();
+        const resolutions = new Map<string, number>();
+        let competing = false;
+        let waiting = 0;
+        const peer = await runtimePeer(signal, async (agent, resolveSignal) => {
+            if (competing) {
+                const count = (resolutions.get(agent.id) ?? 0) + 1;
+                resolutions.set(agent.id, count);
+                if (count === 2) {
+                    const released = once(barrier, "resolved", { signal: resolveSignal });
+                    waiting += 1;
+                    if (waiting === 2) {
+                        barrier.emit("resolved");
+                    }
+                    await released;
+                }
+            }
+            return agent;
+        });
+        try {
+            peer.send(
+                encodeSessionPrepareCommand({ ...peer.base("seed"), kind: "session.prepare", requestId: "seed" }),
+            );
+            await peer.next("seed", ["session.ready"]);
+            await peer.prompt("seed", "seed-history");
+            await peer.restart("competing-runtime");
+            const candidates: { agentId: string; entryId: string }[] = [];
+            for (const agentId of ["codex", "other-codex"]) {
+                const requestId = `list-${agentId}`;
+                peer.send(
+                    encodeNativeSessionCommand({
+                        ...peer.base(`discovery-${agentId}`, agentId),
+                        kind: NATIVE_SESSION_REQUEST_KIND,
+                        requestId,
+                        action: "list",
+                        cursor: null,
+                    }),
+                );
+                const result = decodeNativeSessionResult(await peer.next(requestId, ["native.session.result"]));
+                if (result.action !== "list" || result.entries[0] === undefined) {
+                    throw new Error("Expected native history for each Agent");
+                }
+                candidates.push({ agentId, entryId: result.entries[0].entryId });
+            }
+            competing = true;
+            const outcomes = await Promise.all(
+                candidates.map(async ({ agentId, entryId }) => {
+                    const requestId = `open-${agentId}`;
+                    peer.send(
+                        encodeNativeSessionCommand({
+                            ...peer.base(`discovery-${agentId}`, agentId),
+                            kind: NATIVE_SESSION_REQUEST_KIND,
+                            requestId,
+                            action,
+                            entryId,
+                            targetSessionId: "shared-destination",
+                        }),
+                    );
+                    const frame = await peer.next(requestId, ["native.session.result", "session.operation.failed"]);
+                    return { agentId, result: decodeDaemonToServiceMessage(frame) };
+                }),
+            );
+            expect(outcomes.filter(({ result }) => result.kind === "native.session.result")).toHaveLength(1);
+            expect(outcomes.filter(({ result }) => result.kind === "session.operation.failed")).toEqual([
+                expect.objectContaining({ result: expect.objectContaining({ code: "session_identity_mismatch" }) }),
+            ]);
+            const winner = outcomes.find(({ result }) => result.kind === "native.session.result");
+            if (winner === undefined) {
+                throw new Error("Expected one destination owner");
+            }
+            await peer.prompt("shared-destination", "owner-continues", winner.agentId);
+        } finally {
+            await peer.close();
+        }
+    },
+);
+
+async function runtimePeer(signal: AbortSignal, resolveAgent?: RuntimeConfig["resolveAgent"]) {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-10-26T00:00:00Z"));
     const directory = await mkdtemp(join(tmpdir(), "mobius-session-environment-"));
@@ -148,18 +230,21 @@ await import(${JSON.stringify(agentPeer)});
 `,
     );
     const external = fakeAgentHarness({ id: "codex", label: "Controlled ACP" }, harnessState);
-    const agent = new LocalAgentDefinition(
-        external.id,
-        external.label,
-        process.execPath,
-        [launcher],
-        external.environment,
-        external.adapterVersion,
-        external.agentVersion,
-        undefined,
-        undefined,
-        external.capabilities,
-    );
+    const createAgent = (id: string) =>
+        new LocalAgentDefinition(
+            id,
+            external.label,
+            process.execPath,
+            [launcher],
+            external.environment,
+            external.adapterVersion,
+            external.agentVersion,
+            undefined,
+            undefined,
+            external.capabilities,
+        );
+    const agent = createAgent("codex");
+    const otherAgent = createAgent("other-codex");
     const relay = createServer((_request, response) => response.writeHead(204).end());
     const server = new WebSocketServer({ server: relay });
     const frames: string[] = [];
@@ -196,8 +281,10 @@ await import(${JSON.stringify(agentPeer)});
                     `ws://127.0.0.1:${address.port}/mobius/api/v1/runtimes/connect?token=${"r".repeat(43)}`,
                 ),
             },
-            [agent],
+            [agent, otherAgent],
             new RuntimeLocalContext(join(directory, "runtime"), process.env),
+            null,
+            resolveAgent,
         ),
         sessionEnvironment: ({ sessionId }: { sessionId: string; agentId: string }) => ({
             MOBIUS_TEST_SESSION_CONTEXT: sessionId,
@@ -222,7 +309,7 @@ await import(${JSON.stringify(agentPeer)});
             if (!addressed) {
                 return false;
             }
-            if (value.kind.endsWith(".failed")) {
+            if (value.kind.endsWith(".failed") && !kinds.includes(value.kind)) {
                 throw new Error(frame);
             }
             return (
@@ -265,9 +352,9 @@ await import(${JSON.stringify(agentPeer)});
         }
         socket.send(frame);
     };
-    const base = (sessionId: string) => ({
+    const base = (sessionId: string, agentId = "codex") => ({
         additionalDirectoryIds: [],
-        agentId: "codex",
+        agentId,
         bindingId: config.bindingId,
         directoryId: "default",
         sessionId,
@@ -296,10 +383,10 @@ await import(${JSON.stringify(agentPeer)});
         send,
         launches: () => readContexts(launches),
         nativeRequests: () => readContexts(nativeRequests),
-        prompt: async (sessionId: string, commandId: string) => {
+        prompt: async (sessionId: string, commandId: string, agentId = "codex") => {
             send(
                 encodeSessionPromptCommand({
-                    ...base(sessionId),
+                    ...base(sessionId, agentId),
                     kind: "session.prompt",
                     commandId,
                     disposition: SessionPromptDisposition.Reject,

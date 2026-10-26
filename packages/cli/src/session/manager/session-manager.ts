@@ -984,6 +984,7 @@ export class SessionManager {
                     }
                 });
             }
+            const target = await this.#nativeTargetOptions(options, options.sessionId, resolveAgent);
             if (
                 this.#executionProcesses.get(options.sessionId) !== undefined ||
                 this.#executionProcesses.pending(options.sessionId) !== undefined ||
@@ -998,7 +999,6 @@ export class SessionManager {
             return await this.#executionProcesses.use(options.sessionId, async () => {
                 this.#nativeOperations.add(key);
                 try {
-                    const target = await this.#nativeTargetOptions(options, options.sessionId, resolveAgent);
                     const runtime = await this.#startPreparation({ ...target, origin }, { kind: "interactive-only" });
                     const openedKey = `${options.agent.id}:${runtime.nativeSessionId()}`;
                     this.#nativeOperations.add(openedKey);
