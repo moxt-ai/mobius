@@ -76,13 +76,12 @@ export interface RuntimeConnectionConfig {
 
 export function createRuntimeConfig(
     connection: RuntimeConnectionConfig,
-    agents: readonly CatalogAgent[] | RuntimeAgentDependencies = [],
+    dependencies: RuntimeAgentDependencies = new RuntimeAgentDependencies([]),
     localContext: RuntimeLocalContext = new RuntimeLocalContext(readStateDirectory(), process.env),
     reconnectTarget: RuntimeReconnectTarget | null = null,
     resolveAgent?: RuntimeConfig["resolveAgent"],
     rediscoverAgents?: RuntimeConfig["rediscoverAgents"],
 ): RuntimeConfig {
-    const dependencies = agents instanceof RuntimeAgentDependencies ? agents : new RuntimeAgentDependencies(agents);
     const runtimeAgents = dependencies.agents.map((agent) => withRuntimeEnvironment(agent, localContext.environment));
     return {
         adapters: dependencies.adapters,

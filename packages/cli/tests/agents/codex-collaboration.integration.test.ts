@@ -22,6 +22,7 @@ import { expect, test } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { InProcessAcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { CodexAcpAgent } from "../../src/acp/harness/codex/agent.ts";
+import { RuntimeAgentDependencies } from "../../src/agent/runtime-agents.ts";
 import { createRuntimeConfig, RuntimeLocalContext } from "../../src/runtime/config.ts";
 import { runRuntime } from "../../src/runtime/run.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
@@ -98,7 +99,7 @@ test("Given real Codex dispatches and waits for a subagent, When the turn runs t
     );
     const config = createRuntimeConfig(
         { channelId: "real-codex-collaboration", defaultWorkspace: workspace, relayUrl },
-        [agent],
+        new RuntimeAgentDependencies([agent]),
         new RuntimeLocalContext(stateDirectory),
     );
     const cancellation = new AbortController();
