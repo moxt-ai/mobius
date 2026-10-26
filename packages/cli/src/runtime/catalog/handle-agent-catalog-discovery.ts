@@ -77,7 +77,9 @@ export function createAgentCatalogDiscoveryHandler(dependencies: CatalogDiscover
             try {
                 const readyAgents = await discover(operationSignal);
                 operationSignal.throwIfAborted();
-                await transitionAndPublishCatalog(
+                // The published snapshot answers the command: a concurrent resolver swap that
+                // commits after this publication describes its own reply, not this one.
+                const published = await transitionAndPublishCatalog(
                     config,
                     () => readyAgents.map((agent) => withRuntimeEnvironment(agent, config.localContext.environment)),
                     publishAgentCatalog,
@@ -90,7 +92,7 @@ export function createAgentCatalogDiscoveryHandler(dependencies: CatalogDiscover
                         socket,
                         discoveredEvent(
                             command,
-                            config.catalog.read().agents.map((agent) => ({
+                            published.agents.map((agent) => ({
                                 agentVersion: agent.agentVersion,
                                 id: agent.id,
                                 label: agent.label,

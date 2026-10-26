@@ -21,6 +21,8 @@ class BrowserWebSocket extends EventTarget implements WebSocket {
     readonly subscriptionIds: string[] = [];
     readonly requestBodies: string[] = [];
     readonly responseBody: string;
+    /** While pending, incoming requests are held instead of answered, like a slow server. */
+    requestGate: Promise<unknown> | null = null;
     readonly url: string;
     closedWith: { readonly code: number; readonly reason: string } | null = null;
 
@@ -76,17 +78,20 @@ class BrowserWebSocket extends EventTarget implements WebSocket {
         }
         this.requestBodies.push(value.body);
         queueMicrotask(() => {
-            this.dispatchEvent(
-                new MessageEvent("message", {
-                    data: JSON.stringify({
-                        body: this.responseBody,
-                        headers: [],
-                        kind: "http.response",
-                        requestId,
-                        status: 204,
+            void (async () => {
+                await this.requestGate;
+                this.dispatchEvent(
+                    new MessageEvent("message", {
+                        data: JSON.stringify({
+                            body: this.responseBody,
+                            headers: [],
+                            kind: "http.response",
+                            requestId,
+                            status: 204,
+                        }),
                     }),
-                }),
-            );
+                );
+            })();
         });
     };
 }
@@ -153,6 +158,39 @@ it("Given an idle browser transport, When its connection expires, Then it closes
     });
     expect((await transport.fetch(new Request("https://relay.example.test/second"))).status).toBe(204);
     expect(connector.sockets).toHaveLength(2);
+
+    transport.close();
+});
+
+it("Given a request is still awaiting its answer, When the idle deadline passes, Then the transport stays connected until the request completes", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "clearTimeout", "setTimeout"] });
+    vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+    const connector = new BrowserWebSocketConnector();
+    const transport = new WsTransport({ connector, idleTimeoutMilliseconds: 1_000 });
+
+    // The server holds the answer, like an Agent catalog discovery that probes slow Agents.
+    const gate = Promise.withResolvers<void>();
+    const pending = transport.fetch(new Request("https://relay.example.test/slow", { method: "POST", body: "{}" }));
+    const socket = connector.sockets[0];
+    if (socket === undefined) {
+        throw new Error("The transport did not connect");
+    }
+    socket.requestGate = gate.promise;
+    await vi.advanceTimersByTimeAsync(0);
+    // Far past the idle deadline the request is still unanswered.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(connector.sockets[0]?.closedWith).toBeNull();
+
+    gate.resolve();
+    const response = await pending;
+    expect(response.status).toBe(204);
+
+    // Once no request is pending, the idle deadline applies again.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(connector.sockets[0]?.closedWith).toEqual({
+        code: 4000,
+        reason: "Mobius transport idle timeout",
+    });
 
     transport.close();
 });

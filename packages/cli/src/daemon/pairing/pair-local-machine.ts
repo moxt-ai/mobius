@@ -5,9 +5,9 @@ import { fetch, type Response } from "undici";
 import packageMetadata from "../../../package.json" with { type: "json" };
 import type { CatalogAgent } from "../../agent/catalog.ts";
 import { discoverLocalAgentInventory, type LocalAgentInventory } from "../../agent/discovery/discover-local-agents.ts";
+import { createCatalogUpdateLock } from "../../runtime/catalog/catalog-update-lock.ts";
 import { publishAgentCatalog } from "../../runtime/catalog/publish-agent-catalog.ts";
 import { createCatalogAgentResolver } from "../../runtime/catalog/resolve-catalog-agent.ts";
-import { createCatalogUpdateLock } from "../../runtime/catalog/catalog-update-lock.ts";
 import {
     createRuntimeConfig,
     loadDefaultWorkspace,

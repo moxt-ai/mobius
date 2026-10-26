@@ -1,4 +1,4 @@
-import type { CatalogAgent } from "../../agent/catalog.ts";
+import type { CatalogAgent, LocalAgentCatalogSnapshot } from "../../agent/catalog.ts";
 import type { RuntimeConfig } from "../config.ts";
 import type { CatalogUpdateLock } from "./catalog-update-lock.ts";
 
@@ -9,7 +9,8 @@ type PublishCatalog = (config: RuntimeConfig, signal: AbortSignal) => Promise<vo
  * The next snapshot is built from the catalog state the section itself reads, and a failed
  * publication rolls back to that same state; sharing one lock across every catalog writer
  * means the rollback can never overwrite a concurrent update that published after this
- * section started.
+ * section started. The returned snapshot is the one this section published, so callers
+ * describe their own result rather than whatever the shared catalog holds when they resume.
  */
 export async function transitionAndPublishCatalog(
     config: RuntimeConfig,
@@ -17,20 +18,20 @@ export async function transitionAndPublishCatalog(
     publish: PublishCatalog,
     signal: AbortSignal,
     lock?: CatalogUpdateLock,
-): Promise<void> {
-    const critical = async (): Promise<void> => {
+): Promise<LocalAgentCatalogSnapshot> {
+    const critical = async (): Promise<LocalAgentCatalogSnapshot> => {
         const previous = config.catalog.read();
-        config.catalog.transition(build(previous.agents));
+        const next = config.catalog.transition(build(previous.agents));
         try {
             await publish(config, signal);
         } catch (error) {
             config.catalog.transition(previous.agents);
             throw error;
         }
+        return next;
     };
     if (lock === undefined) {
-        await critical();
-        return;
+        return await critical();
     }
-    await lock(critical);
+    return (await lock(critical)) as LocalAgentCatalogSnapshot;
 }

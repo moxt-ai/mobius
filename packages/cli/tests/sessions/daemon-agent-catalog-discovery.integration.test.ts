@@ -504,3 +504,122 @@ test("Given a full catalog discovery is publishing, When the per-Agent resolver 
         await rm(stateDirectory, { force: true, recursive: true });
     }
 });
+
+test("Given a full catalog discovery has published, When a queued per-Agent resolver swap commits before the discovery answers, Then the reply still describes the snapshot the discovery published", {
+    timeout: 120_000,
+}, async () => {
+    const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-agent-catalog-reply-"));
+    const workspace = join(stateDirectory, "workspace");
+    const binDirectory = join(stateDirectory, "bin");
+    const firstLauncher = join(stateDirectory, "controlled-acp-v1");
+    const secondLauncher = join(stateDirectory, "controlled-acp-v2");
+    await Promise.all([
+        mkdir(workspace),
+        mkdir(binDirectory),
+        writeFile(firstLauncher, launcherSource("1.0.0"), { mode: 0o700 }),
+        writeFile(secondLauncher, launcherSource("1.1.0"), { mode: 0o700 }),
+    ]);
+    const link = join(binDirectory, "controlled-acp");
+    await symlink(firstLauncher, link);
+
+    const relay = await createCatalogRelay();
+    const relayUrl = relay.url("channel_catalog_reply");
+    const environment = {
+        MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(stateDirectory, "native"),
+        PATH: `${binDirectory}:${process.env["PATH"] ?? ""}`,
+    };
+    const discover = (signal: AbortSignal) =>
+        discoverLocalAgentInventory({
+            defaultWorkspace: workspace,
+            environment,
+            signal,
+            specifications: specifications(),
+        });
+    const inventory = await discover(AbortSignal.timeout(60_000));
+    if (inventory.readyAgents().length !== 1) {
+        throw new Error(`Expected exactly one ready Agent, got: ${JSON.stringify(inventory.discoveries)}`);
+    }
+    const withCatalogUpdate = createCatalogUpdateLock();
+    // The lock call order is the queue order: call 1 is the full discovery's critical section,
+    // call 2 is the resolver's queued swap. Recording it lets the test hold the discovery's
+    // publication open until the resolver is provably waiting behind it.
+    let lockCalls = 0;
+    const resolverQueued = Promise.withResolvers<void>();
+    const recordingLock: ReturnType<typeof createCatalogUpdateLock> = (update) => {
+        lockCalls += 1;
+        if (lockCalls === 2) {
+            resolverQueued.resolve();
+        }
+        return withCatalogUpdate(update);
+    };
+    const config: ReturnType<typeof createRuntimeConfig> = createRuntimeConfig(
+        { channelId: "channel_catalog_reply", defaultWorkspace: workspace, relayUrl },
+        inventory.readyAgents(),
+        new RuntimeLocalContext(stateDirectory, environment),
+        null,
+        createCatalogAgentResolver(discover, () => config, publishAgentCatalog, recordingLock),
+        (refreshSignal: AbortSignal) => discover(refreshSignal).then((result) => result.readyAgents()),
+        recordingLock,
+    );
+    const cancellation = new AbortController();
+    const runtime = runRuntime(config, cancellation.signal);
+
+    try {
+        const socket = await relay.socket;
+        const frames = new ClientFrames(socket);
+        await relay.waitForCatalogPutCountAtLeast(1); // the boot-time publication
+
+        // Hold the full discovery's publication open, then start the discovery.
+        const discoveryGate = relay.gateNextPut();
+        const discoveryRequestId = "catalog-discovery-reply-snapshot";
+        sendText(
+            socket,
+            encodeAgentCatalogDiscoverCommand({ kind: "agent.catalog.discover", requestId: discoveryRequestId }),
+        );
+        await relay.waitForCatalogPutCountAtLeast(2);
+
+        // Upgrade the Agent's binary and start a session: the resolver re-discovers the Agent
+        // and queues its swap behind the full discovery's critical section.
+        await unlink(link);
+        await symlink(secondLauncher, link);
+        const prepareRequestId = "prepare-discovery-reply-snapshot";
+        sendText(
+            socket,
+            encodeSessionPrepareCommand({
+                additionalDirectoryIds: [],
+                agentId: "controlled-acp",
+                bindingId: config.bindingId,
+                directoryId: "default",
+                kind: "session.prepare",
+                requestId: prepareRequestId,
+                sessionId: "session-catalog-discovery-reply",
+            }),
+        );
+        await resolverQueued.promise;
+
+        // The full discovery's publication succeeds and the lock releases; the queued resolver
+        // swap commits its newer snapshot before the discovery handler resumes to answer.
+        discoveryGate.resolve();
+        const outcome = await nextCatalogOutcome(frames, discoveryRequestId);
+        expect(outcome.kind).toBe(AGENT_CATALOG_DISCOVERED_KIND);
+        if (outcome.kind !== AGENT_CATALOG_DISCOVERED_KIND) {
+            throw new Error("unreachable");
+        }
+        // The reply describes the snapshot the discovery itself published (the pre-upgrade
+        // Agent), not the newer snapshot the resolver committed after the lock released.
+        expect(outcome.event.agents.map((agent) => ({ agentVersion: agent.agentVersion, id: agent.id }))).toEqual([
+            { agentVersion: "1.0.0", id: "controlled-acp" },
+        ]);
+
+        // The queued resolver swap still commits on top: the session serves the upgrade and the
+        // final catalog reflects it.
+        const ready = await nextSessionReady(frames, prepareRequestId);
+        expect(ready.agentVersion).toBe("1.1.0");
+        expect(config.catalog.read().agents[0]?.agentVersion).toBe("1.1.0");
+    } finally {
+        cancellation.abort();
+        await runtime;
+        await relay.close();
+        await rm(stateDirectory, { force: true, recursive: true });
+    }
+});
