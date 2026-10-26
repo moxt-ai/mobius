@@ -19,7 +19,7 @@ import type { Timer } from "../../util/timer.ts";
 import { createRuntimeCommandDispatcher } from "../command/dispatcher.ts";
 import { send } from "../command/transport.ts";
 import type { RuntimeConfig } from "../config.ts";
-import { connectRelay, releaseRelay } from "./connect.ts";
+import { connectRelay } from "./connect.ts";
 import type { RelayConnectionDiagnostics } from "./diagnostics.ts";
 import { RelayConnectionLiveness } from "./liveness.ts";
 import { isRuntimeRelayRevocation, RuntimeRelayRevokedError } from "./runtime-revocation.ts";
@@ -129,7 +129,8 @@ export async function runRelayConnection({
 }: RelayConnectionOptions): Promise<void> {
     const relayUrl = new URL(config.relayUrl);
     relayUrl.searchParams.set("liveness", "1");
-    const socket = await connectRelay(relayUrl, signal);
+    const relay = await connectRelay(relayUrl, signal);
+    const { socket } = relay;
     diagnostics.connectionOpened(connectionEpoch);
     const connectionController = new AbortController();
     const commands = createRuntimeCommandDispatcher({
@@ -318,6 +319,6 @@ export async function runRelayConnection({
     } finally {
         connectionController.abort();
         await commands.settle();
-        releaseRelay(socket, new Error("Relay connection released"));
+        relay.release(new Error("Relay connection released"));
     }
 }

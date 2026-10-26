@@ -198,11 +198,12 @@ describe("daemon environment proxy", () => {
                 proxyOrigin,
                 proxyRoute: "proxy",
             });
-            const socket = await connectRelay(
+            const relayConnection = await connectRelay(
                 new URL(`ws://127.0.0.1:${relayPort}/daemon`),
                 AbortSignal.timeout(2_000),
             );
-            socket.close();
+            relayConnection.socket.close();
+            relayConnection.release(new Error("Proxy test completed"));
 
             expect(tunnelTargets).toContain(`127.0.0.1:${pairingPort}`);
             expect(tunnelTargets).toContain(`127.0.0.1:${relayPort}`);
