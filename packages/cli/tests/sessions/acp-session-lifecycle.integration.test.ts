@@ -502,7 +502,7 @@ describe("ACP conversation sessions", () => {
         );
         let firstGeneration = "";
         try {
-            first.append("session-1", {
+            const requested = first.append("session-1", {
                 payload: {
                     commandId: "command-1",
                     content: [{ text: "cached prompt", type: "text" }],
@@ -534,7 +534,7 @@ describe("ACP conversation sessions", () => {
                 {
                     payload: {
                         content: { text: "cached prompt", type: "text" },
-                        messageId: "command-1",
+                        messageId: requested.eventId,
                         sessionUpdate: "user_message_chunk",
                     },
                     type: "acp",

@@ -417,9 +417,13 @@ describe("daemon V2 live delivery", () => {
         const fixture = await startControlledDaemon();
         try {
             const running = prompt(fixture, "wait for steering");
+            const requestedEventIds = new Map<string, string>();
             sendText(fixture.socket, encodeSessionPromptCommand(running));
             for (;;) {
                 const event = await nextLive(fixture);
+                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.requested") {
+                    requestedEventIds.set(event.payload.commandId, event.eventId);
+                }
                 if (event.type === "acp" && event.payload.sessionUpdate === "agent_message_chunk") {
                     break;
                 }
@@ -446,7 +450,7 @@ describe("daemon V2 live delivery", () => {
                         ? [event.payload.messageId]
                         : [],
                 ),
-            ).toEqual([running.commandId]);
+            ).toEqual([requestedEventIds.get(running.commandId)]);
 
             const steering: SessionPromptCommand = {
                 ...running,
@@ -459,6 +463,9 @@ describe("daemon V2 live delivery", () => {
             const completed = new Set<string>();
             while (completed.size < 3) {
                 const event = await nextLive(fixture);
+                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.requested") {
+                    requestedEventIds.set(event.payload.commandId, event.eventId);
+                }
                 if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
                     completed.add(event.payload.commandId);
                 }
@@ -473,7 +480,7 @@ describe("daemon V2 live delivery", () => {
             ).toEqual(
                 [running, steering, queued].map((command) => ({
                     content: { text: command.prompt, type: "text" },
-                    messageId: command.commandId,
+                    messageId: requestedEventIds.get(command.commandId),
                     sessionUpdate: "user_message_chunk",
                 })),
             );
@@ -525,14 +532,16 @@ describe("daemon V2 live delivery", () => {
                 const userMessages = page.events.flatMap((event) =>
                     event.type === "acp" && event.payload.sessionUpdate === "user_message_chunk" ? [event] : [],
                 );
+                const requestedEventId = live.find(
+                    (event) => event.type === "lifecycle-metadata" && event.payload.kind === "prompt.requested",
+                )?.eventId;
+                expect(requestedEventId).toBeDefined();
                 expect(userMessages).toHaveLength(scenario === "text-only" ? 1 : 2);
                 expect(userMessages[0]).toMatchObject({
-                    eventId: live.find(
-                        (event) => event.type === "lifecycle-metadata" && event.payload.kind === "prompt.requested",
-                    )?.eventId,
+                    eventId: requestedEventId,
                     payload: {
                         content: { text: command.prompt, type: "text" },
-                        messageId: command.commandId,
+                        messageId: requestedEventId,
                         sessionUpdate: "user_message_chunk",
                     },
                 });
@@ -547,7 +556,7 @@ describe("daemon V2 live delivery", () => {
                                 },
                                 type: "resource",
                             },
-                            messageId: command.commandId,
+                            messageId: requestedEventId,
                             sessionUpdate: "user_message_chunk",
                         },
                     });

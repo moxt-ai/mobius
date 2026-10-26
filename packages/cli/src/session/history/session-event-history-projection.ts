@@ -142,7 +142,7 @@ export class SessionEventHistoryProjection {
                 const events = prompt.content.map(
                     (content, index): AcpSessionEvent => ({
                         eventId: index === 0 ? liveEvent.eventId : `${liveEvent.eventId}-content-${index}`,
-                        payload: { content, messageId: prompt.commandId, sessionUpdate: "user_message_chunk" },
+                        payload: { content, messageId: liveEvent.eventId, sessionUpdate: "user_message_chunk" },
                         recordedAt: liveEvent.recordedAt,
                         sessionGenerationId: liveEvent.sessionGenerationId,
                         sessionId: liveEvent.sessionId,
