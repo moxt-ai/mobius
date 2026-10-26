@@ -1,12 +1,6 @@
 import {
-    AGENT_CATALOG_DISCOVERED_KIND,
-    AGENT_CATALOG_DISCOVERY_FAILED_KIND,
-    type AgentCatalogDiscoverCommand,
-    type AgentCatalogDiscoveredEvent,
     type AgentSettingsDiscoverCommand,
     type AgentSettingsDiscoveredEvent,
-    decodeAgentCatalogDiscoveredEvent,
-    decodeAgentCatalogDiscoveryFailedEvent,
     decodeAgentSettingsDiscoveredEvent,
     decodeAgentSettingsDiscoveryFailedEvent,
     decodeFileBeginEvent,
@@ -497,85 +491,6 @@ export async function requestRuntimeAgentSettings(
         });
     } finally {
         clearTimeout(timer);
-        cleanup();
-        socket.close(1000, "Operation finished");
-    }
-}
-
-export async function requestRuntimeAgentCatalog(
-    socket: WebSocket,
-    command: AgentCatalogDiscoverCommand,
-    signal: AbortSignal,
-): Promise<AgentCatalogDiscoveredEvent> {
-    const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
-    let cleanup = () => {};
-    try {
-        deadline.throwIfAborted();
-        return await new Promise<AgentCatalogDiscoveredEvent>((resolve, reject) => {
-            const onClose = () => reject(new SessionRuntimeError("runtime_offline", "The Runtime connection closed"));
-            const onAbort = () => reject(deadline.reason);
-            const onMessage = (event: MessageEvent) => {
-                try {
-                    if (typeof event.data !== "string") {
-                        return;
-                    }
-                    const kind = decodeMessageKind(event.data);
-                    if (kind === "runtime.status") {
-                        if (!decodeRuntimeStatusEvent(event.data).online) {
-                            reject(new SessionRuntimeError("runtime_offline", "The Runtime connection closed"));
-                        }
-                        return;
-                    }
-                    if (kind === AGENT_CATALOG_DISCOVERY_FAILED_KIND) {
-                        const failed = decodeAgentCatalogDiscoveryFailedEvent(event.data);
-                        if (failed.requestId === command.requestId) {
-                            reject(new SessionRuntimeError(failed.code, failed.message));
-                        }
-                        return;
-                    }
-                    // A daemon that predates this command answers session.operation.failed with
-                    // its own code (for example unsupported_protocol_message_kind); rejecting on
-                    // that reply keeps the caller from waiting out the full deadline.
-                    if (kind === "session.operation.failed") {
-                        const failed = decodeSessionOperationFailedEvent(event.data);
-                        if (failed.requestId === command.requestId) {
-                            reject(
-                                new SessionRuntimeError(failed.code, failed.message, {
-                                    runtimeTimings: failed.runtimeTimings,
-                                }),
-                            );
-                        }
-                        return;
-                    }
-                    if (kind !== AGENT_CATALOG_DISCOVERED_KIND) {
-                        return;
-                    }
-                    const result = decodeAgentCatalogDiscoveredEvent(event.data);
-                    if (result.requestId === command.requestId) {
-                        resolve(result);
-                    }
-                } catch (cause) {
-                    reject(
-                        new SessionRuntimeError("invalid_request", "The Runtime returned an invalid response", {
-                            cause,
-                        }),
-                    );
-                }
-            };
-            cleanup = () => {
-                deadline.removeEventListener("abort", onAbort);
-                socket.removeEventListener("message", onMessage);
-                socket.removeEventListener("close", onClose);
-                socket.removeEventListener("error", onClose);
-            };
-            socket.addEventListener("message", onMessage);
-            socket.addEventListener("close", onClose);
-            socket.addEventListener("error", onClose);
-            deadline.addEventListener("abort", onAbort, { once: true });
-            socket.accept();
-            socket.send(encodeServiceToDaemonMessage(command));
-        });
-    } finally {
         cleanup();
         socket.close(1000, "Operation finished");
     }

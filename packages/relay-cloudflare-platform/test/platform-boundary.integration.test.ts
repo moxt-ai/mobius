@@ -2223,21 +2223,6 @@ async function connectRuntimeDaemon(slug: string, options: { readonly anchorCloc
                 }),
                 environment,
             ),
-        discoverAgents: (
-            path: string,
-            init: { readonly method: string; readonly body?: unknown } = { method: "POST" },
-        ) =>
-            worker.fetch(
-                new Request(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}${path}`,
-                    {
-                        headers: credentialHeaders(appCredential),
-                        ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
-                        method: init.method,
-                    },
-                ),
-                environment,
-            ),
     };
 }
 
@@ -3042,30 +3027,6 @@ describe.sequential("Platform Turn submission", () => {
             ).toMatchObject({ error: { code: "invalid_request" } });
         } finally {
             daemon.close();
-        }
-    });
-
-    it("Given a daemon predating the Agent catalog discovery command, When an app requests an Agent discovery, Then the daemon's session.operation.failed answer surfaces instead of the request waiting out its deadline", async () => {
-        const runtime = await connectRuntimeDaemon("legacy-daemon-discovery");
-        try {
-            const discovery = runtime.discoverAgents("/agents/discovery");
-            const query = decodeServiceToDaemonMessage(await runtime.daemonMessages.next());
-            const catalogQuery = record(query);
-            expect(query).toMatchObject({ kind: "agent.catalog.discover" });
-            runtime.daemon.send(
-                encodeSessionOperationFailedEvent({
-                    code: "unsupported_protocol_message_kind",
-                    kind: "session.operation.failed",
-                    message: "The Relay sent a command this daemon does not support",
-                    requestId: text(catalogQuery, "requestId"),
-                    sessionId: "",
-                }),
-            );
-            expect(await responseJson(await discovery, 503)).toMatchObject({
-                error: { code: "unsupported_protocol_message_kind" },
-            });
-        } finally {
-            runtime.daemon.close(1000, "Test complete");
         }
     });
 

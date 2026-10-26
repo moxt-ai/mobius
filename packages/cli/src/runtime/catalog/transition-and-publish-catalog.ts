@@ -33,5 +33,5 @@ export async function transitionAndPublishCatalog(
     if (lock === undefined) {
         return await critical();
     }
-    return (await lock(critical)) as LocalAgentCatalogSnapshot;
+    return await lock(critical);
 }

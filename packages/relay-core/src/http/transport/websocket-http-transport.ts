@@ -192,23 +192,17 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
         | { readonly kind: "open"; readonly socket: WebSocket }
     >();
     const browserOrigin = request.headers.get("origin");
-    // An outstanding request keeps the transport purposefully busy: its operation may legitimately
-    // run for minutes (for example Agent catalog discovery), so the idle deadline only applies
-    // once every dispatched request has answered.
-    let dispatching = 0;
-    const closeIfIdle = (): void => {
-        if (dispatching > 0) {
-            touch();
-            return;
-        }
+    let idleTimeout = setTimeout(() => {
         controller.abort(new Error("WebSocket transport became inactive"));
         server.close(1001, "WebSocket transport idle timeout");
-    };
-    let idleTimeout = setTimeout(closeIfIdle, IDLE_TIMEOUT_MILLISECONDS);
+    }, IDLE_TIMEOUT_MILLISECONDS);
     let heartbeatTimeout: ReturnType<typeof setTimeout> | null = null;
     const touch = (): void => {
         clearTimeout(idleTimeout);
-        idleTimeout = setTimeout(closeIfIdle, IDLE_TIMEOUT_MILLISECONDS);
+        idleTimeout = setTimeout(() => {
+            controller.abort(new Error("WebSocket transport became inactive"));
+            server.close(1001, "WebSocket transport idle timeout");
+        }, IDLE_TIMEOUT_MILLISECONDS);
     };
     const scheduleHeartbeat = (): void => {
         if (heartbeatTimeout !== null) {
@@ -268,7 +262,6 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
         touch();
         void (async () => {
             let requestId = "unknown";
-            let dispatched = false;
             try {
                 if (typeof event.data !== "string") {
                     throw transportError("invalid_message");
@@ -394,8 +387,6 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                     controller.signal,
                 );
                 requestId = converted.requestId;
-                dispatching += 1;
-                dispatched = true;
                 const response = await dispatch(converted.request);
                 const mediaType = response.headers.get("content-type") ?? "";
                 if (mediaType.startsWith("text/event-stream")) {
@@ -430,11 +421,6 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                         status: httpError.status,
                     }),
                 );
-            } finally {
-                if (dispatched) {
-                    dispatching = Math.max(0, dispatching - 1);
-                    touch();
-                }
             }
         })();
     });
