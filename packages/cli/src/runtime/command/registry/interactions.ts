@@ -12,7 +12,7 @@ import { reportOperationFailure, send } from "../transport.ts";
 
 export const sessionCancelCommand: RuntimeCommand = {
     kind: SESSION_CANCEL_KIND,
-    handle: ({ eventProjection, operations, sessions, sessionTurns }, message): void => {
+    handle: ({ eventProjection, operations, sessions, sessionTurns, signal }, message): void => {
         if (message.kind !== SESSION_CANCEL_KIND) {
             throw new Error("Command kind mismatch");
         }
@@ -27,7 +27,7 @@ export const sessionCancelCommand: RuntimeCommand = {
         if (cancellationState === "already-requested" || cancellationState === "pending") {
             return;
         }
-        void sessions.cancelPrompt(message.sessionId).catch((error) => {
+        void sessions.cancelPrompt(message.sessionId, signal).catch((error) => {
             console.error("Mobius daemon could not cancel the agent turn", error);
         });
     },

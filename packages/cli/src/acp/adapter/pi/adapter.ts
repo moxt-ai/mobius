@@ -28,6 +28,8 @@ export class PiAdapter implements Adapter {
 
     readonly getCapabilities = async (query: NativeSessionQuery) => await this.#queryProcesses.capabilities(query);
     readonly connectSession = (options: LiveSessionConnectionOptions) => this.#liveSessions.connectSession(options);
+    readonly cancel: Adapter["cancel"] = (...args) => this.#liveSessions.cancel(...args);
+    readonly closeSession: Adapter["closeSession"] = (...args) => this.#liveSessions.closeSession(...args);
     readonly prompt: Adapter["prompt"] = (...args) => this.#liveSessions.prompt(...args);
     readonly steer: Adapter["steer"] = (...args) => this.#liveSessions.steer(...args);
     readonly renameSession: Adapter["renameSession"] = (...args) => this.#liveSessions.renameSession(...args);

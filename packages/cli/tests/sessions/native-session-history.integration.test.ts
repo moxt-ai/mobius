@@ -14,6 +14,8 @@ const cannedHistoryAdapter: AdapterResolver = (_agent, dependencies) => {
     return {
         getCapabilities: acp.getCapabilities,
         connectSession: acp.connectSession,
+        cancel: acp.cancel,
+        closeSession: acp.closeSession,
         prompt: acp.prompt,
         steer: acp.steer,
         renameSession: acp.renameSession,
