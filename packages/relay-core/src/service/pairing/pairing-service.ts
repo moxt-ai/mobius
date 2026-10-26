@@ -8,6 +8,7 @@ import { type OperationTiming, unmeasuredOperationTiming } from "../../infra/ope
 import { RuntimeDescriptor } from "../channel/channel.ts";
 import type { LocalSessionOperations } from "../channel/local-session-operations.ts";
 import type { PairingOperations } from "./pairing-operations.ts";
+import { runtimeControlPermission } from "./runtime-control-registry.ts";
 import {
     type RuntimeControlCommand,
     requestRuntimeAgentSettings,
@@ -99,15 +100,7 @@ export class PairingService {
         const deadline =
             this.#runtimeOperations === undefined ? AbortSignal.any([signal, AbortSignal.timeout(120000)]) : signal;
         if (this.#runtimeOperations !== undefined) {
-            const permission =
-                command.kind === "session.live-history.v2.page.load"
-                    ? ProjectPermission.SessionRead
-                    : (command.kind === "native.session.request" && command.action === "list") ||
-                        command.kind === "session.list" ||
-                        command.kind === "session.query" ||
-                        command.kind === "session.preview-history.page.load"
-                      ? ProjectPermission.RuntimeRead
-                      : ProjectPermission.SessionWrite;
+            const permission = runtimeControlPermission(command);
             const access = await this.#pairings.authorizeProject(projectId, token, permission, deadline);
             return await this.#runtimeOperations.requestProjectScopeControl(access.scope, runtimeId, command, deadline);
         }
@@ -119,15 +112,7 @@ export class PairingService {
                     projectId,
                     runtimeId,
                     token,
-                    command.kind === "session.live-history.v2.page.load"
-                        ? ProjectPermission.SessionRead
-                        : (command.kind === "native.session.request" && command.action === "list") ||
-                            command.kind === "session.list" ||
-                            command.kind === "session.query" ||
-                            command.kind === "session.config.read" ||
-                            command.kind === "session.preview-history.page.load"
-                          ? ProjectPermission.RuntimeRead
-                          : ProjectPermission.SessionWrite,
+                    runtimeControlPermission(command),
                     deadline,
                 ),
         );

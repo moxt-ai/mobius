@@ -16,6 +16,7 @@ import {
     encodeNativeSessionRequest,
     encodeNativeSessionResult,
     encodeSessionClosedEvent,
+    encodeSessionConfigReadResult,
     encodeSessionConfigUpdatedEvent,
     encodeSessionConfigureCommand,
     encodeSessionEventEnvelope,
@@ -30,6 +31,7 @@ import {
     MOBIUS_API_PREFIX,
     RUNTIME_HEARTBEAT_ACK_MESSAGE,
     RUNTIME_HEARTBEAT_MESSAGE,
+    type SessionConfigReadResult,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDurableObjectDependencies } from "../../relay-core/src/di/create-durable-object-dependencies.ts";
@@ -2381,6 +2383,34 @@ describe.sequential("Platform Turn submission", () => {
                 }),
             );
             expect(await responseJson(await response, 200)).toEqual(page);
+        } finally {
+            runtime.daemon.close(1000, "Test complete");
+        }
+    });
+
+    it("Given Runtime read permission, When an App reads Session configuration, Then the matching Runtime settings are returned without write permission", async () => {
+        const runtime = await connectRuntimeDaemon("app-configuration-read");
+        try {
+            const readOnly = await runtime.issueAppCredential(["runtime:read"]);
+            const response = runtime.appSessionRequest("/configuration", { method: "GET", credential: readOnly });
+            const first = await Promise.race([
+                runtime.daemonMessages.next().then((message) => ({ kind: "command", message })),
+                response.then((result) => ({ kind: "response", message: String(result.status) })),
+            ]);
+            expect(first).toMatchObject({ kind: "command" });
+            const command = decodeServiceToDaemonMessage(first.message);
+            expect(command).toMatchObject({ kind: "session.config.read", sessionId: runtime.sessionId });
+            if (command.kind !== "session.config.read") {
+                throw new Error("Expected a configuration request");
+            }
+            const result: SessionConfigReadResult = {
+                kind: "session.config.read.result",
+                requestId: command.requestId,
+                sessionId: runtime.sessionId,
+                configOptions: [],
+            };
+            runtime.daemon.send(encodeSessionConfigReadResult(result));
+            expect(await responseJson(await response, 200)).toEqual(result);
         } finally {
             runtime.daemon.close(1000, "Test complete");
         }
