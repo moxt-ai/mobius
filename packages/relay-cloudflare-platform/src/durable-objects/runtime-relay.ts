@@ -30,7 +30,12 @@ export class RuntimeRelay extends DurableObject<ConfiguredPlatformRelayBindings>
         });
         this.#runtime = new RuntimeRelayImplementation(
             this.#context,
-            logger.child({ durableObjectClass: "RuntimeRelay", durableObjectId: state.id.toString() }),
+            logger.child({
+                durableObjectClass: "RuntimeRelay",
+                durableObjectId: state.id.toString(),
+                runtimeInstanceId: crypto.randomUUID(),
+                runtimeInstanceStartedAt: Date.now(),
+            }),
         );
     }
 
