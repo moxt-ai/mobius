@@ -4,6 +4,7 @@ import { ensureWorkingProcess, readWorkingProcessVersion } from "../../../daemon
 import { reloadDaemon } from "../../../daemon/lifecycle/worker.ts";
 import { openMobiusControlInstallation } from "../../../daemon/pairing/pair-local-machine.ts";
 import { DaemonReleaseUpgradeError } from "../../../daemon/upgrades/package.ts";
+import { resolveDaemonLaunch } from "../../../daemon/upgrades/release-location.ts";
 import { awaitDaemonReleaseSwitch, requestDaemonReleaseUpgrade } from "../../../daemon/upgrades/upgrade.ts";
 import type { CliContext } from "../../context.ts";
 
@@ -18,7 +19,11 @@ export function registerUpgradeCommand(program: Command, context: CliContext): v
             const running = await readWorkingProcessVersion(control.stateDirectory, signal);
             const current = running ?? context.version;
             if (running === null) {
-                await ensureWorkingProcess(control.stateDirectory, context.version, signal);
+                await ensureWorkingProcess(
+                    control.stateDirectory,
+                    await resolveDaemonLaunch(context.version, signal),
+                    signal,
+                );
             }
             await reloadDaemon(control.stateDirectory, signal);
             const attempt = await requestDaemonReleaseUpgrade(control.stateDirectory, current, signal);

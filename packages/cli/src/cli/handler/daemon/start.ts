@@ -1,11 +1,11 @@
 import type { Command } from "commander";
 
-import { ensureWorkingProcess } from "../../../daemon/lifecycle/manager-client.ts";
 import { reloadDaemon } from "../../../daemon/lifecycle/worker.ts";
 import {
     openMobiusCliInstallation,
     openMobiusControlInstallation,
 } from "../../../daemon/pairing/pair-local-machine.ts";
+import { ensureWorkingDaemon } from "../../../daemon/upgrades/release-location.ts";
 import type { CliContext } from "../../context.ts";
 import { valueOption } from "../../util/options.ts";
 
@@ -24,7 +24,7 @@ export function registerStartCommand(program: Command, context: CliContext): voi
                 await installation.setConnectionActivation(options.connection, "active", context.shutdownSignal);
             }
             const control = await openMobiusControlInstallation(context.shutdownSignal, process.env);
-            await ensureWorkingProcess(control.stateDirectory, context.version, context.shutdownSignal);
+            await ensureWorkingDaemon(control.stateDirectory, context.version, context.shutdownSignal);
             await reloadDaemon(control.stateDirectory, context.shutdownSignal);
             process.stdout.write("Mobius daemon is running.\n");
         });

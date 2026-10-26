@@ -2,11 +2,10 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { managerLockExists } from "../../storage/daemon/manager-lock.ts";
 import { isNodeError } from "../../util/node-error.ts";
 import { CONTROL_TIMEOUT_MILLISECONDS, sendLocalRequest } from "../control/local-client.ts";
-import { type LifecycleResponse, lifecycleResponse } from "../control/protocol.ts";
-import { currentWorkerLaunch } from "./worker-process.ts";
+import { type LifecycleResponse, lifecycleResponse, type WorkerLaunch } from "../control/protocol.ts";
 
-async function spawnManager(): Promise<ChildProcess> {
-    const child = spawn(process.execPath, [process.argv[1] ?? "", "__manager"], {
+async function spawnManager(launch: WorkerLaunch): Promise<ChildProcess> {
+    const child = spawn(launch.executable, [launch.entry, "__manager"], {
         detached: true,
         windowsHide: true,
         env: process.env,
@@ -16,9 +15,9 @@ async function spawnManager(): Promise<ChildProcess> {
     return child;
 }
 
-async function launchManager(managerVersion: string): Promise<void> {
-    process.stdout.write(`Starting mobius daemon ${managerVersion}\n`);
-    await spawnManager();
+async function launchManager(launch: WorkerLaunch): Promise<void> {
+    process.stdout.write(`Starting mobius daemon ${launch.version}\n`);
+    await spawnManager(launch);
 }
 
 async function waitForManagerExit(stateDirectory: string, signal: AbortSignal): Promise<void> {
@@ -41,25 +40,21 @@ async function waitForManagerExit(stateDirectory: string, signal: AbortSignal): 
     throw deadline.reason;
 }
 
+// Runs the manager and its worker from `launch`, the one place the caller decided the daemon lives.
 export async function ensureWorkingProcess(
     stateDirectory: string,
-    version: string,
+    launch: WorkerLaunch,
     signal: AbortSignal,
 ): Promise<void> {
     const deadline = AbortSignal.any([signal, AbortSignal.timeout(CONTROL_TIMEOUT_MILLISECONDS)]);
-    await ensureManager(stateDirectory, version, deadline);
+    await ensureManager(stateDirectory, launch, deadline);
     const response = lifecycleResponse.parse(
-        await sendLocalRequest(
-            stateDirectory,
-            "manager",
-            { kind: "ensure", launch: currentWorkerLaunch(version) },
-            deadline,
-        ),
+        await sendLocalRequest(stateDirectory, "manager", { kind: "ensure", launch }, deadline),
     );
     if (response.kind === "error") {
         throw new Error(response.message);
     }
-    if (response.kind !== "status" || response.worker?.version !== version) {
+    if (response.kind !== "status" || response.worker?.version !== launch.version) {
         throw new Error("The working daemon did not start");
     }
 }
@@ -82,7 +77,7 @@ export async function readWorkingProcessVersion(stateDirectory: string, signal: 
     return null;
 }
 
-async function ensureManager(stateDirectory: string, managerVersion: string, signal: AbortSignal): Promise<void> {
+async function ensureManager(stateDirectory: string, launch: WorkerLaunch, signal: AbortSignal): Promise<void> {
     let managerStarted = false;
     while (!signal.aborted) {
         try {
@@ -91,20 +86,20 @@ async function ensureManager(stateDirectory: string, managerVersion: string, sig
             );
             if (response.success && response.data.kind === "status") {
                 if (managerStarted) {
-                    process.stdout.write(`Mobius daemon ${managerVersion} started\n`);
+                    process.stdout.write(`Mobius daemon ${launch.version} started\n`);
                 }
                 return;
             }
             // Replace an older lifecycle protocol once; subsequent worker upgrades keep this manager.
             await stopManager(stateDirectory, signal);
-            await launchManager(managerVersion);
+            await launchManager(launch);
             managerStarted = true;
         } catch (cause) {
             if (!isNodeError(cause, "ENOENT") && !isNodeError(cause, "ECONNREFUSED")) {
                 throw cause;
             }
             if (!managerStarted) {
-                await launchManager(managerVersion);
+                await launchManager(launch);
                 managerStarted = true;
             }
             await new Promise<void>((resolve, reject) => {
