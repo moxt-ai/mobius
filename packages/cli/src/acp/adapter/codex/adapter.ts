@@ -15,6 +15,7 @@ import { nativeSessionIdSchema } from "../../protocol/native-session.ts";
 import { openPreviewEventCache, type PreviewEventCache } from "../preview-event-cache.ts";
 import { AgentQueryProcesses } from "../query-processes.ts";
 import { AcpSessionConnector, type AdapterSessionConnectionOptions } from "../session-events.ts";
+import { fitCodexToolEvent } from "./tool-event.ts";
 
 /**
  * Previews saved Codex threads by reading the Codex app-server directly. The read is
@@ -29,7 +30,7 @@ export class CodexAdapter implements Adapter {
 
     constructor(dependencies: AdapterDependencies) {
         this.#dependencies = dependencies;
-        this.#connector = new AcpSessionConnector(dependencies.contentExternalizer);
+        this.#connector = new AcpSessionConnector(dependencies.contentExternalizer, fitCodexToolEvent);
         this.#queryProcesses = new AgentQueryProcesses(dependencies.processes, this.#connector);
     }
 
@@ -102,7 +103,7 @@ export class CodexAdapter implements Adapter {
                         );
                         events.push({
                             type: "acp",
-                            payload: decodeAcpSessionUpdate(JSON.stringify(externalized.event)),
+                            payload: decodeAcpSessionUpdate(JSON.stringify(fitCodexToolEvent(externalized.event))),
                         });
                     },
                     signal,

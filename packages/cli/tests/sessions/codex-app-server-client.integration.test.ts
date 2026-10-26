@@ -6,6 +6,7 @@ import { InProcessAcpAgentDefinition, LocalAgentDefinition } from "../../src/acp
 import { CodexAcpAgent } from "../../src/acp/harness/codex/agent.ts";
 import { CodexAppServerClient } from "../../src/acp/harness/codex/app-server-client.ts";
 import { stopProcessTree } from "../../src/util/process/executable.ts";
+import { imageFixture } from "../support/agents/image-fixture.ts";
 import { loadCodexHistory, previewCodexHistory } from "../support/codex-history-preview.ts";
 
 const temporaryDirectories: string[] = [];
@@ -38,7 +39,10 @@ input.on("line", (line) => {
     return executable;
 }
 
-async function historyAppServer(savedItems: readonly unknown[] | null = null): Promise<string> {
+async function historyAppServer(
+    savedItems: readonly unknown[] | null = null,
+    error: { readonly message: string } | null = null,
+): Promise<string> {
     const directory = await mkdtemp(join(tmpdir(), "mobius-codex-history-server-"));
     temporaryDirectories.push(directory);
     const executable = join(directory, "codex");
@@ -71,8 +75,8 @@ input.on("line", (line) => {
     const result = {
         data: [{
             id: "turn-" + page,
-            status: "completed",
-            error: null,
+            status: ${JSON.stringify(error === null ? "completed" : "failed")},
+            error: ${JSON.stringify(error)},
             padding: savedItems === null ? "x".repeat(9 * 1024 * 1024) : "",
             items: savedItems ?? [{ id: "message-" + page, phase: "final_answer", text: "Reply " + page, type: "agentMessage" }],
         }],
@@ -202,3 +206,85 @@ it.each([
         expect(preview.truncated).toBe(false);
     },
 );
+
+it.each(["mcpToolCall", "dynamicToolCall"])(
+    "Given a saved Codex %s result exceeds SDK limits, When history is previewed and opened, Then a marked bounded result and surrounding messages remain readable",
+    async (type) => {
+        const result = {
+            text: "Large saved result ".repeat(60_000),
+            content: [{ type: "image", data: imageFixture(16).toString("base64"), mimeType: "image/png" }],
+        };
+        const items = [
+            { id: "user", type: "userMessage", content: [{ type: "text", text: "Saved prompt" }] },
+            { id: "answer", type: "agentMessage", text: "Saved answer", phase: "final_answer" },
+            {
+                id: "tool",
+                type,
+                server: "saved",
+                tool: "read",
+                status: "completed",
+                ...(type === "mcpToolCall" ? { result } : { contentItems: [result] }),
+            },
+        ];
+        const command = await historyAppServer(items);
+        const agent = new InProcessAcpAgentDefinition(
+            "codex",
+            "Codex",
+            command,
+            (options) => new CodexAcpAgent(options),
+        );
+        const preview = await previewCodexHistory(agent, process.cwd(), "saved-thread");
+        const opened = await loadCodexHistory(agent, process.cwd(), "saved-thread");
+        for (const page of [preview, opened]) {
+            const updates = page.events.flatMap((event) => (event.type === "acp" ? [event.payload] : []));
+            expect(updates).toEqual(
+                expect.arrayContaining([
+                    expect.objectContaining({
+                        sessionUpdate: "user_message_chunk",
+                        content: { type: "text", text: "Saved prompt" },
+                    }),
+                    expect.objectContaining({
+                        sessionUpdate: "agent_message_chunk",
+                        content: { type: "text", text: "Saved answer" },
+                    }),
+                ]),
+            );
+            const tool = updates.find((update) => update.sessionUpdate === "tool_call");
+            expect(tool).toMatchObject({
+                rawOutput: { truncated: true, text: expect.stringContaining("Large saved result") },
+            });
+            expect(tool).toMatchObject({
+                content: expect.arrayContaining([
+                    expect.objectContaining({
+                        type: "content",
+                        content: expect.objectContaining({ type: "external_image", imageKey: expect.any(String) }),
+                    }),
+                ]),
+            });
+            expect(JSON.stringify(tool).length).toBeLessThan(100_000);
+        }
+    },
+);
+
+it("Given a saved failed Codex turn has no assistant answer, When it is previewed and opened, Then both show the bounded native failure with a stable identity", async () => {
+    const command = await historyAppServer(
+        [{ id: "user", type: "userMessage", content: [{ type: "text", text: "Saved failed prompt" }] }],
+        { message: "Native failure ".repeat(1_000) },
+    );
+    const agent = new InProcessAcpAgentDefinition("codex", "Codex", command, (options) => new CodexAcpAgent(options));
+    const preview = await previewCodexHistory(agent, process.cwd(), "saved-thread");
+    const opened = await loadCodexHistory(agent, process.cwd(), "saved-thread");
+    const failures = (page: typeof preview) =>
+        page.events.flatMap((event) =>
+            event.type === "acp" && event.payload.sessionUpdate === "tool_call" && event.payload.status === "failed"
+                ? [event.payload]
+                : [],
+        );
+    expect(failures(preview)).toHaveLength(1);
+    expect(failures(preview)).toEqual(failures(opened));
+    expect(failures(preview)[0]).toMatchObject({
+        title: "Agent error",
+        rawOutput: { message: expect.stringContaining("Native failure") },
+    });
+    expect(JSON.stringify(failures(preview)).length).toBeLessThan(10_000);
+});

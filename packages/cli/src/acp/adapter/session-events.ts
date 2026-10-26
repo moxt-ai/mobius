@@ -55,7 +55,11 @@ export class AdapterSessionConnection {
     readonly #lifetime = new AbortController();
     readonly events: Pick<AgentUpdateStream, "sessionId" | "select" | "drained">;
 
-    constructor(options: AdapterSessionConnectionOptions, externalizer: AcpContentExternalizer) {
+    constructor(
+        options: AdapterSessionConnectionOptions,
+        externalizer: AcpContentExternalizer,
+        normalizeEvent: (event: unknown) => unknown,
+    ) {
         const protocol = sessionConfigProtocolForAgent(options.agent.id);
         this.#updates = new AgentUpdateStream(async (notification: SessionNotification) => {
             this.#lifetime.signal.throwIfAborted();
@@ -66,7 +70,7 @@ export class AdapterSessionConnection {
             const externalized = await externalizer.update(options.sessionId(), notification.update, signal);
             signal.throwIfAborted();
             const update = externalized.agent;
-            const payload = decodeAcpSessionUpdate(JSON.stringify(externalized.event));
+            const payload = decodeAcpSessionUpdate(JSON.stringify(normalizeEvent(externalized.event)));
             let event: AdapterSessionEvent;
             switch (update.sessionUpdate) {
                 case "available_commands_update":
@@ -174,11 +178,13 @@ export class AdapterSessionConnection {
 /** Reusable ACP transport implementation; each harness adapter owns its connector. */
 export class AcpSessionConnector implements AdapterSessionConnector {
     readonly #externalizer: AcpContentExternalizer;
-    constructor(externalizer: AcpContentExternalizer) {
+    readonly #normalizeEvent: (event: unknown) => unknown;
+    constructor(externalizer: AcpContentExternalizer, normalizeEvent: (event: unknown) => unknown = (event) => event) {
         this.#externalizer = externalizer;
+        this.#normalizeEvent = normalizeEvent;
     }
     readonly connectSession = (options: AdapterSessionConnectionOptions): AdapterSessionConnection =>
-        new AdapterSessionConnection(options, this.#externalizer);
+        new AdapterSessionConnection(options, this.#externalizer, this.#normalizeEvent);
 
     readonly connectQuerySession = (options: SessionConnectionScope): AdapterSessionConnection => {
         const rejectInteraction = async (): Promise<never> => {
@@ -198,6 +204,7 @@ export class AcpSessionConnector implements AdapterSessionConnector {
                 },
             },
             this.#externalizer,
+            this.#normalizeEvent,
         );
     };
 }

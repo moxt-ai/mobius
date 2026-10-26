@@ -1,4 +1,5 @@
 import { CodexAdapter } from "../../src/acp/adapter/codex/adapter.ts";
+import { fitCodexToolEvent } from "../../src/acp/adapter/codex/tool-event.ts";
 import { AcpQuerySession } from "../../src/acp/adapter/query-session.ts";
 import { AcpSessionConnector } from "../../src/acp/adapter/session-events.ts";
 import type { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
@@ -54,6 +55,7 @@ export async function loadCodexHistory(agent: AcpAgentDefinition, cwd: string, n
                 signal,
             }),
         ),
+        fitCodexToolEvent,
     );
     const events = new MemorySessionEventStore();
     try {

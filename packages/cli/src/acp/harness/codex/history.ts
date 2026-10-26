@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { SessionNotification } from "@agentclientprotocol/sdk";
 import { AcpExecutionError } from "../../acp-error.ts";
 import { embedLocalHistoryImages } from "../../native-history/codex/history-images.ts";
@@ -16,6 +17,7 @@ export async function replayCodexHistory(
     const deadline = AbortSignal.any([signal, AbortSignal.timeout(60_000)]);
     const seenCursors = new Set<string>();
     let cursor: string | null = null;
+    let turnIndex = 0;
     for (;;) {
         deadline.throwIfAborted();
         const page = threadTurnsPageSchema.parse(
@@ -96,6 +98,23 @@ export async function replayCodexHistory(
                     }
                 }
             }
+            if (turn.error != null) {
+                const identity = createHash("sha256")
+                    .update(threadId)
+                    .update("\0")
+                    .update(turn.id ?? turnIndex.toString())
+                    .digest("hex");
+                await emit({
+                    sessionUpdate: "tool_call",
+                    toolCallId: `agent-error-${identity}`,
+                    title: "Agent error",
+                    kind: "other",
+                    status: "failed",
+                    rawOutput: { message: turn.error.message },
+                    content: [{ type: "content", content: { type: "text", text: turn.error.message } }],
+                });
+            }
+            turnIndex += 1;
         }
         if (page.nextCursor == null) {
             return;
