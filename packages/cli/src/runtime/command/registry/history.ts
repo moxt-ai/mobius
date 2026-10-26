@@ -24,46 +24,15 @@ import type { RelayConnectionDiagnostics } from "../../relay/diagnostics.ts";
 import type { RuntimeCommand } from "../definition.ts";
 import { reportOperationFailure, send } from "../transport.ts";
 
-function isAgentReasoning(event: SessionEvent | undefined): boolean {
-    return event?.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk";
-}
-
 interface OrderedHistoryEvent {
     readonly cursor: string | null;
     readonly event: SessionEvent;
-}
-
-function omitAgentReasoning(events: readonly OrderedHistoryEvent[]): readonly OrderedHistoryEvent[] {
-    const retained: OrderedHistoryEvent[] = [];
-    let previousReasoningMessageId: string | null | undefined;
-    for (const positioned of events) {
-        const { event } = positioned;
-        if (event.type !== "acp" || event.payload.sessionUpdate !== "agent_thought_chunk") {
-            previousReasoningMessageId = undefined;
-            retained.push(positioned);
-            continue;
-        }
-        const messageId = event.payload.messageId ?? null;
-        if (previousReasoningMessageId === undefined || previousReasoningMessageId !== messageId) {
-            retained.push({
-                ...positioned,
-                event: {
-                    ...event,
-                    mobiusMetadata: { omitted: true },
-                    payload: { ...event.payload, content: { text: "", type: "text" } },
-                },
-            });
-        }
-        previousReasoningMessageId = messageId;
-    }
-    return retained;
 }
 
 async function loadHistoryPage(
     sessionId: string,
     eventLimit: number,
     initialCursor: string | null,
-    omitReasoning: boolean,
     queuedPromptRequests: readonly QueuedPromptRequestEventLog[],
     load: (eventLimit: number, cursor: string | null) => Promise<SessionEventPage>,
 ): Promise<NativeSessionEvents> {
@@ -96,9 +65,7 @@ async function loadHistoryPage(
         });
         loaded = [...events, ...loaded];
         sourceNextCursor = replay.nextCursor;
-        const visible = omitReasoning ? omitAgentReasoning(loaded) : loaded;
-        const reasoningContinuesBeforePage = sourceNextCursor !== null && isAgentReasoning(loaded[0]?.event);
-        if (visible.length >= eventLimit && !reasoningContinuesBeforePage) {
+        if (loaded.length >= eventLimit) {
             break;
         }
         cursor = sourceNextCursor;
@@ -107,8 +74,7 @@ async function loadHistoryPage(
     if (sessionGenerationId === null || throughPosition === null) {
         throw new SessionError("session_history_unavailable", "The Session history is unavailable");
     }
-    const visible = omitReasoning ? omitAgentReasoning(loaded) : loaded;
-    const orderedEvents = visible.slice(-eventLimit);
+    const orderedEvents = loaded.slice(-eventLimit);
     const nextCursor = orderedEvents[0]?.cursor ?? null;
     return {
         events: {
@@ -162,7 +128,6 @@ export async function executeSessionHistoryPageLoad(
             command.sessionId,
             command.eventLimit,
             command.cursor,
-            command.omit?.includes("agent-reasoning") === true,
             recovery.queuedPromptRequests,
             async (eventLimit, cursor) => await sessions.loadSessionEvents(loadOptions, eventLimit, cursor),
         );
@@ -219,7 +184,6 @@ export async function executeSessionPreviewHistoryPageLoad(
             command.sessionId,
             command.eventLimit,
             command.cursor,
-            command.omit?.includes("agent-reasoning") === true,
             [],
             async (eventLimit, cursor) =>
                 await sessions.previewNativeSessionEvents(loadOptions, command.sessionId, eventLimit, cursor),

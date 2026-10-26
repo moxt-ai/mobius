@@ -164,7 +164,7 @@ describe("acp content limits", () => {
         }
     });
 
-    it("Given an Agent streams oversized UTF-8 reasoning chunks, When it completes, Then the event log retains only each chunk's last 24 KiB without splitting characters", async () => {
+    it("Given an Agent streams oversized UTF-8 reasoning chunks, When it completes, Then live updates retain complete chunks without history truncation metadata", async () => {
         const observer = new RecordingObserver();
         const manager = new SessionManager({
             observer,
@@ -209,22 +209,18 @@ describe("acp content limits", () => {
                 "Inspecting ",
                 "the workspace",
                 ...Array.from({ length: 8 }, (_, index) => {
-                    const prefix = ["r", "", "\u{1f600}r"][index % 3];
                     return (
-                        prefix +
-                        "\u601d\u{1f600}r".repeat(index % 3 === 2 ? 3_070 : 3_071) +
+                        "discarded prefix" +
+                        "\u601d\u{1f600}r".repeat(12_000) +
                         ` tail-${index.toString()}${"!".repeat(index % 3)}`
                     );
                 }),
             ]);
-            for (const text of reasoning) {
-                expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(24 * 1024);
-            }
             expect(
                 observer
                     .acpUpdates()
                     .flatMap((update) => (update.sessionUpdate === "agent_thought_chunk" ? [update.meta] : [])),
-            ).toEqual([undefined, undefined, ...Array.from({ length: 8 }, () => ({ truncated: true }))]);
+            ).toEqual(Array.from({ length: 10 }, () => undefined));
         } finally {
             await manager.close();
         }

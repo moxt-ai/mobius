@@ -5,6 +5,7 @@ import type { NativeSessionCommand } from "@moxt-ai/mobius-sdk/protocol";
 import { InProcessAcpAgentDefinition } from "../../../src/acp/agent/agent-definition.ts";
 import { AcpContentExternalizer } from "../../../src/acp/content/content-externalizer.ts";
 import { CodexAcpAgent } from "../../../src/acp/harness/codex/agent.ts";
+import type { AdapterResolver } from "../../../src/acp/native-history/preview-contract.ts";
 import { createRuntimeConfig } from "../../../src/runtime/config.ts";
 import { NullSessionObserver } from "../../../src/session/api/session-api.ts";
 import { NativeSessionService } from "../../../src/session/native/native-session-browser.ts";
@@ -21,6 +22,7 @@ export async function codexFixture(
     sessionIdentity: "assigned" | "native" = "assigned",
     answer = "REAL_CODEX_REPLY",
     providerOptions: Parameters<typeof FakeOpenAiProvider.start>[2] = {},
+    adapters: AdapterResolver = acpAdapters,
 ) {
     const temporary = await realpath(await mkdtemp(join(tmpdir(), "mobius-native-codex-")));
     const workspace = join(temporary, "workspace");
@@ -38,7 +40,7 @@ export async function codexFixture(
     const sessions = new SessionManager({
         observer: new NullSessionObserver(),
         store,
-        adapters: acpAdapters,
+        adapters,
         sessionIdentity,
         onSessionStatusChanged: () => undefined,
         contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>

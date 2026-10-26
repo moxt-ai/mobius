@@ -3,7 +3,6 @@ import { readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { ClaudeAdapter } from "../../src/acp/adapter/claude/adapter.ts";
-import { nativeHistoryEvents } from "../../src/acp/native-history/codex/native-history-events.ts";
 import type { AdapterResolver } from "../../src/acp/native-history/preview-contract.ts";
 import { MemorySessionEventStore } from "../../src/session/history/session-event-store.ts";
 import { fixture } from "./native-session-fixture.ts";
@@ -20,24 +19,27 @@ const cannedHistoryAdapter: AdapterResolver = (_agent, dependencies) => {
             await acp.close();
             events.close();
         },
-        previewSessionEvents: async (_query, request) =>
-            await nativeHistoryEvents(
-                request.sessionId,
-                request.nativeSessionId,
+        previewSessionEvents: async (_query, request) => {
+            events.materialize(request.sessionId, request.nativeSessionId, [
                 {
-                    coveredCommandIds: [],
-                    coveredMessageIds: [],
-                    messages: [
-                        { role: "user", text: "Read without resuming" },
-                        { activities: [], content: [], role: "assistant", text: "Preview available" },
-                    ],
-                    status: "available",
-                    truncated: false,
+                    type: "acp",
+                    payload: {
+                        sessionUpdate: "user_message_chunk",
+                        messageId: "user",
+                        content: { type: "text", text: "Read without resuming" },
+                    },
                 },
-                request.eventLimit,
-                request.cursor,
-                events,
-            ),
+                {
+                    type: "acp",
+                    payload: {
+                        sessionUpdate: "agent_message_chunk",
+                        messageId: "assistant",
+                        content: { type: "text", text: "Preview available" },
+                    },
+                },
+            ]);
+            return events.page(request.sessionId, request.eventLimit, request.cursor);
+        },
     };
 };
 

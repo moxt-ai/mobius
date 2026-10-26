@@ -12,6 +12,7 @@ export const SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND = "session.preview-history
 const pageRequestFields = {
     cursor: z.string().min(1).max(512).nullable(),
     eventLimit: z.number().int().min(1).max(10_000),
+    // Decode old clients without rejecting their request; omission has no effect.
     omit: z.array(sessionEventOmissionSchema).max(1).readonly().optional(),
     requestId: identifier,
     sessionId: identifier,

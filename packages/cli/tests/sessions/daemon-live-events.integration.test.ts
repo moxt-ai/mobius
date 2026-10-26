@@ -675,7 +675,7 @@ describe("daemon V2 live delivery", () => {
         }
     });
 
-    it("Given reasoning chunks exceed a 200-event page, When history omits reasoning details, Then 200 events remain and each marker retains its chunk's first identity", async () => {
+    it("Given reasoning exceeds a history page, When an older client requests agent-reasoning omission, Then it receives the same reasoning text and pagination as a current client", async () => {
         const fixture = await startControlledDaemon();
         try {
             const command = prompt(fixture, "stream paged reasoning");
@@ -686,35 +686,22 @@ describe("daemon V2 live delivery", () => {
                     break;
                 }
             }
-            const complete = await history(fixture, command, { eventLimit: 1_000 });
-            const firstReasoningEventIds = new Map<string, string>();
-            for (const event of complete.events) {
-                if (
-                    event.type === "acp" &&
-                    event.payload.sessionUpdate === "agent_thought_chunk" &&
-                    typeof event.payload.messageId === "string" &&
-                    !firstReasoningEventIds.has(event.payload.messageId)
-                ) {
-                    firstReasoningEventIds.set(event.payload.messageId, event.eventId);
-                }
-            }
-
-            const omitted = await history(fixture, command, { eventLimit: 200, omit: ["agent-reasoning"] });
-            const retainedReasoning = omitted.events.filter(
+            const complete = await history(fixture, command, { eventLimit: 200 });
+            const legacy = await history(fixture, command, { eventLimit: 200, omit: ["agent-reasoning"] });
+            const retainedReasoning = legacy.events.filter(
                 (event) => event.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk",
             );
 
             expect(complete.throughPosition).toBeDefined();
-            expect(omitted.throughPosition).toBe(complete.throughPosition);
-            expect(omitted.events).toHaveLength(200);
+            expect(legacy).toEqual(complete);
+            expect(legacy.events).toHaveLength(200);
             expect(retainedReasoning.length).toBeGreaterThan(0);
             for (const event of retainedReasoning) {
                 if (event.type !== "acp" || event.payload.sessionUpdate !== "agent_thought_chunk") {
                     throw new Error("Expected retained reasoning");
                 }
-                expect(event.mobiusMetadata).toEqual({ omitted: true });
-                expect(event.payload.content).toEqual({ text: "", type: "text" });
-                expect(event.eventId).toBe(firstReasoningEventIds.get(event.payload.messageId ?? ""));
+                expect(event.mobiusMetadata?.omitted).not.toBe(true);
+                expect(event.payload.content).toMatchObject({ type: "text", text: expect.stringContaining("chunk-") });
             }
         } finally {
             await fixture.close();

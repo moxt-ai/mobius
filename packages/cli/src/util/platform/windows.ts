@@ -147,6 +147,7 @@ function terminateProcess(child: ChildProcess, signal: NodeJS.Signals): void {
 // The path is data in the environment, never interpolated into PowerShell source.
 const windowsPermissions = `
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1')
 $item = Get-Item -LiteralPath $env:MOBIUS_PERMISSION_PATH -Force
 if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Unsafe path' }
@@ -168,6 +169,10 @@ if ($env:MOBIUS_PERMISSION_PRIVATE -eq '1') {
     Set-Acl -LiteralPath $item.FullName -AclObject $private
 }
 `;
+
+// Windows PowerShell's first Security module import can exceed ten seconds on
+// a cold host. Keep ACL validation bounded without rejecting a healthy startup.
+const windowsPermissionsTimeoutMs = 30_000;
 
 async function validatePathPermissions(
     path: string,
@@ -197,8 +202,8 @@ async function validatePathPermissions(
                     MOBIUS_PERMISSION_PRIVATE: privateAccess ? "1" : "0",
                 },
                 windowsHide: true,
-                signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]),
-                timeout: 10000,
+                signal: AbortSignal.any([signal, AbortSignal.timeout(windowsPermissionsTimeoutMs)]),
+                timeout: windowsPermissionsTimeoutMs,
                 maxBuffer: 16384,
             },
         );
