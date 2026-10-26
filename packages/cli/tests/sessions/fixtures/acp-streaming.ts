@@ -91,7 +91,13 @@ export async function runStreamingScenario(
             await context.client.notify(acp.methods.client.session.update, {
                 sessionId: context.params.sessionId,
                 update: {
-                    content: { text: "r".repeat(100_000), type: "text" },
+                    content: {
+                        text:
+                            "discarded prefix" +
+                            "\u601d\u{1f600}r".repeat(12_000) +
+                            ` tail-${index.toString()}${"!".repeat(index % 3)}`,
+                        type: "text",
+                    },
                     messageId: `reasoning-${turnNumber.toString()}`,
                     sessionUpdate: "agent_thought_chunk",
                 },

@@ -236,7 +236,13 @@ const contentChunkFields = {
 export const acpSessionUpdateSchema = z.discriminatedUnion("sessionUpdate", [
     z.object({ ...contentChunkFields, sessionUpdate: z.literal("user_message_chunk") }).readonly(),
     z.object({ ...contentChunkFields, sessionUpdate: z.literal("agent_message_chunk") }).readonly(),
-    z.object({ ...contentChunkFields, sessionUpdate: z.literal("agent_thought_chunk") }).readonly(),
+    z
+        .object({
+            ...contentChunkFields,
+            meta: z.object({ truncated: z.boolean().optional() }).readonly().optional(),
+            sessionUpdate: z.literal("agent_thought_chunk"),
+        })
+        .readonly(),
     z
         .object({
             content: z.array(toolCallContentSchema).max(MAX_COLLECTION_SIZE).readonly().optional(),
