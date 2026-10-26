@@ -43,6 +43,74 @@ function numberedEvents(count: number, start = 0) {
 }
 
 describe("Recording live V2 events", () => {
+    // @no-uc: Performance; a waiting durable read must return committed new events without an empty-poll round trip.
+    it("wakes a caught-up reader after a new durable event is written", async () => {
+        expect((await worker.fetch(write(), env)).status).toBe(201);
+        const path = `https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions/live-session/events`;
+        const first = await worker.fetch(new Request(`${path}?after=0&limit=100`), env);
+        const cursor = decodeSessionRecordingHistoryPage(await first.text()).tailCursor;
+        const waiting = worker.fetch(new Request(`${path}?after=${cursor}&limit=100&waitMs=5000`), env);
+        const barrier = await worker.fetch(new Request(`${path}?after=${cursor}&limit=100`), env);
+        expect(decodeSessionRecordingHistoryPage(await barrier.text()).events).toEqual([]);
+        const next = { ...event, eventId: "next-live-event", position: "1" };
+        expect(
+            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: [next] }), env)).status,
+        ).toBe(201);
+        const response = await waiting;
+        expect(response.status).toBe(200);
+        expect(decodeSessionRecordingHistoryPage(await response.text()).events).toEqual([next]);
+        expect(response.headers.get("Mobius-Recording-Wait-Supported")).toBe("1");
+    });
+
+    // @no-uc: Technical regression; abandoning a held read must cancel its wait without failing the Worker.
+    it("cancels an abandoned live read and still accepts the following reader", async () => {
+        expect((await worker.fetch(write(), env)).status).toBe(201);
+        const path = `https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions/live-session/events`;
+        const initial = await worker.fetch(new Request(`${path}?after=0&limit=100`), env);
+        const cursor = decodeSessionRecordingHistoryPage(await initial.text()).tailCursor;
+        const abort = new AbortController();
+        const waiting = worker.fetch(
+            new Request(`${path}?after=${cursor}&limit=100&waitMs=5000`, { signal: abort.signal }),
+            env,
+        );
+        const cancellation = expect(waiting).rejects.toThrow(/cancel|abort/iu);
+        expect((await worker.fetch(new Request(`${path}?after=${cursor}&limit=100`), env)).status).toBe(200);
+        abort.abort(new DOMException("The reader cancelled its live read", "AbortError"));
+        await cancellation;
+        const nextRead = worker.fetch(new Request(`${path}?after=${cursor}&limit=100&waitMs=5000`), env);
+        expect((await worker.fetch(new Request(`${path}?after=${cursor}&limit=100`), env)).status).toBe(200);
+        const next = { ...event, eventId: "after-abandoned-read", position: "1" };
+        expect(
+            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: [next] }), env)).status,
+        ).toBe(201);
+        expect(decodeSessionRecordingHistoryPage(await (await nextRead).text()).events).toEqual([next]);
+    });
+
+    // @no-uc: Compatibility; a finite empty wait must retain the last durable cursor and legacy reads stay immediate.
+    it("finishes an empty wait without moving its durable cursor", async () => {
+        expect((await worker.fetch(write(), env)).status).toBe(201);
+        const path = `https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions/live-session/events`;
+        const initial = await worker.fetch(new Request(`${path}?after=0&limit=100`), env);
+        const cursor = decodeSessionRecordingHistoryPage(await initial.text()).tailCursor;
+        const response = await worker.fetch(new Request(`${path}?after=${cursor}&limit=100&waitMs=1`), env);
+        expect(response.headers.get("Mobius-Recording-Wait-Supported")).toBe("1");
+        expect(decodeSessionRecordingHistoryPage(await response.text())).toMatchObject({
+            events: [],
+            nextCursor: null,
+            tailCursor: cursor,
+        });
+    });
+
+    // @no-uc: Technical regression; malformed long-poll budgets cannot allocate unbounded worker waiters.
+    it("rejects an invalid wait budget before reading a session", async () => {
+        const path = `https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions/live-session/events`;
+        for (const waitMs of ["-1", "10001", "1.5", "never"]) {
+            expect((await worker.fetch(new Request(`${path}?after=0&limit=100&waitMs=${waitMs}`), env)).status).toBe(
+                400,
+            );
+        }
+    });
+
     it("Given an event broadcast to browsers, When Recording receives the live event, Then its positioned representation is retained", async () => {
         expect((await worker.fetch(write(), env)).status).toBe(201);
         const response = await worker.fetch(

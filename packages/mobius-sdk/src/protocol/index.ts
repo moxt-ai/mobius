@@ -63,6 +63,7 @@ export {
     encodeSessionRecordingHistory,
     encodeSessionRecordingHistoryPage,
     encodeSessionRecordingWrite,
+    parseSessionRecordingWaitMilliseconds,
     type SessionRecordingDirectory,
     type SessionRecordingHistory,
     type SessionRecordingHistoryPage,

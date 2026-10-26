@@ -158,6 +158,15 @@ export class WorkspaceDirectoryService {
         return await this.resolvePath(this.requestedPath(id), signal);
     };
 
+    readonly describe = async (
+        bindingId: string,
+        id: string,
+        signal: AbortSignal,
+    ): Promise<{ readonly path: string; readonly label: string }> => {
+        const path = await this.resolve(bindingId, id, signal);
+        return { path, label: this.label(path) };
+    };
+
     readonly list = async (bindingId: string, id: string, signal: AbortSignal): Promise<WorkspaceDirectoryListing> => {
         const target = await this.resolve(bindingId, id, signal);
         try {

@@ -374,6 +374,24 @@ describe.sequential("Platform Recording read route", () => {
             generationReset: false,
             version: 2,
         });
+        const waited = await worker.fetch(
+            new Request(`${readUrl}&waitMs=1`, { headers: credentialHeaders(credential) }),
+            environment,
+        );
+        expect(waited.status).toBe(200);
+        expect(waited.headers.get("Mobius-Recording-Wait-Supported")).toBe("1");
+        expect(decodeSessionRecordingHistoryPage(await waited.text())).toMatchObject({
+            events: [],
+            tailCursor: "v2:1:1",
+        });
+        expect(
+            (
+                await worker.fetch(
+                    new Request(`${readUrl}&waitMs=10001`, { headers: credentialHeaders(credential) }),
+                    environment,
+                )
+            ).status,
+        ).toBe(400);
     });
 
     it("Given an enabled Project policy, When a Platform app reads Turn history through the production boundary, Then Recording serves the projected page", async () => {

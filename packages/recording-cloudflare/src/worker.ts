@@ -10,6 +10,7 @@ import {
     parseSessionRecordingPageLimit,
     parseSessionRecordingTurnCursor,
     parseSessionRecordingTurnItemCursor,
+    parseSessionRecordingWaitMilliseconds,
     SESSION_RECORDING_TURN_ITEM_ID_MAX_LENGTH,
     SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT,
     SESSION_RECORDING_TURN_PAGE_MAX_LIMIT,
@@ -21,6 +22,7 @@ import { directoryUpdateSchema } from "./entity/recording-directory-update.ts";
 import { RecordingSqlMetrics } from "./infra/recording-sql-metrics.ts";
 import { RecordingDirectory } from "./service/recording-directory.ts";
 import { projectDirectoryUpdate } from "./service/recording-directory-update.ts";
+import { RecordingEventWaiters } from "./service/recording-event-waiters.ts";
 import { SessionTurnHistory, type TurnHistoryRead } from "./service/session-turn-history.ts";
 import { RecordingDirectoryStorage } from "./storage/recording-directory-storage.ts";
 import { SessionRecordingStorage } from "./storage/session-recording-storage.ts";
@@ -85,6 +87,7 @@ function sessionRecordingRoutes(
     history: TurnHistoryRoutes,
     scheduleBackfill: (at?: Date) => Promise<void>,
     metrics: RecordingSqlMetrics,
+    waiters: RecordingEventWaiters,
 ): Hono<RecordingEnvironment> {
     return new Hono<RecordingEnvironment>()
         .onError((cause, context): Response => internalErrorResponse(cause, context.req.raw))
@@ -109,6 +112,7 @@ function sessionRecordingRoutes(
             if (!recorded) {
                 return errorResponse("recording_identity_conflict", 409);
             }
+            waiters.changed();
             if (!projected) {
                 await scheduleBackfill();
             }
@@ -192,21 +196,32 @@ function sessionRecordingRoutes(
             }
             return historyResponse(storage.read(target.projectId, target.runtimeId, target.sessionId));
         })
-        .get("/page-events", (context): Response => {
+        .get("/page-events", async (context): Promise<Response> => {
             const target = eventTarget(context.req.raw);
             const after = context.req.query("after");
             const limit = context.req.query("limit");
+            const waitValue = context.req.query("waitMs");
+            const waitMilliseconds = waitValue === undefined ? 0 : parseSessionRecordingWaitMilliseconds(waitValue);
             if (
                 target === null ||
                 after === undefined ||
                 limit === undefined ||
                 !/^(?:(?:0|[1-9][0-9]*)|v2:[1-9][0-9]*:(?:0|[1-9][0-9]*))$/.test(after) ||
-                !/^[1-9][0-9]{0,4}$/.test(limit)
+                !/^[1-9][0-9]{0,4}$/.test(limit) ||
+                waitMilliseconds === null
             ) {
                 return errorResponse("invalid_target", 400);
             }
-            const page = storage.readPage(target.projectId, target.runtimeId, target.sessionId, after, Number(limit));
-            return historyResponse(page);
+            let page = storage.readPage(target.projectId, target.runtimeId, target.sessionId, after, Number(limit));
+            if (waitMilliseconds > 0 && (page === null || page.events.length === 0)) {
+                await waiters.wait(waitMilliseconds, context.req.raw.signal);
+                page = storage.readPage(target.projectId, target.runtimeId, target.sessionId, after, Number(limit));
+            }
+            const response = historyResponse(page);
+            if (waitValue !== undefined) {
+                response.headers.set("Mobius-Recording-Wait-Supported", "1");
+            }
+            return response;
         })
         .all("*", (): Response => errorResponse("not_found", 404));
 }
@@ -381,6 +396,11 @@ const maximumPageEvents = 10_000;
 function incrementalReadQuery(query: Record<string, string | undefined>) {
     const after = query["after"];
     const limit = query["limit"];
+    const waitValue = query["waitMs"];
+    const waitMilliseconds = waitValue === undefined ? 0 : parseSessionRecordingWaitMilliseconds(waitValue);
+    if (waitMilliseconds === null || (waitValue !== undefined && after === undefined && limit === undefined)) {
+        return { error: true };
+    }
     if (after === undefined && limit === undefined) {
         return null;
     }
@@ -391,7 +411,11 @@ function incrementalReadQuery(query: Record<string, string | undefined>) {
     if (pageLimit === null) {
         return { error: true };
     }
-    return { after: after === undefined ? "0" : after, limit: pageLimit };
+    return {
+        after: after === undefined ? "0" : after,
+        limit: pageLimit,
+        ...(waitValue === undefined ? {} : { waitMs: waitMilliseconds }),
+    };
 }
 
 function readTarget(context: { readonly req: { readonly param: (name: string) => string | undefined } }) {
@@ -710,6 +734,9 @@ export function createRecordingWorker(): RecordingWorker {
                 if (incremental !== null) {
                     query.set("after", incremental.after);
                     query.set("limit", incremental.limit.toString());
+                    if (incremental.waitMs !== undefined) {
+                        query.set("waitMs", incremental.waitMs.toString());
+                    }
                 }
                 return await sessionRecordingFetch(context, query, incremental === null ? "events" : "page-events");
             },
@@ -728,7 +755,13 @@ export class SessionRecordingDurableObject extends DurableObject<RecordingWorker
         const metrics = new RecordingSqlMetrics();
         const recording = new SessionRecordingStorage(state.storage, metrics);
         this.#history = new SessionTurnHistory(recording, new SessionTurnHistoryStorage(state.storage, metrics));
-        this.#routes = sessionRecordingRoutes(recording, this.#history, this.#scheduleBackfill, metrics);
+        this.#routes = sessionRecordingRoutes(
+            recording,
+            this.#history,
+            this.#scheduleBackfill,
+            metrics,
+            new RecordingEventWaiters(),
+        );
     }
     override async fetch(request: Request): Promise<Response> {
         return await this.#routes.fetch(request);

@@ -83,10 +83,6 @@ async function prepareSession(
                               valueType: configuration.valueType,
                           }),
                   );
-        const listing = await metrics.measure(
-            "workspace-list",
-            async () => await directories.list(config.bindingId, command.directoryId, signal),
-        );
         return {
             additionalDirectories: resolved.additionalDirectoryEntries,
             agentId: command.agentId,
@@ -96,7 +92,7 @@ async function prepareSession(
             commands: prepared.commands,
             configOptions,
             directoryId: command.directoryId,
-            directoryLabel: listing.directoryLabel,
+            directoryLabel: resolved.directoryLabel,
             kind: "session.ready",
             requestId: command.requestId,
             restored: prepared.restored,

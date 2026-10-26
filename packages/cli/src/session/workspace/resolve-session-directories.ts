@@ -9,9 +9,11 @@ class ResolvedSessionDirectories {
         readonly name: string;
     }[];
     readonly cwd: string;
+    readonly directoryLabel: string;
 
     constructor(
         cwd: string,
+        directoryLabel: string,
         additionalDirectories: readonly string[],
         additionalDirectoryEntries: readonly {
             readonly directoryId: string;
@@ -21,6 +23,7 @@ class ResolvedSessionDirectories {
         this.additionalDirectories = additionalDirectories;
         this.additionalDirectoryEntries = additionalDirectoryEntries;
         this.cwd = cwd;
+        this.directoryLabel = directoryLabel;
     }
 }
 
@@ -31,7 +34,8 @@ export async function resolveSessionDirectories(
     additionalDirectoryIds: readonly string[],
     signal: AbortSignal,
 ): Promise<ResolvedSessionDirectories> {
-    const cwd = await directories.resolve(bindingId, directoryId, signal);
+    const selection = await directories.describe(bindingId, directoryId, signal);
+    const cwd = selection.path;
     const additionalDirectories: string[] = [];
     const additionalDirectoryEntries: {
         readonly directoryId: string;
@@ -50,5 +54,5 @@ export async function resolveSessionDirectories(
             name: basename(directory),
         });
     }
-    return new ResolvedSessionDirectories(cwd, additionalDirectories, additionalDirectoryEntries);
+    return new ResolvedSessionDirectories(cwd, selection.label, additionalDirectories, additionalDirectoryEntries);
 }
