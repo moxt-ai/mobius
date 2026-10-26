@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { decodeAcpSessionUpdate, type SessionEventPayload } from "@moxt-ai/mobius-sdk/protocol";
 import { revalidateExecutable, stopProcessTree } from "../../../util/process/executable.ts";
 import { AcpExecutionError } from "../../acp-error.ts";
+import type { AcpContentExternalizer } from "../../content/content-externalizer.ts";
 import { CodexAppServerClient } from "../../harness/codex/app-server-client.ts";
 import { replayCodexHistory } from "../../harness/codex/history.ts";
 import type {
@@ -15,7 +16,7 @@ import { nativeSessionIdSchema } from "../../protocol/native-session.ts";
 import { openPreviewEventCache, type PreviewEventCache } from "../preview-event-cache.ts";
 import { AgentQueryProcesses } from "../query-processes.ts";
 import { AcpSessionConnector, type AdapterSessionConnectionOptions } from "../session-events.ts";
-import { fitCodexToolEvent } from "./tool-event.ts";
+import { fitCodexToolEvent, prepareCodexToolUpdate } from "./tool-event.ts";
 
 /**
  * Previews saved Codex threads by reading the Codex app-server directly. The read is
@@ -26,11 +27,20 @@ export class CodexAdapter implements Adapter {
     readonly #queryProcesses: AgentQueryProcesses;
     readonly #connector: AcpSessionConnector;
     readonly #dependencies: AdapterDependencies;
+    readonly #contentExternalizer: Pick<AcpContentExternalizer, "update">;
     #previewCache: PreviewEventCache | null = null;
 
     constructor(dependencies: AdapterDependencies) {
         this.#dependencies = dependencies;
-        this.#connector = new AcpSessionConnector(dependencies.contentExternalizer, fitCodexToolEvent);
+        this.#contentExternalizer = {
+            update: async (sessionId, update, signal) => {
+                signal.throwIfAborted();
+                const prepared = prepareCodexToolUpdate(update);
+                signal.throwIfAborted();
+                return await dependencies.contentExternalizer.update(sessionId, prepared, signal);
+            },
+        };
+        this.#connector = new AcpSessionConnector(this.#contentExternalizer, fitCodexToolEvent);
         this.#queryProcesses = new AgentQueryProcesses(dependencies.processes, this.#connector);
     }
 
@@ -96,11 +106,7 @@ export class CodexAdapter implements Adapter {
                     client,
                     request.nativeSessionId,
                     async (update) => {
-                        const externalized = await this.#dependencies.contentExternalizer.update(
-                            sessionId,
-                            update,
-                            signal,
-                        );
+                        const externalized = await this.#contentExternalizer.update(sessionId, update, signal);
                         events.push({
                             type: "acp",
                             payload: decodeAcpSessionUpdate(JSON.stringify(fitCodexToolEvent(externalized.event))),

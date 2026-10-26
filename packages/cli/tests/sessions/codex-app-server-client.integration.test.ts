@@ -266,6 +266,57 @@ it.each(["mcpToolCall", "dynamicToolCall"])(
     },
 );
 
+it("Given a saved Codex tool result exceeds the nesting limit, When it is previewed and opened, Then marked tool content, surrounding messages and shallow images remain readable", async () => {
+    let nested: unknown = { text: "Deep saved result" };
+    for (let depth = 0; depth < 18; depth += 1) {
+        nested = { child: nested };
+    }
+    const command = await historyAppServer([
+        { id: "user", type: "userMessage", content: [{ type: "text", text: "Saved prompt" }] },
+        { id: "answer", type: "agentMessage", text: "Saved answer", phase: "final_answer" },
+        {
+            id: "tool",
+            type: "mcpToolCall",
+            server: "saved",
+            tool: "read",
+            status: "completed",
+            result: {
+                structuredContent: nested,
+                content: [{ type: "image", data: imageFixture(16).toString("base64"), mimeType: "image/png" }],
+            },
+        },
+    ]);
+    const agent = new InProcessAcpAgentDefinition("codex", "Codex", command, (options) => new CodexAcpAgent(options));
+    const preview = await previewCodexHistory(agent, process.cwd(), "saved-thread");
+    const opened = await loadCodexHistory(agent, process.cwd(), "saved-thread");
+    for (const page of [preview, opened]) {
+        const updates = page.events.flatMap((event) => (event.type === "acp" ? [event.payload] : []));
+        expect(updates).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    sessionUpdate: "user_message_chunk",
+                    content: { type: "text", text: "Saved prompt" },
+                }),
+                expect.objectContaining({
+                    sessionUpdate: "agent_message_chunk",
+                    content: { type: "text", text: "Saved answer" },
+                }),
+            ]),
+        );
+        const tool = updates.find((update) => update.sessionUpdate === "tool_call");
+        expect(JSON.stringify(tool)).toContain("[truncated: nesting depth]");
+        expect(JSON.stringify(tool)).toContain("Deep saved result");
+        expect(tool).toMatchObject({
+            content: expect.arrayContaining([
+                expect.objectContaining({
+                    type: "content",
+                    content: expect.objectContaining({ type: "external_image", imageKey: expect.any(String) }),
+                }),
+            ]),
+        });
+    }
+});
+
 it("Given a saved failed Codex turn has no assistant answer, When it is previewed and opened, Then both show the bounded native failure with a stable identity", async () => {
     const command = await historyAppServer(
         [{ id: "user", type: "userMessage", content: [{ type: "text", text: "Saved failed prompt" }] }],

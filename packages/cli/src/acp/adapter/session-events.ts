@@ -57,7 +57,7 @@ export class AdapterSessionConnection {
 
     constructor(
         options: AdapterSessionConnectionOptions,
-        externalizer: AcpContentExternalizer,
+        externalizer: Pick<AcpContentExternalizer, "update">,
         normalizeEvent: (event: unknown) => unknown,
     ) {
         const protocol = sessionConfigProtocolForAgent(options.agent.id);
@@ -177,9 +177,12 @@ export class AdapterSessionConnection {
 
 /** Reusable ACP transport implementation; each harness adapter owns its connector. */
 export class AcpSessionConnector implements AdapterSessionConnector {
-    readonly #externalizer: AcpContentExternalizer;
+    readonly #externalizer: Pick<AcpContentExternalizer, "update">;
     readonly #normalizeEvent: (event: unknown) => unknown;
-    constructor(externalizer: AcpContentExternalizer, normalizeEvent: (event: unknown) => unknown = (event) => event) {
+    constructor(
+        externalizer: Pick<AcpContentExternalizer, "update">,
+        normalizeEvent: (event: unknown) => unknown = (event) => event,
+    ) {
         this.#externalizer = externalizer;
         this.#normalizeEvent = normalizeEvent;
     }
