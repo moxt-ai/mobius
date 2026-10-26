@@ -3,7 +3,6 @@ import { RUNTIME_WORKSPACE_BINDING_ID } from "@moxt-ai/mobius-sdk/protocol";
 import type { CatalogAgent } from "../agent/catalog.ts";
 import { LocalAgentCatalog } from "../agent/catalog.ts";
 import { readStateDirectory } from "../storage/state-directory.ts";
-import type { CatalogUpdateLock } from "./catalog/catalog-update-lock.ts";
 
 export function loadDefaultWorkspace(environment: Readonly<NodeJS.ProcessEnv> = process.env): string {
     const { MOBIUS_DEFAULT_WORKSPACE: configuredWorkspace } = environment;
@@ -65,12 +64,6 @@ export interface RuntimeConfig {
      * discovery command. Undefined keeps the boot-time catalog: the command fails instead.
      */
     readonly rediscoverAgents?: (signal: AbortSignal) => Promise<readonly CatalogAgent[]>;
-    /**
-     * Serializes catalog transitions and their Relay publications across the lazy per-Agent
-     * resolver and full catalog discovery, so one writer's failed rollback cannot overwrite
-     * another writer's committed update. Undefined when this config has one catalog writer.
-     */
-    readonly withCatalogUpdate?: CatalogUpdateLock;
 }
 
 export interface RuntimeConnectionConfig {
@@ -86,7 +79,6 @@ export function createRuntimeConfig(
     reconnectTarget: RuntimeReconnectTarget | null = null,
     resolveAgent?: RuntimeConfig["resolveAgent"],
     rediscoverAgents?: RuntimeConfig["rediscoverAgents"],
-    withCatalogUpdate?: RuntimeConfig["withCatalogUpdate"],
 ): RuntimeConfig {
     const runtimeAgents = agents.map((agent) => withRuntimeEnvironment(agent, localContext.environment));
     return {
@@ -100,6 +92,5 @@ export function createRuntimeConfig(
         relayUrl: connection.relayUrl,
         ...(resolveAgent === undefined ? {} : { resolveAgent }),
         ...(rediscoverAgents === undefined ? {} : { rediscoverAgents }),
-        ...(withCatalogUpdate === undefined ? {} : { withCatalogUpdate }),
     };
 }

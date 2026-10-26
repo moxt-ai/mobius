@@ -2,8 +2,6 @@ import type { CatalogAgent as CatalogAgentDefinition } from "../../agent/catalog
 import type { discoverLocalAgentInventory } from "../../agent/discovery/discover-local-agents.ts";
 import { revalidateExecutable } from "../../util/process/executable.ts";
 import { type RuntimeConfig, withRuntimeEnvironment } from "../config.ts";
-import type { CatalogUpdateLock } from "./catalog-update-lock.ts";
-import { transitionAndPublishCatalog } from "./transition-and-publish-catalog.ts";
 
 /** The definition a command for `agentId` runs against, re-discovered when its executable changed. */
 export async function resolveCatalogAgent(
@@ -25,13 +23,12 @@ type PublishCatalog = (config: RuntimeConfig, signal: AbortSignal) => Promise<vo
  * the upgraded runtime. A failed publication rolls the swap back, keeping the relay-facing catalog
  * consistent with what this daemon would actually spawn. Concurrent commands for the same Agent
  * share one refresh instead of racing probes against the same binary, and the swap commits
- * through the shared catalog update lock so it neither overlaps nor clobbers a full discovery.
+ * through the catalog's serialized replacement so it neither overlaps nor clobbers a full discovery.
  */
 export function createCatalogAgentResolver(
     discover: DiscoverInventory,
     readConfig: () => RuntimeConfig,
     publish: PublishCatalog,
-    lock?: CatalogUpdateLock,
 ): NonNullable<RuntimeConfig["resolveAgent"]> {
     const swaps = new Map<string, Promise<void>>();
     return async (agent, signal) => {
@@ -57,17 +54,15 @@ export function createCatalogAgentResolver(
                 .readyAgents()
                 .filter((ready) => ready.id === agent.id)
                 .map((ready) => withRuntimeEnvironment(ready, config.localContext.environment));
-            await transitionAndPublishCatalog(
-                config,
+            await config.catalog.replaceAndPublish(
                 (current) => {
                     if (!current.some((entry) => entry.id === agent.id)) {
                         throw new Error(`The local Agent ${agent.id} left the catalog before its refresh completed`);
                     }
                     return [...current.filter((entry) => entry.id !== agent.id), ...rediscovered];
                 },
-                publish,
+                (publishSignal) => publish(config, publishSignal),
                 signal,
-                lock,
             );
             return config.catalog.find(agent.id);
         } finally {

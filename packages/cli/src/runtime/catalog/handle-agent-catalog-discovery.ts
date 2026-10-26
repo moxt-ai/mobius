@@ -11,7 +11,6 @@ import { send } from "../command/transport.ts";
 import { type RuntimeConfig, withRuntimeEnvironment } from "../config.ts";
 import type { RelayConnectionDiagnostics } from "../relay/diagnostics.ts";
 import { publishAgentCatalog } from "./publish-agent-catalog.ts";
-import { transitionAndPublishCatalog } from "./transition-and-publish-catalog.ts";
 
 interface CatalogDiscoveryDependencies {
     readonly config: RuntimeConfig;
@@ -79,12 +78,10 @@ export function createAgentCatalogDiscoveryHandler(dependencies: CatalogDiscover
                 operationSignal.throwIfAborted();
                 // The published snapshot answers the command: a concurrent resolver swap that
                 // commits after this publication describes its own reply, not this one.
-                const published = await transitionAndPublishCatalog(
-                    config,
+                const published = await config.catalog.replaceAndPublish(
                     () => readyAgents.map((agent) => withRuntimeEnvironment(agent, config.localContext.environment)),
-                    publishAgentCatalog,
+                    (publishSignal) => publishAgentCatalog(config, publishSignal),
                     operationSignal,
-                    config.withCatalogUpdate,
                 );
                 operationSignal.throwIfAborted();
                 if (socket.readyState === WebSocket.OPEN) {

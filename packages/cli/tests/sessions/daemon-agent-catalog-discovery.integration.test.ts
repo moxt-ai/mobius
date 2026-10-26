@@ -23,7 +23,6 @@ import { expect, test } from "vitest";
 import { discoverLocalAgentInventory } from "../../src/agent/discovery/discover-local-agents.ts";
 import type { LocalAgentSpecification } from "../../src/agent/specification/agent-specification.ts";
 import { DirectAcpAgentSpecification } from "../../src/agent/specification/agent-specification.ts";
-import { createCatalogUpdateLock } from "../../src/runtime/catalog/catalog-update-lock.ts";
 import { publishAgentCatalog } from "../../src/runtime/catalog/publish-agent-catalog.ts";
 import { createCatalogAgentResolver } from "../../src/runtime/catalog/resolve-catalog-agent.ts";
 import { createRuntimeConfig, RuntimeLocalContext } from "../../src/runtime/config.ts";
@@ -343,15 +342,13 @@ test("Given the daemon started before an Agent was installed, When the Relay req
     if (inventory.readyAgents().length !== 1) {
         throw new Error(`Expected exactly one ready Agent, got: ${JSON.stringify(inventory.discoveries)}`);
     }
-    const withCatalogUpdate = createCatalogUpdateLock();
     const config: ReturnType<typeof createRuntimeConfig> = createRuntimeConfig(
         { channelId: "channel_catalog", defaultWorkspace: workspace, relayUrl },
         inventory.readyAgents(),
         new RuntimeLocalContext(stateDirectory, environment),
         null,
-        createCatalogAgentResolver(discover, () => config, publishAgentCatalog, withCatalogUpdate),
+        createCatalogAgentResolver(discover, () => config, publishAgentCatalog),
         (refreshSignal: AbortSignal) => discover(refreshSignal).then((result) => result.readyAgents()),
-        withCatalogUpdate,
     );
     const cancellation = new AbortController();
     const runtime = runRuntime(config, cancellation.signal);
@@ -426,15 +423,13 @@ test("Given a full catalog discovery is publishing, When the per-Agent resolver 
     if (inventory.readyAgents().length !== 1) {
         throw new Error(`Expected exactly one ready Agent, got: ${JSON.stringify(inventory.discoveries)}`);
     }
-    const withCatalogUpdate = createCatalogUpdateLock();
     const config: ReturnType<typeof createRuntimeConfig> = createRuntimeConfig(
         { channelId: "channel_catalog_race", defaultWorkspace: workspace, relayUrl },
         inventory.readyAgents(),
         new RuntimeLocalContext(stateDirectory, environment),
         null,
-        createCatalogAgentResolver(discover, () => config, publishAgentCatalog, withCatalogUpdate),
+        createCatalogAgentResolver(discover, () => config, publishAgentCatalog),
         (refreshSignal: AbortSignal) => discover(refreshSignal).then((result) => result.readyAgents()),
-        withCatalogUpdate,
     );
     const cancellation = new AbortController();
     const runtime = runRuntime(config, cancellation.signal);
@@ -539,27 +534,22 @@ test("Given a full catalog discovery has published, When a queued per-Agent reso
     if (inventory.readyAgents().length !== 1) {
         throw new Error(`Expected exactly one ready Agent, got: ${JSON.stringify(inventory.discoveries)}`);
     }
-    const withCatalogUpdate = createCatalogUpdateLock();
-    // The lock call order is the queue order: call 1 is the full discovery's critical section,
-    // call 2 is the resolver's queued swap. Recording it lets the test hold the discovery's
-    // publication open until the resolver is provably waiting behind it.
-    let lockCalls = 0;
-    const resolverQueued = Promise.withResolvers<void>();
-    const recordingLock: ReturnType<typeof createCatalogUpdateLock> = (update) => {
-        lockCalls += 1;
-        if (lockCalls === 2) {
-            resolverQueued.resolve();
-        }
-        return withCatalogUpdate(update);
-    };
+    const resolverDiscovered = Promise.withResolvers<void>();
     const config: ReturnType<typeof createRuntimeConfig> = createRuntimeConfig(
         { channelId: "channel_catalog_reply", defaultWorkspace: workspace, relayUrl },
         inventory.readyAgents(),
         new RuntimeLocalContext(stateDirectory, environment),
         null,
-        createCatalogAgentResolver(discover, () => config, publishAgentCatalog, recordingLock),
+        createCatalogAgentResolver(
+            async (signal) => {
+                const result = await discover(signal);
+                resolverDiscovered.resolve();
+                return result;
+            },
+            () => config,
+            publishAgentCatalog,
+        ),
         (refreshSignal: AbortSignal) => discover(refreshSignal).then((result) => result.readyAgents()),
-        recordingLock,
     );
     const cancellation = new AbortController();
     const runtime = runRuntime(config, cancellation.signal);
@@ -595,7 +585,9 @@ test("Given a full catalog discovery has published, When a queued per-Agent reso
                 sessionId: "session-catalog-discovery-reply",
             }),
         );
-        await resolverQueued.promise;
+        // Complete the resolver's probe before releasing the publication's HTTP response.
+        // Its catalog replacement queues while that response travels back to the daemon.
+        await resolverDiscovered.promise;
 
         // The full discovery's publication succeeds and the lock releases; the queued resolver
         // swap commits its newer snapshot before the discovery handler resumes to answer.
