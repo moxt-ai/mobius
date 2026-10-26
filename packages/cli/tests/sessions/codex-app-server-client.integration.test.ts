@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { CodexAppServerClient } from "../../src/acp/harness/codex/app-server-client.ts";
-import { readCodexFullHistory } from "../../src/acp/native-history/codex/codex-history.ts";
 import { stopProcessTree } from "../../src/util/process/executable.ts";
+import { previewCodexHistory } from "../support/codex-history-preview.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -63,7 +63,8 @@ input.on("line", (line) => {
             id: "turn-" + page,
             status: "completed",
             error: null,
-            items: [{ id: "message-" + page, phase: "final_answer", text: "x".repeat(9 * 1024 * 1024), type: "agentMessage" }],
+            padding: "x".repeat(9 * 1024 * 1024),
+            items: [{ id: "message-" + page, phase: "final_answer", text: "Reply " + page, type: "agentMessage" }],
         }],
         nextCursor: page < 3 ? String(page + 1) : null,
     };
@@ -126,10 +127,6 @@ it("Given paginated Codex history exceeds 32 MiB across consumed responses, When
     const command = await historyAppServer();
     const agent = new LocalAgentDefinition("codex", "Codex", command, []);
 
-    await expect(
-        readCodexFullHistory(agent, process.cwd(), "large-history", AbortSignal.timeout(30_000)),
-    ).resolves.toMatchObject({
-        history: { status: "available" },
-        nativeSessionId: "large-history",
-    });
+    const page = await previewCodexHistory(agent, process.cwd(), "large-history");
+    expect(page.events).toHaveLength(4);
 });

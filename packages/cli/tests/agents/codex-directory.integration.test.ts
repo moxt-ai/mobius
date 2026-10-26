@@ -1,8 +1,63 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { readCodexFullHistory } from "../../src/acp/native-history/codex/codex-history.ts";
+import { harnessAdapters } from "../../src/acp/adapter/registry.ts";
 import { codexFixture } from "../support/agents/codex-native.ts";
+import { previewCodexHistory } from "../support/codex-history-preview.ts";
+
+it("Given a saved Codex conversation with an active writer, When it is previewed, Then history keeps the harness message identities and the writer can continue", async () => {
+    const f = await codexFixture("native", "PREVIEW_REPLY", {}, harnessAdapters);
+    try {
+        const id = await f.seed("Preview this conversation");
+        const options = {
+            agent: f.agent,
+            cwd: f.workspace,
+            additionalDirectories: [],
+            sessionId: "preview",
+            signal: AbortSignal.timeout(30_000),
+        };
+        const page = await f.sessions.previewNativeSessionEvents(options, id, 100, null);
+        const messages = page.events.flatMap((event) =>
+            event.type === "acp" &&
+            (event.payload.sessionUpdate === "user_message_chunk" ||
+                event.payload.sessionUpdate === "agent_message_chunk")
+                ? [event.payload]
+                : [],
+        );
+        expect(messages).toContainEqual(
+            expect.objectContaining({ content: { type: "text", text: "Preview this conversation" } }),
+        );
+        expect(messages.length).toBeGreaterThanOrEqual(2);
+        const newest = await f.sessions.previewNativeSessionEvents(options, id, 1, null);
+        expect(newest.nextCursor).not.toBeNull();
+        const older = await f.sessions.previewNativeSessionEvents(options, id, 1, newest.nextCursor);
+        expect([...older.events, ...newest.events].map((event) => event.eventId)).toEqual(
+            page.events.slice(-2).map((event) => event.eventId),
+        );
+        const live = await f.sessions.loadSessionEvents({ ...options, sessionId: id }, 100, null);
+        const liveMessageIds = live.events.flatMap((event) =>
+            event.type === "acp" && event.payload.sessionUpdate === "agent_message_chunk"
+                ? [event.payload.messageId]
+                : [],
+        );
+        expect(liveMessageIds.length).toBeGreaterThan(0);
+        expect(
+            messages
+                .filter((message) => message.sessionUpdate === "agent_message_chunk")
+                .map((message) => message.messageId),
+        ).toEqual([...new Set(liveMessageIds)]);
+        await f.prompt(id, "Continue after preview");
+        const continued = await f.sessions.previewNativeSessionEvents(options, id, 100, null);
+        expect(continued.events).toContainEqual(
+            expect.objectContaining({
+                type: "acp",
+                payload: expect.objectContaining({ content: { type: "text", text: "Continue after preview" } }),
+            }),
+        );
+    } finally {
+        await f.close();
+    }
+});
 
 it("Given saved Codex threads, When its directory is listed through the in-process Agent, Then every thread opens without a synthesized submitted-prompt echo", async () => {
     const f = await codexFixture();
@@ -106,22 +161,28 @@ it("Given an open Codex conversation with fifteen turns, When history is read wh
         if (entry === undefined) {
             throw new Error("Missing native conversation");
         }
-        const { history } = await readCodexFullHistory(f.agent, f.workspace, id, AbortSignal.timeout(30_000));
-        expect(history).toMatchObject({ status: "available", truncated: false });
-        if (history.status !== "available") {
-            throw new Error("Missing native history");
-        }
-        expect(history.messages.filter((message) => message.role === "user").map((message) => message.text)).toEqual(
-            Array.from({ length: 15 }, (_, index) => `Question ${index + 1}`),
-        );
+        const history = await previewCodexHistory(f.agent, f.workspace, id);
+        expect(history.truncated).toBe(false);
+        expect(
+            history.events.flatMap((event) =>
+                event.type === "acp" &&
+                event.payload.sessionUpdate === "user_message_chunk" &&
+                event.payload.content.type === "text"
+                    ? [event.payload.content.text]
+                    : [],
+            ),
+        ).toEqual(Array.from({ length: 15 }, (_, index) => `Question ${index + 1}`));
         await f.prompt(id, "Continue after history preview");
-        const resumed = await readCodexFullHistory(f.agent, f.workspace, id, AbortSignal.timeout(30_000));
-        expect(resumed.history).toMatchObject({
-            status: "available",
-            messages: expect.arrayContaining([
-                expect.objectContaining({ role: "user", text: "Continue after history preview" }),
-            ]),
-        });
+        const resumed = await previewCodexHistory(f.agent, f.workspace, id);
+        expect(resumed.events).toContainEqual(
+            expect.objectContaining({
+                type: "acp",
+                payload: expect.objectContaining({
+                    sessionUpdate: "user_message_chunk",
+                    content: { type: "text", text: "Continue after history preview" },
+                }),
+            }),
+        );
     } finally {
         await f.close();
     }
@@ -131,17 +192,19 @@ it("Given Codex saved tools and a reply exceeding the history budget, When histo
     const f = await codexFixture("native", "Large reply ".repeat(30_000));
     try {
         const id = await f.seed("Use two shell tools successfully, then reply");
-        const { history } = await readCodexFullHistory(f.agent, f.workspace, id, AbortSignal.timeout(30_000));
-        expect(history).toMatchObject({ status: "available", truncated: true });
-        if (history.status !== "available") {
-            throw new Error("Missing rich history");
-        }
-        const assistants = history.messages.filter((message) => message.role === "assistant");
-        const tools = assistants
-            .flatMap((message) => message.activities)
-            .filter((activity) => activity.activityType === "tool");
+        const history = await previewCodexHistory(f.agent, f.workspace, id);
+        expect(history.truncated).toBe(true);
+        const updates = history.events.flatMap((event) => (event.type === "acp" ? [event.payload] : []));
+        const tools = updates.filter((update) => update.sessionUpdate === "tool_call");
         expect(tools.length).toBeGreaterThanOrEqual(2);
-        expect(assistants.some((message) => message.text.includes("Large reply"))).toBe(true);
+        expect(
+            updates.some(
+                (update) =>
+                    update.sessionUpdate === "agent_message_chunk" &&
+                    update.content.type === "text" &&
+                    update.content.text.includes("Large reply"),
+            ),
+        ).toBe(true);
         expect(JSON.stringify(history).length).toBeLessThan(300_000);
     } finally {
         await f.close();
@@ -155,19 +218,16 @@ it("Given real Codex applies a patch, When saved history is read, Then the file 
     try {
         const id = await f.seed("Use a tool to create the requested file");
         expect(await readFile(join(f.workspace, "result.txt"), "utf8")).toBe("created by Codex\n");
-        const { history } = await readCodexFullHistory(f.agent, f.workspace, id, AbortSignal.timeout(30_000));
-        if (history.status !== "available") {
-            throw new Error("Missing patch history");
-        }
-        const changeIndex = history.messages.findIndex(
-            (message) =>
-                message.role === "assistant" &&
-                message.activities.some(
-                    (activity) => activity.activityType === "tool" && JSON.stringify(activity).includes("result.txt"),
-                ),
+        const history = await previewCodexHistory(f.agent, f.workspace, id);
+        const updates = history.events.flatMap((event) => (event.type === "acp" ? [event.payload] : []));
+        const changeIndex = updates.findIndex(
+            (update) => update.sessionUpdate === "tool_call" && JSON.stringify(update).includes("result.txt"),
         );
-        const answerIndex = history.messages.findIndex(
-            (message) => message.role === "assistant" && message.text.includes("PATCH_REPLY"),
+        const answerIndex = updates.findIndex(
+            (update) =>
+                update.sessionUpdate === "agent_message_chunk" &&
+                update.content.type === "text" &&
+                update.content.text.includes("PATCH_REPLY"),
         );
         expect(changeIndex).toBeGreaterThanOrEqual(0);
         expect(answerIndex).toBeGreaterThan(changeIndex);
