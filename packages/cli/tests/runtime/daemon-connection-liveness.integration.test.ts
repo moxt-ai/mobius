@@ -913,7 +913,7 @@ describe("daemon relay connection liveness", () => {
                         additionalDirectoryIds: [],
                         agentId: "codex",
                         bindingId: "workspace",
-                        commandId: "reconciliation-command",
+                        commandId: daemonSockets.length === 1 ? "reconciliation-command" : "fresh-command",
                         directoryId: "default",
                         disposition: "reject",
                         images: [],
@@ -1082,9 +1082,28 @@ describe("daemon relay connection liveness", () => {
             while (decodeMessageKind(freshFrame.text) !== SESSION_EVENT_KIND) {
                 freshFrame = await freshFrames.next();
             }
-            const freshReady = decodeSessionEventEnvelope(freshFrame.text);
-            expect(freshReady.events.every((event) => event.sessionId === "fresh-session")).toBe(true);
-            expect(freshReady.events).toEqual(
+            const freshEvents = [...decodeSessionEventEnvelope(freshFrame.text).events];
+            while (
+                !freshEvents.some(
+                    (event) =>
+                        event.sessionId === "fresh-session" &&
+                        event.type === "lifecycle-metadata" &&
+                        event.payload.kind === "prompt.requested",
+                )
+            ) {
+                (await timer.waitForTask(SESSION_EVENT_BATCH_WINDOW_MILLISECONDS)).run();
+                freshFrame = await freshFrames.next();
+                if (decodeMessageKind(freshFrame.text) === SESSION_EVENT_KIND) {
+                    freshEvents.push(...decodeSessionEventEnvelope(freshFrame.text).events);
+                }
+            }
+            // A restart retains terminal facts, while no earlier content or admission is replayed.
+            expect(
+                freshEvents
+                    .filter((event) => event.sessionId !== "fresh-session")
+                    .every((event) => event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed"),
+            ).toBe(true);
+            expect(freshEvents).toEqual(
                 expect.arrayContaining([
                     expect.objectContaining({
                         type: "lifecycle-metadata",
@@ -1092,7 +1111,7 @@ describe("daemon relay connection liveness", () => {
                     }),
                 ]),
             );
-            expect(freshReady).not.toHaveProperty("delivery");
+            expect(decodeSessionEventEnvelope(freshFrame.text)).not.toHaveProperty("delivery");
             expect(await readdir(stateDirectory)).not.toContain("events");
         } finally {
             cancellation.abort();

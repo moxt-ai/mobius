@@ -144,6 +144,10 @@ export async function createMobiusRuntimeEngine(
 export class MobiusRuntimeEngine {
     readonly #config: RuntimeConfig;
     readonly #options: MobiusRuntimeEngineOptions;
+    #activeTurnCount = 0;
+    get activeTurnCount(): number {
+        return this.#activeTurnCount;
+    }
     #state: MobiusRuntimeState = new IdleMobiusRuntimeState();
 
     constructor(config: RuntimeConfig, options: MobiusRuntimeEngineOptions = {}) {
@@ -161,6 +165,9 @@ export class MobiusRuntimeEngine {
         try {
             await runRuntime(this.#config, signal, undefined, {
                 ...(this.#options.turnActivity === undefined ? {} : { turnActivity: this.#options.turnActivity }),
+                onExecutionCountChange: (count) => {
+                    this.#activeTurnCount = count;
+                },
                 ...(this.#options.onConnectionStatus === undefined
                     ? {}
                     : { onConnectionStatus: this.#options.onConnectionStatus }),
@@ -172,6 +179,7 @@ export class MobiusRuntimeEngine {
                     : { processLogsDirectory: this.#options.processLogsDirectory }),
             });
         } finally {
+            this.#activeTurnCount = 0;
             this.#state = new FinishedMobiusRuntimeState();
         }
     };

@@ -168,7 +168,7 @@ export interface SessionEventPage {
 }
 
 export interface SessionEventStore {
-    readonly append: (sessionId: string, event: SessionEventPayload) => SessionLiveEvent;
+    readonly append: (sessionId: string, event: SessionEventPayload, recordedAt?: string) => SessionLiveEvent;
     readonly close: () => void;
     /**
      * The projected tool call announced with this identifier in its current
@@ -197,12 +197,13 @@ function liveEvent(
     eventId: string,
     position: number,
     event: SessionEventPayload,
+    recordedAt = new Date().toISOString(),
 ): SessionLiveEvent {
     return {
         eventId,
         ...event,
         position: position.toString(),
-        recordedAt: new Date().toISOString(),
+        recordedAt,
         sessionGenerationId,
         sessionId,
     };
@@ -254,7 +255,7 @@ export class MemorySessionEventStore implements SessionEventStore {
             return resolved;
         };
 
-    readonly append = (sessionId: string, event: SessionEventPayload): SessionLiveEvent => {
+    readonly append = (sessionId: string, event: SessionEventPayload, recordedAt?: string): SessionLiveEvent => {
         const session = this.#session(sessionId);
         const allocatedPosition = this.#allocatedPositionBySession.get(sessionId) ?? 9_999;
         if (allocatedPosition === Number.MAX_SAFE_INTEGER) {
@@ -268,6 +269,7 @@ export class MemorySessionEventStore implements SessionEventStore {
             this.#eventIds.allocate(sessionId, session.sessionGenerationId),
             position,
             event,
+            recordedAt,
         );
         session.apply(recorded, this.#resolver(session));
         return recorded;
@@ -321,6 +323,9 @@ export class MemorySessionEventStore implements SessionEventStore {
 }
 
 export class CachedSessionEventStore implements SessionEventStore {
+    readonly #terminalOutcomes: (
+        sessionId: string,
+    ) => readonly { readonly event: SessionEventPayload; readonly recordedAt: string }[];
     readonly #cacheTable: SessionEventCacheTable;
     readonly #eventIds: SessionEventIdAllocator;
     readonly #liveEventPositions: SessionLiveEventPosition;
@@ -331,7 +336,11 @@ export class CachedSessionEventStore implements SessionEventStore {
         cacheTable: SessionEventCacheTable,
         liveEventPositions: SessionLiveEventPosition,
         eventIds: SessionEventIdAllocator = new InMemorySessionEventIdAllocator(),
+        terminalOutcomes: (
+            sessionId: string,
+        ) => readonly { readonly event: SessionEventPayload; readonly recordedAt: string }[] = () => [],
     ) {
+        this.#terminalOutcomes = terminalOutcomes;
         this.#eventIds = eventIds;
         this.#liveEventPositions = liveEventPositions;
         this.#cacheTable = cacheTable;
@@ -369,7 +378,7 @@ export class CachedSessionEventStore implements SessionEventStore {
             return resolved;
         };
 
-    readonly append = (sessionId: string, event: SessionEventPayload): SessionLiveEvent => {
+    readonly append = (sessionId: string, event: SessionEventPayload, recordedAt?: string): SessionLiveEvent => {
         if (this.#flushSchedule.kind === "closed") {
             throw new Error("The V2 Session event store is closed");
         }
@@ -381,6 +390,7 @@ export class CachedSessionEventStore implements SessionEventStore {
             this.#eventIds.allocate(sessionId, session.sessionGenerationId),
             position,
             event,
+            recordedAt,
         );
         session.apply(recorded, this.#resolver(sessionId, session));
         this.#sessions.set(sessionId, session);
@@ -483,6 +493,10 @@ export class CachedSessionEventStore implements SessionEventStore {
         this.#deletePersisted(sessionId, previous?.sessionGenerationId);
         const sessionGenerationId = randomUUID();
         this.#sessions.set(sessionId, new SessionEvents(sessionGenerationId));
+        // Native replay replaces content, while execution facts remain owned by the ledger.
+        for (const { event, recordedAt } of this.#terminalOutcomes(sessionId)) {
+            this.append(sessionId, event, recordedAt);
+        }
     };
 
     readonly materializedEventCount = (sessionId: string): number =>

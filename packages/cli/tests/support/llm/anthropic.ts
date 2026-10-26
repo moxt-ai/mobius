@@ -236,7 +236,7 @@ export class FakeAnthropicProvider implements AsyncDisposable {
         model: string,
         answer: string,
         options: {
-            readonly beforeFirstText?: (scenario: FakeProviderScenario) => Promise<void>;
+            readonly beforeFirstText?: (scenario: FakeProviderScenario, signal: AbortSignal) => Promise<void>;
             readonly disconnectsBeforeSuccess?: number;
             readonly readPath?: string;
             readonly subagent?: SubagentScript;
@@ -245,6 +245,8 @@ export class FakeAnthropicProvider implements AsyncDisposable {
         const requests: ProviderRequestDiagnostic[] = [];
         let disconnectsRemaining = options.disconnectsBeforeSuccess ?? 0;
         const server = createServer(async (request, response) => {
+            const disconnected = new AbortController();
+            response.once("close", () => disconnected.abort());
             let body = "";
             for await (const chunk of request) {
                 body += chunk.toString();
@@ -288,8 +290,9 @@ export class FakeAnthropicProvider implements AsyncDisposable {
                     ? { type: "text", text: selectedAnswer }
                     : { type: "tool_use", id: tool.id, name: tool.name, input: tool.input };
             const stopReason = tool === undefined ? "end_turn" : "tool_use";
-            if (tool === undefined) {
-                await options.beforeFirstText?.(scenario);
+            // Startup probes such as /api/hello are not model requests.
+            if (tool === undefined && Array.isArray(payload["messages"])) {
+                await options.beforeFirstText?.(scenario, disconnected.signal);
             }
             if (payload["stream"] === true) {
                 sendStream(response, model, content, responseChunks(selectedAnswer, scenario), stopReason);

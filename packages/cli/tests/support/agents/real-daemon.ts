@@ -19,13 +19,18 @@ import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { type WebSocket, WebSocketServer } from "ws";
 import { discoverLocalAgentInventory } from "../../../src/agent/discovery/discover-local-agents.ts";
 import type { LocalAgentSpecification } from "../../../src/agent/specification/agent-specification.ts";
-import { openMobiusCliInstallation } from "../../../src/daemon/pairing/pair-local-machine.ts";
+import { sendLocalRequest } from "../../../src/daemon/control/local-client.ts";
+import { lifecycleResponse } from "../../../src/daemon/control/protocol.ts";
+import {
+    openMobiusCliInstallation,
+    openMobiusControlInstallation,
+} from "../../../src/daemon/pairing/pair-local-machine.ts";
 import { createRuntimeConfig, RuntimeLocalContext } from "../../../src/runtime/config.ts";
 import { runRuntime } from "../../../src/runtime/run.ts";
 import { systemTimer, type Timer } from "../../../src/util/timer.ts";
 
 export interface RealDaemonPeer {
-    readonly restart: () => Promise<void>;
+    readonly restart: (mode?: "crash") => Promise<void>;
     readonly send: (message: string) => void;
     readonly sessionId: string;
     readonly workspace: string;
@@ -191,16 +196,27 @@ export async function withRealDaemon(
         const pendingEvents: string[] = [];
         const sessionId = `real_${specification.id}_${randomUUID()}`;
         await scenario({
-            restart: async () => {
+            restart: async (mode) => {
+                messages.length = 0;
+                pendingEvents.length = 0;
+                connected = Promise.withResolvers<void>();
                 if (launch === "managed") {
-                    await cli(["quit"]);
+                    if (mode === "crash") {
+                        const control = await openMobiusControlInstallation(signal, cliEnvironment);
+                        const status = lifecycleResponse.parse(
+                            await sendLocalRequest(control.stateDirectory, "manager", { kind: "status" }, signal),
+                        );
+                        if (status.kind !== "status" || status.worker === null) {
+                            throw new Error("The managed worker is unavailable for SIGKILL");
+                        }
+                        process.kill(status.worker.pid, "SIGKILL");
+                    } else {
+                        await cli(["quit"]);
+                    }
                 } else {
                     execution.abort();
                     await runtime;
                 }
-                messages.length = 0;
-                pendingEvents.length = 0;
-                connected = Promise.withResolvers<void>();
                 await start();
                 await connected.promise;
             },

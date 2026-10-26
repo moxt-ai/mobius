@@ -402,6 +402,10 @@ describe("daemon V2 live delivery", () => {
         try {
             const command = { ...prompt(restarted, "second allocation"), commandId: "second-allocation" };
             sendText(restarted.socket, encodeSessionPromptCommand(command));
+            const retainedOutcome = await nextLive(restarted);
+            expect(
+                retainedOutcome.type === "lifecycle-metadata" && retainedOutcome.payload.kind === "prompt.completed",
+            ).toBe(true);
             let event = await nextLive(restarted);
             expect(event.sessionGenerationId).not.toBe(firstGenerationId);
             expect(event.eventId.startsWith(`event-${event.sessionGenerationId}-`)).toBe(true);

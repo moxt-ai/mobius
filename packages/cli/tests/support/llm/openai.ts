@@ -478,7 +478,7 @@ export class FakeOpenAiProvider implements AsyncDisposable {
         model: string,
         answer: string,
         options: {
-            readonly beforeFirstText?: () => Promise<void>;
+            readonly beforeFirstText?: (signal: AbortSignal) => Promise<void>;
             readonly fallbackPrompt?: string;
             readonly commentary?: string;
             readonly patch?: string;
@@ -510,6 +510,8 @@ export class FakeOpenAiProvider implements AsyncDisposable {
         let activeScenario: FakeProviderScenario | undefined;
         let failedMarkerRequests = 0;
         const server = createServer(async (request, response) => {
+            const disconnected = new AbortController();
+            response.once("close", () => disconnected.abort());
             if (request.method === "GET" && request.url?.endsWith("/models") === true) {
                 response.writeHead(200, { "content-type": "application/json" });
                 response.end(
@@ -592,7 +594,7 @@ export class FakeOpenAiProvider implements AsyncDisposable {
             if (request.url?.endsWith("/responses") === true) {
                 response.writeHead(200, responseHeaders());
                 if (tool === undefined) {
-                    await options.beforeFirstText?.();
+                    await options.beforeFirstText?.(disconnected.signal);
                     sendResponsesText(response, model, selectedAnswer, selectedChunks, options.commentary);
                 } else {
                     sendResponsesToolCall(response, model, tool);
@@ -600,7 +602,7 @@ export class FakeOpenAiProvider implements AsyncDisposable {
                 return;
             }
             if (tool === undefined) {
-                await options.beforeFirstText?.();
+                await options.beforeFirstText?.(disconnected.signal);
             }
             if (payload["stream"] === false) {
                 sendChatCompletion(response, model, selectedAnswer, tool);
