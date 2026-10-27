@@ -4226,6 +4226,16 @@ export class ClaudeAcpAgent {
                                 });
                             }
                         }
+                        if (currentStreamMessageId === undefined) {
+                            // Boundary-only SDK events before message_start produce no chunks.
+                            if (
+                                message.event.type !== "content_block_start" &&
+                                message.event.type !== "content_block_delta"
+                            ) {
+                                break;
+                            }
+                            throw RequestError.internalError({ code: "invalid_message_boundary" });
+                        }
                         for (const notification of streamEventToAcpNotifications(
                             message,
                             params.sessionId,
@@ -7801,11 +7811,7 @@ export function promptToClaude(prompt: PromptRequest): SDKUserMessage {
  * are never streamed, so their (stable) SDK uuid is used instead. ACP message
  * ids are opaque strings, so no particular format is required.
  */
-export function messageIdForGrouping(message: {
-    type?: string;
-    uuid?: string | null;
-    message?: unknown;
-}): string | undefined {
+export function messageIdForGrouping(message: { type?: string; uuid?: string | null; message?: unknown }): string {
     if (message.type === "assistant") {
         const inner = message.message;
         const apiId = inner && typeof inner === "object" && "id" in inner ? (inner as { id?: unknown }).id : undefined;
@@ -7813,7 +7819,10 @@ export function messageIdForGrouping(message: {
             return apiId;
         }
     }
-    return typeof message.uuid === "string" && message.uuid.length > 0 ? message.uuid : undefined;
+    if (typeof message.uuid === "string" && message.uuid.length > 0) {
+        return message.uuid;
+    }
+    throw RequestError.internalError({ code: "invalid_source_message" });
 }
 
 /** Built-in tools that drive the task list (headless/SDK sessions use these
@@ -7981,7 +7990,7 @@ export function toAcpNotifications(
     toolUseCache: ToolUseCache,
     client: AcpClient,
     logger: Logger,
-    options?: {
+    options: {
         registerHooks?: boolean;
         clientCapabilities?: ClientCapabilities;
         parentToolUseId?: string | null;
@@ -7999,7 +8008,7 @@ export function toAcpNotifications(
         // user/agent message and thought chunks so clients can group streamed chunks
         // into a single message. Required whenever content produces message/thought
         // chunks; tool-only updates do not need a message identity.
-        messageId?: string;
+        messageId: string;
         // The SDK user message's `tool_use_result`: the structured Output object of
         // the tool_result this message carries (shape is per-tool). Used to render
         // Agent/Task results from the structured subagent report instead of the raw
@@ -8023,10 +8032,7 @@ export function toAcpNotifications(
         if (content.length === 0) {
             return [];
         }
-        const messageId = options?.messageId;
-        if (typeof messageId !== "string" || messageId.length === 0) {
-            throw RequestError.internalError({ code: "invalid_native_message_id" });
-        }
+        const messageId = options.messageId;
         const update: SessionNotification["update"] = {
             sessionUpdate: role === "assistant" ? "agent_message_chunk" : "user_message_chunk",
             messageId,
@@ -8071,10 +8077,7 @@ export function toAcpNotifications(
             case "text":
             case "text_delta": {
                 if (chunk.text) {
-                    const messageId = options?.messageId;
-                    if (typeof messageId !== "string" || messageId.length === 0) {
-                        throw RequestError.internalError({ code: "invalid_native_message_id" });
-                    }
+                    const messageId = options.messageId;
                     update = {
                         sessionUpdate: role === "assistant" ? "agent_message_chunk" : "user_message_chunk",
                         messageId,
@@ -8087,10 +8090,7 @@ export function toAcpNotifications(
                 break;
             }
             case "image": {
-                const messageId = options?.messageId;
-                if (typeof messageId !== "string" || messageId.length === 0) {
-                    throw RequestError.internalError({ code: "invalid_native_message_id" });
-                }
+                const messageId = options.messageId;
                 update = {
                     sessionUpdate: role === "assistant" ? "agent_message_chunk" : "user_message_chunk",
                     messageId,
@@ -8108,10 +8108,7 @@ export function toAcpNotifications(
                 // Recent models default `thinking.display` to "omitted", which streams
                 // signature-only thinking blocks whose text is empty.
                 if (chunk.thinking) {
-                    const messageId = options?.messageId;
-                    if (typeof messageId !== "string" || messageId.length === 0) {
-                        throw RequestError.internalError({ code: "invalid_native_message_id" });
-                    }
+                    const messageId = options.messageId;
                     update = {
                         sessionUpdate: "agent_thought_chunk",
                         messageId,
@@ -8457,12 +8454,12 @@ export function streamEventToAcpNotifications(
     toolUseCache: ToolUseCache,
     client: AcpClient,
     logger: Logger,
-    options?: {
+    options: {
         clientCapabilities?: ClientCapabilities;
         cwd?: string;
         taskState?: TaskState;
         emittedToolCalls?: Set<string>;
-        messageId?: string;
+        messageId: string;
         streamedToolInputs?: StreamedToolInputCache;
         compactionId?: string;
     },
