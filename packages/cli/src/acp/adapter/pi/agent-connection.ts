@@ -14,6 +14,11 @@ export class PiAgentConnection extends EndpointAgentConnection {
             command: options.command,
             cwd: options.cwd,
             environment: options.environment,
+            // Raw Pi owns submission boundaries, while synthetic identity stays here.
+            // Adjacent blocks within one submission still share the allocated ID.
+            onUserMessageStart: () => {
+                message = { kind: "none" };
+            },
             onSessionUpdate: async (notification) => {
                 const update: SessionUpdate = notification.update;
                 switch (update.sessionUpdate) {

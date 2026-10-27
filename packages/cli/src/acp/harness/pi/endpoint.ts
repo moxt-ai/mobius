@@ -24,6 +24,7 @@ export class PiAcpEndpoint implements InProcessAcpEndpoint {
     constructor(
         options: Omit<InProcessAcpEndpointOptions, "onSessionUpdate"> & {
             readonly onSessionUpdate: (notification: SessionNotification) => Promise<void>;
+            readonly onUserMessageStart?: () => void;
         },
     ) {
         const termination = Promise.withResolvers<AcpEndpointTermination>();
@@ -38,7 +39,10 @@ export class PiAcpEndpoint implements InProcessAcpEndpoint {
         this.#app = createAgentApp({ name: "mobius-pi" })
             .onConnect((connection) => {
                 this.#connection = connection;
-                piAgent = new PiAcpAgent(createPiAcpClient(connection, options.onSessionUpdate), { environment });
+                piAgent = new PiAcpAgent(
+                    createPiAcpClient(connection, options.onSessionUpdate, options.onUserMessageStart),
+                    { environment },
+                );
                 this.#agent = piAgent;
             })
             .onRequest(
