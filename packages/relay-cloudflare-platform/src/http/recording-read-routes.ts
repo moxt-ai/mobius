@@ -5,6 +5,7 @@ import {
     parseSessionRecordingTurnCursor,
     parseSessionRecordingTurnItemCursor,
     parseSessionRecordingWaitMilliseconds,
+    SESSION_RECORDING_EXECUTION_COMMAND_MAX_LIMIT,
     SESSION_RECORDING_TURN_ITEM_ID_MAX_LENGTH,
     SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT,
     SESSION_RECORDING_TURN_PAGE_MAX_LIMIT,
@@ -238,6 +239,22 @@ export const recordingReadRoutes = new Hono<PlatformApplicationEnvironment>()
             `${target.sessionPath}/turns/${encodeURIComponent(commandId)}/items`,
             new URLSearchParams({ ...values, runtimeId: target.runtimeId }),
         );
+    })
+    .get("/sessions/:sessionId/execution", async (context): Promise<Response> => {
+        const target = turnTarget(context);
+        const commandIds = context.req.queries("commandId") ?? [];
+        if (
+            target === null ||
+            commandIds.length > SESSION_RECORDING_EXECUTION_COMMAND_MAX_LIMIT ||
+            commandIds.some((id) => !isIdentifier(id))
+        ) {
+            return errorResponse("invalid_request", "The Recording execution target is invalid", 400);
+        }
+        const query = new URLSearchParams({ runtimeId: target.runtimeId });
+        for (const commandId of commandIds) {
+            query.append("commandId", commandId);
+        }
+        return await readRecording(context, target.projectId, `${target.sessionPath}/execution`, query);
     })
     .get("/sessions/:sessionId/turns/:commandId/items/:itemId", async (context): Promise<Response> => {
         const target = turnTarget(context);

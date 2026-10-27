@@ -6,6 +6,7 @@ import {
     decodeSessionRecordingWrite,
     encodeSessionRecordingDirectory,
     encodeSessionRecordingDirectoryV2,
+    encodeSessionRecordingExecution,
     encodeSessionRecordingTurnItemDetail,
     encodeSessionRecordingTurnItemPage,
     encodeSessionRecordingTurnPage,
@@ -15,6 +16,7 @@ import {
     parseSessionRecordingTurnCursor,
     parseSessionRecordingTurnItemCursor,
     parseSessionRecordingWaitMilliseconds,
+    SESSION_RECORDING_EXECUTION_COMMAND_MAX_LIMIT,
     SESSION_RECORDING_TURN_ITEM_ID_MAX_LENGTH,
     SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT,
     SESSION_RECORDING_TURN_PAGE_MAX_LIMIT,
@@ -58,7 +60,7 @@ type SessionRecordingRoutes = Pick<
     SessionRecordingStorage,
     "append" | "read" | "readPage" | "records" | "batchesNewestFirst"
 >;
-type TurnHistoryRoutes = Pick<SessionTurnHistory, "item" | "itemPage" | "project" | "turnPage">;
+type TurnHistoryRoutes = Pick<SessionTurnHistory, "execution" | "item" | "itemPage" | "project" | "turnPage">;
 const jsonHeaders = { "content-type": "application/json" } as const;
 // Each invocation stays below the Durable Object subrequest budget. A full 100k-entry
 // legacy directory needs fewer than 800 batch requests from the outer Worker.
@@ -177,6 +179,22 @@ function sessionRecordingRoutes(
                 case "unavailable":
                     return errorResponse("recording_status_unavailable", 503);
             }
+        })
+        .get("/execution", async (context): Promise<Response> => {
+            const target = eventTarget(context.req.raw);
+            const commandIds = context.req.queries("commandId") ?? [];
+            if (
+                target === null ||
+                commandIds.length > SESSION_RECORDING_EXECUTION_COMMAND_MAX_LIMIT ||
+                commandIds.some((id) => !isIdentifier(id))
+            ) {
+                return errorResponse("invalid_target", 400);
+            }
+            return await turnHistoryResponse(
+                history.execution(target, commandIds),
+                encodeSessionRecordingExecution,
+                scheduleBackfill,
+            );
         })
         .get("/turns", async (context): Promise<Response> => {
             const target = eventTarget(context.req.raw);
@@ -884,6 +902,19 @@ export function createRecordingWorker(): RecordingWorker {
         )
         .get("/v2/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId", (context) =>
             recordingSummaryResponse(context, 2, "summary"),
+        )
+        .get(
+            "/v1/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/execution",
+            async (context): Promise<Response> => {
+                const query = sessionQuery(context);
+                if (query === null) {
+                    return errorResponse("not_found", 404);
+                }
+                for (const commandId of context.req.queries("commandId") ?? []) {
+                    query.append("commandId", commandId);
+                }
+                return await sessionRecordingFetch(context, query, "execution");
+            },
         )
         .get(
             "/v1/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/turns",

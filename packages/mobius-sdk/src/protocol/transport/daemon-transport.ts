@@ -175,12 +175,15 @@ import {
     SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND,
 } from "../session/observability/history.ts";
 import {
+    decodeSessionCancelBeforeStartCommand,
     decodeSessionCancelCommand,
     decodeSessionPromptCommand,
     decodeSessionPromptDispositionCommand,
+    encodeSessionCancelBeforeStartCommand,
     encodeSessionCancelCommand,
     encodeSessionPromptCommand,
     encodeSessionPromptDispositionCommand,
+    SESSION_CANCEL_BEFORE_START_KIND,
     SESSION_CANCEL_KIND,
     SESSION_PROMPT_DISPOSITION_KIND,
     SESSION_PROMPT_KIND,
@@ -285,6 +288,11 @@ const serviceToDaemonSignatures = {
         decodeRuntimeDiagnosticsRequest,
     ),
     [RUNTIME_PING_KIND]: defineMessageSignature(RUNTIME_PING_KIND, encodeRuntimePingCommand, decodeRuntimePingCommand),
+    [SESSION_CANCEL_BEFORE_START_KIND]: defineMessageSignature(
+        SESSION_CANCEL_BEFORE_START_KIND,
+        encodeSessionCancelBeforeStartCommand,
+        decodeSessionCancelBeforeStartCommand,
+    ),
     [SESSION_CANCEL_KIND]: defineMessageSignature(
         SESSION_CANCEL_KIND,
         encodeSessionCancelCommand,

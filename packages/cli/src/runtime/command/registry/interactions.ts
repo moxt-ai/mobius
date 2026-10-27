@@ -1,4 +1,5 @@
 import {
+    SESSION_CANCEL_BEFORE_START_KIND,
     SESSION_CANCEL_KIND,
     SESSION_CLOSE_KIND,
     SESSION_CLOSED_KIND,
@@ -6,6 +7,7 @@ import {
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PROMPT_DISPOSITION_KIND,
 } from "@moxt-ai/mobius-sdk/protocol";
+import { SessionError } from "../../../session/api/session-error.ts";
 import { settleAbandonedTurn } from "../../../session/prompt/prompt-lifecycle.ts";
 import type { RuntimeCommand } from "../definition.ts";
 import { reportOperationFailure, send } from "../transport.ts";
@@ -30,6 +32,43 @@ export const sessionCancelCommand: RuntimeCommand = {
         void sessions.cancelPrompt(message.sessionId, signal).catch((error) => {
             console.error("Mobius daemon could not cancel the agent turn", error);
         });
+    },
+};
+
+export const sessionCancelBeforeStartCommand: RuntimeCommand = {
+    kind: SESSION_CANCEL_BEFORE_START_KIND,
+    handle: ({ eventProjection, operations, sessionTurns, socket }, message): void => {
+        if (message.kind !== SESSION_CANCEL_BEFORE_START_KIND) {
+            throw new Error("Command kind mismatch");
+        }
+        const turn = sessionTurns.get(message.commandId, message.sessionId);
+        if (turn === undefined) {
+            const outcome = operations.recordCancellationBeforeAdmission(message.commandId, message.sessionId);
+            if (outcome !== undefined) {
+                void eventProjection.replayOutcome(message.sessionId, outcome).catch((error: unknown) => {
+                    reportOperationFailure(socket, message.commandId, message.sessionId, error);
+                });
+                return;
+            }
+            reportOperationFailure(
+                socket,
+                message.commandId,
+                message.sessionId,
+                new SessionError("turn_not_active", "The command is not waiting to start"),
+            );
+            return;
+        }
+        // No await separates checking admission from requesting cancellation.
+        if (turn.snapshot() !== null) {
+            reportOperationFailure(
+                socket,
+                message.commandId,
+                message.sessionId,
+                new SessionError("turn_already_started", "The command already started"),
+            );
+            return;
+        }
+        turn.requestCancellation();
     },
 };
 

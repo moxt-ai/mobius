@@ -2,6 +2,7 @@ import type {
     AcpSessionUpdate,
     LifecycleMetadata,
     SessionLiveEvent,
+    SessionRecordingExecution,
     SessionRecordingTurn,
     SessionRecordingTurnAttempt,
     SessionRecordingTurnItem,
@@ -781,6 +782,40 @@ export class SessionTurnHistory {
             });
             return { kind: "failed", retryAt };
         }
+    };
+
+    readonly execution = (
+        target: RecordingTarget,
+        commandIds: readonly string[],
+    ): TurnHistoryRead<SessionRecordingExecution> => {
+        const readable = this.#readable(target);
+        if (readable.kind !== "ready") {
+            return readable;
+        }
+        const commands: SessionRecordingExecution["commands"][number][] = [];
+        for (const commandId of new Set(commandIds)) {
+            const turn = this.#history.turn(commandId);
+            if (turn !== null) {
+                commands.push({ attempt: turn.attempt, commandId, generationId: turn.generationId });
+            }
+        }
+        const active = readable.value.activeCommands;
+        return {
+            kind: "ready",
+            value: {
+                activeCommands:
+                    active === null || active.commandIds.length === 0
+                        ? null
+                        : {
+                              commandIds: active.commandIds.slice(-activeCommandLimit),
+                              generationId: active.generationId,
+                          },
+                commands,
+                sessionId: target.sessionId,
+                tailCursor: this.#recording.tailCursor(),
+                version: 1,
+            },
+        };
     };
 
     readonly turnPage = (

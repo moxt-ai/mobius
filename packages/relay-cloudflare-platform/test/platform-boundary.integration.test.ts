@@ -2190,6 +2190,15 @@ describe.sequential("Platform Turn submission", () => {
             expected: { turnId: "app-command", idempotencyKey: "cancel-app-command", state: { kind: "cancelled" } },
         },
         {
+            label: "cancels the selected message only before it starts",
+            path: "/turns/app-command/cancel-before-start",
+            method: "POST",
+            body: { idempotencyKey: "cancel-app-command" },
+            command: { commandId: "app-command", kind: "session.cancel-before-start" },
+            payload: { commandId: "app-command", kind: "prompt.completed", stopReason: "cancelled" },
+            expected: { turnId: "app-command", idempotencyKey: "cancel-app-command" },
+        },
+        {
             label: "steers the selected queued message",
             path: "/turns/app-command/disposition",
             method: "PUT",

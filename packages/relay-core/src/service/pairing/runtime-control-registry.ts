@@ -91,6 +91,10 @@ export const runtimeControlRegistry = {
         permission: ProjectPermission.SessionWrite,
         reply: directReply("session.closed", decodeSessionClosedEvent),
     },
+    "session.cancel-before-start": {
+        permission: ProjectPermission.SessionWrite,
+        reply: lifecycleReply(["prompt.completed"]),
+    },
     "session.cancel": {
         permission: ProjectPermission.SessionWrite,
         reply: lifecycleReply(["prompt.completed"]),

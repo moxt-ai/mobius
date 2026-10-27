@@ -345,6 +345,15 @@ describe.sequential("Platform Recording read route", () => {
             events: [{ payload: { content: { text: "recording route answer" } } }],
             sessionId,
         });
+        const execution = await worker.fetch(
+            new Request(
+                `${readUrl.replace("/events?", "/execution?")}&commandId=missing-first&commandId=missing-second`,
+                { headers: credentialHeaders(credential) },
+            ),
+            environment,
+        );
+        expect(execution.status).toBe(200);
+        expect(await execution.json()).toMatchObject({ version: 1, sessionId, commands: [], activeCommands: null });
     });
     // @no-uc: Technical regression; incremental cursor reads must traverse Platform routing unchanged.
     it("Given an enabled Project policy, When a Platform app reads after a cursor, Then only later events arrive as a bounded page", async () => {
