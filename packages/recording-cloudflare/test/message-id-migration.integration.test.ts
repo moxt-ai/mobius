@@ -107,7 +107,8 @@ describe("Recording message identity migration", () => {
                 "UPDATE recorded_session_events_v2 SET envelope_json = json_set(envelope_json, '$.futureEnvelope', 7, '$.events[0].futureEvent', 8, '$.events[0].payload.futurePayload', 9)",
             );
         });
-        const before = decodeSessionRecordingHistoryPage(await (await f.read("events?after=0&limit=1000")).text());
+        const beforeRaw = await (await f.read("events?after=0&limit=1000")).json();
+        const before = decodeSessionRecordingHistoryPage(JSON.stringify(beforeRaw));
         const preview = await f.step({ mode: "dry-run", afterOrdinal: 0 });
         expect(preview.status).toBe(200);
         expect(await preview.json()).toMatchObject({
@@ -116,11 +117,12 @@ describe("Recording message identity migration", () => {
             affectedBatches: 1,
             hasMore: false,
         });
-        expect(await (await f.read("events?after=0&limit=1000")).json()).toEqual(before);
+        expect(await (await f.read("events?after=0&limit=1000")).json()).toEqual(beforeRaw);
         const applied = await f.step();
         expect(applied.status).toBe(200);
         expect(await applied.json()).toMatchObject({ kind: "complete", rewrittenEvents: 3, rewrittenBatches: 1 });
-        const after = decodeSessionRecordingHistoryPage(await (await f.read("events?after=0&limit=1000")).text());
+        const afterRaw = await (await f.read("events?after=0&limit=1000")).json();
+        const after = decodeSessionRecordingHistoryPage(JSON.stringify(afterRaw));
         expect(after).toMatchObject({ tailCursor: before.tailCursor, nextCursor: before.nextCursor });
         expect(
             after.events
@@ -140,7 +142,7 @@ describe("Recording message identity migration", () => {
             ]),
         });
         await f.step();
-        expect(await (await f.read("events?after=0&limit=1000")).json()).toEqual(after);
+        expect(await (await f.read("events?after=0&limit=1000")).json()).toEqual(afterRaw);
     });
 
     it("Given streamed legacy chunks across bounded steps and duplicate frames, When migration resumes and live output continues, Then identities stay grouped, duplicate identities agree, and turn history is rebuilt", async () => {

@@ -1,4 +1,8 @@
-import type { SessionLiveEvent, SessionRecordingWrite } from "@moxt-ai/mobius-sdk/protocol";
+import {
+    type SessionRecordingWireWrite,
+    type SessionWireEvent,
+    sessionLiveEventSchema,
+} from "@moxt-ai/mobius-sdk/protocol";
 import type { DirectoryOperation, RecordingDirectoryUpdate } from "../entity/recording-directory-update.ts";
 
 const CONVERSATION_TITLE_CHARACTER_LIMIT = 42;
@@ -30,8 +34,13 @@ function conversationTitleFromText(text: string): string {
     return `${characters.slice(0, CONVERSATION_TITLE_CHARACTER_LIMIT - 1).join("")}…`;
 }
 
-function operation(event: SessionLiveEvent): DirectoryOperation {
-    const recordedAt = event.recordedAt;
+function operation(wireEvent: SessionWireEvent): DirectoryOperation {
+    const recordedAt = wireEvent.recordedAt;
+    const parsed = sessionLiveEventSchema.safeParse(wireEvent);
+    if (!parsed.success) {
+        return { kind: "activity", recordedAt };
+    }
+    const event = parsed.data;
     if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.requested") {
         const payload = event.payload;
         if (payload.context !== undefined) {
@@ -55,7 +64,7 @@ function operation(event: SessionLiveEvent): DirectoryOperation {
 }
 
 /** Keeps ordered creation/title changes while replacing other events with activity times. */
-export function projectDirectoryUpdate(write: SessionRecordingWrite): RecordingDirectoryUpdate {
+export function projectDirectoryUpdate(write: SessionRecordingWireWrite): RecordingDirectoryUpdate {
     const sessions = new Map<string, DirectoryOperation[]>();
     for (const event of write.envelope.events) {
         const operations = sessions.get(event.sessionId) ?? [];

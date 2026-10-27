@@ -1,4 +1,8 @@
-import { lastRecordedLifecycleStatus, type SessionRecordingStatus } from "@moxt-ai/mobius-sdk/protocol";
+import {
+    lastRecordedLifecycleStatus,
+    type SessionRecordingStatus,
+    sessionLiveEventSchema,
+} from "@moxt-ai/mobius-sdk/protocol";
 import type { SessionRecordingStorage } from "../storage/session-recording-storage.ts";
 
 type LegacyRecordingStatusRead =
@@ -15,7 +19,12 @@ export function readLegacyRecordingStatus(
         return { kind: "not_found" };
     }
     for (const batch of storage.batchesNewestFirst()) {
-        const status = lastRecordedLifecycleStatus(batch.events);
+        const status = lastRecordedLifecycleStatus(
+            batch.events.flatMap((event) => {
+                const parsed = sessionLiveEventSchema.safeParse(event);
+                return parsed.success ? [parsed.data] : [];
+            }),
+        );
         if (status !== null) {
             return { kind: "available", status };
         }

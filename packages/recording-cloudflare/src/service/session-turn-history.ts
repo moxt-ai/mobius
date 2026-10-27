@@ -10,7 +10,11 @@ import type {
     SessionRecordingTurnItemPage,
     SessionRecordingTurnPage,
 } from "@moxt-ai/mobius-sdk/protocol";
-import { sessionRecordingTurnItemCursor } from "@moxt-ai/mobius-sdk/protocol";
+import {
+    decodeSessionLiveEvent,
+    type SessionWireEvent,
+    sessionRecordingTurnItemCursor,
+} from "@moxt-ai/mobius-sdk/protocol";
 import {
     emptyProjection,
     type ItemTextChange,
@@ -157,7 +161,9 @@ class ProjectionFold {
         this.#turnCount = projection.turnCount;
     }
 
-    readonly fold = (events: readonly SessionLiveEvent[]): void => {
+    readonly fold = (wireEvents: readonly SessionWireEvent[]): void => {
+        // Unknown content leaves this projection retryable while raw history remains available.
+        const events = wireEvents.map(decodeSessionLiveEvent);
         const identities = events.map((event) => ({ eventId: event.eventId, generationId: event.sessionGenerationId }));
         const storedEvents = new Set(this.#storage.projectedEvents(identities).map(projectedEventKey));
         for (const event of events) {
@@ -725,7 +731,7 @@ export class SessionTurnHistory {
      * the batch is left for backfill: earlier batches are unfolded, an earlier fold failed, or this
      * fold failed. A failed fold rolls back on its own and never prevents the batch from recording.
      */
-    readonly project = (ordinal: number, events: readonly SessionLiveEvent[]): boolean => {
+    readonly project = (ordinal: number, events: readonly SessionWireEvent[]): boolean => {
         try {
             return this.#history.transaction(() => {
                 const projection = this.#projection() ?? emptyProjection;

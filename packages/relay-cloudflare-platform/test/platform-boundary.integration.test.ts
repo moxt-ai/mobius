@@ -1154,6 +1154,19 @@ describe.sequential("Platform Session-only boundary", () => {
             daemon.send(encodeSessionEventEnvelope({ events: [rawEvent, secondRawEvent], kind: "session.event.v2" }));
             expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "session.event.v2" });
             expect(JSON.parse(await v2Messages.next())).toEqual([rawEvent, secondRawEvent]);
+            const futureEvent = {
+                ...rawEvent,
+                eventId: "event-v2-future",
+                position: "3",
+                futureField: "retained",
+                payload: {
+                    ...rawEvent.payload,
+                    content: { type: "future_content", text: "Future public output", extra: { retained: true } },
+                },
+            };
+            daemon.send(JSON.stringify({ kind: "session.event.v2", events: [futureEvent] }));
+            expect(JSON.parse(await hostMessages.next())).toEqual({ kind: "session.event.v2", events: [futureEvent] });
+            expect(JSON.parse(await v2Messages.next())).toEqual([futureEvent]);
             const historyResponse = worker.fetch(
                 new Request(
                     `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/events-v2?limit=50&omit=agent-reasoning`,

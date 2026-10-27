@@ -336,13 +336,13 @@ export interface PromptExecutionContext {
     readonly directoryId: string;
     readonly additionalDirectoryIds: readonly string[];
 }
-const promptExecutionContextSchema: z.ZodType<PromptExecutionContext> = z
+const promptExecutionContextSchema = z
     .object({
         agentId: identifier,
         directoryId: DIRECTORY_IDENTIFIER,
         additionalDirectoryIds: z.array(DIRECTORY_IDENTIFIER).max(16).readonly(),
     })
-    .readonly();
+    .readonly() satisfies z.ZodType<PromptExecutionContext>;
 
 export const lifecycleMetadataSchema = z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("session.queue.changed") }).readonly(),
@@ -436,6 +436,60 @@ export const sessionLiveEventSchema = z.discriminatedUnion("type", [
         .readonly(),
 ]);
 export type SessionLiveEvent = z.infer<typeof sessionLiveEventSchema>;
+
+// Forwarders own routing and archive identity, not the independently versioned content model.
+// Keep opaque payload fields intact; consumers must still validate content before interpreting it.
+const wireLifecyclePayloadSchema = z
+    .object({
+        kind: identifier,
+        commandId: identifier.optional(),
+        context: promptExecutionContextSchema.unwrap().passthrough().readonly().optional(),
+        event: z.object({ interactionId: identifier.optional() }).passthrough().readonly().optional(),
+    })
+    .passthrough()
+    .readonly();
+const wireEventFields = {
+    ...sessionLiveEventFields,
+    mobiusMetadata: z
+        .object({ omitted: z.literal(true).optional() })
+        .passthrough()
+        .readonly()
+        .optional(),
+};
+export const sessionWireEventSchema = z.union([
+    z
+        .object({
+            ...wireEventFields,
+            type: z.literal("acp"),
+            payload: z.object({ sessionUpdate: identifier }).passthrough().readonly(),
+        })
+        .passthrough()
+        .readonly(),
+    z
+        .object({
+            ...wireEventFields,
+            type: z.literal("lifecycle-metadata"),
+            payload: wireLifecyclePayloadSchema,
+        })
+        .passthrough()
+        .readonly(),
+    z
+        .object({
+            ...wireEventFields,
+            type: identifier.refine((type) => type !== "acp" && type !== "lifecycle-metadata"),
+            payload: z.record(z.string(), z.unknown()).readonly(),
+        })
+        .passthrough()
+        .readonly(),
+]);
+export type SessionWireEvent = z.infer<typeof sessionWireEventSchema>;
+export const sessionWireEnvelopeSchema = z
+    .object({
+        kind: z.literal(SESSION_EVENT_KIND),
+        events: z.array(sessionWireEventSchema).min(1).max(SESSION_EVENT_BATCH_MAX_SIZE).readonly(),
+    })
+    .readonly();
+export type SessionWireEnvelope = z.infer<typeof sessionWireEnvelopeSchema>;
 export const sessionEventBatchSchema = z.array(sessionEventSchema).min(1).max(SESSION_EVENT_BATCH_MAX_SIZE).readonly();
 export type SessionEventBatch = z.infer<typeof sessionEventBatchSchema>;
 export const sessionLiveEventBatchSchema = z
@@ -558,6 +612,10 @@ export const decodeSessionEvent = (value: unknown): SessionEvent => decode(value
 export const encodeSessionEvent = (value: SessionEvent): string => encode(value, sessionEventSchema);
 export const decodeSessionLiveEvent = (value: unknown): SessionLiveEvent => decode(value, sessionLiveEventSchema);
 export const encodeSessionLiveEvent = (value: SessionLiveEvent): string => encode(value, sessionLiveEventSchema);
+export const decodeSessionWireEnvelope = (value: unknown): SessionWireEnvelope =>
+    decode(value, sessionWireEnvelopeSchema);
+export const encodeSessionWireEnvelope = (value: SessionWireEnvelope): string =>
+    encode(value, sessionWireEnvelopeSchema);
 export const decodeSessionEventBatch = (value: unknown): SessionEventBatch => decode(value, sessionEventBatchSchema);
 export const encodeSessionEventBatch = (value: SessionEventBatch): string => encode(value, sessionEventBatchSchema);
 export const decodeSessionLiveEventBatch = (value: unknown): SessionLiveEventBatch =>

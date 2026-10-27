@@ -1,4 +1,4 @@
-import { encodeSessionEventEnvelope, type SessionEventEnvelope } from "@moxt-ai/mobius-sdk/protocol";
+import { encodeSessionWireEnvelope, type SessionWireEnvelope } from "@moxt-ai/mobius-sdk/protocol";
 import type { SessionStatusNotifications } from "../../infra/session-status-notifications.ts";
 import type { BestEffortRecording } from "./best-effort-recording.ts";
 import type { ChannelPeers } from "./channel-actor.ts";
@@ -24,7 +24,7 @@ export class SessionLiveEventRelay {
         this.#notifications = notifications;
     }
 
-    readonly receive = (envelope: SessionEventEnvelope): void => {
+    readonly receive = (envelope: SessionWireEnvelope): void => {
         const eventsBySession = new Map<string, (typeof envelope.events)[number][]>();
         for (const event of envelope.events) {
             const events = eventsBySession.get(event.sessionId) ?? [];
@@ -37,7 +37,7 @@ export class SessionLiveEventRelay {
             const sessionFilter = host.sessionFilter;
             let message: string;
             if (sessionFilter === undefined) {
-                runtimeMessage ??= encodeSessionEventEnvelope(envelope);
+                runtimeMessage ??= encodeSessionWireEnvelope(envelope);
                 message = runtimeMessage;
             } else {
                 const events = eventsBySession.get(sessionFilter);
@@ -45,7 +45,7 @@ export class SessionLiveEventRelay {
                     continue;
                 }
                 const encoded =
-                    sessionMessages.get(sessionFilter) ?? encodeSessionEventEnvelope({ events, kind: envelope.kind });
+                    sessionMessages.get(sessionFilter) ?? encodeSessionWireEnvelope({ ...envelope, events });
                 sessionMessages.set(sessionFilter, encoded);
                 message = encoded;
             }
@@ -68,7 +68,7 @@ export class SessionLiveEventRelay {
                 viewer.socket.send(
                     viewer.eventFormat === "events"
                         ? JSON.stringify(events)
-                        : encodeSessionEventEnvelope({ kind: envelope.kind, events }),
+                        : encodeSessionWireEnvelope({ ...envelope, events }),
                 );
             } catch {
                 viewer.socket.close(1013, "Session subscription backpressure");
@@ -84,13 +84,19 @@ export class SessionLiveEventRelay {
                     return payload.commandId === route.requestId;
                 }
                 if (payload.kind === "session.permission.resolved" || payload.kind === "session.elicitation.resolved") {
-                    return payload.event.interactionId === route.requestId;
+                    const interaction = payload["event"];
+                    return (
+                        typeof interaction === "object" &&
+                        interaction !== null &&
+                        "interactionId" in interaction &&
+                        interaction.interactionId === route.requestId
+                    );
                 }
                 return route.queueAcknowledgement && payload.kind === "session.queue.changed";
             });
             if (events.length > 0) {
                 try {
-                    route.socket.send(encodeSessionEventEnvelope({ kind: envelope.kind, events }));
+                    route.socket.send(encodeSessionWireEnvelope({ ...envelope, events }));
                 } catch {
                     route.socket.close(1013, "Runtime request backpressure");
                 }
