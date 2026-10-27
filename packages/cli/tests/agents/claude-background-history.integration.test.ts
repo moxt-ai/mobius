@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { join } from "node:path";
 import {
     decodeMessageKind,
-    decodeSessionEvent,
+    decodeSessionLiveEvent,
     decodeSessionPreviewHistoryPageLoaded,
     encodeSessionPermissionRespondCommand,
     encodeSessionPreviewHistoryPageLoad,
@@ -229,7 +229,7 @@ test("Given Claude is running a background command, When two idle hours pass and
                         }),
                     );
                     for (;;) {
-                        const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                        const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                         if (event.type === "acp") {
                             if (
                                 (event.payload.sessionUpdate === "tool_call" ||

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import {
     decodeMessageKind,
     decodeNativeSessionResult,
-    decodeSessionEvent,
+    decodeSessionLiveEvent,
     encodeNativeSessionCommand,
     encodeSessionPermissionRespondCommand,
     encodeSessionPromptCommand,
@@ -58,7 +58,7 @@ test.each(["allow_once", "reject_once"] as const)(
             const announcedInputs = new Map<string, unknown>();
             let response = "";
             for (;;) {
-                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                 if (event.type === "lifecycle-metadata" && event.payload.kind === "session.permission.requested") {
                     const permission = event.payload.event;
                     approvals += 1;
@@ -180,7 +180,7 @@ test.each(["allow_once", "reject_once"] as const)(
                 let toolStatus = "";
                 let response = "";
                 for (;;) {
-                    const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                    const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                     if (event.type === "lifecycle-metadata" && event.payload.kind === "session.permission.requested") {
                         const permission = event.payload.event;
                         approvals += 1;

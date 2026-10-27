@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { decodeSessionEvent, encodeSessionPromptCommand, SessionPromptDisposition } from "@moxt-ai/mobius-sdk/protocol";
+import {
+    decodeSessionLiveEvent,
+    encodeSessionPromptCommand,
+    SessionPromptDisposition,
+} from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
 import { CodexAgentSpecification } from "../../src/agent/specification/vendors/codex-agent.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
@@ -29,7 +33,7 @@ test("Given a real Codex conversation, When the user sends slash-prefixed text o
             );
             let text = "";
             for (;;) {
-                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                 if (
                     event.type === "lifecycle-metadata" &&
                     "commandId" in event.payload &&
@@ -84,7 +88,7 @@ test("Given a real Codex conversation with content, When the user sends /compact
         // advertisement rides on session creation and is observed during it.
         sendPrompt("Talk about something first");
         for (;;) {
-            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (event.type === "acp" && event.payload.sessionUpdate === "available_commands_update") {
                 compactAdvertised = event.payload.availableCommands.some((command) => command.name === "compact");
             }
@@ -97,7 +101,7 @@ test("Given a real Codex conversation with content, When the user sends /compact
         const statuses: string[] = [];
         const compactionIds: string[] = [];
         for (;;) {
-            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (event.type === "lifecycle-metadata") {
                 if (event.payload.kind === "prompt.failed") {
                     throw new Error(JSON.stringify(event));
@@ -149,7 +153,7 @@ test("Given a real Codex conversation with content, When the manual /compact's s
         // Seed a turn so compaction has content to summarize.
         sendPrompt("Talk about something first");
         for (;;) {
-            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
                 break;
             }
@@ -160,7 +164,7 @@ test("Given a real Codex conversation with content, When the manual /compact's s
         const compactionIds: string[] = [];
         let promptFailed = false;
         for (;;) {
-            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (event.type === "lifecycle-metadata") {
                 if (event.payload.kind === "prompt.failed") {
                     promptFailed = true;

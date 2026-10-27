@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { decodeSessionEvent, encodeSessionPromptCommand, SessionPromptDisposition } from "@moxt-ai/mobius-sdk/protocol";
+import {
+    decodeSessionLiveEvent,
+    encodeSessionPromptCommand,
+    SessionPromptDisposition,
+} from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
 import { PiAgentSpecification } from "../../src/agent/specification/vendors/pi-agent.ts";
 import { PiFixture } from "../support/agents/pi.ts";
@@ -36,7 +40,7 @@ test("Given pi compacts the conversation, When the daemon relays the turn, Then 
         for (const topic of ["archaeology", "bicycles", "coffee"]) {
             sendPrompt(`Talk about ${topic} with some detail`);
             for (;;) {
-                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                 if (event.type === "lifecycle-metadata") {
                     if (event.payload.kind === "prompt.failed") {
                         throw new Error(JSON.stringify(event));
@@ -54,7 +58,7 @@ test("Given pi compacts the conversation, When the daemon relays the turn, Then 
         const summaryText: string[] = [];
         const bannerTexts: string[] = [];
         for (;;) {
-            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (event.type === "lifecycle-metadata") {
                 if (event.payload.kind === "prompt.failed") {
                     throw new Error(JSON.stringify(event));

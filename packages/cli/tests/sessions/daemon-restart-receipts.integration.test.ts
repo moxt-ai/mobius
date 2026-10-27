@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { decodeSessionEvent, encodeSessionPromptCommand, SessionPromptDisposition } from "@moxt-ai/mobius-sdk/protocol";
+import {
+    decodeSessionLiveEvent,
+    encodeSessionPromptCommand,
+    SessionPromptDisposition,
+} from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
 import { ControlledAcpAgentSpecification } from "../support/agents/controlled-acp.ts";
 import { withControlledDaemon as withRealDaemon } from "../support/agents/real-daemon.ts";
@@ -40,7 +44,7 @@ test("Given running and queued prompts, When the daemon restarts, Then it report
                 });
                 peer.send(original);
                 for (;;) {
-                    const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                    const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                     if (
                         event.type === "lifecycle-metadata" &&
                         event.payload.kind === "prompt.started" &&
@@ -59,7 +63,7 @@ test("Given running and queued prompts, When the daemon restarts, Then it report
                     });
                 peer.send(followup(running));
                 for (;;) {
-                    const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                    const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                     if (event.type === "lifecycle-metadata" && event.payload.kind === "session.queue.changed") {
                         break;
                     }
@@ -67,7 +71,7 @@ test("Given running and queued prompts, When the daemon restarts, Then it report
                 await peer.restart();
                 const outcomes = new Map<string, string>();
                 while (outcomes.size < 2) {
-                    const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                    const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                     if (
                         event.type === "lifecycle-metadata" &&
                         (event.payload.kind === "prompt.failed" || event.payload.kind === "prompt.failed-before-start")
@@ -92,7 +96,7 @@ test("Given running and queued prompts, When the daemon restarts, Then it report
                 peer.send(followup(continuation));
                 const completed: string[] = [];
                 while (completed.length < 2) {
-                    const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                    const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                     if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.started") {
                         expect(event.payload.commandId).not.toBe(running);
                     }
@@ -104,7 +108,7 @@ test("Given running and queued prompts, When the daemon restarts, Then it report
                 await peer.restart();
                 const retained = new Set<string>();
                 while (retained.size < 2) {
-                    const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                    const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                     if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
                         retained.add(event.payload.commandId);
                     }

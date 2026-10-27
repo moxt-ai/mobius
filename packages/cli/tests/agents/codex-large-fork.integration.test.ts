@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
     decodeNativeSessionResult,
-    decodeSessionEvent,
     decodeSessionHistoryPageLoaded,
+    decodeSessionLiveEvent,
     encodeNativeSessionCommand,
     encodeSessionHistoryPageLoad,
     encodeSessionPromptCommand,
@@ -40,7 +40,7 @@ test("Given real Codex saved more than 32 MiB of answers, When a user forks thro
                 }),
             );
             for (;;) {
-                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                 if (event.type !== "lifecycle-metadata") {
                     continue;
                 }
@@ -158,7 +158,7 @@ test("Given real Codex saved more than 32 MiB of answers, When a user forks thro
             }),
         );
         for (;;) {
-            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (
                 event.type !== "lifecycle-metadata" ||
                 (event.payload.kind !== "prompt.failed" && event.payload.kind !== "prompt.completed") ||

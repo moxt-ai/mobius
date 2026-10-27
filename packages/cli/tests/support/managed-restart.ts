@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
-    decodeSessionEvent,
     decodeSessionHistoryPageLoaded,
+    decodeSessionLiveEvent,
     decodeSessionReadyEvent,
     encodeSessionHistoryPageLoad,
     encodeSessionPrepareCommand,
@@ -40,7 +40,7 @@ async function journey(peer: RealDaemonPeer, agentId: string, reply: string): Pr
         );
         let output = "";
         for (;;) {
-            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (
                 event.type === "acp" &&
                 event.payload.sessionUpdate === "agent_message_chunk" &&
@@ -194,7 +194,7 @@ async function interruptedJourney(
         await awaitPeerOperation(disconnected, peer.signal);
         release();
         for (;;) {
-            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (
                 event.type === "lifecycle-metadata" &&
                 event.payload.kind === "prompt.failed" &&
@@ -260,7 +260,7 @@ async function interruptedJourney(
             "The runtime restarted. Review the native conversation and continue unfinished work. Check before repeating side effects.",
         );
         for (;;) {
-            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (
                 event.type === "lifecycle-metadata" &&
                 (event.payload.kind === "prompt.failed" || event.payload.kind === "prompt.failed-before-start")

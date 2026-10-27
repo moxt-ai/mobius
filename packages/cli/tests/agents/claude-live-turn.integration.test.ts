@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, symlink } from "node:fs/promises";
 import { basename, delimiter, dirname, join } from "node:path";
 import {
-    decodeSessionEvent,
+    decodeSessionLiveEvent,
     encodeSessionPermissionRespondCommand,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
@@ -67,7 +67,7 @@ test("Given native Claude is installed outside PATH, When two prompts execute th
             let text = "";
             let toolSucceeded = false;
             for (;;) {
-                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                 if (event.type === "lifecycle-metadata" && event.payload.kind === "session.permission.requested") {
                     const option = event.payload.event.options.find((entry) => entry.kind === "allow_once");
                     if (option === undefined) {
@@ -138,7 +138,7 @@ test.skipIf(process.platform !== "darwin")(
             );
             let text = "";
             for (;;) {
-                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                 if (
                     event.type === "acp" &&
                     event.payload.sessionUpdate === "agent_message_chunk" &&

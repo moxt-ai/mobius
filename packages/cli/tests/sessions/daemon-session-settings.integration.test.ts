@@ -17,7 +17,7 @@ import {
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
     SESSION_EVENT_KIND,
-    type SessionEvent,
+    type SessionLiveEvent,
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
@@ -102,7 +102,7 @@ class TerminalSessionResult {
     }
 }
 
-const bufferedSessionEvents = new WeakMap<ClientFrames, SessionEvent[]>();
+const bufferedSessionEvents = new WeakMap<ClientFrames, SessionLiveEvent[]>();
 
 function _readStringField(value: unknown, field: string): string {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -119,7 +119,7 @@ async function readTerminalSessionResult(
     includeAcpText = true,
 ): Promise<TerminalSessionResult> {
     let text = "";
-    const deferredEvents: SessionEvent[] = [];
+    const deferredEvents: SessionLiveEvent[] = [];
     for (;;) {
         let events = bufferedSessionEvents.get(frames) ?? [];
         bufferedSessionEvents.delete(frames);

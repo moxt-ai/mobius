@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
     decodeMessageKind,
-    decodeSessionEvent,
+    decodeSessionLiveEvent,
     encodeSessionHistoryPageLoad,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
@@ -113,7 +113,7 @@ async function prompt(peer: RealDaemonPeer, agentId: string, sessionId: string, 
     );
     let output = "";
     for (;;) {
-        const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+        const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
         if (
             event.type === "acp" &&
             event.payload.sessionUpdate === "agent_message_chunk" &&

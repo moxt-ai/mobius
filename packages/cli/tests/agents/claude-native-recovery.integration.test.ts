@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
     decodeNativeSessionResult,
-    decodeSessionEvent,
     decodeSessionEventEnvelope,
     decodeSessionHistoryPageLoaded,
+    decodeSessionLiveEvent,
     encodeNativeSessionCommand,
     encodeSessionCancelCommand,
     encodeSessionHistoryPageLoad,
@@ -56,7 +56,7 @@ test("Given a real claude native Session, When the active prompt is cancelled wi
             const finish = async (commandId: string, reason: string): Promise<string> => {
                 let text = "";
                 for (;;) {
-                    const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                    const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                     if (
                         event.type === "lifecycle-metadata" &&
                         event.payload.kind === "prompt.failed" &&
@@ -146,7 +146,7 @@ test("Given a completed real Claude Session, When it is forked, Then its history
         const finish = async (sessionId: string, commandId: string): Promise<string> => {
             let text = "";
             for (;;) {
-                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                 if (
                     event.type === "lifecycle-metadata" &&
                     event.payload.kind === "prompt.failed" &&

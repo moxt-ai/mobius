@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
     decodeNativeSessionResult,
-    decodeSessionEvent,
+    decodeSessionLiveEvent,
     decodeSessionOperationFailedEvent,
     encodeNativeSessionCommand,
     encodeSessionPromptCommand,
@@ -117,7 +117,7 @@ test("Given setup runs in a real Codex exec conversation, When its native sessio
         );
         let reply = "";
         for (;;) {
-            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (
                 event.type === "acp" &&
                 event.payload.sessionUpdate === "agent_message_chunk" &&

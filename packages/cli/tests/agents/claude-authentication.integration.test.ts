@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
-    decodeSessionEvent,
     decodeSessionHistoryPageLoaded,
+    decodeSessionLiveEvent,
     decodeSessionReadyEvent,
     encodeSessionHistoryPageLoad,
     encodeSessionPrepareCommand,
@@ -40,7 +40,7 @@ test("Given real Claude has expired OAuth credentials, When I send a message and
             );
             const output: string[] = [];
             for (;;) {
-                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                 if (
                     event.type === "acp" &&
                     event.payload.sessionUpdate === "agent_message_chunk" &&
@@ -145,7 +145,7 @@ test("Given a real Claude answer quotes login diagnostics, When it completes, Th
         );
         let output = "";
         for (;;) {
-            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
                 throw new Error(JSON.stringify(event));
             }

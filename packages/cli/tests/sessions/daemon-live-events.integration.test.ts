@@ -25,7 +25,6 @@ import {
     type PromptAttachment,
     SESSION_EVENT_KIND,
     SESSION_HISTORY_PAGE_LOADED_KIND,
-    type SessionEvent,
     type SessionLiveEvent,
     type SessionPromptCommand,
     SessionPromptDisposition,
@@ -799,7 +798,7 @@ describe("daemon V2 live delivery", () => {
         try {
             const command = prompt(fixture, "interleave progress and hold");
             sendText(fixture.socket, encodeSessionPromptCommand(command));
-            const live: SessionEvent[] = [];
+            const live: SessionLiveEvent[] = [];
             const order: string[] = [];
             let accumulated = "";
             for (;;) {

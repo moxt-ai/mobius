@@ -4,7 +4,7 @@ import { join } from "node:path";
 import {
     decodeMessageKind,
     decodeNativeSessionResult,
-    decodeSessionEvent,
+    decodeSessionLiveEvent,
     decodeSessionOperationFailedEvent,
     encodeNativeSessionCommand,
     encodeSessionCancelCommand,
@@ -83,7 +83,7 @@ test.each(["new", "imported"] as const)(
             let result = "";
             let reply = "";
             for (;;) {
-                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                 if (event.type === "lifecycle-metadata") {
                     if (event.payload.kind === "session.permission.requested") {
                         throw new Error("Pi questions must use information requests, not permissions");
@@ -289,7 +289,7 @@ for (const ending of ["stop", "timeout"] as const) {
                     const commandId = sendQuestionPrompt(peer, sessionId, prompt);
                     let interactionId = "";
                     for (;;) {
-                        const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                        const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                         if (
                             event.type === "lifecycle-metadata" &&
                             event.payload.kind === "session.elicitation.requested"
@@ -313,7 +313,7 @@ for (const ending of ["stop", "timeout"] as const) {
                     let resolved = 0;
                     let notices = "";
                     for (;;) {
-                        const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                        const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                         if (
                             event.type === "acp" &&
                             event.payload.sessionUpdate === "agent_message_chunk" &&
@@ -366,7 +366,7 @@ for (const ending of ["stop", "timeout"] as const) {
                     const followup = sendQuestionPrompt(peer, sessionId, "Continue after the question was cancelled");
                     let reply = "";
                     for (;;) {
-                        const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                        const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                         if (
                             event.type === "acp" &&
                             event.payload.sessionUpdate === "agent_message_chunk" &&
@@ -420,7 +420,7 @@ test("Given real Pi asks a question before a daemon disconnect, When the daemon 
         const interruptedCommandId = sendQuestionPrompt(peer, peer.sessionId, prompt);
         let interactionId = "";
         for (;;) {
-            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (event.type === "lifecycle-metadata" && event.payload.kind === "session.elicitation.requested") {
                 interactionId = event.payload.event.interactionId;
                 break;
@@ -434,7 +434,7 @@ test("Given real Pi asks a question before a daemon disconnect, When the daemon 
         let interrupted = false;
         let reply = "";
         for (;;) {
-            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (
                 event.type === "acp" &&
                 event.payload.sessionUpdate === "agent_message_chunk" &&
@@ -506,7 +506,7 @@ test("Given real Pi is waiting for an answer, When its process exits unexpectedl
         let interactionId = "";
         let resolved = 0;
         for (;;) {
-            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (event.type !== "lifecycle-metadata") {
                 continue;
             }
@@ -559,7 +559,7 @@ test("Given real Pi requests fields outside the supported bounds, When the quest
         let text = "";
         let result = "";
         for (;;) {
-            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (
                 event.type === "acp" &&
                 event.payload.sessionUpdate === "agent_message_chunk" &&
@@ -623,7 +623,7 @@ test("Given real Pi asks dialogs with empty titles or confirmation bodies, When 
         let requests = 0;
         let output = "";
         for (;;) {
-            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (event.type === "lifecycle-metadata") {
                 if (event.payload.kind === "session.elicitation.requested") {
                     const request = event.payload.event;
@@ -675,7 +675,7 @@ test.each(["answer", "stop"] as const)(
             for (const topic of ["archaeology", "bicycles", "coffee"]) {
                 sendQuestionPrompt(peer, peer.sessionId, `Talk about ${topic} with some detail`);
                 for (;;) {
-                    const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                    const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                     if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
                         throw new Error(JSON.stringify(event));
                     }
@@ -691,7 +691,7 @@ test.each(["answer", "stop"] as const)(
             let text = "";
             const statuses: string[] = [];
             for (;;) {
-                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                 if (event.type === "lifecycle-metadata") {
                     if (event.payload.kind === "session.elicitation.requested") {
                         const request = event.payload.event;
@@ -765,7 +765,7 @@ test.each(["answer", "stop"] as const)(
             sendQuestionPrompt(peer, peer.sessionId, "Continue after manual compaction");
             let reply = "";
             for (;;) {
-                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                 if (event.type === "lifecycle-metadata") {
                     if (
                         event.payload.kind === "session.elicitation.requested" ||

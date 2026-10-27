@@ -2,7 +2,7 @@ import { RuntimeMessageScheduler, type SessionStatusNotifications } from "@moxt-
 import {
     encodeSessionStatusWebhookBody,
     lastRecordedLifecycleStatus,
-    type SessionEvent,
+    type SessionLiveEvent,
     type SessionStatusWebhookCommand,
     sessionLiveEventSchema,
 } from "@moxt-ai/mobius-sdk/protocol";
@@ -42,7 +42,7 @@ export class PlatformSessionStatusNotifications implements SessionStatusNotifica
     }
 
     readonly publish: SessionStatusNotifications["publish"] = (scope, envelope) => {
-        const eventsBySession = new Map<string, SessionEvent[]>();
+        const eventsBySession = new Map<string, SessionLiveEvent[]>();
         for (const wireEvent of envelope.events) {
             if (wireEvent.type !== "lifecycle-metadata") {
                 continue;
@@ -136,7 +136,7 @@ export class PlatformSessionStatusNotifications implements SessionStatusNotifica
  * observes the events it carries, so a command that ended earlier is absent here and must not be
  * inferred from these results.
  */
-function terminatedCommands(events: readonly SessionEvent[]): SessionStatusWebhookCommand[] {
+function terminatedCommands(events: readonly SessionLiveEvent[]): SessionStatusWebhookCommand[] {
     const byCommand = new Map<string, SessionStatusWebhookCommand>();
     for (const event of events) {
         if (event.type !== "lifecycle-metadata") {
