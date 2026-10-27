@@ -1,3 +1,4 @@
+import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
     decodeSessionRecordingDirectory,
@@ -69,6 +70,39 @@ async function directory(projectId: string, runtimeId: string) {
 
 // @no-uc: Performance; bounded multi-Session ingestion must preserve each history and directory lifecycle.
 describe("Recording multi-Session batches", () => {
+    it("Given a large legacy directory, When it is read across batches, Then every summary survives and a later missing history fails the body instead of returning a partial directory", async () => {
+        const projectId = "large-legacy-project";
+        const runtimeId = "large-legacy-runtime";
+        const sessions = Array.from({ length: 257 }, (_, index) => `large-${String(index).padStart(4, "0")}`);
+        for (let offset = 0; offset < sessions.length; offset += 128) {
+            const response = await write(
+                projectId,
+                runtimeId,
+                sessions.slice(offset, offset + 128).flatMap((id) => [requested(id), completed(id, 2)]),
+            );
+            expect(response.status).toBe(201);
+            await response.body?.cancel();
+        }
+        const summaries = await directory(projectId, runtimeId);
+        expect(summaries.sessions.map(({ sessionId, status }) => ({ sessionId, status }))).toEqual(
+            [...sessions].reverse().map((sessionId) => ({ sessionId, status: "idle" })),
+        );
+
+        const response = await worker.fetch(
+            new Request(`https://recording.test/v1/projects/${projectId}/runtimes/${runtimeId}/sessions`),
+            env,
+        );
+        expect(response.status).toBe(200);
+        // Remove a history still ahead of the reader through the real storage boundary.
+        await runInDurableObject(
+            env.SESSION_RECORDING.getByName(JSON.stringify([projectId, "large-0000"])),
+            (_instance, state) => {
+                state.storage.sql.exec("DELETE FROM recorded_session_events_v2");
+            },
+        );
+        await expect(response.text()).rejects.toThrow();
+    });
+
     it("Given interleaved Sessions, When one batch is recorded, Then each complete history and directory outcome is retained", async () => {
         const sessions = ["batch-one", "batch-two", "batch-three"];
         const events = [
