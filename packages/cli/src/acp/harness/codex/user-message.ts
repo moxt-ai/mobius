@@ -31,7 +31,7 @@ export function userMessageUpdates(
                         type: "image",
                         data: data?.[2] ?? "",
                         mimeType: data?.[1] ?? "image/png",
-                        uri: image.data.url,
+                        ...(data === null ? { uri: image.data.url } : {}),
                     },
                 },
             ];
