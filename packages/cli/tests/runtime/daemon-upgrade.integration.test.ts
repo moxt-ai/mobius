@@ -219,10 +219,11 @@ describe("Daemon hourly npm upgrade", () => {
                 await tick(goodWorker, 3_600_000);
                 await observed;
             }
+            // Data for the next version that is not current, as a CLI before 0.0.325 left when it ran before the switch.
             const reuse = "99.0.2";
             packages.set(reuse, await packedRelease(directory, reuse, false, signal));
             await cp(join(stateRoot, "versions", good), join(stateRoot, "versions", reuse), { recursive: true });
-            await writeFile(join(stateRoot, "versions", reuse, "retained-data"), "existing-target-data");
+            await writeFile(join(stateRoot, "versions", reuse, "retained-data"), "stale-target-data");
             latest = reuse;
             await tick(await readFile(join(control.stateDirectory, "worker.lock"), "utf8"), 3_600_000);
             expect(await next()).toMatchObject({
@@ -230,9 +231,8 @@ describe("Daemon hourly npm upgrade", () => {
                 outcome: { status: "succeeded" },
             });
             expect(downloads).toBe(downloadsAfterUpgrade + 1);
-            expect(await readFile(join(stateRoot, "versions", reuse, "retained-data"), "utf8")).toBe(
-                "existing-target-data",
-            );
+            // The current data wins over the stale copy.
+            expect(await readFile(join(stateRoot, "versions", reuse, "retained-data"), "utf8")).toBe("upgraded-data");
             // Reject candidates before replacing the current worker or its data.
             const workerBeforePreflight = await readFile(join(control.stateDirectory, "worker.lock"), "utf8");
             for (const candidate of [

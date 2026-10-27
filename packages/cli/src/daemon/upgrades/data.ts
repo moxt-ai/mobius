@@ -9,7 +9,8 @@ import {
 import { readStateDirectory } from "../../storage/state-directory.ts";
 import { readSwitchStatus } from "../control/switch-status.ts";
 
-// A version that has never run inherits the current data, or the data of the version it replaces.
+// A version whose data is not current inherits the current data. Without a current data pointer, a version that has
+// never run inherits the data of the version it replaces.
 export async function prepareVersionData(
     version: string,
     signal: AbortSignal,
@@ -19,12 +20,21 @@ export async function prepareVersionData(
     signal.throwIfAborted();
     const root = readStateDirectory(environment);
     const targetVersion = runtimeUpgradeVersionSchema.parse(version);
-    if (await versionDataExists(root, targetVersion, signal)) {
-        return;
-    }
-    const previous = (await readCurrentDataVersion(root, signal)) ?? fallbackVersion;
-    if (previous === null) {
-        return;
+    const current = await readCurrentDataVersion(root, signal);
+    let previous: string;
+    if (current !== null) {
+        if (current === targetVersion) {
+            return;
+        }
+        // The pointer names the data that wins. A directory it does not name never became current, as one an earlier
+        // CLI started for its own version, so it is stale and must not replace the current data.
+        await discardVersionData(root, targetVersion, signal);
+        previous = current;
+    } else {
+        if (fallbackVersion === null || (await versionDataExists(root, targetVersion, signal))) {
+            return;
+        }
+        previous = fallbackVersion;
     }
     const leftBehind = await copyVersionData(root, runtimeUpgradeVersionSchema.parse(previous), targetVersion, signal);
     for (const entry of leftBehind) {
