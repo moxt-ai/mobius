@@ -14,6 +14,7 @@ export const CONTENT_AVAILABLE_KIND = "content.available";
 
 export const CONTENT_CHUNK_MAX_BYTES = 192 * 1024;
 export const CONTENT_WRITE_MAX_BYTES = 32 * 1024 * 1024;
+export const PROMPT_IMAGE_MAX_BYTES = 5_000_000;
 const CONTENT_CHUNK_MAGIC = new Uint8Array([0x4d, 0x42, 0x43, 0x31]);
 const CONTENT_CHUNK_HEADER_BYTES = CONTENT_CHUNK_MAGIC.byteLength + 1 + 4;
 

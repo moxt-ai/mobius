@@ -1,9 +1,8 @@
 import { createHash } from "node:crypto";
-import type { PromptAttachment } from "@moxt-ai/mobius-sdk/protocol";
+import { PROMPT_IMAGE_MAX_BYTES, type PromptAttachment } from "@moxt-ai/mobius-sdk/protocol";
 import type { PromptImageInput, PromptResourceInput } from "../../acp/client/prompt-content.ts";
 import { OperationError } from "../../infra/operation-error.ts";
 
-const MAX_AGENT_IMAGE_BASE64_LENGTH = 4_000_000;
 const MAX_AGENT_RESOURCE_BYTE_LENGTH = 1_000_000;
 
 export class PromptArtifactError extends OperationError {
@@ -55,14 +54,17 @@ export async function resolvePromptArtifacts(
             );
         }
         if (attachment.kind === "image") {
-            const data = Buffer.from(bytes).toString("base64");
-            if (data.length > MAX_AGENT_IMAGE_BASE64_LENGTH || images.length >= 8) {
+            if (bytes.byteLength > PROMPT_IMAGE_MAX_BYTES || images.length >= 8) {
                 throw new PromptArtifactError(
                     "artifact_too_large_for_agent",
                     "The prompt attachment exceeds the Agent image limit",
                 );
             }
-            images.push({ data, mimeType: attachment.mimeType, name: attachment.name });
+            images.push({
+                data: Buffer.from(bytes).toString("base64"),
+                mimeType: attachment.mimeType,
+                name: attachment.name,
+            });
             continue;
         }
         if (!isTextMediaType(attachment.mimeType)) {
