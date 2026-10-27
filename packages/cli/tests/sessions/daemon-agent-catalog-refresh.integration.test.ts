@@ -243,6 +243,7 @@ test("Given the local Agent executable is upgraded after the daemon started, Whe
         PATH: `${binDirectory}:${process.env["PATH"] ?? ""}`,
     };
     const inventory = await discoverLocalAgentInventory({
+        dataDirectory: stateDirectory,
         defaultWorkspace: workspace,
         environment,
         signal: AbortSignal.timeout(60_000),
@@ -261,6 +262,7 @@ test("Given the local Agent executable is upgraded after the daemon started, Whe
         createCatalogAgentResolver(
             (refreshSignal) =>
                 discoverLocalAgentInventory({
+                    dataDirectory: stateDirectory,
                     defaultWorkspace: workspace,
                     environment,
                     signal: refreshSignal,

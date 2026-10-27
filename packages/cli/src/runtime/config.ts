@@ -5,18 +5,27 @@ import { LocalAgentCatalog } from "../agent/catalog.ts";
 import { RuntimeAgentDependencies } from "../agent/runtime-agents.ts";
 import { readStateDirectory } from "../storage/state-directory.ts";
 
-export function loadDefaultWorkspace(environment: Readonly<NodeJS.ProcessEnv> = process.env): string {
+/** The workspace new conversations use: `MOBIUS_DEFAULT_WORKSPACE`, or `workspace` in the Runtime's data directory. */
+export function loadDefaultWorkspace(
+    dataDirectory: string,
+    environment: Readonly<NodeJS.ProcessEnv> = process.env,
+): string {
     const { MOBIUS_DEFAULT_WORKSPACE: configuredWorkspace } = environment;
-    return configuredWorkspace ?? join(readStateDirectory(environment), "workspace");
+    return configuredWorkspace ?? join(dataDirectory, "workspace");
 }
 
+/**
+ * Where a Runtime keeps its local data, and the environment it runs and launches Agents with. The data directory is
+ * passed explicitly: the environment keeps the caller's MOBIUS_STATE_DIRECTORY, which names the CLI state root, so
+ * Mobius run from an Agent addresses the same root as Mobius outside it.
+ */
 export class RuntimeLocalContext {
     readonly environment: Readonly<NodeJS.ProcessEnv>;
     readonly stateDirectory: string;
 
     constructor(stateDirectory: string, environment: Readonly<NodeJS.ProcessEnv> = process.env) {
         this.stateDirectory = resolve(stateDirectory);
-        this.environment = Object.freeze({ ...environment, MOBIUS_STATE_DIRECTORY: this.stateDirectory });
+        this.environment = Object.freeze({ ...environment });
     }
 }
 

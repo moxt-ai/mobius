@@ -85,7 +85,7 @@ export function loadMobiusRuntimeConnection(
     }
     return Object.freeze({
         channelId,
-        defaultWorkspace: loadDefaultWorkspace(environment),
+        defaultWorkspace: loadDefaultWorkspace(readStateDirectory(environment), environment),
         relayUrl: requiredEnvironmentValue(environment, "MOBIUS_RELAY_URL"),
         runtimeCredential: requiredEnvironmentValue(environment, "MOBIUS_RELAY_TOKEN"),
     });
@@ -119,6 +119,7 @@ export async function createMobiusRuntimeEngine(
     const discover = async (refreshSignal: AbortSignal) =>
         await discoverLocalAgentInventory({
             defaultWorkspace,
+            dataDirectory: localContext.stateDirectory,
             environment: discoveryEnvironment,
             signal: refreshSignal,
             specifications,

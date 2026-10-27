@@ -24,10 +24,11 @@ export function registerAgentsHandler(program: Command, context: CliContext): vo
         .action(async (options: AgentOptions) => {
             const installation = await openMobiusCliInstallation(context.shutdownSignal, process.env);
             const localContext = new RuntimeLocalContext(installation.stateDirectory, process.env);
-            const defaultWorkspace = loadDefaultWorkspace(localContext.environment);
+            const defaultWorkspace = loadDefaultWorkspace(localContext.stateDirectory, localContext.environment);
             await ensurePrivateDirectory(defaultWorkspace);
             const inventory = await discoverLocalAgentInventory({
                 defaultWorkspace,
+                dataDirectory: localContext.stateDirectory,
                 environment: localContext.environment,
                 signal: context.shutdownSignal,
             });

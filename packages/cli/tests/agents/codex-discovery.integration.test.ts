@@ -37,6 +37,7 @@ child.once("exit", code => process.exit(code ?? 1));
             { mode: 0o700 },
         );
         const inventory = await discoverLocalAgentInventory({
+            dataDirectory: directory,
             defaultWorkspace: directory,
             environment: { ...codex.environment, MOBIUS_CODEX_PATH: executable },
             signal: AbortSignal.timeout(30_000),
@@ -88,6 +89,7 @@ test.skipIf(process.platform === "win32")(
             await codex.writeLauncher(second);
             await symlink(first, link);
             const inventory = await discoverLocalAgentInventory({
+                dataDirectory: directory,
                 defaultWorkspace: directory,
                 environment: { ...codex.environment, MOBIUS_CODEX_PATH: link },
                 signal: AbortSignal.timeout(30_000),

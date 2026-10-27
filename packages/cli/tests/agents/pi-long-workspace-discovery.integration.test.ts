@@ -24,6 +24,7 @@ test("Given Pi's default workspace creates an oversized native session path, Whe
     await mkdir(workspace, { recursive: true });
     try {
         const inventory = await discoverLocalAgentInventory({
+            dataDirectory: stateDirectory,
             defaultWorkspace: workspace,
             environment: {
                 ...agent.environment,
