@@ -17,6 +17,7 @@ import { decodeSessionConfigurationSelections } from "../configuration/index.ts"
 export const SESSION_PROMPT_KIND = "session.prompt";
 export const SESSION_PROMPT_DISPOSITION_KIND = "session.prompt.disposition";
 export const SESSION_CANCEL_KIND = "session.cancel";
+export const SESSION_CANCEL_BEFORE_START_KIND = "session.cancel-before-start";
 
 export const SessionPromptDisposition = Object.freeze({
     Queue: "queue",
@@ -56,6 +57,26 @@ export interface SessionCancelCommand {
     readonly kind: typeof SESSION_CANCEL_KIND;
     readonly sessionId: string;
 }
+
+/** Fails closed on older Runtimes; it must never degrade into cancellation of running work. */
+export interface SessionCancelBeforeStartCommand {
+    readonly commandId: string;
+    readonly kind: typeof SESSION_CANCEL_BEFORE_START_KIND;
+    readonly sessionId: string;
+}
+
+export function decodeSessionCancelBeforeStartCommand(encoded: string): SessionCancelBeforeStartCommand {
+    const value = parseJson(encoded);
+    assertKind(value, SESSION_CANCEL_BEFORE_START_KIND);
+    return {
+        commandId: readIdentifier(value, "commandId"),
+        kind: SESSION_CANCEL_BEFORE_START_KIND,
+        sessionId: readIdentifier(value, "sessionId"),
+    };
+}
+
+export const encodeSessionCancelBeforeStartCommand = (message: SessionCancelBeforeStartCommand): string =>
+    JSON.stringify(decodeSessionCancelBeforeStartCommand(JSON.stringify(message)));
 
 export interface SessionPromptDispositionCommand {
     readonly commandId: string;

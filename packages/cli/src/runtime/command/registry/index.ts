@@ -10,6 +10,7 @@ import {
     elicitationRespondCommand,
     permissionRespondCommand,
     promptDispositionCommand,
+    sessionCancelBeforeStartCommand,
     sessionCancelCommand,
     sessionCloseCommand,
 } from "./interactions.ts";
@@ -41,6 +42,7 @@ export function createCommandRegistry(context: CommandContext): {
         ...createAgentSettingsCommands(context),
         ...contentWrites.commands,
         fileReadCommand,
+        sessionCancelBeforeStartCommand,
         sessionCancelCommand,
         sessionCloseCommand,
         promptDispositionCommand,

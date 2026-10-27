@@ -1,4 +1,5 @@
 import {
+    decodeSessionCancelBeforeStartCommand,
     decodeSessionCancelCommand,
     decodeSessionElicitationRespondCommand,
     decodeSessionHistoryPageLoad,
@@ -85,6 +86,26 @@ export function createProjectRuntimeSessionControlRoutes() {
                     state: { cancelledAt, kind: "cancelled" },
                     turnId,
                 });
+            },
+        )
+        .post(
+            "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/turns/:turnId/cancel-before-start",
+            bodyParser<RelayHttpEnvironment>(),
+            async (context) => {
+                const body = validated(cancellation, context.req.valid("json"));
+                const sessionId = validateIdentifier(context.req.param("sessionId"), "session_id");
+                const turnId = validateIdentifier(context.req.param("turnId"), "turn_id");
+                const completed = await requestControl(
+                    context,
+                    decodeSessionCancelBeforeStartCommand(
+                        JSON.stringify({ commandId: turnId, kind: "session.cancel-before-start", sessionId }),
+                    ),
+                );
+                if (completed.kind !== "turn.completed" || completed.commandId !== turnId) {
+                    throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid cancellation");
+                }
+                context.header("Cache-Control", "no-store");
+                return context.json({ turnId, idempotencyKey: body.idempotencyKey });
             },
         )
         .put(

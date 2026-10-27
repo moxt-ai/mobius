@@ -239,6 +239,46 @@ export const sessionRecordingInteractionSchema = z.discriminatedUnion("kind", [
         .readonly(),
 ]);
 
+export const SESSION_RECORDING_EXECUTION_COMMAND_MAX_LIMIT = 100;
+
+const recordingActiveCommandsSchema = z
+    .object({
+        commandIds: z.array(identifierStringSchema).max(1_000).readonly(),
+        generationId: identifierStringSchema,
+    })
+    .readonly()
+    .nullable();
+
+const sessionRecordingExecutionSchema = z
+    .object({
+        activeCommands: recordingActiveCommandsSchema,
+        commands: z
+            .array(
+                z
+                    .object({
+                        attempt: sessionRecordingTurnAttemptSchema,
+                        commandId: identifierStringSchema,
+                        generationId: identifierStringSchema,
+                    })
+                    .readonly(),
+            )
+            .max(SESSION_RECORDING_EXECUTION_COMMAND_MAX_LIMIT)
+            .readonly(),
+        sessionId: identifierStringSchema,
+        tailCursor: recordingCursorSchema,
+        version: z.literal(1),
+    })
+    .readonly();
+
+/** Named execution facts, without prompts or output. Missing commands have no recorded evidence yet. */
+export type SessionRecordingExecution = z.infer<typeof sessionRecordingExecutionSchema>;
+
+export const decodeSessionRecordingExecution = (encoded: string): SessionRecordingExecution =>
+    decode(encoded, sessionRecordingExecutionSchema);
+
+export const encodeSessionRecordingExecution = (value: SessionRecordingExecution): string =>
+    JSON.stringify(sessionRecordingExecutionSchema.parse(value));
+
 const sessionRecordingTurnPageSchema = z
     .object({
         // Commands that own Agent output in the newest Session generation, innermost last.

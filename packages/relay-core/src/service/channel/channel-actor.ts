@@ -22,6 +22,7 @@ import {
     decodeNativeSessionRequest,
     decodeRuntimeDiagnosticsRequest,
     decodeRuntimePingCommand,
+    decodeSessionCancelBeforeStartCommand,
     decodeSessionCancelCommand,
     decodeSessionCloseCommand,
     decodeSessionConfigReadCommand,
@@ -55,6 +56,7 @@ import {
     RUNTIME_PING_KIND,
     RUNTIME_PONG_KIND,
     RUNTIME_STATUS_KIND,
+    SESSION_CANCEL_BEFORE_START_KIND,
     SESSION_CANCEL_KIND,
     SESSION_CLOSE_KIND,
     SESSION_CLOSE_NOTICE_KIND,
@@ -476,6 +478,10 @@ export class ChannelActor {
             case NATIVE_SESSION_CANCEL_KIND: {
                 const command = decodeNativeSessionCancel(message);
                 return { message: command, requestId: command.requestId, sessionId: command.sessionId };
+            }
+            case SESSION_CANCEL_BEFORE_START_KIND: {
+                const command = decodeSessionCancelBeforeStartCommand(message);
+                return { message: command, requestId: command.commandId, sessionId: command.sessionId };
             }
             case SESSION_CANCEL_KIND: {
                 const command = decodeSessionCancelCommand(message);

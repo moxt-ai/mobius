@@ -34,6 +34,7 @@ import {
     type RuntimePingCommand,
     type RuntimePongEvent,
     SESSION_EVENT_KIND,
+    type SessionCancelBeforeStartCommand,
     type SessionCancelCommand,
     type SessionCloseCommand,
     type SessionClosedEvent,
@@ -85,6 +86,7 @@ export type RuntimeControlCommand =
     | SessionConfigReadCommand
     | SessionRenameCommand
     | SessionCloseCommand
+    | SessionCancelBeforeStartCommand
     | SessionCancelCommand
     | SessionPromptDispositionCommand
     | SessionPromptCommand
@@ -613,7 +615,8 @@ export async function requestRuntimeControl(
     const requestId =
         command.kind === "session.prompt" ||
         command.kind === "session.prompt.disposition" ||
-        command.kind === "session.cancel"
+        command.kind === "session.cancel" ||
+        command.kind === "session.cancel-before-start"
             ? command.commandId
             : command.kind === "session.permission.respond" || command.kind === "session.elicitation.respond"
               ? command.interactionId
