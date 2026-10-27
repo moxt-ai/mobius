@@ -24,11 +24,30 @@ const acpUrl = new URL("./fixtures/acp-peer.ts", import.meta.url).toString();
 class NativeSessionObserver extends NullSessionObserver {
     readonly updates: AcpSessionUpdate[] = [];
     readonly loading = Promise.withResolvers<void>();
+    readonly #waiters: { readonly matches: (update: AcpSessionUpdate) => boolean; readonly resolve: () => void }[] = [];
     override readonly onSessionEvent = (event: SessionLiveEvent): Promise<void> => {
         if (event.type === "acp") {
             this.updates.push(event.payload);
+            for (const waiter of this.#waiters.splice(0).filter((candidate) => {
+                if (candidate.matches(event.payload)) {
+                    return true;
+                }
+                this.#waiters.push(candidate);
+                return false;
+            })) {
+                waiter.resolve();
+            }
         }
         return Promise.resolve();
+    };
+    /** Settles once an Agent update matching `matches` arrives, or at once if one already has. */
+    readonly nextUpdate = (matches: (update: AcpSessionUpdate) => boolean): Promise<void> => {
+        if (this.updates.some(matches)) {
+            return Promise.resolve();
+        }
+        const arrived = Promise.withResolvers<void>();
+        this.#waiters.push({ matches, resolve: arrived.resolve });
+        return arrived.promise;
     };
     override readonly onInfo = async (): Promise<void> => {
         this.loading.resolve();

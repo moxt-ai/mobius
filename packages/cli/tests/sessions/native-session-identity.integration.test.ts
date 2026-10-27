@@ -162,6 +162,70 @@ describe("native session identity", () => {
         }
     });
 
+    it("Given an imported native conversation is running a turn, When another device imports it again, Then the running Session is returned and its turn continues", async () => {
+        const f = await fixture("Claude Code", "supported", "native");
+        const signal = new AbortController().signal;
+        try {
+            await f.seed("Join while it works");
+            const entry = (await f.list()).entries[0];
+            if (entry === undefined) {
+                throw new Error("Missing native conversation");
+            }
+            const first = await f.service.execute(
+                { ...f.identity, action: "import", entryId: entry.entryId, targetSessionId: crypto.randomUUID() },
+                signal,
+            );
+            if (first.action !== "import") {
+                throw new Error("Expected a native import");
+            }
+            const turnCancellation = new AbortController();
+            const turn = f.sessions.runPrompt({
+                agent: f.agent,
+                cwd: f.workspace,
+                additionalDirectories: [],
+                sessionId: first.ready.sessionId,
+                commandId: crypto.randomUUID(),
+                prompt: "interleave progress and hold",
+                images: [],
+                resources: [],
+                signal: turnCancellation.signal,
+            });
+            let turnSettled = false;
+            void turn.then(
+                () => {
+                    turnSettled = true;
+                },
+                () => {
+                    turnSettled = true;
+                },
+            );
+            await f.observer.nextUpdate(
+                (update) =>
+                    update.sessionUpdate === "agent_message_chunk" &&
+                    update.content.type === "text" &&
+                    update.content.text === "Checking the workspace",
+            );
+
+            const joined = await f.service.execute(
+                {
+                    ...f.identity,
+                    action: "import",
+                    entryId: entry.entryId,
+                    requestId: "import-while-running",
+                    targetSessionId: crypto.randomUUID(),
+                },
+                signal,
+            );
+
+            expect(joined).toMatchObject({ action: "import", ready: { sessionId: first.ready.sessionId } });
+            expect(turnSettled).toBe(false);
+            turnCancellation.abort();
+            await expect(turn).rejects.toBeDefined();
+        } finally {
+            await f.close();
+        }
+    });
+
     it.each(["import", "fork"] satisfies readonly ("import" | "fork")[])(
         "Given a %s assigned a UUID distinct from its native identity, When the Runtime restarts, Then that conversation remains discoverable and can continue",
         async (action) => {
