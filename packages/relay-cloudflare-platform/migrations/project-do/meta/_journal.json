@@ -29,6 +29,20 @@
             "when": 1793091179980,
             "tag": "0003_drop_project_authorization_copies",
             "breakpoints": true
+        },
+        {
+            "idx": 4,
+            "version": "6",
+            "when": 1793095958112,
+            "tag": "0004_add_runtime_pairing_records",
+            "breakpoints": true
+        },
+        {
+            "idx": 5,
+            "version": "6",
+            "when": 1793096145815,
+            "tag": "0005_drop_pairing_channels",
+            "breakpoints": true
         }
     ]
 }

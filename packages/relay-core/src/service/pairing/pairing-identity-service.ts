@@ -46,19 +46,12 @@ export class PairingIdentityService {
             const projectId = runtimeIdentityField(match.row, "project_id");
             const runtimeId = runtimeIdentityField(match.row, "runtime_id");
             const channelId = runtimeIdentityField(match.row, "channel_id");
-            const pairingId = runtimeIdentityField(match.row, "pairing_id");
             const project = await this.#projects.resolve(projectId, signal);
             signal.throwIfAborted();
             if (!this.#storage.matchesPlacement(match.sourceId, project)) {
                 throw new PairingDirectoryError("directory_unavailable", "Runtime storage is unavailable");
             }
-            return new RuntimeAccessContext(
-                new ProjectScope(projectId),
-                runtimeId,
-                channelId,
-                `daemon:${channelId}`,
-                pairingId,
-            );
+            return new RuntimeAccessContext(new ProjectScope(projectId), runtimeId, channelId, `daemon:${channelId}`);
         } catch (cause) {
             signal.throwIfAborted();
             if (cause instanceof PairingDirectoryError) {

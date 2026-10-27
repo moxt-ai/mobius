@@ -8,8 +8,11 @@ import type { SqlDatabase } from "../infra/sql-database.ts";
 import {
     channelAccessGrant,
     channelHostCredential,
-    pairingChannel,
     projectBrowserCredential,
+    runtimeDaemonCredential,
+    runtimeIdentity,
+    runtimePairingRequest,
+    runtimeRegistration,
 } from "../schema/project-do/index.ts";
 
 export interface IdentityDatabaseSource {
@@ -26,15 +29,16 @@ async function identityRows(
     switch (credential.kind) {
         case "host":
             return orm
-                .selectDistinct({ project_id: pairingChannel.projectId })
-                .from(pairingChannel)
-                .innerJoin(channelHostCredential, eq(channelHostCredential.channelId, pairingChannel.channelId))
+                .selectDistinct({ project_id: runtimeIdentity.projectId })
+                .from(runtimeIdentity)
+                .innerJoin(runtimeRegistration, eq(runtimeRegistration.runtimeId, runtimeIdentity.runtimeId))
+                .innerJoin(channelHostCredential, eq(channelHostCredential.channelId, runtimeIdentity.channelId))
                 .where(
                     and(
-                        eq(pairingChannel.channelId, validateIdentifier(credential.channelId, "channel_id")),
+                        eq(runtimeIdentity.channelId, validateIdentifier(credential.channelId, "channel_id")),
                         eq(channelHostCredential.tokenHash, credential.tokenHash),
                         isNull(channelHostCredential.revokedAt),
-                        eq(pairingChannel.status, "paired"),
+                        isNull(runtimeIdentity.revokedAt),
                         or(
                             isNull(channelHostCredential.replacedByCredentialId),
                             gt(channelHostCredential.overlapEndsAt, Date.now()),
@@ -43,28 +47,31 @@ async function identityRows(
                 );
         case "daemon":
             return orm
-                .select({ project_id: pairingChannel.projectId })
-                .from(pairingChannel)
+                .select({ project_id: runtimeIdentity.projectId })
+                .from(runtimeIdentity)
+                .innerJoin(runtimeRegistration, eq(runtimeRegistration.runtimeId, runtimeIdentity.runtimeId))
+                .innerJoin(runtimeDaemonCredential, eq(runtimeDaemonCredential.runtimeId, runtimeIdentity.runtimeId))
                 .where(
                     and(
-                        eq(pairingChannel.channelId, validateIdentifier(credential.channelId, "channel_id")),
-                        eq(pairingChannel.daemonTokenHash, credential.tokenHash),
-                        eq(pairingChannel.status, "paired"),
+                        eq(runtimeIdentity.channelId, validateIdentifier(credential.channelId, "channel_id")),
+                        eq(runtimeDaemonCredential.tokenHash, credential.tokenHash),
+                        isNull(runtimeIdentity.revokedAt),
                     ),
                 );
         case "project": {
             const projectId = validateIdentifier(credential.projectId, "project_id");
             const [hosts, browsers] = await Promise.all([
                 orm
-                    .selectDistinct({ project_id: pairingChannel.projectId })
-                    .from(pairingChannel)
-                    .innerJoin(channelHostCredential, eq(channelHostCredential.channelId, pairingChannel.channelId))
+                    .selectDistinct({ project_id: runtimeIdentity.projectId })
+                    .from(runtimeIdentity)
+                    .innerJoin(runtimeRegistration, eq(runtimeRegistration.runtimeId, runtimeIdentity.runtimeId))
+                    .innerJoin(channelHostCredential, eq(channelHostCredential.channelId, runtimeIdentity.channelId))
                     .where(
                         and(
-                            eq(pairingChannel.projectId, projectId),
+                            eq(runtimeIdentity.projectId, projectId),
                             eq(channelHostCredential.tokenHash, credential.tokenHash),
                             isNull(channelHostCredential.revokedAt),
-                            eq(pairingChannel.status, "paired"),
+                            isNull(runtimeIdentity.revokedAt),
                         ),
                     ),
                 orm
@@ -85,24 +92,26 @@ async function identityRows(
         }
         case "pairing":
             return orm
-                .select({ project_id: pairingChannel.projectId })
-                .from(pairingChannel)
+                .select({ project_id: runtimeIdentity.projectId })
+                .from(runtimePairingRequest)
+                .innerJoin(runtimeIdentity, eq(runtimeIdentity.runtimeId, runtimePairingRequest.runtimeId))
                 .where(
                     and(
-                        eq(pairingChannel.pairingId, validateIdentifier(credential.pairingId, "pairing_id")),
-                        eq(pairingChannel.pollTokenHash, credential.tokenHash),
+                        eq(runtimePairingRequest.pairingId, validateIdentifier(credential.pairingId, "pairing_id")),
+                        eq(runtimePairingRequest.pollTokenHash, credential.tokenHash),
                     ),
                 );
         case "pairing-code":
             return orm
-                .select({ project_id: pairingChannel.projectId })
-                .from(pairingChannel)
-                .where(eq(pairingChannel.pairingCodeHash, credential.codeHash));
+                .select({ project_id: runtimeIdentity.projectId })
+                .from(runtimePairingRequest)
+                .innerJoin(runtimeIdentity, eq(runtimeIdentity.runtimeId, runtimePairingRequest.runtimeId))
+                .where(eq(runtimePairingRequest.pairingCodeHash, credential.codeHash));
         case "grant":
             return orm
-                .select({ project_id: pairingChannel.projectId })
+                .select({ project_id: runtimeIdentity.projectId })
                 .from(channelAccessGrant)
-                .innerJoin(pairingChannel, eq(pairingChannel.channelId, channelAccessGrant.channelId))
+                .innerJoin(runtimeIdentity, eq(runtimeIdentity.channelId, channelAccessGrant.channelId))
                 .where(
                     and(
                         eq(channelAccessGrant.channelId, validateIdentifier(credential.channelId, "channel_id")),
@@ -142,13 +151,14 @@ export class PairingIdentityStorage {
         for (const source of this.#sources) {
             const rows = await relayDrizzle(source.database, signal)
                 .select({
-                    project_id: pairingChannel.projectId,
-                    runtime_id: pairingChannel.runtimeId,
-                    channel_id: pairingChannel.channelId,
-                    pairing_id: pairingChannel.pairingId,
+                    project_id: runtimeIdentity.projectId,
+                    runtime_id: runtimeIdentity.runtimeId,
+                    channel_id: runtimeIdentity.channelId,
                 })
-                .from(pairingChannel)
-                .where(and(eq(pairingChannel.daemonTokenHash, tokenHash), eq(pairingChannel.status, "paired")));
+                .from(runtimeIdentity)
+                .innerJoin(runtimeRegistration, eq(runtimeRegistration.runtimeId, runtimeIdentity.runtimeId))
+                .innerJoin(runtimeDaemonCredential, eq(runtimeDaemonCredential.runtimeId, runtimeIdentity.runtimeId))
+                .where(and(eq(runtimeDaemonCredential.tokenHash, tokenHash), isNull(runtimeIdentity.revokedAt)));
             for (const row of rows) {
                 matches.push({ sourceId: source.sourceId, row });
             }
