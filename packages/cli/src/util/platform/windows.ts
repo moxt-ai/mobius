@@ -148,11 +148,10 @@ function terminateProcess(child: ChildProcess, signal: NodeJS.Signals): void {
 const windowsPermissions = `
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1')
 $item = Get-Item -LiteralPath $env:MOBIUS_PERMISSION_PATH -Force
 if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Unsafe path' }
 $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
-$acl = Get-Acl -LiteralPath $item.FullName
+$acl = $item.GetAccessControl()
 $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier])
 if ($owner -ne $sid -and -not ($owner.Value -eq 'S-1-5-32-544' -and ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))) { throw 'Path is not user-owned' }
 if ($env:MOBIUS_PERMISSION_PRIVATE -eq '1') {
@@ -166,12 +165,11 @@ if ($env:MOBIUS_PERMISSION_PRIVATE -eq '1') {
     $private.SetOwner($sid)
     $private.SetAccessRuleProtection($true, $false)
     $private.AddAccessRule($rule)
-    Set-Acl -LiteralPath $item.FullName -AclObject $private
+    $item.SetAccessControl($private)
 }
 `;
 
-// Windows PowerShell's first Security module import can exceed ten seconds on
-// a cold host. Keep ACL validation bounded without rejecting a healthy startup.
+// Keep ACL validation bounded in case Windows filesystem operations stall.
 const windowsPermissionsTimeoutMs = 30_000;
 
 async function validatePathPermissions(
