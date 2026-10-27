@@ -7,7 +7,7 @@ import {
     sessionPermissionRequestedEventSchema,
 } from "../interactions/index.ts";
 import { sessionReadyEventSchema } from "../lifecycle/index.ts";
-import { promptImageSchema } from "../prompt/commands.ts";
+import { promptImageSchema, promptResourceSchema } from "../prompt/commands.ts";
 import { sessionCapabilitiesSchema } from "../shared/index.ts";
 
 export const NATIVE_SESSION_REQUEST_KIND = "native.session.request";
@@ -119,6 +119,8 @@ const nativeSessionResultSchema = z.discriminatedUnion("action", [
                             commandId: identifier,
                             prompt: z.string().max(100_000),
                             images: z.array(promptImageSchema).max(8).readonly(),
+                            // Absent from daemons that predate it; a client then cannot restore the prompt's files.
+                            resources: z.array(promptResourceSchema).max(16).readonly().optional(),
                         })
                         .readonly(),
                 )
