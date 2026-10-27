@@ -8,6 +8,7 @@ import {
     connectionDirectory,
     connectionFilePath,
     createInstallationFile,
+    type InstallationDirectory,
     installationDirectory,
     installationPointerPath,
     listInstallationFiles,
@@ -295,10 +296,10 @@ async function writeJsonAtomically(
 export class RuntimeInstallationStore {
     readonly applicationId: string;
     readonly installationId: string;
-    readonly stateDirectory: string;
+    readonly stateDirectory: InstallationDirectory;
     readonly #connectionDirectory: string;
 
-    private constructor(applicationId: string, installationId: string, stateDirectory: string) {
+    private constructor(applicationId: string, installationId: string, stateDirectory: InstallationDirectory) {
         this.applicationId = applicationId;
         this.installationId = installationId;
         this.stateDirectory = stateDirectory;

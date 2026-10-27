@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { type FileHandle, mkdir, open, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { z } from "zod";
 import { isNodeError } from "../../util/node-error.ts";
 import { STATE_ROOT_LAYOUT } from "../state-root-layout.ts";
 
@@ -18,8 +19,13 @@ export function installationPointerPath(applicationDirectory: string): string {
     return join(applicationDirectory, "current.json");
 }
 
-export function installationDirectory(applicationDirectory: string, installationId: string): string {
-    return join(applicationDirectory, installationId);
+const installationDirectorySchema = z.string().brand<"InstallationDirectory">();
+
+/** One installation's own directory, `<root or version data>/installations/<application>/<installation>`. */
+export type InstallationDirectory = z.infer<typeof installationDirectorySchema>;
+
+export function installationDirectory(applicationDirectory: string, installationId: string): InstallationDirectory {
+    return installationDirectorySchema.parse(join(applicationDirectory, installationId));
 }
 
 export function connectionDirectory(installationDirectory: string): string {

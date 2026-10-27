@@ -1,13 +1,14 @@
 import { readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isNodeError } from "../../util/node-error.ts";
+import type { InstallationDirectory } from "../installation/installation-files.ts";
 
 /**
  * Takes the lock file that makes this process the only holder of a daemon role. A lock left by a
  * process that is gone is replaced. Returns the release function, or null when a live process holds it.
  */
 export async function acquireManagerLock(
-    stateDirectory: string,
+    stateDirectory: InstallationDirectory,
     name = "manager.lock",
 ): Promise<(() => Promise<void>) | null> {
     const path = join(stateDirectory, name);
@@ -38,7 +39,7 @@ export async function acquireManagerLock(
 }
 
 /** True while the manager lock file exists. */
-export async function managerLockExists(stateDirectory: string): Promise<boolean> {
+export async function managerLockExists(stateDirectory: InstallationDirectory): Promise<boolean> {
     try {
         await readFile(join(stateDirectory, "manager.lock"), "utf8");
         return true;

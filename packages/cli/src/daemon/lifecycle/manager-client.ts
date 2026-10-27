@@ -2,6 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { gt } from "semver";
 import { managerLockExists } from "../../storage/daemon/manager-lock.ts";
 import { readCurrentDataVersion } from "../../storage/daemon/version-data.ts";
+import type { InstallationDirectory } from "../../storage/installation/installation-files.ts";
 import { readStateDirectory } from "../../storage/state-directory.ts";
 import { isNodeError } from "../../util/node-error.ts";
 import { CONTROL_TIMEOUT_MILLISECONDS, sendLocalRequest } from "../control/local-client.ts";
@@ -24,7 +25,7 @@ async function launchManager(launch: WorkerLaunch): Promise<void> {
     await spawnManager(launch);
 }
 
-async function waitForManagerExit(stateDirectory: string, signal: AbortSignal): Promise<void> {
+async function waitForManagerExit(stateDirectory: InstallationDirectory, signal: AbortSignal): Promise<void> {
     const deadline = AbortSignal.any([signal, AbortSignal.timeout(30_000)]);
     while (!deadline.aborted) {
         if (!(await managerLockExists(stateDirectory))) {
@@ -47,7 +48,7 @@ async function waitForManagerExit(stateDirectory: string, signal: AbortSignal): 
 // The daemon never runs behind the current data: an older version would reopen its own stale copy. A CLI older
 // than the current data therefore keeps or starts the version that recorded it. Returns the running version.
 export async function ensureWorkingProcess(
-    stateDirectory: string,
+    stateDirectory: InstallationDirectory,
     cliVersion: string,
     signal: AbortSignal,
 ): Promise<string> {
@@ -70,7 +71,10 @@ export async function ensureWorkingProcess(
 
 // Returns the running worker's version, or null when no compatible manager
 // reports one. Callers fall back to ensureWorkingProcess to start a daemon.
-export async function readWorkingProcessVersion(stateDirectory: string, signal: AbortSignal): Promise<string | null> {
+export async function readWorkingProcessVersion(
+    stateDirectory: InstallationDirectory,
+    signal: AbortSignal,
+): Promise<string | null> {
     try {
         const response = lifecycleResponse.safeParse(
             await sendLocalRequest(stateDirectory, "manager", { kind: "status" }, signal),
@@ -86,7 +90,11 @@ export async function readWorkingProcessVersion(stateDirectory: string, signal: 
     return null;
 }
 
-async function ensureManager(stateDirectory: string, launch: WorkerLaunch, signal: AbortSignal): Promise<void> {
+async function ensureManager(
+    stateDirectory: InstallationDirectory,
+    launch: WorkerLaunch,
+    signal: AbortSignal,
+): Promise<void> {
     let managerStarted = false;
     while (!signal.aborted) {
         try {
@@ -127,7 +135,7 @@ async function ensureManager(stateDirectory: string, launch: WorkerLaunch, signa
 }
 
 export async function stopManager(
-    stateDirectory: string,
+    stateDirectory: InstallationDirectory,
     signal: AbortSignal,
 ): Promise<Extract<LifecycleResponse, { kind: "stopped" }>> {
     try {

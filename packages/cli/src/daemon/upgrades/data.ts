@@ -6,6 +6,7 @@ import {
     versionDataExists,
     writeCurrentDataVersion,
 } from "../../storage/daemon/version-data.ts";
+import type { InstallationDirectory } from "../../storage/installation/installation-files.ts";
 import { readStateDirectory } from "../../storage/state-directory.ts";
 import { readSwitchStatus } from "../control/switch-status.ts";
 
@@ -55,7 +56,7 @@ export async function recordCurrentData(version: string, signal: AbortSignal): P
 }
 
 export async function prepareUpgradeData(
-    controlDirectory: string,
+    controlDirectory: InstallationDirectory,
     version: string,
     signal: AbortSignal,
 ): Promise<void> {

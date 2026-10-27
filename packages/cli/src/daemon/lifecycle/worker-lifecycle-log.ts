@@ -1,3 +1,4 @@
+import type { InstallationDirectory } from "../../storage/installation/installation-files.ts";
 import { BoundedLineLog } from "../../storage/logs/bounded-log.ts";
 import { logDirectory, WORKER_LIFECYCLE_LOG_FILENAME } from "../../storage/logs/log-files.ts";
 
@@ -26,7 +27,7 @@ function toLogText(value: string): string {
 export class WorkerLifecycleLog {
     readonly #log: BoundedLineLog;
 
-    constructor(stateDirectory: string) {
+    constructor(stateDirectory: InstallationDirectory) {
         this.#log = new BoundedLineLog(
             logDirectory(stateDirectory),
             WORKER_LIFECYCLE_LOG_FILENAME,

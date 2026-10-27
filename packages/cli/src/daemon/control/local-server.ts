@@ -1,10 +1,11 @@
 import { createServer, type Socket } from "node:net";
 import { readOrCreateControlToken } from "../../storage/daemon/control-token.ts";
+import type { InstallationDirectory } from "../../storage/installation/installation-files.ts";
 import { platformSupportFor } from "../../util/platform/index.ts";
 import { controlSocketPath, readSocketMessage } from "./local-client.ts";
 
 export async function serveLocalControl(
-    stateDirectory: string,
+    stateDirectory: InstallationDirectory,
     endpoint: "manager" | "worker",
     signal: AbortSignal,
     handle: (request: unknown, signal: AbortSignal) => Promise<unknown>,

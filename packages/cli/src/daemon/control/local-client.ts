@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { createConnection, type Socket } from "node:net";
 import { readOrCreateControlToken } from "../../storage/daemon/control-token.ts";
+import type { InstallationDirectory } from "../../storage/installation/installation-files.ts";
 import { platformSupportFor } from "../../util/platform/index.ts";
 
 export const CONTROL_TIMEOUT_MILLISECONDS = 130_000;
@@ -8,7 +9,10 @@ const MAXIMUM_MESSAGE_BYTES = 64 * 1024;
 
 const managerPlatform = platformSupportFor(process.platform);
 
-export function controlSocketPath(stateDirectory: string, endpoint: "manager" | "worker" = "manager"): string {
+export function controlSocketPath(
+    stateDirectory: InstallationDirectory,
+    endpoint: "manager" | "worker" = "manager",
+): string {
     const installationHash = createHash("sha256")
         .update(endpoint === "manager" ? stateDirectory : `${stateDirectory}:worker`)
         .digest("hex")
@@ -58,7 +62,7 @@ export async function readSocketMessage(socket: Socket, signal: AbortSignal): Pr
 }
 
 export async function sendLocalRequest(
-    stateDirectory: string,
+    stateDirectory: InstallationDirectory,
     endpoint: "manager" | "worker",
     command: Readonly<Record<string, unknown>>,
     signal: AbortSignal,
