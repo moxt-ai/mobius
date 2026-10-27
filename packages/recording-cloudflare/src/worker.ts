@@ -27,27 +27,18 @@ import {
     sessionRecordingStatusSchema,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { type Context, Hono } from "hono";
-import {
-    MessageIdMigrationError,
-    type MessageIdMigrationProgress,
-    messageIdMigrationRequestSchema,
-} from "./entity/message-id-migration.ts";
 import { directoryUpdateSchema } from "./entity/recording-directory-update.ts";
-import { authorizeMessageIdMigration } from "./infra/authorize-message-id-migration.ts";
 import { RecordingSqlMetrics } from "./infra/recording-sql-metrics.ts";
 import { readLegacyRecordingStatus } from "./service/legacy-recording-status.ts";
-import { MessageIdMigration } from "./service/message-id-migration.ts";
 import { RecordingDirectory } from "./service/recording-directory.ts";
 import { projectDirectoryUpdate } from "./service/recording-directory-update.ts";
 import { RecordingEventWaiters } from "./service/recording-event-waiters.ts";
 import { SessionTurnHistory, type TurnHistoryRead } from "./service/session-turn-history.ts";
-import { MessageIdMigrationStorage } from "./storage/message-id-migration-storage.ts";
 import { RecordingDirectoryStorage } from "./storage/recording-directory-storage.ts";
 import { SessionRecordingStorage } from "./storage/session-recording-storage.ts";
 import { SessionTurnHistoryStorage } from "./storage/session-turn-history-storage.ts";
 
 export interface RecordingWorkerBindings {
-    readonly MIGRATION_TOKEN?: string;
     readonly RECORDING_DIRECTORY: DurableObjectNamespace<RecordingDirectoryDurableObject>;
     readonly SESSION_RECORDING: DurableObjectNamespace<SessionRecordingDurableObject>;
 }
@@ -983,7 +974,6 @@ export function createRecordingWorker(): RecordingWorker {
 
 export class SessionRecordingDurableObject extends DurableObject<RecordingWorkerBindings> {
     readonly #history: SessionTurnHistory;
-    readonly #migration: MessageIdMigration;
     readonly #routes: Hono<RecordingEnvironment>;
     constructor(state: DurableObjectState, _environment: RecordingWorkerBindings) {
         super(state, _environment);
@@ -991,24 +981,8 @@ export class SessionRecordingDurableObject extends DurableObject<RecordingWorker
         const recording = new SessionRecordingStorage(state.storage, metrics);
         const historyStorage = new SessionTurnHistoryStorage(state.storage, metrics);
         this.#history = new SessionTurnHistory(recording, historyStorage);
-        this.#migration = new MessageIdMigration(
-            new MessageIdMigrationStorage(state.storage),
-            recording,
-            historyStorage,
-        );
         this.#routes = sessionRecordingRoutes(
-            {
-                append: (write, project) =>
-                    this.#migration.append(write, (ordinal, events) => {
-                        if (!this.#migration.running()) {
-                            project?.(ordinal, events);
-                        }
-                    }),
-                read: recording.read,
-                readPage: recording.readPage,
-                records: recording.records,
-                batchesNewestFirst: recording.batchesNewestFirst,
-            },
+            recording,
             this.#history,
             this.#scheduleBackfill,
             metrics,
@@ -1016,70 +990,10 @@ export class SessionRecordingDurableObject extends DurableObject<RecordingWorker
         );
     }
     override async fetch(request: Request): Promise<Response> {
-        const path = new URL(request.url).pathname;
-        if (path === "/migrations/message-ids") {
-            const denied = await authorizeMessageIdMigration(request, this.env.MIGRATION_TOKEN);
-            if (denied !== null) {
-                return denied;
-            }
-            if (request.method !== "POST") {
-                return errorResponse("invalid_migration_request", 400);
-            }
-            let input: unknown;
-            try {
-                input = await request.json();
-            } catch {
-                return errorResponse("invalid_migration_request", 400);
-            }
-            const parsed = messageIdMigrationRequestSchema.safeParse(input);
-            if (!parsed.success) {
-                return errorResponse("invalid_migration_request", 400);
-            }
-            if (!this.#migration.storage.hasRecording()) {
-                return errorResponse("not_found", 404);
-            }
-            request.signal.throwIfAborted();
-            try {
-                if (parsed.data.mode === "dry-run") {
-                    return Response.json(this.#migration.preview(parsed.data.afterOrdinal));
-                }
-                const progress = this.#migration.advance();
-                await this.#scheduleBackfill();
-                const { group: _group, ...result } = progress;
-                console.info(JSON.stringify({ event: "recording_message_id_migration", ...result }));
-                return Response.json(result);
-            } catch (cause) {
-                request.signal.throwIfAborted();
-                return errorResponse(
-                    cause instanceof MessageIdMigrationError ? cause.code : "migration_unavailable",
-                    503,
-                );
-            }
-        }
-        if (this.#migration.running() && ["/turns", "/turn-items", "/turn-item"].includes(path)) {
-            return errorResponse("projection_building", 503);
-        }
         return await this.#routes.fetch(request);
     }
     /** Folds one bounded step of unprojected Recording batches and keeps stepping until caught up. */
     override async alarm(): Promise<void> {
-        if (this.#migration.running()) {
-            // A failed data migration does not spin forever: the operator must retry explicitly.
-            let progress: MessageIdMigrationProgress;
-            try {
-                progress = this.#migration.advance();
-            } catch (cause) {
-                if (!(cause instanceof MessageIdMigrationError)) {
-                    throw cause;
-                }
-                console.error(JSON.stringify({ event: "recording_message_id_migration_failed", code: cause.code }));
-                return;
-            }
-            if (progress.kind === "running") {
-                await this.ctx.storage.setAlarm(Date.now());
-                return;
-            }
-        }
         const outcome = this.#history.backfill(new Date());
         switch (outcome.kind) {
             case "caught_up":

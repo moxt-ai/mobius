@@ -11,7 +11,6 @@ export default defineConfig(
         plugins: [
             cloudflareTest({
                 wrangler: { configPath: wranglerConfigPath },
-                miniflare: { bindings: { MIGRATION_TOKEN: "test-message-id-migration-token-0000000000" } },
             }),
         ],
         test: {
