@@ -449,10 +449,10 @@ type Turn = {
      *  issue #866), and the model's task-notification followup summary all
      *  land inside the turn.
      *
-     *  The CLI does NOT hold its trailing idle for background agents (observed
-     *  on 2.1.206: `idle` follows the result immediately while the subagent
-     *  still runs), so the hold spans multiple idle cycles: user result →
-     *  idle → (subagent works) → task_notification → followup turn → idle.
+     *  Idle cadence varies by CLI version: 2.1.206 emits an idle after the
+     *  human result while its subagent still runs; 2.1.310 can coalesce the
+     *  human and task-notification results into one final idle. The hold
+     *  must therefore support either cadence without counting result trailers.
      *  The stored outcome (the result's stop reason and usage snapshot) is
      *  what the turn settles with once its spawned subagents have settled —
      *  at the followup's terminal result (the summary has streamed by then),
@@ -808,30 +808,14 @@ export type Session = {
      *  turn already active or queued when the autonomous result lands) does
      *  the replayed turn stay silent rather than risk a duplicate. */
     emittedAssistantText: boolean;
-    /** The most recent `session_state_changed` state the consumer processed.
-     *  Read by cancel() to decide whether the interrupt will produce a
-     *  trailing idle worth pre-counting: interrupting a RUNNING cycle yields
-     *  one; interrupting an already-idle session (the common held-turn shape)
-     *  yields none, and a pre-counted debt that never drains would mask one
-     *  future issue-#825 detection. */
+    /** The most recent SDK state, used to attribute a cancelled live cycle's
+     *  trailing idle. Interrupting an already-idle held turn emits no idle. */
     lastSessionState?: "idle" | "running" | "requires_action";
-    /** How many trailing `session_state_changed: idle` messages are already
-     *  accounted for: every result is followed by one (user-turn results that
-     *  terminate a turn — settle, reject, or orphan skip — and autonomous
-     *  cycles alike), as is a cancelled turn settled by the next turn's echo
-     *  hand-off or by cancel()'s inline settle of a held turn whose interrupt
-     *  pre-empts a running cycle — the reason this lives on the Session:
-     *  cancel() must be able to record the debt. The idle handler absorbs
-     *  owed idles; an idle that arrives when NONE is owed while the active
-     *  turn is still unsettled means the SDK ended the turn without ever
-     *  emitting its result, so the turn will never settle on its own (issue
-     *  #825). Stream-level debt, deliberately NOT reset per turn: a lagged
-     *  idle can arrive after the next turn has already activated (issue
-     *  #773), and the debt is what attributes it to the turn that owed it.
-     *  Over-counting (an idle the SDK never emits) is benign: the counter
-     *  just absorbs one future idle, and detection degrades to the status quo
-     *  rather than misfiring. */
-    owedTrailingIdles: number;
+    /** The latest result or cancelled hand-off covered by the next SDK idle.
+     *  Idle is a stream boundary, not a per-result acknowledgement: several
+     *  human/autonomous results may share it. Retain the producing turn so a
+     *  late boundary cannot settle or fail a newly activated turn. */
+    idleBoundary: { readonly kind: "unaccounted" } | { readonly kind: "accounted"; readonly turn: Turn | null };
     /** Maps the ACP `messageId` we expose to clients (see `messageIdForGrouping`)
      *  to the SDK message uuid that the Agent SDK's rewind/resume APIs key on
      *  (`Query.rewindFiles` takes a user-message uuid; `resumeSessionAt` takes an
@@ -3192,29 +3176,15 @@ export class ClaudeAcpAgent {
                                 session.lastSessionState = message.state;
                                 if (message.state === "idle") {
                                     disarmResultWatchdog();
-                                    // A non-cancelled turn normally settled at its terminal
-                                    // `result` already (issue #773), and that result recorded an
-                                    // owed trailing idle — absorbed here via the decrement. We
-                                    // must NOT settle `activeTurn` on an owed idle: `idle`
-                                    // carries no turn identity, and it can lag (the SDK flushes
-                                    // held-back results / drains background agents first), so by
-                                    // the time it arrives the SDK may have echoed the NEXT turn
-                                    // and activated it — settling now would resolve that new
-                                    // turn prematurely with end_turn and ~zero usage, dropping
-                                    // its real result. A cancelled turn relies on `idle`: its
-                                    // `result` is dropped at the `session.cancelled` guard, so
-                                    // it never settles at a result and must settle here.
-                                    //
-                                    // An idle that is NOT owed while the active turn is still
-                                    // unsettled is the issue #825 signature: `idle` is the SDK's
-                                    // authoritative turn-over signal (it fires after held-back
-                                    // results flush and background agents drain), so a turn that
-                                    // reaches it without a result will never get one — the model
-                                    // stream dropped mid-turn, or an async agent
-                                    // completed/stalled without the host turn resolving. Fail
-                                    // the turn NOW so its session/prompt gets a terminal
-                                    // response, instead of leaving it hanging until the next
-                                    // prompt drains the wreckage.
+                                    // One idle drains the results preceding it, including
+                                    // coalesced human and task-notification results. Preserve
+                                    // ownership across activation: an earlier turn's late idle
+                                    // cannot finish the next turn, but this turn's own results
+                                    // must not hide the idle that finishes its steered work.
+                                    const boundary = session.idleBoundary;
+                                    const hadEarlierResult =
+                                        boundary.kind === "accounted" && boundary.turn !== session.activeTurn;
+                                    session.idleBoundary = { kind: "unaccounted" };
                                     // A cancelled turn still consumed tokens: its dropped result
                                     // already fed the accumulator (the usage tally at the result
                                     // handler runs before the `session.cancelled` guard), so
@@ -3230,33 +3200,12 @@ export class ClaudeAcpAgent {
                                         // suppress the next turn's issue-#453 fallback.
                                         session.emittedAssistantText = false;
                                     } else if (isHeldOpen(session.activeTurn)) {
-                                        // A turn held open for its background subagents (see
-                                        // Turn.deferredSettle). Idles keep their normal cadence
-                                        // during the hold — the CLI emits one per processing
-                                        // cycle (the turn's own trailer, then one per followup),
-                                        // NOT one final "all drained" signal — so each one
-                                        // absorbs an outstanding trailer debt, and the turn only
-                                        // settles once none of its spawned subagents is left
-                                        // (the followup-result settle usually got there first;
-                                        // this is the fallback when no followup came). Mid-hold
-                                        // idles never fall through: a held turn HAS its result,
-                                        // so reading its idle as "turn abandoned without a
-                                        // result" (issue #825) would fail a healthy prompt.
-                                        if (session.owedTrailingIdles > 0) {
-                                            session.owedTrailingIdles--;
-                                        }
+                                        // A held turn already has its result. An idle can
+                                        // finish the hold only after its own subagents drain.
                                         settleDeferredIfDrained();
-                                    } else if (session.owedTrailingIdles > 0) {
-                                        // Absorb a settled turn's trailing idle. Also covers a
-                                        // cancel that landed between a turn's counted result and
-                                        // this lagged idle (no active turn to settle): the idle
-                                        // still belongs to that settled turn, and skipping the
-                                        // decrement would leak the debt permanently.
-                                        // Deliberately BEFORE the steer lane below: an owed idle
-                                        // belongs to an earlier turn, and reading it as the steered
-                                        // sequence's turn-over signal would settle a turn whose
-                                        // steered cycle is still running. Steered results owe none.
-                                        session.owedTrailingIdles--;
+                                    } else if (hadEarlierResult) {
+                                        // Absorb a previous turn's trailer before considering
+                                        // the active turn's steering or missing-result lanes.
                                     } else if (isSteering(session.activeTurn)) {
                                         // A steered turn settles here, not at a result: this idle is
                                         // the only signal spanning the interrupted and steered cycles
@@ -3278,6 +3227,7 @@ export class ClaudeAcpAgent {
                                             settleDeferredIfDrained();
                                         }
                                     } else if (
+                                        boundary.kind === "unaccounted" &&
                                         !session.cancelled &&
                                         session.activeTurn &&
                                         !session.activeTurn.settled
@@ -3779,41 +3729,15 @@ export class ClaudeAcpAgent {
                             // leaves alone).
                             const deliveredAssistantText = session.emittedAssistantText;
 
-                            // Every user-turn result terminates a turn (settle, reject, or
-                            // orphan skip) and the SDK follows it with a trailing
-                            // `session_state_changed: idle` — record the debt so the idle
-                            // handler absorbs that idle rather than reading it as a turn the
-                            // SDK abandoned (issue #825). One exclusion: the cancelled ACTIVE
-                            // turn's own result. It is dropped at the `session.cancelled`
-                            // guard, and either the idle itself settles the turn (consuming
-                            // the trailer) or the next echo's hand-off does (which records
-                            // the debt there instead) — counting here too would double it.
-                            // Results skipped while cancelled with NO active turn — orphaned
-                            // queued turns the SDK still ran, or a force-cancelled turn's
-                            // late result after the backstop settled it — get no such settle,
-                            // so their trailers must be counted here or they'd later be read
-                            // as the next healthy turn being abandoned and false-fail it.
-                            // Autonomous results (followups, peer/channel/coordinator
-                            // cycles) are counted too: each is its own processing cycle with
-                            // its own trailing idle, and that idle can lag past the next
-                            // prompt's echo — which, un-owed, would be read as the fresh
-                            // turn being abandoned (#825 false-fail). That lag was mostly
-                            // unreachable when such cycles only ran with no pending turn,
-                            // but a held turn settling AT a followup result unblocks the
-                            // client at exactly that point, making the race the common
-                            // case.
-                            // The cancelled-ACTIVE-turn exclusion applies only to that
-                            // turn's OWN result — a followup result arriving inside the
-                            // cancel window still gets its own trailer and must be counted,
-                            // or that idle would later false-fail the next prompt.
-                            // A second exclusion: a steered turn's own results (see
-                            // Turn.steeredEchoes). One idle covers the whole interrupted +
-                            // steered sequence and that idle settles the turn, so counting
-                            // either result would leave a debt that swallows it. Autonomous
-                            // results inside a steered turn keep their own trailers.
-                            const owesTrailingIdle = isAutonomousResult || !isSteering(session.activeTurn);
-                            if (owesTrailingIdle && (isAutonomousResult || !session.cancelled || !session.activeTurn)) {
-                                session.owedTrailingIdles++;
+                            // Remember whose result an idle may trail. Multiple results
+                            // from the same active turn share one boundary on newer CLIs.
+                            // A cancelled active turn consumes its own idle at settlement;
+                            // orphan and autonomous results still need attribution. Steered
+                            // human results settle on idle directly, while a previously
+                            // held result or an autonomous followup belongs to that same
+                            // turn and must not mask its final idle.
+                            if (isAutonomousResult || !session.cancelled || !session.activeTurn) {
+                                session.idleBoundary = { kind: "accounted", turn: session.activeTurn ?? null };
                             }
 
                             // Accumulate usage into the user turn's tally. Skip autonomous
@@ -4380,18 +4304,12 @@ export class ClaudeAcpAgent {
                                         // otherwise a cancel followed quickly by the next prompt
                                         // would report the cancelled turn as a normal completion.
                                         if (session.cancelled) {
-                                            // The cancelled turn settles here, but the trailing idle
-                                            // its interrupt produces is still in flight — record the
-                                            // debt so that lagged idle is absorbed rather than read
-                                            // as the freshly-activated turn ending without a result
-                                            // (which would false-fail a healthy turn — issue #825).
-                                            // Counted for a DEFERRED turn too, even though its own
-                                            // result already recorded a debt that may still be
-                                            // outstanding: the interrupt can produce a trailer of
-                                            // its own, and over-counting is benign (absorbs one
-                                            // future idle) while under-counting risks the false
-                                            // fail this debt exists to prevent.
-                                            session.owedTrailingIdles++;
+                                            // The interrupt's trailing idle may arrive after
+                                            // the next echo; keep its previous-turn ownership.
+                                            session.idleBoundary = {
+                                                kind: "accounted",
+                                                turn: session.activeTurn ?? null,
+                                            };
                                             // Before activateTurn resets the accumulator, so the
                                             // usage still belongs to the cancelled turn.
                                             settleActive(turnOutcome(session, "cancelled"));
@@ -4414,12 +4332,12 @@ export class ClaudeAcpAgent {
                                             // stands. With no result yet it falls through to the
                                             // end_turn hand-off below, owing nothing there.
                                             //
-                                            // The steer lane normally pays for that result's trailing
-                                            // idle by settling on it; this hand-off settles instead,
-                                            // so count it here or it arrives un-owed against the fresh
-                                            // turn and false-fails it (issue #825). Harmless if it
-                                            // never comes: the debt absorbs one future idle.
-                                            session.owedTrailingIdles++;
+                                            // This hand-off pre-empts idle settlement. Attribute
+                                            // any trailing idle to the turn being handed off.
+                                            session.idleBoundary = {
+                                                kind: "accounted",
+                                                turn: session.activeTurn ?? null,
+                                            };
                                             settleActive(session.activeTurn.steeredSettle);
                                         } else {
                                             settleActive(turnOutcome(session, "end_turn"));
@@ -4441,8 +4359,13 @@ export class ClaudeAcpAgent {
                                 // none), but it marks the steered cycle as running — how the idle
                                 // lane tells "the answer is still ahead" from "the turn is over"
                                 // (see Turn.steeredEchoes).
-                                if (isSteering(session.activeTurn)) {
-                                    session.activeTurn.steeredEchoes.delete(message.uuid);
+                                if (
+                                    isSteering(session.activeTurn) &&
+                                    session.activeTurn.steeredEchoes.delete(message.uuid)
+                                ) {
+                                    // The interrupted/held cycle's result cannot finish work
+                                    // that only starts at this echo. Wait for its own result.
+                                    session.activeTurn.steeredSettle = undefined;
                                 }
                                 // Unrelated replay (e.g. the echo of an already-settled turn).
                                 break;
@@ -4897,7 +4820,7 @@ export class ClaudeAcpAgent {
         // fired at the result), so the interrupt may produce no fresh idle for
         // the consumer's cancelled-settle path to run on, and the cancel would
         // otherwise stall until the force-cancel backstop. Any outstanding
-        // trailer debt is absorbed by the idle handler when its idle does come.
+        // trailer is attributed by the idle handler when its idle does come.
         // The turn's own usage snapshot is reported per the cancelled-usage
         // contract (issue #844).
         {
@@ -4915,25 +4838,10 @@ export class ClaudeAcpAgent {
                 // text since the last boundary was its followups', and left latched
                 // it would suppress a following replayed turn's issue-#453 fallback.
                 session.emittedAssistantText = false;
-                // When the interrupt below pre-empts a live cycle — running, or
-                // blocked on a permission request (requires_action, the #866 shape
-                // users cancel out of) — it produces a trailer idle with no counted
-                // result; with the hold's own trailer typically already absorbed,
-                // that idle would be un-owed and could lag past the next prompt's
-                // echo — read as the fresh turn ending without a result (issue #825
-                // false-fail). Pre-count it unless the session sits idle: there the
-                // interrupt emits nothing, and a debt that never drains would mask
-                // one future #825 detection. (lastSessionState is last-CONSUMED, so
-                // both stale reads exist and both are accepted one-cycle windows: a
-                // running transition still in the backlog reads as stale idle and
-                // under-counts — that false-fail additionally needs the trailer to
-                // lag past the next echo — while a cycle already completed into the
-                // backlog reads as stale non-idle and over-counts, masking one
-                // future #825 detection. Undefined — no state event consumed —
-                // pre-counts; that only occurs on CLIs whose missing idle events
-                // also disable the detector the debt could mask.)
+                // A live cycle's interrupt may trail the next prompt. An
+                // already-idle held turn produces no new boundary on cancel.
                 if (session.lastSessionState !== "idle") {
-                    session.owedTrailingIdles++;
+                    session.idleBoundary = { kind: "accounted", turn: active };
                 }
                 // Carries the held outcome's `_meta` too: a deferred outcome's only
                 // metadata is its quota breakdown, the counterpart of the usage taken
@@ -4946,14 +4854,10 @@ export class ClaudeAcpAgent {
             }
         }
 
-        // A steered active turn (see Turn.steeredEchoes) settles "cancelled" in the
-        // consumer at the interrupt's trailing idle, like any live turn. But the
-        // steer lane pays for its last result's trailer by settling on it, which
-        // this cancel pre-empts, so count that trailer here or it arrives un-owed
-        // against the next prompt and false-fails it (issue #825). Over-counting
-        // when only one trailer comes absorbs a future idle.
+        // Cancellation pre-empts the steered turn's normal idle settlement;
+        // preserve its ownership if that idle arrives after the next prompt.
         if (isSteering(session.activeTurn) && session.activeTurn.steeredSettle !== undefined) {
-            session.owedTrailingIdles++;
+            session.idleBoundary = { kind: "accounted", turn: session.activeTurn ?? null };
         }
 
         // Arm a backstop before interrupting: if a turn is actively consuming the
@@ -6629,7 +6533,7 @@ export class ClaudeAcpAgent {
             emittedToolCalls: new Set(),
             liveBackgroundTasks: new Map(),
             emittedAssistantText: false,
-            owedTrailingIdles: 0,
+            idleBoundary: { kind: "unaccounted" },
             messageIdToUuid: new Map(),
         };
 
