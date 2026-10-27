@@ -4,12 +4,17 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import packageMetadata from "../../package.json" with { type: "json" };
+import { installWorkspaceDaemonRelease } from "../support/installed-daemon-release.ts";
 
 const temporaryDirectories: string[] = [];
+const runningRoots: Readonly<NodeJS.ProcessEnv>[] = [];
 const earlierVersion = "0.0.300";
 const installationId = "min_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 afterEach(async () => {
+    for (const environment of runningRoots.splice(0)) {
+        await runCli(["quit"], environment);
+    }
     await Promise.all(
         temporaryDirectories.splice(0).map(async (directory) => await rm(directory, { force: true, recursive: true })),
     );
@@ -18,17 +23,22 @@ afterEach(async () => {
 async function runCli(
     arguments_: readonly string[],
     environment: Readonly<NodeJS.ProcessEnv>,
-): Promise<{ readonly code: number | null; readonly stderr: string }> {
+): Promise<{ readonly code: number | null; readonly stderr: string; readonly stdout: string }> {
     const child = spawn(
         process.execPath,
         [resolve(import.meta.dirname, "../../src/cli/entrypoint.ts"), ...arguments_],
         {
             env: environment,
             signal: AbortSignal.timeout(60_000),
-            stdio: ["ignore", "ignore", "pipe"],
+            stdio: ["ignore", "pipe", "pipe"],
         },
     );
+    let stdout = "";
     let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+        stdout += chunk;
+    });
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
         stderr += chunk;
@@ -37,7 +47,15 @@ async function runCli(
         child.once("error", reject);
         child.once("exit", resolve_);
     });
-    return { code, stderr };
+    return { code, stderr, stdout };
+}
+
+// The daemon of a newer version inherits the current data when it starts; CLI commands only use the current data.
+async function startNewerDaemon(environment: Readonly<NodeJS.ProcessEnv>) {
+    const root = environment["MOBIUS_STATE_DIRECTORY"] ?? "";
+    await installWorkspaceDaemonRelease(root);
+    runningRoots.push(environment);
+    return await runCli(["start"], environment);
 }
 
 /**
@@ -78,25 +96,28 @@ async function rootWithNestedInstallation() {
 }
 
 describe("Mobius version data inheritance", () => {
-    it("Given an earlier version's installation that an Agent shell once used as a nested state root, When a newer CLI first runs, Then it starts, keeps the installation's data, and leaves the nested root's entries behind", async () => {
+    it("Given an earlier version's installation that an Agent shell once used as a nested state root, When a newer daemon first starts, Then it starts, keeps the installation's data, and leaves the nested root's entries behind", async () => {
         const { environment, inherited } = await rootWithNestedInstallation();
 
-        const listed = await runCli(["pair", "list"], environment);
+        const started = await startNewerDaemon(environment);
 
-        expect(listed.code, listed.stderr).toBe(0);
+        expect(started.code, started.stderr).toBe(0);
         expect(
             await readFile(join(inherited, "agents", "pi", "sessions", "workspace-hash", "session.jsonl"), "utf8"),
         ).toBe('{"type":"session"}\n');
-        expect((await readdir(inherited)).sort()).toEqual(["agents"]);
+        const entries = await readdir(inherited);
+        for (const nestedRootEntry of ["current-data.txt", "installations", "npm", "versions"]) {
+            expect(entries).not.toContain(nestedRootEntry);
+        }
     });
 
-    it("Given a symbolic link inside an earlier version's installation data, When a newer CLI first runs, Then inheritance still refuses it", async () => {
+    it("Given a symbolic link inside an earlier version's installation data, When a newer daemon first starts, Then inheritance still refuses it", async () => {
         const { environment, installation } = await rootWithNestedInstallation();
         await symlink("/etc/hostname", join(installation, "agents", "pi", "linked"));
 
-        const listed = await runCli(["pair", "list"], environment);
+        const started = await startNewerDaemon(environment);
 
-        expect(listed.code).toBe(1);
-        expect(listed.stderr).toContain("The inherited data contains a symbolic link");
+        expect(started.code).toBe(1);
+        expect((await runCli(["logs"], environment)).stdout).toContain("The inherited data contains a symbolic link");
     });
 });

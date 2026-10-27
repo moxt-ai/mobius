@@ -197,11 +197,11 @@ describe("Mobius manager version compatibility", () => {
         const deadline = AbortSignal.timeout(90_000);
         const release = join(directory, "release");
         await cp(resolve(import.meta.dirname, "../../src"), join(release, "src"), { recursive: true });
-        await writeFile(join(release, "package.json"), JSON.stringify({ ...cliPackage, version: "0.0.227-test" }));
+        await writeFile(join(release, "package.json"), JSON.stringify({ ...cliPackage, version: "99.0.0-test" }));
         await symlink(resolve(import.meta.dirname, "../../node_modules"), join(release, "node_modules"), "junction");
         await installWorkspaceDaemonRelease(
             environment.MOBIUS_STATE_DIRECTORY,
-            "0.0.227-test",
+            "99.0.0-test",
             join(release, "src/cli/entrypoint.ts"),
         );
         try {
@@ -300,9 +300,15 @@ describe("Mobius manager version compatibility", () => {
             expect((await readFile(pointer, "utf8")).trim()).toBe(`versions/${nextVersion}`);
             expect(await readFile(join(stateRoot, "versions", nextVersion, "retained-data"), "utf8")).toBe("original");
             await writeFile(join(stateRoot, "versions", nextVersion, "retained-data"), "newer");
+            // An older CLI uses the newer daemon's data and never brings back its own stale copy.
             expect((await runCli(["start"], environment, deadline)).code).toBe(0);
-            expect(await readFile(join(original, "retained-data"), "utf8")).toBe("original");
-            expect((await readFile(pointer, "utf8")).trim()).toBe(`versions/${cliPackage.version}`);
+            expect((await readFile(pointer, "utf8")).trim()).toBe(`versions/${nextVersion}`);
+            expect(
+                (await runCli(["pair", "remove", "--connection", saved.connectionId], environment, deadline)).code,
+            ).toBe(0);
+            expect((await runCli(["pair", "list"], environment, deadline, nextCli)).stdout).not.toContain(
+                saved.connectionId,
+            );
         } finally {
             await runCli(["quit"], environment, AbortSignal.timeout(20_000)).catch(() => undefined);
         }

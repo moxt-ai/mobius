@@ -20,11 +20,11 @@ import {
     openRuntimeInstallationStore,
     type RuntimeInstallationStore,
 } from "../../runtime/connection/runtime-installation-store.ts";
+import { readCurrentDataVersion } from "../../storage/daemon/version-data.ts";
 import { ensureCanonicalDirectory } from "../../storage/files/local-files.ts";
 import { readStateDirectory } from "../../storage/state-directory.ts";
 import { environmentProxyDispatcher } from "../../util/network/environment-proxy.ts";
 import { isRecord } from "../../util/value-utils.ts";
-import { prepareVersionData } from "../upgrades/data.ts";
 
 const PAIRING_TIMEOUT_MILLISECONDS = 20_000;
 const PAIRING_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}$/;
@@ -408,15 +408,27 @@ export async function openMobiusControlInstallation(
     );
 }
 
+// CLI commands use the data the current data pointer names, which is the data the daemon uses. Only before any
+// daemon has recorded it does this CLI's own version directory start the data.
 export async function openMobiusCliInstallation(
     signal: AbortSignal,
     environment: Readonly<NodeJS.ProcessEnv>,
 ): Promise<RuntimeInstallationStore> {
-    await prepareVersionData(packageMetadata.version, signal, environment);
+    const root = readStateDirectory(environment);
+    const version = (await readCurrentDataVersion(root, signal)) ?? packageMetadata.version;
+    return await openMobiusVersionInstallation(version, signal, environment);
+}
+
+// A worker uses its own version's data, which it prepared from the current data before it starts.
+export async function openMobiusVersionInstallation(
+    version: string,
+    signal: AbortSignal,
+    environment: Readonly<NodeJS.ProcessEnv>,
+): Promise<RuntimeInstallationStore> {
     return await openRuntimeInstallationStore(
         {
             applicationId: MOBIUS_CLI_APPLICATION_ID,
-            stateDirectory: join(readStateDirectory(environment), "versions", packageMetadata.version),
+            stateDirectory: join(readStateDirectory(environment), "versions", version),
         },
         signal,
     );

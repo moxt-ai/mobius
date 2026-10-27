@@ -254,7 +254,7 @@ describe("Daemon hourly npm upgrade", () => {
                     await sendLocalRequest(control.stateDirectory, "manager", { kind: "status" }, signal),
                 ).toMatchObject({ worker: { version: reuse } });
             }
-            // Data for the failing version that is not current, as its CLI leaves when it runs before the switch.
+            // Data for the failing version that is not current, as a CLI before 0.0.325 left when it ran before the switch.
             await cp(join(stateRoot, "versions", reuse), join(stateRoot, "versions", bad), { recursive: true });
             latest = bad;
             await tick(manager, 2_000);
@@ -310,6 +310,7 @@ describe("Daemon hourly npm upgrade", () => {
             ).toEqual({ kind: "switch-status", state: null });
             await cli(["quit"]);
             latest = reuse;
+            // An older CLI starts the version that owns the current data instead of falling back to its own copy.
             await cli(["upgrade"]);
             expect(await sendLocalRequest(control.stateDirectory, "manager", { kind: "status" }, signal)).toMatchObject(
                 { worker: { version: reuse } },
@@ -318,10 +319,10 @@ describe("Daemon hourly npm upgrade", () => {
                 await sendLocalRequest(
                     control.stateDirectory,
                     "manager",
-                    { kind: "switch-status", wait: true },
+                    { kind: "switch-status", wait: false },
                     signal,
                 ),
-            ).toMatchObject({ state: { previous: { entry: await realpath(managedEntry) } } });
+            ).toEqual({ kind: "switch-status", state: null });
         } finally {
             await cli(["quit"], AbortSignal.timeout(20_000)).catch(() => undefined);
             signal.removeEventListener("abort", aborted);

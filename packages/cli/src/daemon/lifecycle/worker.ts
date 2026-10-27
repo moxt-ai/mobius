@@ -8,8 +8,8 @@ import { isNodeError } from "../../util/node-error.ts";
 import { sendLocalRequest } from "../control/local-client.ts";
 import { serveLocalControl } from "../control/local-server.ts";
 import {
-    openMobiusCliInstallation,
     openMobiusControlInstallation,
+    openMobiusVersionInstallation,
     resumeMobiusRuntime,
 } from "../pairing/pair-local-machine.ts";
 import { prepareUpgradeData, recordCurrentData } from "../upgrades/data.ts";
@@ -72,7 +72,7 @@ async function runWorkerRuntime(
 ): Promise<void> {
     const control = await openMobiusControlInstallation(combined, process.env);
     await prepareUpgradeData(control.stateDirectory, version, combined);
-    const installation = await openMobiusCliInstallation(combined, process.env);
+    const installation = await openMobiusVersionInstallation(version, combined, process.env);
     const deadline = AbortSignal.any([combined, AbortSignal.timeout(15_000)]);
     let release: (() => Promise<void>) | null = null;
     while (release === null) {
