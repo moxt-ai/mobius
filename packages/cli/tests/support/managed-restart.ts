@@ -120,38 +120,44 @@ async function journey(peer: RealDaemonPeer, agentId: string, reply: string): Pr
     await sendAndFinish("Continue the restored conversation");
 }
 
-test("Given a managed real Codex session, When the user quits and starts Mobius, Then history is restored and another turn completes", async () => {
-    await using provider = await FakeOpenAiProvider.start("gpt-5.4", "MANAGED_CODEX_REPLY");
-    await using agent = await CodexFixture.create(provider);
-    await withRealDaemon(
-        new CodexAgentSpecification(),
-        agent.environment,
-        (peer) => journey(peer, "codex", "MANAGED_CODEX_REPLY"),
-        "managed",
-    );
-});
-
-test("Given a managed real Claude Code session, When the user quits and starts Mobius, Then history is restored and another turn completes", async () => {
-    await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "MANAGED_CLAUDE_REPLY");
-    await using agent = await ClaudeFixture.create(provider);
-    await withRealDaemon(
-        new ClaudeCodeAgentSpecification(),
-        agent.environment,
-        (peer) => journey(peer, "claude", "MANAGED_CLAUDE_REPLY"),
-        "managed",
-    );
-});
-
-test("Given a managed real Pi session, When the user quits and starts Mobius, Then history is restored and another turn completes", async () => {
-    await using provider = await FakeOpenAiProvider.start("gpt-4.1", "MANAGED_PI_REPLY");
-    await using agent = await PiFixture.create(provider);
-    await withRealDaemon(
-        new PiAgentSpecification(),
-        agent.environment,
-        (peer) => journey(peer, "pi", "MANAGED_PI_REPLY"),
-        "managed",
-    );
-});
+export function registerManagedRestartScenarios(agentId: "codex" | "claude" | "pi"): void {
+    if (agentId === "codex") {
+        test("Given a managed real Codex session, When the user quits and starts Mobius, Then history is restored and another turn completes", async () => {
+            await using provider = await FakeOpenAiProvider.start("gpt-5.4", "MANAGED_CODEX_REPLY");
+            await using agent = await CodexFixture.create(provider);
+            await withRealDaemon(
+                new CodexAgentSpecification(),
+                agent.environment,
+                (peer) => journey(peer, "codex", "MANAGED_CODEX_REPLY"),
+                "managed",
+            );
+        });
+    }
+    if (agentId === "claude") {
+        test("Given a managed real Claude Code session, When the user quits and starts Mobius, Then history is restored and another turn completes", async () => {
+            await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "MANAGED_CLAUDE_REPLY");
+            await using agent = await ClaudeFixture.create(provider);
+            await withRealDaemon(
+                new ClaudeCodeAgentSpecification(),
+                agent.environment,
+                (peer) => journey(peer, "claude", "MANAGED_CLAUDE_REPLY"),
+                "managed",
+            );
+        });
+    }
+    if (agentId === "pi") {
+        test("Given a managed real Pi session, When the user quits and starts Mobius, Then history is restored and another turn completes", async () => {
+            await using provider = await FakeOpenAiProvider.start("gpt-4.1", "MANAGED_PI_REPLY");
+            await using agent = await PiFixture.create(provider);
+            await withRealDaemon(
+                new PiAgentSpecification(),
+                agent.environment,
+                (peer) => journey(peer, "pi", "MANAGED_PI_REPLY"),
+                "managed",
+            );
+        });
+    }
+}
 
 async function interruptedJourney(
     peer: RealDaemonPeer,
@@ -311,59 +317,65 @@ function firstRequestGate() {
     };
 }
 
-// @no-uc: Compatibility; a real Codex native session remains resumable after an interrupted request.
-test("Given a running real Codex request, When SIGKILL restarts its managed runtime, Then a continuation completes in the native session", async () => {
-    const gate = firstRequestGate();
-    await using provider = await FakeOpenAiProvider.start("gpt-5.4", "RESTART_CONTINUED", {
-        beforeFirstText: gate.beforeFirstText,
-    });
-    await using agent = await CodexFixture.create(provider);
-    try {
-        await withRealDaemon(
-            new CodexAgentSpecification(),
-            agent.environment,
-            (peer) => interruptedJourney(peer, "codex", gate.entered, gate.release, gate.disconnected),
-            "managed",
-        );
-    } finally {
-        gate.release();
+export function registerManagedCrashScenarios(agentId: "codex" | "claude" | "pi"): void {
+    if (agentId === "codex") {
+        // @no-uc: Compatibility; a real Codex native session remains resumable after an interrupted request.
+        test("Given a running real Codex request, When SIGKILL restarts its managed runtime, Then a continuation completes in the native session", async () => {
+            const gate = firstRequestGate();
+            await using provider = await FakeOpenAiProvider.start("gpt-5.4", "RESTART_CONTINUED", {
+                beforeFirstText: gate.beforeFirstText,
+            });
+            await using agent = await CodexFixture.create(provider);
+            try {
+                await withRealDaemon(
+                    new CodexAgentSpecification(),
+                    agent.environment,
+                    (peer) => interruptedJourney(peer, "codex", gate.entered, gate.release, gate.disconnected),
+                    "managed",
+                );
+            } finally {
+                gate.release();
+            }
+        }, 120_000);
     }
-}, 120_000);
-
-// @no-uc: Compatibility; a real Claude native session remains resumable after an interrupted request.
-test("Given a running real Claude request, When SIGKILL restarts its managed runtime, Then a continuation completes in the native session", async () => {
-    const gate = firstRequestGate();
-    await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-5", "RESTART_CONTINUED", {
-        beforeFirstText: (_scenario, signal) => gate.beforeFirstText(signal),
-    });
-    await using agent = await ClaudeFixture.create(provider);
-    try {
-        await withRealDaemon(
-            new ClaudeCodeAgentSpecification(),
-            agent.environment,
-            (peer) => interruptedJourney(peer, "claude", gate.entered, gate.release, gate.disconnected),
-            "managed",
-        );
-    } finally {
-        gate.release();
+    if (agentId === "claude") {
+        // @no-uc: Compatibility; a real Claude native session remains resumable after an interrupted request.
+        test("Given a running real Claude request, When SIGKILL restarts its managed runtime, Then a continuation completes in the native session", async () => {
+            const gate = firstRequestGate();
+            await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-5", "RESTART_CONTINUED", {
+                beforeFirstText: (_scenario, signal) => gate.beforeFirstText(signal),
+            });
+            await using agent = await ClaudeFixture.create(provider);
+            try {
+                await withRealDaemon(
+                    new ClaudeCodeAgentSpecification(),
+                    agent.environment,
+                    (peer) => interruptedJourney(peer, "claude", gate.entered, gate.release, gate.disconnected),
+                    "managed",
+                );
+            } finally {
+                gate.release();
+            }
+        }, 120_000);
     }
-}, 120_000);
-
-// @no-uc: Compatibility; a real Pi native session remains resumable after an interrupted request.
-test("Given a running real Pi request, When SIGKILL restarts its managed runtime, Then a continuation completes in the native session", async () => {
-    const gate = firstRequestGate();
-    await using provider = await FakeOpenAiProvider.start("gpt-5.4", "RESTART_CONTINUED", {
-        beforeFirstText: gate.beforeFirstText,
-    });
-    await using agent = await PiFixture.create(provider);
-    try {
-        await withRealDaemon(
-            new PiAgentSpecification(),
-            agent.environment,
-            (peer) => interruptedJourney(peer, "pi", gate.entered, gate.release, gate.disconnected),
-            "managed",
-        );
-    } finally {
-        gate.release();
+    if (agentId === "pi") {
+        // @no-uc: Compatibility; a real Pi native session remains resumable after an interrupted request.
+        test("Given a running real Pi request, When SIGKILL restarts its managed runtime, Then a continuation completes in the native session", async () => {
+            const gate = firstRequestGate();
+            await using provider = await FakeOpenAiProvider.start("gpt-5.4", "RESTART_CONTINUED", {
+                beforeFirstText: gate.beforeFirstText,
+            });
+            await using agent = await PiFixture.create(provider);
+            try {
+                await withRealDaemon(
+                    new PiAgentSpecification(),
+                    agent.environment,
+                    (peer) => interruptedJourney(peer, "pi", gate.entered, gate.release, gate.disconnected),
+                    "managed",
+                );
+            } finally {
+                gate.release();
+            }
+        }, 120_000);
     }
-}, 120_000);
+}
