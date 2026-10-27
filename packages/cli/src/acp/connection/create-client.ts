@@ -7,8 +7,8 @@ import {
     methods,
     type RequestPermissionRequest,
     type RequestPermissionResponse,
-    type SessionNotification,
 } from "@agentclientprotocol/sdk";
+import type { IdentifiedSessionNotification } from "./session-notification.ts";
 
 export interface AcpClientHandler {
     readonly onElicitation: (
@@ -20,7 +20,7 @@ export interface AcpClientHandler {
         request: RequestPermissionRequest,
         signal: AbortSignal,
     ) => Promise<RequestPermissionResponse>;
-    readonly onUpdate: (notification: SessionNotification) => Promise<void>;
+    readonly onUpdate: (notification: IdentifiedSessionNotification) => Promise<void>;
 }
 
 export const createAcpClient = (handler: AcpClientHandler): ClientApp =>
@@ -33,9 +33,6 @@ export const createAcpClient = (handler: AcpClientHandler): ClientApp =>
             methods.client.elicitation.create,
             async (context) => await handler.onElicitation(context.params, context.signal),
         )
-        .onNotification(methods.client.session.update, async (context) => {
-            await handler.onUpdate(context.params);
-        })
         .onNotification(methods.client.elicitation.complete, async (context) => {
             await handler.onElicitationComplete(context.params);
         });

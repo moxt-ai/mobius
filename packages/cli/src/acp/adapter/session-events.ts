@@ -1,5 +1,5 @@
 import { setImmediate as yieldToRuntime } from "node:timers/promises";
-import type { SessionNotification, SessionUpdate } from "@agentclientprotocol/sdk";
+import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import {
     type AcpSessionUpdate,
     decodeAcpSessionUpdate,
@@ -13,6 +13,7 @@ import type { AcpAgentDefinition } from "../agent/agent-definition.ts";
 import type { AgentConnection } from "../connection/agent-connection.ts";
 import { AgentUpdateStream } from "../connection/agent-update-stream.ts";
 import type { AcpClientHandler } from "../connection/create-client.ts";
+import type { IdentifiedSessionNotification as SessionNotification } from "../connection/session-notification.ts";
 import type { AcpContentExternalizer } from "../content/content-externalizer.ts";
 import { sessionConfigProtocolForAgent } from "../protocol/session-config-protocol.ts";
 

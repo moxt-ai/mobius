@@ -1,7 +1,7 @@
 import { setImmediate as yieldToRuntime } from "node:timers/promises";
-import type { SessionNotification } from "@agentclientprotocol/sdk";
 import { AcpExecutionError } from "../acp-error.ts";
 import { nativeSessionIdSchema } from "../protocol/native-session.ts";
+import type { IdentifiedSessionNotification as SessionNotification } from "./session-notification.ts";
 
 const MAX_PENDING_UPDATES = 100;
 const MAX_PENDING_BYTES = 1024 * 1024;

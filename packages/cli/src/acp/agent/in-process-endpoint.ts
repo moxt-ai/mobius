@@ -1,6 +1,7 @@
-import type { AgentApp, SessionNotification } from "@agentclientprotocol/sdk";
+import type { AgentApp } from "@agentclientprotocol/sdk";
 import type { AgentModelEffort } from "@moxt-ai/mobius-sdk/protocol";
 import { AcpExecutionError } from "../acp-error.ts";
+import type { IdentifiedSessionNotification } from "../connection/session-notification.ts";
 
 export type AcpEndpointTermination =
     | { readonly kind: "closed" }
@@ -54,7 +55,7 @@ export interface InProcessAcpEndpointOptions {
     readonly cwd: string;
     readonly environment: Readonly<Record<string, string>>;
     /** Resolves after Mobius processes the update, backpressuring the local producer. */
-    readonly onSessionUpdate: (notification: SessionNotification) => Promise<void>;
+    readonly onSessionUpdate: (notification: IdentifiedSessionNotification) => Promise<void>;
 }
 
 /**
