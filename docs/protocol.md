@@ -121,15 +121,24 @@ local Runtimes, SDK clients, and persisted messages temporarily use adjacent
 versions. ACP negotiation at the Agent boundary does not negotiate the separate
 Mobius daemon-to-relay contract.
 
+Compatibility is mandatory unless the human user or maintainer explicitly requires
+the specific breaking change. A new protocol version or negotiated capability does
+not authorize removal of the existing contract. AI agents must not infer permission
+to retire an older peer from a refactoring task or a version bump. Follow
+[AGENTS.md](AGENTS.md) and the mandatory [code review rules](CODE_REVIEW.md).
+
 ### Compatibility rules
 
-- Adding a field to an existing object is compatible. Receivers validate every
-  field they understand and ignore unrecognized fields.
+- New receivers validate every field they understand and ignore unrecognized
+  fields. Before adding a field, verify that existing receivers also accept it;
+  a strict released decoder may reject an otherwise additive change.
 - A receiver must continue to accept an older representation that omits a newly
   introduced field. The new field must have an explicit fallback until all
   supported senders provide it.
 - Adding a message kind is compatible on long-lived transports. A receiver logs a
   bounded warning and skips an unrecognized kind without closing the connection.
+  Skipping an unknown operation is not successful execution: a sender must retain
+  the old supported behavior until it establishes support for the new operation.
 - A recognized message kind with an invalid known field remains a protocol error.
   Compatibility must not weaken validation of supported representations.
 - Removing or changing the meaning, type, or validation of an existing field or
