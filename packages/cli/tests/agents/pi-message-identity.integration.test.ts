@@ -22,6 +22,14 @@ test("Given the raw Pi harness, When a user submits a prompt, Then its chunks an
         cwd,
         onSessionUpdate: async ({ update }) => {
             updates.push(update);
+            if (
+                update.sessionUpdate === "user_message_chunk" &&
+                update.content.type === "text" &&
+                update.content.text === "Cancel during echo"
+            ) {
+                await connection.agent.notify(methods.agent.session.cancel, { sessionId: cancelledSessionId });
+                await connection.agent.request(methods.agent.session.list, {}, { cancellationSignal: signal });
+            }
         },
     });
     const rejectInteraction = async (): Promise<never> => {
@@ -34,6 +42,7 @@ test("Given the raw Pi harness, When a user submits a prompt, Then its chunks an
         onElicitationComplete: async () => undefined,
     }).connect(endpoint.app());
     const signal = AbortSignal.timeout(60_000);
+    let cancelledSessionId = "";
     try {
         await endpoint.initialize(signal);
         await connection.agent.request(
@@ -59,6 +68,27 @@ test("Given the raw Pi harness, When a user submits a prompt, Then its chunks an
             expect(chunk).not.toHaveProperty("messageId");
         }
         expect(response._meta ?? {}).not.toHaveProperty("messageId");
+        cancelledSessionId = session.sessionId;
+        expect(
+            await connection.agent.request(
+                methods.agent.session.prompt,
+                {
+                    sessionId: session.sessionId,
+                    prompt: [
+                        { type: "text", text: "Cancel during echo" },
+                        { type: "text", text: "Do not submit this turn" },
+                    ],
+                },
+                { cancellationSignal: signal },
+            ),
+        ).toMatchObject({ stopReason: "cancelled" });
+        expect(
+            await connection.agent.request(
+                methods.agent.session.prompt,
+                { sessionId: session.sessionId, prompt: [{ type: "text", text: "Continue after cancellation" }] },
+                { cancellationSignal: signal },
+            ),
+        ).toMatchObject({ stopReason: "end_turn" });
     } finally {
         await endpoint.close();
         connection.close();

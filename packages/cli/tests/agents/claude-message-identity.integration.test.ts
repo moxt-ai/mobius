@@ -21,8 +21,16 @@ test("Given real Claude streams a message, When its harness emits chunks and rep
     const environment = { ...process.env, ...fixture.environment, CLAUDE_CODE_EXECUTABLE: fixture.executable };
     const claude = createClaudeAcpApp({
         environment,
-        onSessionUpdate: async ({ update }) => {
+        onSessionUpdate: async ({ sessionId, update }) => {
             updates.push(update);
+            if (
+                update.sessionUpdate === "user_message_chunk" &&
+                update.content.type === "text" &&
+                update.content.text === "Cancel during echo"
+            ) {
+                await connection.agent.notify(methods.agent.session.cancel, { sessionId });
+                await connection.agent.request(methods.agent.session.list, {}, { cancellationSignal: signal });
+            }
             if (
                 update.sessionUpdate === "user_message_chunk" &&
                 update.content.type === "text" &&
@@ -73,6 +81,19 @@ test("Given real Claude streams a message, When its harness emits chunks and rep
             expect(update.messageId).toEqual(expect.any(String));
         }
         updates.length = 0;
+        expect(
+            await connection.agent.request(
+                methods.agent.session.prompt,
+                {
+                    sessionId,
+                    prompt: [
+                        { type: "text", text: "Cancel during echo" },
+                        { type: "text", text: "Do not submit this turn" },
+                    ],
+                },
+                { cancellationSignal: signal },
+            ),
+        ).toMatchObject({ stopReason: "cancelled" });
         await connection.agent.request(
             methods.agent.session.load,
             { sessionId, cwd, mcpServers: [] },

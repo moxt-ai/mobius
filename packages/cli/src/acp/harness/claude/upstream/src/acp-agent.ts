@@ -1533,6 +1533,7 @@ async function waitForMcpAuthentication(
 }
 
 export class ClaudeAcpAgent {
+    private readonly pendingSubmissions = new Map<string, Set<AbortController>>();
     sessions: {
         [key: string]: Session;
     };
@@ -2039,6 +2040,26 @@ export class ClaudeAcpAgent {
         promptUuid: ReturnType<typeof randomUUID>,
         onSubmitted: () => void = () => {},
     ): Promise<PromptResponse> {
+        const controller = new AbortController();
+        const pending = this.pendingSubmissions.get(params.sessionId) ?? new Set<AbortController>();
+        pending.add(controller);
+        this.pendingSubmissions.set(params.sessionId, pending);
+        try {
+            return await this.promptSubmission(params, promptUuid, onSubmitted, controller.signal);
+        } finally {
+            pending.delete(controller);
+            if (pending.size === 0) {
+                this.pendingSubmissions.delete(params.sessionId);
+            }
+        }
+    }
+
+    private async promptSubmission(
+        params: PromptRequest,
+        promptUuid: ReturnType<typeof randomUUID>,
+        onSubmitted: () => void,
+        submission: AbortSignal,
+    ): Promise<PromptResponse> {
         if (this.providerUpdate !== null) {
             await this.providerUpdate;
         }
@@ -2064,12 +2085,20 @@ export class ClaudeAcpAgent {
         const userMessage = promptToClaude(params);
         userMessage.uuid = promptUuid;
         for (const content of params.prompt) {
+            if (submission.aborted) {
+                onSubmitted();
+                return { stopReason: "cancelled" };
+            }
             await this.client.sessionUpdate({
                 sessionId: params.sessionId,
                 update: { sessionUpdate: "user_message_chunk", messageId: promptUuid, content },
             });
         }
 
+        if (submission.aborted) {
+            onSubmitted();
+            return { stopReason: "cancelled" };
+        }
         // Local-only commands (e.g. `/clear`) return a result without replaying the
         // user message, so the consumer can't promote the turn from the echo.
         const firstText = params.prompt[0]?.type === "text" ? params.prompt[0].text : "";
@@ -4749,6 +4778,9 @@ export class ClaudeAcpAgent {
     }
 
     async cancel(params: CancelNotification): Promise<void> {
+        for (const submission of this.pendingSubmissions.get(params.sessionId) ?? []) {
+            submission.abort();
+        }
         this.exitPlan.cancel(params.sessionId);
         const session = this.sessions[params.sessionId];
         if (!session) {

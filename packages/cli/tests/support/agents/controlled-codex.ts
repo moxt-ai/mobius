@@ -22,6 +22,7 @@ export class ControlledCodexFixture implements AsyncDisposable {
             readonly consumeSteeringAfterFirstTurn?: boolean;
             readonly endFirstTurnOnSteering?: "completed" | "failed";
             readonly latePreviousUser?: boolean;
+            readonly skipSecondSteering?: boolean;
         } = {},
     ): Promise<ControlledCodexFixture> {
         const directory = await mkdtemp(join(tmpdir(), "mobius-controlled-codex-"));
@@ -41,6 +42,7 @@ if (process.argv[2] !== "app-server") {
 
 let threadNumber = 0;
 let turnNumber = 0;
+let steeringNumber = 0;
 let active;
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
 createInterface({ input: process.stdin }).on("line", (line) => {
@@ -62,7 +64,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
             } });
         }
         send({ method: "item/started", params: { threadId, turnId: turn.id,
-            item: { type: "userMessage", id: "controlled-user-" + turnNumber, content: request.params.input },
+            item: { type: "userMessage", id: "controlled-user-" + turnNumber, clientId: request.params.clientUserMessageId, content: request.params.input },
         } });
         send({ method: "thread/settings/updated", params: {
             threadId, threadSettings: { collaborationMode: { mode: "plan" } },
@@ -73,13 +75,15 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         return;
     }
     if (request.method === "turn/steer") {
+        steeringNumber++;
         send({ id: request.id, result: { turnId: active.turn.id } });
+        if (${options.skipSecondSteering === true} && steeringNumber === 2) return;
         if (${JSON.stringify(options.endFirstTurnOnSteering ?? null)} !== null && turnNumber === 1) {
             send({ method: "turn/completed", params: { threadId: active.threadId, turn: { ...active.turn, status: ${JSON.stringify(options.endFirstTurnOnSteering ?? "completed")} } } });
         }
         if (${options.consumeSteeringAfterFirstTurn === true} && turnNumber > 1) {
             send({ method: "item/started", params: { threadId: active.threadId, turnId: active.turn.id,
-                item: { type: "userMessage", id: "controlled-steering-user-" + turnNumber, content: request.params.input },
+                item: { type: "userMessage", id: "controlled-steering-user-" + turnNumber, clientId: request.params.clientUserMessageId, content: request.params.input },
             } });
         }
         return;

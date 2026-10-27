@@ -110,7 +110,12 @@ export const threadItemSchema = z.discriminatedUnion("type", [
         type: z.literal("agentMessage"),
         phase: messagePhaseSchema.nullish(),
     }),
-    z.object({ content: z.array(z.unknown()).max(10_000), id: boundedText(256), type: z.literal("userMessage") }),
+    z.object({
+        content: z.array(z.unknown()).max(10_000),
+        id: boundedText(256),
+        clientId: boundedText(256).nullish(),
+        type: z.literal("userMessage"),
+    }),
     z.object({
         aggregatedOutput: boundedText(4_000_000).nullish(),
         command: boundedText(32_768),

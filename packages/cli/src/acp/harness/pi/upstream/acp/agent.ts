@@ -152,6 +152,7 @@ const PI_ACP_NAME = "pi-acp";
 const PI_ACP_VERSION = "0.0.34";
 
 export class PiAcpAgent {
+    private readonly pendingSubmissions = new Map<string, Set<AbortController>>();
     private readonly conn: PiAcpClient;
     private readonly sessions = new SessionManager();
     private readonly store: SessionStore;
@@ -500,14 +501,35 @@ export class PiAcpAgent {
     }
 
     async prompt(params: PromptRequest): Promise<PromptResponse> {
+        const controller = new AbortController();
+        const pending = this.pendingSubmissions.get(params.sessionId) ?? new Set<AbortController>();
+        pending.add(controller);
+        this.pendingSubmissions.set(params.sessionId, pending);
+        try {
+            return await this.promptSubmission(params, controller.signal);
+        } finally {
+            pending.delete(controller);
+            if (pending.size === 0) {
+                this.pendingSubmissions.delete(params.sessionId);
+            }
+        }
+    }
+
+    private async promptSubmission(params: PromptRequest, submission: AbortSignal): Promise<PromptResponse> {
         const session = await this.restoreSession(params.sessionId);
         for (const content of params.prompt) {
+            if (submission.aborted) {
+                return { stopReason: "cancelled" };
+            }
             await this.conn.sessionUpdate({
                 sessionId: params.sessionId,
                 update: { sessionUpdate: "user_message_chunk", content },
             });
         }
 
+        if (submission.aborted) {
+            return { stopReason: "cancelled" };
+        }
         const { message, images } = promptToPiMessage(params.prompt);
 
         // Built-in ACP slash command handling (headless-friendly subset).
@@ -1015,6 +1037,9 @@ export class PiAcpAgent {
             }
         }
 
+        if (submission.aborted) {
+            return { stopReason: "cancelled" };
+        }
         const result = await session.prompt(message, images);
 
         // ACP StopReason does not include "error"; if pi fails we map to end_turn for now,
@@ -1057,6 +1082,9 @@ export class PiAcpAgent {
     }
 
     async cancel(params: CancelNotification): Promise<void> {
+        for (const submission of this.pendingSubmissions.get(params.sessionId) ?? []) {
+            submission.abort();
+        }
         const session = this.sessions.maybeGet(params.sessionId);
         if (!session) {
             return;

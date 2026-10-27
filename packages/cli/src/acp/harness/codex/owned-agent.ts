@@ -140,7 +140,8 @@ function steeringPrompt(prompt: readonly unknown[]): readonly SteeringPromptBloc
 }
 
 interface ActiveTurn {
-    readonly steeringContent: (readonly ContentBlock[])[];
+    readonly steeringContent: Map<string, readonly ContentBlock[]>;
+    readonly clientId: string;
     readonly content: readonly ContentBlock[];
     readonly completion: PromiseWithResolvers<PromptResponse>;
     readonly turn: { id: string };
@@ -212,14 +213,14 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
     readonly nativeTurnId = (): string | null => this.#nativeTurnId;
     readonly onTerminated = (termination: AcpEndpointTermination): void => {
         if (this.#turn !== null) {
-            this.#turn.steeringContent.length = 0;
+            this.#turn.steeringContent.clear();
         }
         this.#turn?.completion.reject(acpEndpointTerminationError(termination));
         this.#settleCompaction("cancelled");
     };
     readonly close = async (): Promise<void> => {
         if (this.#turn !== null) {
-            this.#turn.steeringContent.length = 0;
+            this.#turn.steeringContent.clear();
         }
         this.#turn?.completion.reject(new AcpExecutionError("The Codex endpoint is closed", {}, "acp_endpoint_closed"));
         this.#settleCompaction("cancelled");
@@ -297,7 +298,8 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
         const turn: ActiveTurn = {
             completion,
             content: [],
-            steeringContent: [],
+            steeringContent: new Map(),
+            clientId: randomUUID(),
             input: { kind: "awaiting" },
             turn: { id: "" },
         };
@@ -508,8 +510,16 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
                 ) {
                     return;
                 }
-                const submitted = turn.input.kind === "awaiting" ? turn.content : turn.steeringContent.shift();
-                if (turn.input.kind === "awaiting") {
+                const submitted =
+                    item.clientId === turn.clientId
+                        ? turn.content
+                        : item.clientId == null
+                          ? undefined
+                          : turn.steeringContent.get(item.clientId);
+                if (item.clientId != null) {
+                    turn.steeringContent.delete(item.clientId);
+                }
+                if (item.clientId === turn.clientId && turn.input.kind === "awaiting") {
                     turn.input = { kind: "identified", messageId: item.id };
                 }
                 await this.#enqueue(async () => {
@@ -783,7 +793,8 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
         const turn: ActiveTurn = {
             completion,
             content,
-            steeringContent: [],
+            steeringContent: new Map(),
+            clientId: randomUUID(),
             input: { kind: "awaiting" },
             turn: { id: "" },
         };
@@ -802,6 +813,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
                         {
                             ...this.#settings.turnParameters(),
                             input,
+                            clientUserMessageId: turn.clientId,
                             threadId: this.#context.threadId(),
                         },
                         signal,
@@ -826,7 +838,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
         } finally {
             signal.removeEventListener("abort", aborted);
             if (this.#turn === turn) {
-                turn.steeringContent.length = 0;
+                turn.steeringContent.clear();
                 this.#turn = null;
                 this.#agentMessages.clear();
                 this.#streamedReasoningSources.clear();
@@ -854,11 +866,12 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
         if (steering.length === 0) {
             throw new AcpExecutionError("Codex received an empty steering request", {}, "invalid_request");
         }
-        if (active.steeringContent.length >= 100) {
+        if (active.steeringContent.size >= 100) {
             throw new AcpExecutionError("Too many steering requests are pending consumption", {}, "session_busy");
         }
         const submitted = steering.map((block) => block.content);
-        active.steeringContent.push(submitted);
+        const clientId = randomUUID();
+        active.steeringContent.set(clientId, submitted);
         const bounded = AbortSignal.any([signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]);
         try {
             const response = turnSteerResponseSchema.parse(
@@ -866,6 +879,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
                     "turn/steer",
                     {
                         expectedTurnId: active.turn.id,
+                        clientUserMessageId: clientId,
                         input: steering.map((block) => block.input),
                         threadId: this.#context.threadId(),
                     },
@@ -878,10 +892,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
             // Native acceptance owns the input. Its user item and identity may arrive much later.
             return { outcome: "injected" };
         } catch (cause) {
-            const index = active.steeringContent.indexOf(submitted);
-            if (index !== -1) {
-                active.steeringContent.splice(index, 1);
-            }
+            active.steeringContent.delete(clientId);
             throw cause;
         }
     };
@@ -892,7 +903,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
             return;
         }
         this.#turn = null;
-        turn.steeringContent.length = 0;
+        turn.steeringContent.clear();
         if (turn.turn.id.length > 0) {
             try {
                 await this.#appServer.request(
@@ -919,7 +930,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
         if (active === null || active.turn.id !== turn.id) {
             return;
         }
-        active.steeringContent.length = 0;
+        active.steeringContent.clear();
         // Keep this Turn reachable by termination and cancellation until its output has drained.
         // The app-server dispatches notifications concurrently, so an item update can still be in
         // flight when the turn completes. Drain it: a client must never see the turn finish before

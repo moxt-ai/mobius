@@ -8,6 +8,7 @@ for (const terminal of ["cancelled", "completed", "failed"] as const) {
     test(`Given Codex defers accepted steering, When its turn is ${terminal} and the endpoint is reused, Then new steering retains its own content despite late old-turn input`, async () => {
         await using fixture = await ControlledCodexFixture.create({
             holdTurn: true,
+            skipSecondSteering: true,
             consumeSteeringAfterFirstTurn: true,
             latePreviousUser: true,
             ...(terminal === "cancelled" ? {} : { endFirstTurnOnSteering: terminal }),
@@ -87,6 +88,16 @@ for (const terminal of ["cancelled", "completed", "failed"] as const) {
             );
             void reused.catch(() => {});
             await started.promise;
+            expect(
+                await connection.agent.request(
+                    "_session/steering",
+                    {
+                        sessionId: session.sessionId,
+                        prompt: [{ type: "text", text: "Rejected by the native submission hook" }],
+                    },
+                    { cancellationSignal: signal },
+                ),
+            ).toMatchObject({ outcome: "injected" });
             expect(
                 await connection.agent.request(
                     "_session/steering",
