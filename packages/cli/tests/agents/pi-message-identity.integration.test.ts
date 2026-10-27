@@ -1,3 +1,4 @@
+import { addAbortListener } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,112 @@ import type { IdentifiedSessionUpdate } from "../../src/acp/connection/session-n
 import { PiAcpEndpoint } from "../../src/acp/harness/pi/endpoint.ts";
 import { PiFixture } from "../support/agents/pi.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
+
+test("Given real Pi is waiting for model output, When two multi-block steers are accepted consecutively, Then each submission has a distinct user message identity", async () => {
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const signal = AbortSignal.timeout(60_000);
+    using _abort = addAbortListener(signal, () => release.resolve());
+    await using provider = await FakeOpenAiProvider.start("gpt-4.1", "PI_STEERING_IDENTITY_REPLY", {
+        beforeFirstText: async () => {
+            entered.resolve();
+            await release.promise;
+        },
+    });
+    await using fixture = await PiFixture.create(provider);
+    const cwd = await mkdtemp(join(tmpdir(), "mobius-pi-steering-identity-"));
+    const updates: IdentifiedSessionUpdate[] = [];
+    const endpoint = new PiAgentConnection({
+        command: fixture.executable,
+        environment: fixture.environment,
+        cwd,
+        client: {
+            onUpdate: async ({ update }) => {
+                updates.push(update);
+            },
+            onPermission: async () => {
+                throw new Error("Unexpected permission request");
+            },
+            onElicitation: async () => {
+                throw new Error("Unexpected input request");
+            },
+            onElicitationComplete: async () => undefined,
+        },
+    });
+    const connection = endpoint.connection;
+    try {
+        await endpoint.initialize(signal);
+        await connection.agent.request(
+            methods.agent.initialize,
+            { protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} },
+            { cancellationSignal: signal },
+        );
+        const { sessionId } = await connection.agent.request(
+            methods.agent.session.new,
+            { cwd, mcpServers: [] },
+            { cancellationSignal: signal },
+        );
+        const pending = connection.agent.request(
+            methods.agent.session.prompt,
+            { sessionId, prompt: [{ type: "text", text: "Wait for updated instructions" }] },
+            { cancellationSignal: signal },
+        );
+        // Always settle the in-flight prompt, including on assertion failure.
+        const finished = pending.then(
+            (result) => ({ kind: "completed" as const, result }),
+            (cause: unknown) => ({ kind: "failed" as const, cause }),
+        );
+        try {
+            await Promise.race([
+                entered.promise,
+                finished.then(() => {
+                    throw new Error("Prompt ended before model gate");
+                }),
+            ]);
+            updates.length = 0;
+            for (const text of ["First steering", "Second steering"]) {
+                const response = await connection.agent.request(
+                    "_session/steering",
+                    {
+                        sessionId,
+                        prompt: [
+                            { type: "text", text },
+                            { type: "text", text: `${text} detail` },
+                        ],
+                    },
+                    { cancellationSignal: signal },
+                );
+                expect(response).toMatchObject({ outcome: "injected" });
+            }
+            const firstUser = updates.findIndex((update) => update.sessionUpdate === "user_message_chunk");
+            expect(updates.slice(firstUser).map((update) => update.sessionUpdate)).toEqual(
+                Array(4).fill("user_message_chunk"),
+            );
+            const chunks = updates.filter((update) => update.sessionUpdate === "user_message_chunk");
+            expect(chunks.map((update) => update.content)).toEqual([
+                { type: "text", text: "First steering" },
+                { type: "text", text: "First steering detail" },
+                { type: "text", text: "Second steering" },
+                { type: "text", text: "Second steering detail" },
+            ]);
+            expect(chunks[0]?.messageId).toEqual(expect.any(String));
+            expect(chunks[0]?.messageId).toBe(chunks[1]?.messageId);
+            expect(chunks[2]?.messageId).toBe(chunks[3]?.messageId);
+            expect(chunks[0]?.messageId).not.toBe(chunks[2]?.messageId);
+        } finally {
+            release.resolve();
+            await finished;
+        }
+        const outcome = await finished;
+        if (outcome.kind === "failed") {
+            throw outcome.cause;
+        }
+    } finally {
+        release.resolve();
+        await endpoint.closeProcess();
+        await rm(cwd, { recursive: true, force: true });
+    }
+});
 
 test("Given the raw Pi harness, When a user submits a prompt, Then its chunks and result contain no adapter-generated message identity", async () => {
     await using provider = await FakeOpenAiProvider.start("gpt-4.1", "PI_RAW_REPLY");

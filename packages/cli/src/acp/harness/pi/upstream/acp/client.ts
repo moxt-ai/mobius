@@ -15,11 +15,13 @@ export interface PiAcpClient {
     ) => Promise<CreateElicitationResponse>;
     readonly requestPermission: (request: RequestPermissionRequest) => Promise<RequestPermissionResponse>;
     readonly sessionUpdate: (notification: PiSessionNotification) => Promise<void>;
+    readonly startUserMessage: () => void;
 }
 
 export function createPiAcpClient(
     connection: AgentConnection,
     onSessionUpdate: (notification: PiSessionNotification) => Promise<void>,
+    onUserMessageStart: () => void = () => undefined,
 ): PiAcpClient {
     return {
         requestElicitation: async (request, signal) =>
@@ -27,5 +29,6 @@ export function createPiAcpClient(
         requestPermission: async (request) =>
             await connection.client.request(methods.client.session.requestPermission, request),
         sessionUpdate: onSessionUpdate,
+        startUserMessage: onUserMessageStart,
     };
 }

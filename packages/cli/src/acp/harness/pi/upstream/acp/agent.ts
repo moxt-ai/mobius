@@ -517,6 +517,7 @@ export class PiAcpAgent {
 
     private async promptSubmission(params: PromptRequest, submission: AbortSignal): Promise<PromptResponse> {
         const session = await this.restoreSession(params.sessionId);
+        this.conn.startUserMessage();
         for (const content of params.prompt) {
             if (submission.aborted) {
                 return { stopReason: "cancelled" };
@@ -1069,6 +1070,7 @@ export class PiAcpAgent {
             case "idle":
                 return { outcome: "promptRequired", reason: "noRunningTurn" };
             case "injected": {
+                this.conn.startUserMessage();
                 for (const content of parsed.data.prompt) {
                     signal.throwIfAborted();
                     await this.conn.sessionUpdate({
