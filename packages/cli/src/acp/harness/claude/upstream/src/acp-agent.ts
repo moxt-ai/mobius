@@ -53,7 +53,6 @@ import {
     type ResumeSessionResponse,
     type SessionConfigOption,
     type SessionModeState,
-    type SessionNotification,
     type SetProviderRequest,
     type SetProviderResponse,
     type SetSessionConfigOptionRequest,
@@ -142,7 +141,7 @@ import { buildClaudePermissionPresentation } from "./permissions/presentation.js
 import { decodeClaudePermissionResponse } from "./permissions/response.js";
 import { DEFAULT_AGENT_ID, EFFORT_CONFIG_ID } from "./session-config-ids.js";
 import { SessionTitles, sanitizeTitle } from "./session-titles.js";
-import { type ClaudeSessionNotification, claudeSessionNotification } from "./session-update.js";
+import type { ClaudeSessionNotification, ClaudeSessionNotification as SessionNotification } from "./session-update.js";
 import { SettingsManager } from "./settings.js";
 import { parseToolResultMeta } from "./tool-result-meta.js";
 import {
@@ -1323,11 +1322,10 @@ class ClientConnection implements AcpClient {
     ) {}
 
     sessionUpdate(params: SessionNotification): Promise<void> {
-        const notification = claudeSessionNotification(params);
         if (this.onSessionUpdate !== undefined) {
-            return this.onSessionUpdate(notification);
+            return this.onSessionUpdate(params);
         }
-        return this.ctx.notify(methods.client.session.update, notification);
+        return this.ctx.notify(methods.client.session.update, params);
     }
 
     requestPermission(params: RequestPermissionRequest, signal?: AbortSignal): Promise<RequestPermissionResponse> {
@@ -3170,6 +3168,7 @@ export class ClaudeAcpAgent {
                                     update: {
                                         sessionUpdate: "agent_message_chunk",
                                         messageId: message.uuid,
+                                        nativeMessageId: message.uuid,
                                         content: { type: "text", text: message.content },
                                     },
                                 });
@@ -3402,6 +3401,7 @@ export class ClaudeAcpAgent {
                                     update: {
                                         sessionUpdate: "agent_message_chunk",
                                         messageId: message.uuid,
+                                        nativeMessageId: message.uuid,
                                         content: { type: "text", text },
                                     },
                                 });
@@ -3565,6 +3565,7 @@ export class ClaudeAcpAgent {
                                     update: {
                                         sessionUpdate: "agent_message_chunk",
                                         messageId: message.uuid,
+                                        nativeMessageId: message.uuid,
                                         content: {
                                             type: "text",
                                             text: `**Model fallback:** ${message.original_model} declined this request${category}; retried with ${message.fallback_model}. ${outcome}${explanation}`,
@@ -3925,6 +3926,7 @@ export class ClaudeAcpAgent {
                                         update: {
                                             sessionUpdate: "agent_message_chunk",
                                             messageId: message.uuid,
+                                            nativeMessageId: message.uuid,
                                             content: { type: "text", text: lastRefusalExplanation },
                                         },
                                     });
@@ -3998,6 +4000,7 @@ export class ClaudeAcpAgent {
                                             session.toolUseCache,
                                             this.client,
                                             this.logger,
+                                            { messageId: message.uuid },
                                         )) {
                                             await sendUpdate(notification);
                                         }
@@ -5919,10 +5922,13 @@ export class ClaudeAcpAgent {
         session.fastModeDisabledReason = nextReason;
         this.refreshFastModeOption(session, enabled);
         if (explain) {
+            const messageId = randomUUID();
             await this.client.sessionUpdate({
                 sessionId,
                 update: {
                     sessionUpdate: "agent_message_chunk",
+                    messageId,
+                    nativeMessageId: messageId,
                     content: {
                         type: "text",
                         text: `**Fast mode turned off:** ${FAST_MODE_UNAVAILABLE_EXPLANATIONS[nextReason]}.`,
@@ -7815,22 +7821,6 @@ export function messageIdForGrouping(message: {
     return typeof message.uuid === "string" && message.uuid.length > 0 ? message.uuid : undefined;
 }
 
-/**
- * Stamps an ACP `messageId` onto a session update, but only on the message/
- * thought chunk variants that carry one — tool_call/plan/etc. updates never do.
- * No-op when `messageId` is falsy, so callers can pass it through unconditionally.
- */
-function applyMessageId(update: SessionNotification["update"], messageId: string | undefined): void {
-    if (
-        messageId &&
-        (update.sessionUpdate === "agent_message_chunk" ||
-            update.sessionUpdate === "user_message_chunk" ||
-            update.sessionUpdate === "agent_thought_chunk")
-    ) {
-        update.messageId = messageId;
-    }
-}
-
 /** Built-in tools that drive the task list (headless/SDK sessions use these
  *  instead of TodoWrite). Their tool_use/tool_result are surfaced as `plan`
  *  snapshots rather than as tool_calls. */
@@ -8012,8 +8002,8 @@ export function toAcpNotifications(
         // Opaque id identifying the message these chunks belong to (ACP message ids
         // are opaque strings — no particular format is required). Attached to
         // user/agent message and thought chunks so clients can group streamed chunks
-        // into a single message. Omit it (leave undefined) when unknown — never send
-        // an explicit `null`.
+        // into a single message. Required whenever content produces message/thought
+        // chunks; tool-only updates do not need a message identity.
         messageId?: string;
         // The SDK user message's `tool_use_result`: the structured Output object of
         // the tool_result this message carries (shape is per-tool). Used to render
@@ -8038,14 +8028,19 @@ export function toAcpNotifications(
         if (content.length === 0) {
             return [];
         }
+        const nativeMessageId = options?.messageId;
+        if (typeof nativeMessageId !== "string" || nativeMessageId.length === 0) {
+            throw RequestError.internalError({ code: "invalid_native_message_id" });
+        }
         const update: SessionNotification["update"] = {
             sessionUpdate: role === "assistant" ? "agent_message_chunk" : "user_message_chunk",
+            messageId: nativeMessageId,
+            nativeMessageId,
             content: {
                 type: "text",
                 text: content,
             },
         };
-        applyMessageId(update, options?.messageId);
 
         if (options?.parentToolUseId) {
             update._meta = {
@@ -8082,8 +8077,14 @@ export function toAcpNotifications(
             case "text":
             case "text_delta": {
                 if (chunk.text) {
+                    const nativeMessageId = options?.messageId;
+                    if (typeof nativeMessageId !== "string" || nativeMessageId.length === 0) {
+                        throw RequestError.internalError({ code: "invalid_native_message_id" });
+                    }
                     update = {
                         sessionUpdate: role === "assistant" ? "agent_message_chunk" : "user_message_chunk",
+                        messageId: nativeMessageId,
+                        nativeMessageId,
                         content: {
                             type: "text",
                             text: chunk.text,
@@ -8092,9 +8093,15 @@ export function toAcpNotifications(
                 }
                 break;
             }
-            case "image":
+            case "image": {
+                const nativeMessageId = options?.messageId;
+                if (typeof nativeMessageId !== "string" || nativeMessageId.length === 0) {
+                    throw RequestError.internalError({ code: "invalid_native_message_id" });
+                }
                 update = {
                     sessionUpdate: role === "assistant" ? "agent_message_chunk" : "user_message_chunk",
+                    messageId: nativeMessageId,
+                    nativeMessageId,
                     content: {
                         type: "image",
                         data: chunk.source.type === "base64" ? chunk.source.data : "",
@@ -8103,13 +8110,20 @@ export function toAcpNotifications(
                     },
                 };
                 break;
+            }
             case "thinking":
             case "thinking_delta": {
                 // Recent models default `thinking.display` to "omitted", which streams
                 // signature-only thinking blocks whose text is empty.
                 if (chunk.thinking) {
+                    const nativeMessageId = options?.messageId;
+                    if (typeof nativeMessageId !== "string" || nativeMessageId.length === 0) {
+                        throw RequestError.internalError({ code: "invalid_native_message_id" });
+                    }
                     update = {
                         sessionUpdate: "agent_thought_chunk",
+                        messageId: nativeMessageId,
+                        nativeMessageId,
                         content: {
                             type: "text",
                             text: chunk.thinking,
@@ -8439,7 +8453,6 @@ export function toAcpNotifications(
                     },
                 };
             }
-            applyMessageId(update, options?.messageId);
             output.push({ sessionId, update });
         }
     }
@@ -8543,7 +8556,6 @@ export function streamEventToAcpNotifications(
                         },
                     };
                 }
-                applyMessageId(update, options?.messageId);
                 return [{ sessionId, update }];
             }
             return toAcpNotifications(

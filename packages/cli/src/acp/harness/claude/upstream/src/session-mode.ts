@@ -1,13 +1,14 @@
+import { randomUUID } from "node:crypto";
 import {
     RequestError,
     type SessionConfigOption,
     type SessionModeState,
-    type SessionNotification,
     type SetSessionModeRequest,
     type SetSessionModeResponse,
 } from "@agentclientprotocol/sdk";
 import type { ModelInfo, PermissionMode, PermissionResult, Query } from "@anthropic-ai/claude-agent-sdk";
 import { ALLOW_BYPASS } from "./permissions/modes.js";
+import type { ClaudeSessionNotification as SessionNotification } from "./session-update.js";
 
 export const MODE_CONFIG_ID = "mode";
 export const AUTO_MODE_FALLBACK: PermissionMode = "acceptEdits";
@@ -210,11 +211,14 @@ export class SessionModeManager<S extends SessionMode> {
             return;
         }
         session.autoModeFallbackWarningShown = true;
+        const messageId = randomUUID();
         try {
             await this.options.sessionUpdate({
                 sessionId,
                 update: {
                     sessionUpdate: "agent_message_chunk",
+                    messageId,
+                    nativeMessageId: messageId,
                     content: { type: "text", text: AUTO_MODE_FALLBACK_NOTICE },
                 },
             });
