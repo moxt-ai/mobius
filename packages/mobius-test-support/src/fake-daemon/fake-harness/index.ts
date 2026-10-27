@@ -24,7 +24,7 @@ export const fakeHarnessCapabilities: SessionCapabilities = {
     renameSession: true,
     resumeSession: true,
     steering: true,
-    unstableForkSession: false,
+    unstableForkSession: true,
 };
 
 function configOptions(model: string): acp.SessionConfigOption[] {
@@ -92,6 +92,19 @@ class ControlledAgentState {
         if (!this.#models.has(sessionId)) {
             this.#models.set(sessionId, "test-small");
         }
+    };
+    readonly fork = (sourceId: string): string => {
+        if (!this.#sessions.has(sourceId)) {
+            throw new Error(`The controlled Agent session is unknown: ${sourceId}`);
+        }
+        const sessionId = crypto.randomUUID();
+        this.rememberSession(sessionId, this.turnCount(sourceId));
+        this.#history.set(
+            sessionId,
+            (this.#history.get(sourceId) ?? []).map((event) => ({ ...event, sessionId })),
+        );
+        this.#models.set(sessionId, this.#models.get(sourceId) ?? "test-small");
+        return sessionId;
     };
     readonly configuration = (sessionId: string): acp.SessionConfigOption[] =>
         configOptions(this.#models.get(sessionId) ?? "test-small");
@@ -449,7 +462,7 @@ class ControlledAgentEndpoint implements FakeHarnessEndpoint {
                     _meta: { claudeCode: { promptQueueing: true } },
                     loadSession: true,
                     promptCapabilities: { embeddedContext: true, image: true },
-                    sessionCapabilities: { close: {}, list: {}, resume: {} },
+                    sessionCapabilities: { close: {}, fork: {}, list: {}, resume: {} },
                 },
                 agentInfo: { name: agentName, version: "controlled-harness" },
                 authMethods: [],
@@ -466,6 +479,11 @@ class ControlledAgentEndpoint implements FakeHarnessEndpoint {
                 this.#state.rememberSession(context.params.sessionId, this.#state.turnCount(context.params.sessionId));
                 await this.#state.replay(context.params.sessionId, onSessionUpdate);
                 return { configOptions: this.#state.configuration(context.params.sessionId) };
+            })
+            .onRequest(acp.methods.agent.session.fork, (context) => {
+                const sessionId = this.#state.fork(context.params.sessionId);
+                this.#sessionIds.add(sessionId);
+                return { configOptions: this.#state.configuration(sessionId), sessionId };
             })
             .onRequest(acp.methods.agent.session.resume, (context) => {
                 this.#sessionIds.add(context.params.sessionId);

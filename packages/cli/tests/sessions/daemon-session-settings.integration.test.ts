@@ -753,4 +753,130 @@ describe("daemon session configuration boundary", () => {
             await rm(stateDirectory, { force: true, recursive: true });
         }
     }, 30_000);
+
+    it("Given a Turn runs with a settings snapshot, When a steering prompt names a setting value the live Session does not hold, Then the Agent receives the steering prompt", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-steer-drifted-settings-"));
+        const workspace = join(stateDirectory, "workspace");
+        const nativeStateDirectory = join(stateDirectory, "native");
+        await Promise.all([mkdir(workspace), mkdir(nativeStateDirectory)]);
+
+        const socketReady = Promise.withResolvers<Duplex>();
+        const relaySockets = new Set<Duplex>();
+        const relay = createServer((_request, response) => {
+            response.writeHead(404);
+            response.end();
+        });
+        relay.on("connection", (socket) => {
+            relaySockets.add(socket);
+            socket.once("close", () => relaySockets.delete(socket));
+            socket.on("error", () => undefined);
+        });
+        relay.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            if (typeof key !== "string") {
+                socket.destroy();
+                return;
+            }
+            const accept = createHash("sha1").update(`${key}${websocketGuid}`).digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            sendText(socket, JSON.stringify({ kind: "runtime.liveness.ready" }));
+            socketReady.resolve(socket);
+        });
+        await listen(relay);
+
+        const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
+        relayUrl.searchParams.set("token", "d".repeat(43));
+        // This Agent exposes reasoning effort for every model, so the live Session holds the
+        // effort the running Turn configured and a steering Turn naming another one drifts
+        // from it instead of naming a setting the Session does not expose at all.
+        const agent = new AcpAgentDefinition(
+            "controlled-acp",
+            "Controlled ACP",
+            process.execPath,
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "controlled-acp",
+                        adapterPath: process.execPath,
+                        arguments: [fakeAgentPath, "--agent-name", "Controlled ACP"],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
+            { MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory },
+        );
+        const config = createRuntimeConfig(
+            {
+                channelId: "channel_alpha",
+                defaultWorkspace: workspace,
+                relayUrl,
+            },
+            [agent],
+            new RuntimeLocalContext(stateDirectory),
+        );
+        const cancellation = new AbortController();
+        const runtime = runRuntime(config, cancellation.signal);
+
+        try {
+            const socket = await socketReady.promise;
+            const frames = new ClientFrames(socket);
+            const sessionId = "steered_drifted_settings_conversation";
+            const runningCommandId = "running_drifted_settings_turn";
+            const runningPrompt: SessionPromptCommand = {
+                additionalDirectoryIds: [],
+                agentId: agent.id,
+                bindingId: config.bindingId,
+                commandId: runningCommandId,
+                directoryId: "default",
+                disposition: SessionPromptDisposition.Reject,
+                attachments: [],
+                kind: "session.prompt",
+                prompt: "wait for steering",
+                sessionConfigurations: [
+                    { booleanValue: false, configId: "model", value: "test-small", valueType: "select" },
+                    { booleanValue: false, configId: "reasoning_effort", value: "high", valueType: "select" },
+                ],
+                sessionId,
+                targetCommandId: "",
+            };
+            sendText(socket, encodeSessionPromptCommand(runningPrompt));
+            await readCommandActivity(frames, sessionId, runningCommandId);
+
+            // Steering cannot reconfigure a running Agent, so the member's newer effort
+            // reaches this Turn as a snapshot the live Session does not hold yet.
+            const steeringPrompt: SessionPromptCommand = {
+                ...runningPrompt,
+                commandId: "steering_drifted_settings_turn",
+                disposition: SessionPromptDisposition.Steer,
+                prompt: "focus on the requested fix",
+                sessionConfigurations: [
+                    { booleanValue: false, configId: "model", value: "test-small", valueType: "select" },
+                    { booleanValue: false, configId: "reasoning_effort", value: "medium", valueType: "select" },
+                ],
+                targetCommandId: runningCommandId,
+            };
+            sendText(socket, encodeSessionPromptCommand(steeringPrompt));
+
+            // The steering Turn is accepted and then injected into the running
+            // Turn, so only the running Turn carries the Agent's reply.
+            const steeringResult = await readTerminalSessionResult(frames, sessionId, steeringPrompt.commandId, false);
+            expect(steeringResult).toMatchObject({ kind: "completed", code: "", text: "" });
+            const runningResult = await readTerminalSessionResult(frames, sessionId, runningCommandId);
+            expect(runningResult.kind).toBe("completed");
+            expect(runningResult.text).toContain("Steered: focus on the requested fix");
+        } finally {
+            cancellation.abort();
+            await runtime;
+            for (const socket of relaySockets) {
+                socket.destroy();
+            }
+            await new Promise<void>((resolve) => relay.close(() => resolve()));
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
+    }, 30_000);
 });

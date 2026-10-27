@@ -9,9 +9,11 @@ import { BestEffortRecording } from "../service/channel/best-effort-recording.ts
 import { ChannelActor } from "../service/channel/channel-actor.ts";
 import { ChannelCredentialService } from "../service/channel/channel-credential-service.ts";
 import { LocalRuntimeRequests } from "../service/channel/local-runtime-requests.ts";
+import { NativeSessionForks } from "../service/channel/native-session-forks.ts";
 import { RuntimeConnectionService } from "../service/channel/runtime-connection-service.ts";
 import { type RuntimePeers, RuntimeService } from "../service/channel/runtime-service.ts";
 import { ChannelCredentialStorage } from "../storage/channel-credential-storage.ts";
+import { NativeSessionForkStorage } from "../storage/native-session-fork-storage.ts";
 import { RuntimeConnectionStorage } from "../storage/runtime-connection-storage.ts";
 
 function createRuntimeRelayDependencies(cx: {
@@ -119,7 +121,10 @@ export function createDurableObjectDependencies(cx: {
         gateways: { ...cx.gateways, peers, requests },
         storages: cx.storages,
         utilities: cx.utilities,
-        services: runtime.services,
+        services: {
+            ...runtime.services,
+            nativeForks: new NativeSessionForks(new NativeSessionForkStorage(cx.doDatabase), cx.utilities.waitUntil),
+        },
         applications: {
             runtime: createRuntimeRoutes(runtime.services.runtime),
         },

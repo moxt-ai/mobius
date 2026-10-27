@@ -469,6 +469,8 @@ function decodeAgentDescriptor(value: unknown): MobiusAgentDescriptor {
 }
 
 export class MobiusRuntimeDescriptor {
+    /** Relay-owned Fork receipt contract; independent of the installed Agent and Runtime versions. */
+    readonly nativeForkRecovery: boolean;
     readonly agents: readonly MobiusAgentDescriptor[];
     readonly channelId: string;
     readonly machineName: string;
@@ -485,7 +487,9 @@ export class MobiusRuntimeDescriptor {
         projectId: string,
         runtimeId: string,
         workspaceName: string,
+        nativeForkRecovery = false,
     ) {
+        this.nativeForkRecovery = nativeForkRecovery;
         this.agents = agents;
         this.channelId = channelId;
         this.machineName = machineName;
@@ -543,6 +547,7 @@ export function decodeRuntimeDescriptor(value: unknown): MobiusRuntimeDescriptor
         identifierField(runtime, "projectId"),
         identifierField(runtime, "runtimeId"),
         stringField(runtime, "workspaceName", 255),
+        runtime["nativeForkRecovery"] === true,
     );
 }
 

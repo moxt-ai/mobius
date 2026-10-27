@@ -76,6 +76,10 @@ const nativeEventsSchema = v.strictObject({
     // Accepted only for older clients; never forward it to a Runtime.
     omit: v.optional(v.pipe(v.array(v.literal("agent-reasoning")), v.maxLength(1))),
 });
+const nativeForkSchema = v.strictObject({
+    ...sessionIdentitySchema.entries,
+    nativeSessionId: identifier,
+});
 const sessionQuerySchema = v.strictObject({
     sessionIds: v.pipe(v.array(identifier), v.minLength(1), v.maxLength(500)),
 });
@@ -545,6 +549,22 @@ export function createProjectRuntimeRoutes() {
                     validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
                     bearerToken(context.req.raw),
                     command,
+                    context.req.raw.signal,
+                );
+                context.header("Cache-Control", "no-store");
+                return context.json(result);
+            },
+        )
+        .post(
+            "/projects/:projectId/runtimes/:runtimeId/native-session-forks/:operationId",
+            bodyParser<RelayHttpEnvironment>(),
+            async (context) => {
+                const result = await context.env.services.runtimePairings.forkNativeSession(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
+                    bearerToken(context.req.raw),
+                    validateIdentifier(context.req.param("operationId"), "operation_id"),
+                    validated(nativeForkSchema, context.req.valid("json")),
                     context.req.raw.signal,
                 );
                 context.header("Cache-Control", "no-store");

@@ -1960,6 +1960,18 @@ async function connectRuntimeDaemon(slug: string, options: { readonly anchorCloc
     return {
         projectId,
         sessionId,
+        forkNative: (operationId: string, input: object) =>
+            worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}/native-session-forks/${operationId}`,
+                    {
+                        method: "POST",
+                        headers: credentialHeaders(appCredential),
+                        body: JSON.stringify(input),
+                    },
+                ),
+                environment,
+            ),
         appSessionRequest: async (
             path: string,
             init: {
@@ -3549,3 +3561,86 @@ describe.sequential("Platform Turn submission", () => {
         }
     });
 });
+
+it.each(["completed", "interrupted"] as const)(
+    "Given a %s Fork, When its request is replayed across Relay eviction, Then the recorded outcome prevents another execution",
+    async (outcome) => {
+        const runtime = await connectRuntimeDaemon(`fork-receipt-${outcome}`);
+        const input = {
+            agentId: "codex",
+            nativeSessionId: "native-source",
+            directoryId: "default",
+            additionalDirectoryIds: [],
+        };
+        const operationId = "retained-fork-operation";
+        try {
+            const first = runtime.forkNative(operationId, input);
+            // Independent v1 peer: the new HTTP operation still sends the existing find/fork wire messages.
+            const find = record(JSON.parse(await runtime.daemonMessages.next()));
+            expect(find).toMatchObject({
+                kind: "native.session.request",
+                action: "find",
+                nativeSessionId: "native-source",
+            });
+            const source = {
+                kind: "native.session.result",
+                action: "find",
+                requestId: text(find, "requestId"),
+                sessionId: text(find, "sessionId"),
+                entry: {
+                    entryId: "native-entry",
+                    nativeSessionId: "native-source",
+                    mobiusSessionIds: [],
+                    title: "Source",
+                    directoryId: "default",
+                    directoryLabel: "Workspace",
+                    additionalDirectories: [],
+                    updatedAt: null,
+                },
+            };
+            runtime.daemon.send(JSON.stringify(source));
+            const fork = record(JSON.parse(await runtime.daemonMessages.next()));
+            expect(fork).toMatchObject({ kind: "native.session.request", action: "fork", entryId: "native-entry" });
+            const concurrent = runtime.forkNative(operationId, input);
+            if (outcome === "completed") {
+                runtime.daemon.send(
+                    JSON.stringify({
+                        kind: "native.session.result",
+                        action: "fork",
+                        requestId: text(fork, "requestId"),
+                        sessionId: text(fork, "sessionId"),
+                        targetSessionId: text(fork, "targetSessionId"),
+                        title: "Source (fork 1)",
+                        ready: {
+                            kind: "session.ready",
+                            requestId: text(fork, "requestId"),
+                            sessionId: text(fork, "targetSessionId"),
+                            agentId: "codex",
+                            agentName: "Codex",
+                            agentVersion: "1.0.0",
+                            restored: true,
+                            directoryId: "default",
+                            directoryLabel: "Workspace",
+                            additionalDirectories: [],
+                            capabilities: readyAgents[0]?.capabilities,
+                            commands: [],
+                            configOptions: [],
+                        },
+                    }),
+                );
+            } else {
+                runtime.daemon.close(1000, "Runtime stopped without returning the Fork outcome");
+            }
+            const expectedStatus = outcome === "completed" ? 200 : 409;
+            const original = await responseJson(await first, expectedStatus);
+            expect(await responseJson(await concurrent, expectedStatus)).toEqual(original);
+            if (outcome === "interrupted") {
+                expect(original).toMatchObject({ error: { code: "native_fork_outcome_unknown" } });
+            }
+            await evictDurableObject(env.RUNTIME_RELAY.getByName(runtime.runtimeId), { webSockets: "hibernate" });
+            expect(await responseJson(await runtime.forkNative(operationId, input), expectedStatus)).toEqual(original);
+        } finally {
+            runtime.daemon.close(1000, "Fork recovery scenario completed");
+        }
+    },
+);
