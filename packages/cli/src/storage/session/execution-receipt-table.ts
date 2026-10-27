@@ -1,6 +1,6 @@
-import { and, asc, desc, eq, inArray, notInArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, notInArray, type SQL } from "drizzle-orm";
 import { z } from "zod";
-import { executionReceipt } from "../../schema/acp-session-store/index.ts";
+import { executionIdentity, executionReceipt } from "../../schema/acp-session-store/index.ts";
 import type { LocalSqliteDatabase } from "../sqlite/local-sqlite-database.ts";
 
 const receiptFields = z.object({
@@ -23,12 +23,22 @@ const receiptSchema = z
     .readonly();
 export type PersistedExecutionReceipt = z.infer<typeof receiptSchema>;
 
+const identitySchema = z.object({ sessionId: z.string(), commandHash: z.string() }).readonly();
+
 /** Prompt bodies and Agent error text never enter the execution ledger. */
 export class ExecutionReceiptTable {
     readonly #database: LocalSqliteDatabase;
     constructor(database: LocalSqliteDatabase) {
         this.#database = database;
     }
+    readonly identity = (commandId: string): z.infer<typeof identitySchema> | undefined => {
+        const row = this.#database.orm
+            .select({ sessionId: executionIdentity.sessionId, commandHash: executionIdentity.commandHash })
+            .from(executionIdentity)
+            .where(eq(executionIdentity.commandId, commandId))
+            .get();
+        return row === undefined ? undefined : identitySchema.parse(row);
+    };
     readonly list = (): readonly PersistedExecutionReceipt[] =>
         receiptSchema
             .array()
@@ -62,23 +72,42 @@ export class ExecutionReceiptTable {
                 .limit(1024)
                 .all();
             if (retained.length === 1024) {
-                this.#database.orm
-                    .delete(executionReceipt)
-                    .where(
-                        and(
-                            eq(executionReceipt.sessionId, receipt.sessionId),
-                            inArray(executionReceipt.state, ["succeeded", "failed", "cancelled"]),
-                            notInArray(
-                                executionReceipt.commandId,
-                                retained.map((row) => row.commandId),
-                            ),
+                this.#remove(
+                    and(
+                        eq(executionReceipt.sessionId, receipt.sessionId),
+                        inArray(executionReceipt.state, ["succeeded", "failed", "cancelled"]),
+                        notInArray(
+                            executionReceipt.commandId,
+                            retained.map((row) => row.commandId),
                         ),
-                    )
-                    .run();
+                    ),
+                );
             }
         });
     };
     readonly remove = (commandId: string): void => {
-        this.#database.orm.delete(executionReceipt).where(eq(executionReceipt.commandId, commandId)).run();
+        this.#database.transaction(() => this.#remove(eq(executionReceipt.commandId, commandId)));
+    };
+    readonly #remove = (condition: SQL | undefined): void => {
+        if (condition === undefined) {
+            throw new Error("Execution receipt removal requires a scope");
+        }
+        // Move the non-replayable identity into the ledger atomically with receipt eviction.
+        // Unstarted commands remain retryable after a restart, so they leave no identity behind.
+        this.#database.orm
+            .insert(executionIdentity)
+            .select(
+                this.#database.orm
+                    .select({
+                        commandId: executionReceipt.commandId,
+                        sessionId: executionReceipt.sessionId,
+                        commandHash: executionReceipt.commandHash,
+                    })
+                    .from(executionReceipt)
+                    .where(and(condition, eq(executionReceipt.started, true))),
+            )
+            .onConflictDoNothing()
+            .run();
+        this.#database.orm.delete(executionReceipt).where(condition).run();
     };
 }
