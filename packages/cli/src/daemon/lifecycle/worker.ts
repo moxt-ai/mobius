@@ -1,4 +1,6 @@
 import { setTimeout } from "node:timers/promises";
+import { refreshAgentCatalog } from "../../runtime/catalog/refresh-agent-catalog.ts";
+import type { RuntimeConfig } from "../../runtime/config.ts";
 import { MobiusRuntimeEngine } from "../../runtime/engine.ts";
 import { RuntimeTurnActivity } from "../../session/turn/runtime-turn-activity.ts";
 import { acquireManagerLock } from "../../storage/daemon/manager-lock.ts";
@@ -87,6 +89,7 @@ async function runWorkerRuntime(
     const active = new Map<
         string,
         {
+            readonly config: RuntimeConfig;
             readonly controller: AbortController;
             readonly completion: Promise<void>;
         }
@@ -140,13 +143,34 @@ async function runWorkerRuntime(
                         },
                     )
                     .finally(() => active.delete(connection.connectionId));
-                active.set(connection.connectionId, { controller, completion });
+                active.set(connection.connectionId, { config: paired.config, controller, completion });
             } catch (cause) {
                 combined.throwIfAborted();
                 fail(connection.connectionId, cause);
                 throw cause;
             }
         }
+    };
+    const refreshRunningCatalogs = async (connectionIds: ReadonlySet<string>): Promise<void> => {
+        await Promise.all(
+            [...connectionIds].map(async (connectionId) => {
+                const config = active.get(connectionId)?.config;
+                if (config?.rediscoverAgents === undefined) {
+                    return;
+                }
+                try {
+                    await refreshAgentCatalog(
+                        config,
+                        config.rediscoverAgents,
+                        AbortSignal.any([combined, AbortSignal.timeout(90_000)]),
+                    );
+                } catch (cause) {
+                    combined.throwIfAborted();
+                    // The Runtime keeps serving its previous catalog; the reload itself still applies.
+                    console.error(`Runtime ${connectionId} could not refresh its Agent catalog`, cause);
+                }
+            }),
+        );
     };
     let reload: Promise<void> = Promise.resolve();
     let upgrades: Promise<void> = Promise.resolve();
@@ -165,7 +189,10 @@ async function runWorkerRuntime(
                 ) {
                     return { kind: "error", code: "invalid_reload", message: "Expected a configuration reload" };
                 }
-                const pending = reload.then(reconcile);
+                // A reload, such as `mobius start` after the user installs or signs in to an Agent, also re-reads the
+                // Agent inventory of Runtimes that were already running; Runtimes it starts read it themselves.
+                const running = new Set(active.keys());
+                const pending = reload.then(reconcile).then(async () => await refreshRunningCatalogs(running));
                 reload = pending.catch(() => undefined);
                 await pending;
                 return { kind: "reloaded" };
