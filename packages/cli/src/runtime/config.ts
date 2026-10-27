@@ -55,6 +55,11 @@ export interface RuntimeConfig {
     readonly localContext: RuntimeLocalContext;
     readonly reconnectTarget: RuntimeReconnectTarget | null;
     readonly relayUrl: URL;
+    /** Stable embedding context for one Session; applied to a copied Agent before process reuse is checked. */
+    readonly sessionEnvironment?: (context: {
+        readonly sessionId: string;
+        readonly agentId: string;
+    }) => Readonly<Record<string, string>>;
     /**
      * Serves the definition a command should run against, re-discoving the Agent when its
      * executable changed since the catalog snapshot was taken. Undefined keeps the boot-time

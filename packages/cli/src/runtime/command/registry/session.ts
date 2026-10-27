@@ -53,7 +53,7 @@ async function prepareSession(
                     signal,
                 ),
         );
-        const resolvedAgent = await resolveAgent(command.agentId, signal);
+        const resolvedAgent = await resolveAgent(command.agentId, signal, command.sessionId);
         const preparation = {
             additionalDirectories: resolved.additionalDirectories,
             ...resolvedAgent,
@@ -267,7 +267,7 @@ export async function executeSessionConfigure(
         );
         const configOptions = await sessions.configureSession({
             additionalDirectories: resolved.additionalDirectories,
-            ...(await resolveAgent(command.agentId, signal)),
+            ...(await resolveAgent(command.agentId, signal, command.sessionId)),
             booleanValue: command.booleanValue,
             configId: command.configId,
             cwd: resolved.cwd,

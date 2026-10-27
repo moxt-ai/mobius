@@ -65,7 +65,7 @@ export async function executePrompt({
             command.additionalDirectoryIds,
             signal,
         );
-        const { agent, adapter } = await resolveAgent(command.agentId, signal);
+        const { agent, adapter } = await resolveAgent(command.agentId, signal, command.sessionId);
         const availability = await waitForSessionAvailability(signal);
         if (availability.kind === "busy") {
             throw new AcpExecutionError("Another prompt is already running in this conversation", {}, "session_busy");

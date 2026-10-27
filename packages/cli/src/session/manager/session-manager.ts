@@ -39,6 +39,7 @@ import {
     type PermissionResponseOptions,
     type PreparedSession,
     type PromptResult,
+    type ResolveAgent,
     type SessionConfigureOptions,
     type SessionObserver,
     type SessionPrepareOptions,
@@ -920,9 +921,20 @@ export class SessionManager {
             });
         });
 
+    async #nativeTargetOptions(
+        options: SessionPrepareOptions,
+        sessionId: string,
+        resolveAgent: ResolveAgent,
+    ): Promise<SessionPrepareOptions> {
+        const resolved = await resolveAgent(options.agent.id, options.signal, sessionId);
+        options.signal.throwIfAborted();
+        return { ...options, ...resolved, sessionId };
+    }
+
     readonly openNativeSession = async (
         options: SessionPrepareOptions,
         origin: NativeSessionOrigin,
+        resolveAgent: ResolveAgent,
     ): Promise<{
         readonly sessionId: string;
         readonly prepared: PreparedSession;
@@ -951,10 +963,8 @@ export class SessionManager {
                 return await this.#executionProcesses.use(existing.sessionId, async () => {
                     // Importing a Session the Runtime already tracks opens it again, even when it was closed.
                     this.#closedSessions.delete(existing.sessionId);
-                    const runtime = await this.ensureSession({
-                        ...options,
-                        sessionId: existing.sessionId,
-                    });
+                    const target = await this.#nativeTargetOptions(options, existing.sessionId, resolveAgent);
+                    const runtime = await this.ensureSession(target);
                     if (this.#executions.command(existing.sessionId) !== undefined || this.#nativeOperations.has(key)) {
                         throw new AcpExecutionError(
                             "Wait for the native session's running operation to finish",
@@ -974,6 +984,7 @@ export class SessionManager {
                     }
                 });
             }
+            const target = await this.#nativeTargetOptions(options, options.sessionId, resolveAgent);
             if (
                 this.#executionProcesses.get(options.sessionId) !== undefined ||
                 this.#executionProcesses.pending(options.sessionId) !== undefined ||
@@ -988,7 +999,7 @@ export class SessionManager {
             return await this.#executionProcesses.use(options.sessionId, async () => {
                 this.#nativeOperations.add(key);
                 try {
-                    const runtime = await this.#startPreparation({ ...options, origin }, { kind: "interactive-only" });
+                    const runtime = await this.#startPreparation({ ...target, origin }, { kind: "interactive-only" });
                     const openedKey = `${options.agent.id}:${runtime.nativeSessionId()}`;
                     this.#nativeOperations.add(openedKey);
                     try {

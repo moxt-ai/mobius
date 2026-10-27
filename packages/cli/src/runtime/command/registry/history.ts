@@ -118,7 +118,7 @@ export async function executeSessionHistoryPageLoad(
         );
         const loadOptions = {
             additionalDirectories: resolved.additionalDirectories,
-            ...(await resolveAgent(entry.agentId, signal)),
+            ...(await resolveAgent(entry.agentId, signal, command.sessionId)),
             cwd: resolved.cwd,
             sessionId: command.sessionId,
             signal,
@@ -175,7 +175,7 @@ export async function executeSessionPreviewHistoryPageLoad(
         );
         const loadOptions = {
             additionalDirectories: resolved.additionalDirectories,
-            ...(await resolveAgent(command.agentId, signal)),
+            ...(await resolveAgent(command.agentId, signal, command.sessionId)),
             cwd: resolved.cwd,
             sessionId: command.sessionId,
             signal,
