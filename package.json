@@ -38,7 +38,7 @@
         "test:agent-daemon:controlled": "pnpm --filter @moxt-ai/mobius test:controlled",
         "test:agent-daemon:real": "pnpm --filter @moxt-ai/mobius test:agents",
         "test:npm-compatibility": "pnpm --filter @moxt-ai/mobius test:npm-compatibility",
-        "test:ci:client": "pnpm test:agent-daemon:controlled && vitest run packages/mobius-sdk/tests packages/test-support/tests",
+        "test:ci:client": "pnpm test:agent-daemon:controlled && vitest run packages/mobius-sdk/tests packages/test-support/tests packages/platform-app/tests",
         "test:ci:relay": "pnpm test:integration:platform",
         "test:ci:hosting": "pnpm test:integration:platform && pnpm test:integration:recording",
         "test:changed": "vitest run --changed=origin/main",

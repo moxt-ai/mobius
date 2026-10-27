@@ -1,6 +1,7 @@
 import type { MobiusRecordingPolicyMode } from "@moxt-ai/mobius-sdk/platform";
 import { AppWindow, Check, Clipboard, LoaderCircle, Pencil, Plus, Trash2, X } from "lucide-react";
 import { type ReactNode, useCallback, useEffect } from "react";
+import { useStore } from "zustand";
 import { ConfirmAction } from "../components/confirm-action.tsx";
 import { CreateNameDialog } from "../components/create-name-dialog.tsx";
 import { RecordingPanel } from "../components/recording-panel.tsx";
@@ -9,21 +10,7 @@ import { SessionStatusWebhookPanel } from "../components/session-status-webhook-
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.tsx";
 import { platformDataTestId } from "../data-testid.ts";
 import { createPlatformClient } from "../services/platform-client.ts";
-import { usePlatformStore } from "../view-models/platform-app-view-model.ts";
-
-const APP_PERMISSIONS = Object.freeze([
-    "artifact:read",
-    "artifact:write",
-    "interaction:respond",
-    "project:event:read",
-    "project:read",
-    "runtime:pair",
-    "runtime:read",
-    "runtime:revoke",
-    "session:delete",
-    "session:read",
-    "session:write",
-]);
+import type { createPlatformStore } from "../view-models/platform-app-view-model.ts";
 
 export interface PlatformAppProps {
     readonly endpoint: string;
@@ -58,7 +45,14 @@ function EmptyState({ children }: { readonly children: ReactNode }) {
     );
 }
 
-export function PlatformApp({ endpoint, getToken, userControl, organization, organizationControl }: PlatformAppProps) {
+export function PlatformAppView({
+    endpoint,
+    getToken,
+    userControl,
+    organization,
+    organizationControl,
+    store,
+}: PlatformAppProps & { readonly store: ReturnType<typeof createPlatformStore> }) {
     const {
         apps,
         appTab,
@@ -69,6 +63,7 @@ export function PlatformApp({ endpoint, getToken, userControl, organization, org
         setAppRecording,
         failAppRecording,
         credentials,
+        issueCredential,
         setCredentials,
         failCredentials,
         projects,
@@ -90,7 +85,7 @@ export function PlatformApp({ endpoint, getToken, userControl, organization, org
         setSecret,
         secretVisible,
         setSecretVisible,
-    } = usePlatformStore();
+    } = useStore(store);
 
     const client = useCallback(() => createPlatformClient(endpoint, getToken), [endpoint, getToken]);
 
@@ -246,29 +241,6 @@ export function PlatformApp({ endpoint, getToken, userControl, organization, org
                 kind: "app-credential",
                 appId: created.appId,
                 secret: created.defaultCredential.credential,
-            });
-            setSecretVisible(false);
-        });
-    };
-
-    const issueCredential = (): void => {
-        if (selectedApp === undefined) {
-            return;
-        }
-        void perform("issue-key", async () => {
-            const created = await client().issueAppCredential(
-                selectedApp.appId,
-                { permissions: APP_PERMISSIONS, projectIds: [] },
-                AbortSignal.timeout(20_000),
-            );
-            setCredentials(
-                selectedApp.appId,
-                await client().listAppCredentials(selectedApp.appId, AbortSignal.timeout(20_000)),
-            );
-            setSecret({
-                kind: "app-credential",
-                appId: created.appId,
-                secret: created.credential,
             });
             setSecretVisible(false);
         });
@@ -582,7 +554,7 @@ export function PlatformApp({ endpoint, getToken, userControl, organization, org
                                             <button
                                                 type="button"
                                                 className="inline-flex min-h-[39px] items-center justify-center gap-2 rounded-lg border border-[#168247] bg-[#168247] px-3.5 font-bold text-white hover:bg-[#11683a] disabled:cursor-not-allowed disabled:opacity-50"
-                                                onClick={issueCredential}
+                                                onClick={() => void issueCredential(client())}
                                                 disabled={busy.length > 0}
                                             >
                                                 <Plus size={16} /> Create key
