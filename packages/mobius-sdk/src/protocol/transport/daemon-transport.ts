@@ -157,8 +157,10 @@ import {
 } from "../session/native/index.ts";
 import {
     decodeSessionEventEnvelope,
+    decodeSessionWireEnvelope,
     encodeSessionEventEnvelope,
     SESSION_EVENT_KIND,
+    type SessionWireEnvelope,
 } from "../session/observability/event-log.ts";
 import {
     decodeSessionHistoryPageLoad,
@@ -513,6 +515,16 @@ export function decodeDaemonToServiceMessage(encoded: string): DaemonToServiceMe
         throw new UnsupportedProtocolMessageKindError("daemon-to-service", kind);
     }
     return signature.decoder(encoded);
+}
+
+export type DaemonToRelayMessage =
+    | Exclude<DaemonToServiceMessage, { readonly kind: typeof SESSION_EVENT_KIND }>
+    | SessionWireEnvelope;
+
+export function decodeDaemonToRelayMessage(encoded: string): DaemonToRelayMessage {
+    return decodeMessageKind(encoded) === SESSION_EVENT_KIND
+        ? decodeSessionWireEnvelope(encoded)
+        : decodeDaemonToServiceMessage(encoded);
 }
 
 export function encodeDaemonToServiceMessage(message: DaemonToServiceMessage): string {

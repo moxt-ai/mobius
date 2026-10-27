@@ -1,6 +1,6 @@
 import {
-    type DaemonToServiceMessage,
-    decodeDaemonToServiceMessage,
+    type DaemonToRelayMessage,
+    decodeDaemonToRelayMessage,
     encodeRuntimeStatusEvent,
     encodeServiceToDaemonMessage,
     RUNTIME_HEARTBEAT_ACK_KIND,
@@ -463,9 +463,9 @@ export class RuntimeService {
             socket.close(1003, "Bounded text message required");
             return;
         }
-        let daemonMessage: DaemonToServiceMessage;
+        let daemonMessage: DaemonToRelayMessage;
         try {
-            daemonMessage = decodeDaemonToServiceMessage(message);
+            daemonMessage = decodeDaemonToRelayMessage(message);
         } catch (cause) {
             if (cause instanceof UnsupportedProtocolMessageKindError) {
                 console.warn("Runtime message skipped", {
@@ -526,7 +526,7 @@ export class RuntimeService {
         }
     };
 
-    private readonly daemonMessageLane = (message: DaemonToServiceMessage): string => {
+    private readonly daemonMessageLane = (message: DaemonToRelayMessage): string => {
         if (message.kind === SESSION_EVENT_KIND) {
             return message.events.every((event) => event.sessionId === message.events[0]?.sessionId)
                 ? `session:${message.events[0]?.sessionId ?? "unknown"}`

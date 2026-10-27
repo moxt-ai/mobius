@@ -9,6 +9,7 @@ import {
     CONTENT_COMMIT_KIND,
     CONTENT_READY_KIND,
     CONTENT_WRITE_KIND,
+    type DaemonToRelayMessage,
     type DaemonToServiceMessage,
     decodeAgentCatalogDiscoverCommand,
     decodeAgentSettingsDiscoverCommand,
@@ -204,7 +205,7 @@ export class ChannelActor {
 
     readonly receiveDaemonMessage = async (
         socket: ChannelSocket,
-        message: DaemonToServiceMessage,
+        message: DaemonToRelayMessage,
         signal: AbortSignal,
     ): Promise<void> => {
         try {

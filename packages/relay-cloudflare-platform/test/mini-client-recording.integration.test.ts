@@ -228,6 +228,43 @@ beforeEach(() => {
 });
 
 describe.sequential("Mini-client Recording integration", () => {
+    it.each(["text", "future_content"])(
+        "Given a newer daemon with %s content and extension fields, When events cross the relay and Recording, Then full and paged history retain the original events",
+        async (contentType) => {
+            const { credential, environment, projectId, worker } = await createRecordingProject();
+            const runtimeId = "runtime-future-recording";
+            const sessionId = "future-recording-session";
+            // Independently authored wire data: the current SDK encoder would strip or reject these additions.
+            const event = {
+                eventId: "future-event",
+                position: "1",
+                recordedAt: "2026-10-12T00:00:00.000Z",
+                sessionGenerationId: "future-generation",
+                sessionId,
+                type: "acp",
+                futureEventField: { retained: true },
+                mobiusMetadata: { futureMetadata: "retained" },
+                payload: {
+                    sessionUpdate: "agent_message_chunk",
+                    futurePayloadField: "retained",
+                    content: { type: contentType, text: "Future reply", futureContentField: [1, 2, 3] },
+                },
+            };
+            await recordThroughRelay(projectId, runtimeId, [
+                JSON.stringify({ kind: "session.event.v2", events: [event] }),
+            ]);
+            for (const paging of ["", "&after=0&limit=100"]) {
+                const response = await worker.request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/recording/sessions/${sessionId}/events?runtimeId=${runtimeId}${paging}`,
+                    { headers: { authorization: `Bearer ${credential}` } },
+                    environment,
+                );
+                expect(response.status).toBe(200);
+                expect(await response.json()).toMatchObject({ sessionId, events: [event] });
+            }
+        },
+    );
+
     it("Given an enabled Project and recorded Turn, When a mini-client reads through MobiusClient, Then it sees durable history and the session directory", async () => {
         const { credential, environment, projectId, worker } = await createRecordingProject();
 

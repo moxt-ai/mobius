@@ -1,8 +1,8 @@
 import {
-    decodeSessionEventEnvelope,
-    encodeSessionEventEnvelope,
-    type SessionLiveEvent,
-    type SessionRecordingWrite,
+    decodeSessionWireEnvelope,
+    encodeSessionWireEnvelope,
+    type SessionRecordingWireWrite,
+    type SessionWireEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { and, asc, desc, eq, gt, gte, lt } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/durable-sqlite";
@@ -13,14 +13,14 @@ import { recordedSessionEvent, recordingMetadata } from "../schema/session-recor
 import { applyDurableObjectMigrations } from "./durable-object-migrations.ts";
 
 export interface RecordedBatch {
-    readonly events: readonly SessionLiveEvent[];
+    readonly events: readonly SessionWireEvent[];
     readonly generation: string;
     readonly ordinal: number;
 }
 
 interface SelectedEvent {
     readonly batch: RecordedBatch;
-    readonly event: SessionLiveEvent;
+    readonly event: SessionWireEvent;
     readonly index: number;
 }
 
@@ -48,7 +48,7 @@ interface BatchBounds {
 const batchReadChunk = 32;
 
 interface RecordedSessionHistory {
-    readonly events: readonly SessionLiveEvent[];
+    readonly events: readonly SessionWireEvent[];
     readonly sessionId: string;
 }
 
@@ -184,8 +184,8 @@ export class SessionRecordingStorage {
      * projection derived from the batch commits or rolls back together with it.
      */
     readonly append = (
-        write: SessionRecordingWrite,
-        project: (ordinal: number, events: readonly SessionLiveEvent[]) => void = () => undefined,
+        write: SessionRecordingWireWrite,
+        project: (ordinal: number, events: readonly SessionWireEvent[]) => void = () => undefined,
     ): boolean =>
         this.#storage.transactionSync(() => {
             const [event, ...remainingEvents] = write.envelope.events;
@@ -221,7 +221,7 @@ export class SessionRecordingStorage {
             const inserted = this.#database
                 .insert(recordedSessionEvent)
                 .values({
-                    envelopeJson: encodeSessionEventEnvelope(write.envelope),
+                    envelopeJson: encodeSessionWireEnvelope(write.envelope),
                     firstPosition: Number(event.position),
                     lastPosition: finalEvent === undefined ? Number(event.position) : Number(finalEvent.position),
                     recordedAt: Date.parse(event.recordedAt),
@@ -443,6 +443,6 @@ export class SessionRecordingStorage {
             .orderBy(asc(recordedSessionEvent.ordinal))
             .all();
     };
-    readonly #decode = (row: { readonly envelopeJson: string }): readonly SessionLiveEvent[] =>
-        decodeSessionEventEnvelope(JSON.parse(row.envelopeJson)).events;
+    readonly #decode = (row: { readonly envelopeJson: string }): readonly SessionWireEvent[] =>
+        decodeSessionWireEnvelope(JSON.parse(row.envelopeJson)).events;
 }

@@ -3,7 +3,11 @@ import { DIRECTORY_IDENTIFIER } from "../../shared/directory.ts";
 
 import { identifierStringSchema } from "../../shared/identifier.ts";
 import { decodeZodMessage as decode, encodeZodMessage as encode } from "../../shared/message-codec.ts";
-import { sessionEventEnvelopeSchema, sessionLiveEventSchema } from "../observability/event-log.ts";
+import {
+    sessionEventEnvelopeSchema,
+    sessionLiveEventSchema,
+    sessionWireEnvelopeSchema,
+} from "../observability/event-log.ts";
 
 /** An optional event-read wait budget is bounded independently of the page's event budget. */
 export function parseSessionRecordingWaitMilliseconds(value: string): number | null {
@@ -21,6 +25,19 @@ const sessionRecordingWriteSchema = z
         runtimeId: identifierStringSchema,
     })
     .readonly();
+
+const sessionRecordingWireWriteSchema = z
+    .object({
+        envelope: sessionWireEnvelopeSchema,
+        projectId: identifierStringSchema,
+        runtimeId: identifierStringSchema,
+    })
+    .readonly();
+export type SessionRecordingWireWrite = z.infer<typeof sessionRecordingWireWriteSchema>;
+export const decodeSessionRecordingWireWrite = (encoded: string): SessionRecordingWireWrite =>
+    decode(encoded, sessionRecordingWireWriteSchema);
+export const encodeSessionRecordingWireWrite = (value: SessionRecordingWireWrite): string =>
+    encode(value, sessionRecordingWireWriteSchema);
 
 // Full history is serialized straight from storage rather than through encodeSessionRecordingHistory,
 // so an event cap here never bounded what a Durable Object emitted. It only rejected the reader after

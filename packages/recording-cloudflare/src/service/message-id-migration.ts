@@ -1,7 +1,7 @@
 import {
-    decodeSessionEventEnvelope,
-    type SessionLiveEvent,
-    type SessionRecordingWrite,
+    decodeSessionWireEnvelope,
+    type SessionRecordingWireWrite,
+    type SessionWireEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { z } from "zod";
 import {
@@ -17,7 +17,7 @@ import type { SessionTurnHistoryStorage } from "../storage/session-turn-history-
 const rawEnvelopeSchema = z.object({ events: z.array(z.record(z.string(), z.unknown())) }).passthrough();
 const rawPayloadSchema = z.record(z.string(), z.unknown());
 
-function isMissingMessage(event: SessionLiveEvent): boolean {
+function isMissingMessage(event: SessionWireEvent): boolean {
     if (event.type !== "acp") {
         return false;
     }
@@ -25,7 +25,7 @@ function isMissingMessage(event: SessionLiveEvent): boolean {
         case "user_message_chunk":
         case "agent_message_chunk":
         case "agent_thought_chunk":
-            return event.payload.messageId === undefined || event.payload.messageId === null;
+            return event.payload["messageId"] === undefined || event.payload["messageId"] === null;
         default:
             return false;
     }
@@ -52,7 +52,7 @@ export class MessageIdMigration {
         let missingEvents = 0;
         let affectedBatches = 0;
         for (const row of this.storage.batches(afterOrdinal)) {
-            const events = decodeSessionEventEnvelope(row.envelopeJson).events;
+            const events = decodeSessionWireEnvelope(row.envelopeJson).events;
             const missing = events.filter(isMissingMessage).length;
             missingEvents += missing;
             affectedBatches += missing > 0 ? 1 : 0;
@@ -83,7 +83,7 @@ export class MessageIdMigration {
                     return progress;
                 }
                 for (const row of this.storage.batches(progress.throughOrdinal)) {
-                    const original = decodeSessionEventEnvelope(row.envelopeJson).events;
+                    const original = decodeSessionWireEnvelope(row.envelopeJson).events;
                     const normalized = this.#normalize(original, progress.group);
                     if (normalized.changed > 0) {
                         const value: unknown = JSON.parse(row.envelopeJson);
@@ -102,7 +102,7 @@ export class MessageIdMigration {
                                 ...event,
                                 payload: {
                                     ...rawPayloadSchema.parse(event["payload"]),
-                                    messageId: next.payload.messageId,
+                                    messageId: next.payload["messageId"],
                                 },
                             };
                         });
@@ -134,8 +134,8 @@ export class MessageIdMigration {
 
     // Once a Session is migrated, old daemon writes must not reintroduce unidentified chunks.
     readonly append = (
-        write: SessionRecordingWrite,
-        project: (ordinal: number, events: readonly SessionLiveEvent[]) => void,
+        write: SessionRecordingWireWrite,
+        project: (ordinal: number, events: readonly SessionWireEvent[]) => void,
     ): boolean =>
         this.storage.transaction(() => {
             const progress = this.storage.progress();
@@ -160,10 +160,10 @@ export class MessageIdMigration {
             );
         });
 
-    #normalize(events: readonly SessionLiveEvent[], initial: LegacyMessageGroup) {
+    #normalize(events: readonly SessionWireEvent[], initial: LegacyMessageGroup) {
         let group = initial;
         let changed = 0;
-        const result = events.map((event): SessionLiveEvent => {
+        const result = events.map((event): SessionWireEvent => {
             if (event.type !== "acp") {
                 group = { kind: "none" };
                 return event;
@@ -173,7 +173,7 @@ export class MessageIdMigration {
                 case "user_message_chunk":
                 case "agent_message_chunk":
                 case "agent_thought_chunk": {
-                    if (payload.messageId !== null && payload.messageId !== undefined) {
+                    if (payload["messageId"] !== null && payload["messageId"] !== undefined) {
                         group = { kind: "none" };
                         return event;
                     }

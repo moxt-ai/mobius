@@ -1,4 +1,4 @@
-import type { SessionEventEnvelope } from "@moxt-ai/mobius-sdk/protocol";
+import type { SessionWireEnvelope } from "@moxt-ai/mobius-sdk/protocol";
 
 export interface SessionRecordingTarget {
     readonly projectId: string;
@@ -21,7 +21,7 @@ export type SessionRecordingBatchResult = SessionRecordingDeliveryResult & { rea
 export interface SessionRecording {
     readonly deliverBatch: (
         target: SessionRecordingScope,
-        envelope: SessionEventEnvelope,
+        envelope: SessionWireEnvelope,
         signal: AbortSignal,
     ) => Promise<readonly SessionRecordingBatchResult[]>;
 }
