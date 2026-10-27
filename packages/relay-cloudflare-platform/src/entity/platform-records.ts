@@ -116,6 +116,8 @@ export type ProjectRow = Readonly<v.InferOutput<typeof ProjectRowSchema>>;
 export const RecordPresenceRowSchema = v.object({ present: v.literal(1) });
 export type RecordPresenceRow = Readonly<v.InferOutput<typeof RecordPresenceRowSchema>>;
 
+export const ProjectStorageScopeRowSchema = v.object({ created_at: v.number() });
+
 export const TenantRowSchema = v.object({
     created_at: nonNegativeInteger,
     deleted_at: v.nullable(nonNegativeInteger),

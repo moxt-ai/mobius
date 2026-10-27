@@ -1,5 +1,5 @@
 import { relayDrizzle } from "@moxt-ai/mobius-relay-core/database";
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import {
     type ActiveCountRow,
     ActiveCountRowSchema,
@@ -19,12 +19,13 @@ import {
     ProjectIdRowSchema,
     type ProjectRow,
     ProjectRowSchema,
+    ProjectStorageScopeRowSchema,
     type RecordPresenceRow,
     RecordPresenceRowSchema,
     type TenantRow,
     TenantRowSchema,
 } from "../entity/platform-records.ts";
-import { platformAppCredential, platformDashboardAuditEvent } from "../schema/d1/index.ts";
+import { platformAppCredential, platformAppCredentialScope, platformDashboardAuditEvent } from "../schema/d1/index.ts";
 import { platformAuditEvent } from "../schema/project-do/index.ts";
 import { waitForD1 } from "./d1-operation.ts";
 import { decodeOptionalStorageRecord, decodeStorageRecord, decodeStorageRecords } from "./decode-storage-record.ts";
@@ -426,20 +427,11 @@ export class PlatformControlPlaneStorage {
         audit: PlatformAuditRecord,
         signal: AbortSignal,
     ): Promise<boolean> => {
-        for (const projectId of projectIds) {
-            await waitForD1(
-                () =>
-                    projectDatabase(this.#databases, projectId)
-                        .prepare(
-                            `INSERT INTO platform_app_credential_projects (credential_id, project_id, created_at)
-                         VALUES (?, ?, ?)`,
-                        )
-                        .bind(credential.credentialId, projectId, credential.issuedAt)
-                        .run(),
-                signal,
-            );
-        }
-        const statements = [this.credentialInsertStatement(credential), this.dashboardAuditStatement(audit)];
+        await this.writeRollbackScope(credential, projectIds, signal);
+        const scope = projectIds.map((projectId) =>
+            this.statement(this.scopeInsert(credential.credentialId, projectId, credential.issuedAt)),
+        );
+        const statements = [this.credentialInsertStatement(credential), ...scope, this.dashboardAuditStatement(audit)];
         const results = await waitForD1(() => this.#database.batch(statements), signal);
         return results.every((result) => result.meta.changes === 1);
     };
@@ -465,27 +457,88 @@ export class PlatformControlPlaneStorage {
         return decodeStorageRecords(CredentialRowSchema, rows.results);
     };
 
-    readonly listCredentialProjectIds = async (
-        credentialId: string,
+    /**
+     * The Projects a credential without all-Project access may use. Credentials issued before D1 owned this scope
+     * kept it only in Project storage. A scoped credential always names a Project, so an empty D1 scope means it
+     * was not copied yet; this complete read copies it, and D1 answers from then on.
+     */
+    readonly credentialProjectIds = async (
+        credential: Pick<CredentialRow, "all_projects" | "app_id" | "credential_id">,
         signal: AbortSignal,
     ): Promise<readonly string[]> => {
-        const credential = await this.readCredentialById(credentialId, signal);
-        if (credential === null) {
+        if (credential.all_projects === 1) {
             return [];
         }
-        const projects = await this.listProjects(credential.app_id, signal);
-        const scoped: string[] = [];
-        for (const project of projects) {
-            if (await this.credentialHasProject(credentialId, project.project_id, signal)) {
-                scoped.push(project.project_id);
+        const scope = await this.copiedScope(credential.credential_id, signal);
+        if (scope.length > 0) {
+            return scope;
+        }
+        const copied: { readonly projectId: string; readonly createdAt: number }[] = [];
+        for (const project of await this.listProjects(credential.app_id, signal)) {
+            const createdAt = await this.projectStorageScope(credential.credential_id, project.project_id, signal);
+            if (createdAt !== null) {
+                copied.push({ projectId: project.project_id, createdAt });
             }
         }
-        return scoped.sort();
+        if (copied.length > 0) {
+            const database = platformDrizzle(this.#database);
+            await waitForD1(
+                () =>
+                    this.#database.batch(
+                        copied.map((row) =>
+                            this.statement(
+                                database
+                                    .insert(platformAppCredentialScope)
+                                    .values({ credentialId: credential.credential_id, ...row })
+                                    .onConflictDoNothing(),
+                            ),
+                        ),
+                    ),
+                signal,
+            );
+        }
+        return copied.map((row) => row.projectId).sort();
+    };
+
+    /**
+     * The candidates a scoped credential may use. Until its scope is copied to D1, only the candidates' Project
+     * storage is asked, so a request never depends on Projects it does not name.
+     */
+    readonly scopedProjects = async (
+        credentialId: string,
+        candidates: readonly string[],
+        signal: AbortSignal,
+    ): Promise<readonly string[]> => {
+        const scope = await this.copiedScope(credentialId, signal);
+        if (scope.length > 0) {
+            return candidates.filter((projectId) => scope.includes(projectId));
+        }
+        const scoped: string[] = [];
+        for (const projectId of candidates) {
+            if ((await this.projectStorageScope(credentialId, projectId, signal)) !== null) {
+                scoped.push(projectId);
+            }
+        }
+        return scoped;
+    };
+
+    private readonly copiedScope = async (credentialId: string, signal: AbortSignal): Promise<readonly string[]> => {
+        const rows = await waitForD1(
+            () =>
+                platformDrizzle(this.#database)
+                    .select({ projectId: platformAppCredentialScope.projectId })
+                    .from(platformAppCredentialScope)
+                    .where(eq(platformAppCredentialScope.credentialId, credentialId))
+                    .orderBy(asc(platformAppCredentialScope.projectId)),
+            signal,
+        );
+        return rows.map((row) => row.projectId);
     };
 
     readonly rotateAppCredential = async (
         credential: PlatformAppCredentialInsert,
         sourceCredentialId: string,
+        projectIds: readonly string[],
         overlapEndsAt: number,
         audit: PlatformAuditRecord,
         signal: AbortSignal,
@@ -494,21 +547,9 @@ export class PlatformControlPlaneStorage {
         readonly credentialInserted: boolean;
         readonly sourceRotated: boolean;
     }> => {
-        for (const projectId of await this.listCredentialProjectIds(sourceCredentialId, signal)) {
-            await waitForD1(
-                () =>
-                    projectDatabase(this.#databases, projectId)
-                        .prepare(
-                            `INSERT INTO platform_app_credential_projects (credential_id, project_id, created_at)
-                 SELECT ?, project_id, ? FROM platform_app_credential_projects WHERE credential_id = ? AND project_id = ?`,
-                        )
-                        .bind(credential.credentialId, credential.issuedAt, sourceCredentialId, projectId)
-                        .run(),
-                signal,
-            );
-        }
+        await this.writeRollbackScope(credential, projectIds, signal);
         const database = platformDrizzle(this.#database);
-        // A zero-row update does not abort a D1 batch. Gate both inserts on this
+        // A zero-row update does not abort a D1 batch. Gate every insert on this
         // attempt's replacement ID within the same transaction.
         const results = await waitForD1(
             () =>
@@ -568,6 +609,9 @@ export class PlatformControlPlaneStorage {
                             .from(platformAppCredential)
                             .where(eq(platformAppCredential.credentialId, credential.credentialId)),
                     ),
+                    ...projectIds.map((projectId) =>
+                        this.scopeInsert(credential.credentialId, projectId, credential.issuedAt),
+                    ),
                 ]),
             signal,
         );
@@ -602,24 +646,67 @@ export class PlatformControlPlaneStorage {
         };
     };
 
-    readonly credentialHasProject = async (
+    /** Reads the scope Workers kept in Project storage before D1 owned it. */
+    private readonly projectStorageScope = async (
         credentialId: string,
         projectId: string,
         signal: AbortSignal,
-    ): Promise<boolean> => {
+    ): Promise<number | null> => {
         const row = await waitForD1(
             () =>
                 projectDatabase(this.#databases, projectId)
                     .prepare(
-                        "SELECT 1 AS present FROM platform_app_credential_projects WHERE credential_id = ? AND project_id = ?",
+                        "SELECT created_at FROM platform_app_credential_projects WHERE credential_id = ? AND project_id = ?",
                     )
                     .bind(credentialId, projectId)
                     .first(),
             signal,
         );
-        const presence: RecordPresenceRow | null =
-            row === null ? null : decodeStorageRecord(RecordPresenceRowSchema, row);
-        return presence?.present === 1;
+        return row === null ? null : decodeStorageRecord(ProjectStorageScopeRowSchema, row).created_at;
+    };
+
+    /**
+     * A rolled-back Worker reads AppCredential scope from Project storage, so keep writing it there. This Worker never
+     * reads it back; a copy left by an attempt that then fails names a credential that does not exist.
+     */
+    private readonly writeRollbackScope = async (
+        credential: PlatformAppCredentialInsert,
+        projectIds: readonly string[],
+        signal: AbortSignal,
+    ): Promise<void> => {
+        for (const projectId of projectIds) {
+            await waitForD1(
+                () =>
+                    projectDatabase(this.#databases, projectId)
+                        .prepare(
+                            `INSERT INTO platform_app_credential_projects (credential_id, project_id, created_at)
+                         VALUES (?, ?, ?)`,
+                        )
+                        .bind(credential.credentialId, projectId, credential.issuedAt)
+                        .run(),
+                signal,
+            );
+        }
+    };
+
+    /** A scope row exists only when its credential was inserted in the same batch. */
+    private readonly scopeInsert = (credentialId: string, projectId: string, createdAt: number) => {
+        const database = platformDrizzle(this.#database);
+        return database.insert(platformAppCredentialScope).select(
+            database
+                .select({
+                    credentialId: sql<string>`${credentialId}`.as("credentialId"),
+                    projectId: sql<string>`${projectId}`.as("projectId"),
+                    createdAt: sql<number>`${createdAt}`.as("createdAt"),
+                })
+                .from(platformAppCredential)
+                .where(eq(platformAppCredential.credentialId, credentialId)),
+        );
+    };
+
+    private readonly statement = (query: { readonly toSQL: () => { sql: string; params: unknown[] } }) => {
+        const { sql: text, params } = query.toSQL();
+        return this.#database.prepare(text).bind(...params);
     };
 
     readonly touchCredential = async (credentialId: string, now: number, signal: AbortSignal): Promise<boolean> => {
