@@ -334,6 +334,7 @@ test("Given the daemon started before an Agent was installed, When the Relay req
     };
     const discover = (signal: AbortSignal) =>
         discoverLocalAgentInventory({
+            dataDirectory: stateDirectory,
             defaultWorkspace: workspace,
             environment,
             signal,
@@ -415,6 +416,7 @@ test("Given a full catalog discovery is publishing, When the per-Agent resolver 
     };
     const discover = (signal: AbortSignal) =>
         discoverLocalAgentInventory({
+            dataDirectory: stateDirectory,
             defaultWorkspace: workspace,
             environment,
             signal,
@@ -526,6 +528,7 @@ test("Given a full catalog discovery has published, When a queued per-Agent reso
     };
     const discover = (signal: AbortSignal) =>
         discoverLocalAgentInventory({
+            dataDirectory: stateDirectory,
             defaultWorkspace: workspace,
             environment,
             signal,

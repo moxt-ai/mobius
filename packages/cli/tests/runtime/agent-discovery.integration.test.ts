@@ -50,6 +50,7 @@ if (process.argv.includes("--version")) {
             await chmod(piPath, 0o700);
 
             const inventory = await discoverLocalAgentInventory({
+                dataDirectory: temporaryDirectory,
                 defaultWorkspace: temporaryDirectory,
                 environment: {
                     MOBIUS_STATE_DIRECTORY: temporaryDirectory,
@@ -93,6 +94,7 @@ if (process.argv.includes("--version")) {
 
             await expect(
                 resolveAgentExecutable(specification, {
+                    dataDirectory: workspace,
                     defaultWorkspace: workspace,
                     environment: { PATH: workspace },
                     signal: new AbortController().signal,
@@ -100,6 +102,7 @@ if (process.argv.includes("--version")) {
             ).resolves.toMatchObject({ path: await realpath(codexPath) });
             await expect(
                 resolveAgentExecutable(specification, {
+                    dataDirectory: workspace,
                     defaultWorkspace: workspace,
                     environment: {
                         MOBIUS_CODEX_PATH: codexPath,

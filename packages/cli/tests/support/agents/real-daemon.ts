@@ -127,6 +127,7 @@ export async function withRealDaemon(
     try {
         await mkdir(workspace, { recursive: true });
         const inventory = await discoverLocalAgentInventory({
+            dataDirectory: directory,
             defaultWorkspace: workspace,
             environment: { ...process.env, ...environment, MOBIUS_STATE_DIRECTORY: directory },
             signal,

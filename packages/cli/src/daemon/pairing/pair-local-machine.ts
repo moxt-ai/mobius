@@ -296,6 +296,7 @@ function buildPairedRuntime(
             (refreshSignal) =>
                 discoverLocalAgentInventory({
                     defaultWorkspace,
+                    dataDirectory: localContext.stateDirectory,
                     environment: localContext.environment,
                     signal: refreshSignal,
                 }),
@@ -305,6 +306,7 @@ function buildPairedRuntime(
         (refreshSignal: AbortSignal) =>
             discoverLocalAgentInventory({
                 defaultWorkspace,
+                dataDirectory: localContext.stateDirectory,
                 environment: localContext.environment,
                 signal: refreshSignal,
             }).then((inventory) => inventory.readyAgents()),
@@ -327,6 +329,7 @@ async function pairRuntime(
     const defaultWorkspace = await resolveDefaultWorkspace(options.workspace);
     const inventory = await discoverLocalAgentInventory({
         defaultWorkspace,
+        dataDirectory: localContext.stateDirectory,
         environment: localContext.environment,
         signal,
     });
@@ -375,6 +378,7 @@ async function resumeRuntimeConnection(
     const defaultWorkspace = await resolveDefaultWorkspace(connection.defaultWorkspace);
     const inventory = await discoverLocalAgentInventory({
         defaultWorkspace,
+        dataDirectory: localContext.stateDirectory,
         environment: localContext.environment,
         signal,
     });
@@ -439,7 +443,7 @@ export async function pairLocalMachine(
             relayOrigin: requested.relayOrigin,
             workspace: arguments_.includes("--workspace")
                 ? requested.workspace
-                : loadDefaultWorkspace(localContext.environment),
+                : loadDefaultWorkspace(localContext.stateDirectory, localContext.environment),
         },
         signal,
         process.env,
