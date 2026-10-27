@@ -71,6 +71,26 @@ function fixture() {
 }
 
 describe("Recording message identity migration", () => {
+    it("Given protocol-valid empty and whitespace message IDs, When migration and subsequent writes run, Then supplied strings survive unchanged", async () => {
+        const f = fixture();
+        const supplied = [
+            f.chunk("user_message_chunk", ""),
+            f.chunk("agent_message_chunk", " "),
+            f.chunk("agent_thought_chunk", "\t"),
+        ];
+        await f.record(supplied);
+        expect(await (await f.step({ mode: "dry-run", afterOrdinal: 0 })).json()).toMatchObject({ missingEvents: 0 });
+        const applied = await f.step();
+        expect(applied.status).toBe(200);
+        expect(await applied.json()).toMatchObject({ kind: "complete", rewrittenEvents: 0 });
+        const subsequent = [
+            f.chunk("user_message_chunk", ""),
+            f.chunk("agent_message_chunk", " "),
+            f.chunk("agent_thought_chunk", "\t"),
+        ];
+        await f.record(subsequent);
+        expect(await (await f.read()).json()).toMatchObject({ events: [...supplied, ...subsequent] });
+    });
     it("Given legacy chunks, When an operator previews and applies the migration, Then only the three chunk variants gain identities and raw cursors and unrelated fields survive", async () => {
         const f = fixture();
         const original = [

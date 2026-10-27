@@ -174,9 +174,6 @@ export class MessageIdMigration {
                 case "agent_message_chunk":
                 case "agent_thought_chunk": {
                     if (payload.messageId !== null && payload.messageId !== undefined) {
-                        if (payload.messageId.trim().length === 0) {
-                            throw new Error("Empty message identity");
-                        }
                         group = { kind: "none" };
                         return event;
                     }
