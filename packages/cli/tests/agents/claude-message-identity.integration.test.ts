@@ -1,4 +1,5 @@
 import { addAbortListener } from "node:events";
+import { watch } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -125,17 +126,44 @@ test("Given real Claude streams a message, When its harness emits chunks and rep
             submittedFollowUp.reject(signal.reason);
         });
         expect(await submittedFollowUp.promise).toBe(steering.messageId);
-        // A subsequent completed prompt proves the detached input has passed through Claude,
-        // rather than mistaking an earlier turn's trailing output for its persistence boundary.
-        await connection.agent.request(
+        // A subsequent completed prompt establishes that Claude processed the detached input.
+        const confirmation = await connection.agent.request(
             methods.agent.session.prompt,
             { sessionId, prompt: [{ type: "text", text: "Finish with a short confirmation" }] },
             { cancellationSignal: signal },
         );
-        const saved = await getEnvironmentSessionMessages(environment, sessionId, signal);
-        expect(saved.filter((message) => message.type === "user")).toEqual(
-            expect.arrayContaining([expect.objectContaining({ uuid: steering.messageId })]),
-        );
+        expect(confirmation.stopReason).toBe("end_turn");
+        // Prompt completion is a live-output boundary, not a native transcript flush.
+        // Observe native writes rather than assuming the next prompt flushed history.
+        const configDirectory = fixture.environment["CLAUDE_CONFIG_DIR"];
+        if (configDirectory === undefined) {
+            throw new Error("Expected isolated Claude configuration");
+        }
+        type NativeWrite = { readonly kind: "changed" } | { readonly kind: "failed"; readonly cause: Error };
+        let changed = Promise.withResolvers<NativeWrite>();
+        const watcher = watch(configDirectory, { recursive: true }, () => changed.resolve({ kind: "changed" }));
+        watcher.on("error", (cause) => changed.resolve({ kind: "failed", cause }));
+        using _historyAbort = addAbortListener(signal, () => changed.resolve({ kind: "changed" }));
+        try {
+            for (;;) {
+                signal.throwIfAborted();
+                const notification = changed.promise;
+                const saved = await getEnvironmentSessionMessages(environment, sessionId, signal);
+                if (saved.some((message) => message.type === "user" && message.uuid === steering.messageId)) {
+                    expect(saved.filter((message) => message.type === "user")).toEqual(
+                        expect.arrayContaining([expect.objectContaining({ uuid: steering.messageId })]),
+                    );
+                    break;
+                }
+                const event = await notification;
+                if (event.kind === "failed") {
+                    throw event.cause;
+                }
+                changed = Promise.withResolvers<NativeWrite>();
+            }
+        } finally {
+            watcher.close();
+        }
     } finally {
         await claude.agent()?.dispose();
         connection.close();
