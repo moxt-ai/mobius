@@ -229,11 +229,35 @@ export async function executeSessionRestore(
 export async function executeSessionRename(
     socket: WebSocket,
     command: SessionRenameCommand,
+    config: RuntimeConfig,
+    resolveAgent: ResolveAgent,
+    directories: WorkspaceDirectoryService,
     sessions: SessionManager,
+    nativeSessions: NativeSessionService,
     signal: AbortSignal,
 ): Promise<void> {
     try {
-        const renamed = await sessions.renameSession(command.sessionId, command.title, signal);
+        const [entry] = await nativeSessions.querySessions([command.sessionId], signal);
+        if (entry === undefined) {
+            throw new SessionError("session_not_found", "The Session was not found");
+        }
+        const resolved = await resolveSessionDirectories(
+            directories,
+            config.bindingId,
+            entry.directoryId,
+            entry.additionalDirectories.map((directory) => directory.directoryId),
+            signal,
+        );
+        const renamed = await sessions.renameSession(
+            {
+                additionalDirectories: resolved.additionalDirectories,
+                ...(await resolveAgent(entry.agentId, signal, command.sessionId)),
+                cwd: resolved.cwd,
+                sessionId: command.sessionId,
+                signal,
+            },
+            command.title,
+        );
         send(socket, {
             kind: "session.renamed",
             requestId: command.requestId,
@@ -368,7 +392,16 @@ export const sessionRenameCommand: RuntimeCommand = {
         if (message.kind !== SESSION_RENAME_KIND) {
             throw new Error("Command kind mismatch");
         }
-        void executeSessionRename(context.socket, message, context.sessions, context.signal);
+        void executeSessionRename(
+            context.socket,
+            message,
+            context.config,
+            context.resolveAgent,
+            context.directories,
+            context.sessions,
+            context.nativeSessions,
+            context.signal,
+        );
     },
 };
 

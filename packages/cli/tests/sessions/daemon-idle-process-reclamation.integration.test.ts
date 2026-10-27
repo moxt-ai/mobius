@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import {
     decodeMessageKind,
+    decodeNativeSessionResult,
     decodeSessionEvent,
     decodeSessionReadyEvent,
     decodeSessionsQueriedEvent,
@@ -196,6 +197,67 @@ test.each(["resume", "load"] as const)(
             const history = await nextResponse(peer, "session.live-history.v2.page.loaded");
             expect(history).toContain("Remember the first turn");
             expect(history).toContain("Continue after idle reclamation");
+        });
+    },
+);
+
+test.each(["resume", "load"] as const)(
+    "Given a reclaimed %s conversation, When an existing client renames it, Then both directories retain the new title after continuing",
+    async (recovery) => {
+        await withIdleDaemon(recovery, async (peer, native, timer) => {
+            const sessionId = await prepareNewRealSession(peer, "claude");
+            await prompt(peer, sessionId, "Original native title");
+            const original = await processId(native);
+            timer.advance(twoHours - 1);
+            await expire(native, original, timer);
+
+            // Keep the deployed request shape independent of the current encoder.
+            peer.send(
+                JSON.stringify({
+                    kind: "session.rename",
+                    requestId: crypto.randomUUID(),
+                    sessionId,
+                    title: "Renamed after reclamation",
+                }),
+            );
+            await nextResponse(peer, "session.renamed");
+
+            const expectTitles = async (): Promise<void> => {
+                peer.send(
+                    encodeSessionQueryCommand({
+                        kind: "session.query",
+                        requestId: crypto.randomUUID(),
+                        sessionIds: [sessionId],
+                    }),
+                );
+                expect(decodeSessionsQueriedEvent(await nextResponse(peer, "session.queried")).entries).toEqual([
+                    expect.objectContaining({ sessionId, title: "Renamed after reclamation" }),
+                ]);
+                peer.send(
+                    encodeNativeSessionCommand({
+                        kind: "native.session.request",
+                        action: "list",
+                        requestId: crypto.randomUUID(),
+                        sessionId: crypto.randomUUID(),
+                        agentId: "claude",
+                        bindingId: peer.bindingId,
+                        directoryId: "default",
+                        additionalDirectoryIds: [],
+                        cursor: null,
+                    }),
+                );
+                const directory = decodeNativeSessionResult(await nextResponse(peer, "native.session.result"));
+                if (directory.action !== "list") {
+                    throw new Error("Expected the native directory");
+                }
+                expect(directory.entries.find((entry) => entry.mobiusSessionIds.includes(sessionId))?.title).toBe(
+                    "Renamed after reclamation",
+                );
+            };
+
+            await expectTitles();
+            expect(await prompt(peer, sessionId, "Continue the renamed conversation")).toContain("turn 2:");
+            await expectTitles();
         });
     },
 );

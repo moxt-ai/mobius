@@ -19,7 +19,6 @@ import {
     MemorySessionStore,
     MissingStoredSession,
     type SessionStore,
-    StoredSession,
 } from "../record/session-store.ts";
 import { ActiveExecutions } from "../turn/active-executions.ts";
 import { RuntimeOperations, waitForSharedOperation } from "./operation-drain.ts";
@@ -544,37 +543,19 @@ export class SessionManager {
         });
 
     readonly renameSession = async (
-        sessionId: string,
+        options: SessionPrepareOptions,
         title: string,
-        signal: AbortSignal,
     ): Promise<{ readonly title: string; readonly updatedAt: string }> =>
-        await this.#executionProcesses.use(sessionId, async () =>
-            this.#operations.run({ sessionId, signal }, async (options) => {
-                this.#assertOpen(options.sessionId);
+        await this.#executionProcesses.use(options.sessionId, async () =>
+            this.#operations.run(options, async (options) => {
+                // Process reclamation must not turn a native rename into a metadata-only write.
+                // Keep the same process borrowed through recovery and the acknowledged rename.
+                await this.#prepareSession(options, { kind: "interactive-only" }, "keep-closed");
                 const runtime = this.#executionProcesses.get(options.sessionId);
-                if (runtime !== undefined) {
-                    return await runtime.renameSession(title, options.signal);
+                if (runtime === undefined) {
+                    throw new AcpExecutionError("ACP session did not start");
                 }
-                const stored = this.#store.read(options.sessionId);
-                if (!(stored instanceof FoundStoredSession)) {
-                    throw new AcpExecutionError("The Session was not found", {}, "session_not_found");
-                }
-                const normalized = title.slice(0, 500);
-                const updatedAt = new Date().toISOString();
-                this.#store.write(
-                    new StoredSession(
-                        stored.session.sessionId,
-                        stored.session.agentId,
-                        stored.session.nativeSessionId,
-                        stored.session.cwd,
-                        stored.session.additionalDirectories,
-                        stored.session.prompted,
-                        normalized,
-                        updatedAt,
-                        stored.session.configurations,
-                    ),
-                );
-                return { title: normalized, updatedAt };
+                return await runtime.renameSession(title, options.signal);
             }),
         );
 
