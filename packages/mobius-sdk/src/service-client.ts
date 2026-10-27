@@ -129,6 +129,13 @@ export interface DiscoverMobiusAgentSettingsRequest {
     readonly model?: string;
 }
 
+export interface ForkMobiusNativeSessionRequest {
+    readonly agentId: string;
+    readonly nativeSessionId: string;
+    readonly directoryId: string;
+    readonly additionalDirectoryIds: readonly string[];
+}
+
 export type MobiusExternalContentBlock =
     | ExternalImageContentBlock
     | ExternalAudioContentBlock
@@ -909,6 +916,38 @@ export class MobiusRuntimeResources {
                 ),
             ),
         );
+
+    /**
+     * Requires the Relay's nativeForkRecovery capability. Reuse an operationId and its inputs after an ambiguous
+     * failure. This method never falls back to a legacy Fork; an unknown result must not create another Session.
+     */
+    readonly forkNativeSession = async (
+        runtimeId: string,
+        operationId: string,
+        request: ForkMobiusNativeSessionRequest,
+        signal: AbortSignal,
+    ) => {
+        const receipt = await this.#executor.post(
+            projectPath(
+                this.#projectId,
+                `runtimes/${encodeURIComponent(runtimeId)}/native-session-forks/${encodeURIComponent(operationId)}`,
+            ),
+            request,
+            signal,
+        );
+        if (typeof receipt !== "object" || receipt === null || !("result" in receipt) || !("source" in receipt)) {
+            throw new MobiusProtocolError("The service returned an invalid Fork receipt");
+        }
+        const result = decodeNativeSessionResult(JSON.stringify(receipt.result));
+        const source = decodeNativeSessionResult(JSON.stringify(receipt.source));
+        if (result.action !== "fork" || result.ready.sessionId !== result.targetSessionId) {
+            throw new MobiusProtocolError("The service returned an invalid native Fork");
+        }
+        if (source.action !== "find" || source.entry.nativeSessionId !== request.nativeSessionId) {
+            throw new MobiusProtocolError("The service returned an invalid Fork source");
+        }
+        return { result, entry: source.entry };
+    };
 
     readonly querySessions = async (runtimeId: string, sessionIds: readonly string[], signal: AbortSignal) =>
         decodeSessionsQueriedEvent(

@@ -1,3 +1,4 @@
+import type { ForkMobiusNativeSessionRequest } from "@moxt-ai/mobius-sdk";
 import type {
     AgentSettingsDiscoverCommand,
     AgentSettingsDiscoveredEvent,
@@ -17,8 +18,16 @@ import {
     requestRuntimeFile,
     requestRuntimeWorkspace,
 } from "../pairing/runtime-control-request.ts";
+import type { NativeSessionForks } from "./native-session-forks.ts";
 
 export interface LocalSessionOperations extends SessionRuntimeOperations {
+    readonly forkNativeSession: (
+        scope: Scope,
+        runtimeId: string,
+        operationId: string,
+        input: ForkMobiusNativeSessionRequest,
+        signal: AbortSignal,
+    ) => ReturnType<NativeSessionForks["fork"]>;
     readonly requestWorkspace: (
         scope: Scope,
         runtimeId: string,
@@ -100,7 +109,40 @@ export function createLocalSessionOperations(
             }
         });
     };
+    const requestProjectScopeControl: SessionRuntimeOperations["requestProjectScopeControl"] = async (
+        scope,
+        requestedRuntime,
+        command,
+        signal,
+    ) => {
+        checkTarget(scope.projectId, requestedRuntime);
+        const id =
+            "commandId" in command
+                ? command.commandId
+                : "interactionId" in command
+                  ? command.interactionId
+                  : command.requestId;
+        const sessionId = "sessionId" in command ? command.sessionId : "";
+        const socket = await connect(
+            id,
+            sessionId,
+            command.kind === "session.prompt" && command.disposition === "queue",
+            signal,
+        );
+        return await requestRuntimeControl(socket, command, signal);
+    };
     return {
+        forkNativeSession: async (scope, requestedRuntime, operationId, input, signal) => {
+            checkTarget(scope.projectId, requestedRuntime);
+            return await cx.services.nativeForks.fork(
+                scope,
+                requestedRuntime,
+                operationId,
+                input,
+                requestProjectScopeControl,
+                signal,
+            );
+        },
         requestWorkspace: async (scope, requestedRuntime, command, signal) => {
             checkTarget(scope.projectId, requestedRuntime);
             return await requestRuntimeWorkspace(await connect(command.requestId, "", false, signal), command, signal);
@@ -130,25 +172,7 @@ export function createLocalSessionOperations(
                 eventFormat: "events",
             }).response;
         },
-        requestProjectScopeControl: async (scope, requestedRuntime, command, signal) => {
-            checkTarget(scope.projectId, requestedRuntime);
-            let id: string;
-            if ("commandId" in command) {
-                id = command.commandId;
-            } else if ("interactionId" in command) {
-                id = command.interactionId;
-            } else {
-                id = command.requestId;
-            }
-            const sessionId = "sessionId" in command ? command.sessionId : "";
-            const socket = await connect(
-                id,
-                sessionId,
-                command.kind === "session.prompt" && command.disposition === "queue",
-                signal,
-            );
-            return await requestRuntimeControl(socket, command, signal);
-        },
+        requestProjectScopeControl,
         readProjectSessionFile: async (scope, requestedRuntime, command, signal) => {
             checkTarget(scope.projectId, requestedRuntime);
             const socket = await connect(command.requestId, command.sessionId, false, signal);
