@@ -59,6 +59,8 @@ export default defineConfig(async (): Promise<ViteUserConfig> => {
             cloudflareTest({
                 wrangler: { configPath: wranglerConfigPath },
                 miniflare: {
+                    // Legacy data can outlive the deployment that stopped trusting it.
+                    kvNamespaces: ["APP_CREDENTIAL_CACHE"],
                     d1Databases: ["TEST_UNINITIALIZED_SHARD"],
                     r2Buckets: ["R2_BUCKET_WNAM"],
                     bindings: {

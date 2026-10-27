@@ -70,7 +70,6 @@ import { OrganizationInviteService } from "./service/organization-invite-service
 import { PlatformControlPlaneService } from "./service/platform-control-plane-service.ts";
 import { RecordingPolicyService } from "./service/recording-policy-service.ts";
 import { SessionAccessService, type SessionAccessTarget } from "./service/session-access-service.ts";
-import { AppCredentialCacheStorage } from "./storage/app-credential-cache-storage.ts";
 import { AppSessionStatusWebhookStorage } from "./storage/app-session-status-webhook-storage.ts";
 import { OrganizationInviteStorage } from "./storage/organization-invite-storage.ts";
 import { PlatformControlPlaneStorage } from "./storage/platform-control-plane-storage.ts";
@@ -84,7 +83,6 @@ import { RecordingPolicyStorage } from "./storage/recording-policy-storage.ts";
 
 export interface PlatformRelayBindings extends PlatformStorageBindings, ProjectWorkerRoutingBindings {
     readonly CLERK_SECRET_KEY?: string;
-    readonly APP_CREDENTIAL_CACHE: KVNamespace;
     readonly MOBIUS_SESSION_EVENT_PUSH_SECRET?: string;
     readonly MOBIUS_SESSION_STATUS_WEBHOOK_URL?: string;
     readonly MOBIUS_SESSION_WEBHOOK_SECRET_ENCRYPTION_KEY?: string;
@@ -889,20 +887,16 @@ export function createPlatformApplication(
             const projectDatabases = execution === null ? [] : [execution.database];
             const controlStorage = new PlatformControlPlaneStorage(environment.PLATFORM_DIRECTORY_DATABASE, databases);
             const storageRegistry = new PlatformStorageRegistry(environment);
-            const appAuthentication = new AppCredentialAuthenticationService(
-                controlStorage,
-                new AppCredentialCacheStorage(environment.APP_CREDENTIAL_CACHE),
-                {
-                    waitUntil: (operation) => {
-                        try {
-                            context.executionCtx.waitUntil(operation);
-                        } catch {
-                            // Direct application callers do not provide a Worker execution context.
-                            // The already-started operation remains best-effort for those adapters.
-                        }
-                    },
+            const appAuthentication = new AppCredentialAuthenticationService(controlStorage, {
+                waitUntil: (operation) => {
+                    try {
+                        context.executionCtx.waitUntil(operation);
+                    } catch {
+                        // Direct application callers do not provide a Worker execution context.
+                        // The already-started operation remains best-effort for those adapters.
+                    }
                 },
-            );
+            });
             const control = new PlatformControlPlaneService(
                 controlStorage,
                 authentication,
