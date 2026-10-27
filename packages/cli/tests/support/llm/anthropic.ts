@@ -144,6 +144,7 @@ function subagentStep(
                 input: {
                     description: script.dispatchDescription,
                     prompt: script.innerPrompt,
+                    ...(script.runInBackground ? { run_in_background: true, subagent_type: "general-purpose" } : {}),
                 },
                 name: dispatch.name,
             },
@@ -244,7 +245,11 @@ export class FakeAnthropicProvider implements AsyncDisposable {
         model: string,
         answer: string,
         options: {
-            readonly beforeFirstText?: (scenario: FakeProviderScenario, signal: AbortSignal) => Promise<void>;
+            readonly beforeFirstText?: (
+                scenario: FakeProviderScenario,
+                signal: AbortSignal,
+                conversation: string,
+            ) => Promise<void>;
             readonly disconnectsBeforeSuccess?: number;
             readonly readPath?: string;
             readonly bash?: { readonly command: string; readonly runInBackground: boolean };
@@ -301,7 +306,7 @@ export class FakeAnthropicProvider implements AsyncDisposable {
             const stopReason = tool === undefined ? "end_turn" : "tool_use";
             // Startup probes such as /api/hello are not model requests.
             if (tool === undefined && Array.isArray(payload["messages"])) {
-                await options.beforeFirstText?.(scenario, disconnected.signal);
+                await options.beforeFirstText?.(scenario, disconnected.signal, JSON.stringify(payload["messages"]));
             }
             if (payload["stream"] === true) {
                 sendStream(response, model, content, responseChunks(selectedAnswer, scenario), stopReason);
