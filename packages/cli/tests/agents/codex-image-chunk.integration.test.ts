@@ -40,9 +40,13 @@ test("Given an embedded image prompt, When Codex emits its user item, Then the i
             { cancellationSignal: signal },
         );
         const data = Buffer.alloc(800_000, 1).toString("base64");
+        const resource = {
+            type: "resource",
+            resource: { uri: "morty://bot/instructions", mimeType: "text/plain", text: "Private bot instructions" },
+        } satisfies import("@agentclientprotocol/sdk").ContentBlock;
         await connection.agent.request(
             methods.agent.session.prompt,
-            { sessionId: session.sessionId, prompt: [{ type: "image", data, mimeType: "image/png" }] },
+            { sessionId: session.sessionId, prompt: [{ type: "image", data, mimeType: "image/png" }, resource] },
             { cancellationSignal: signal },
         );
         const image = updates.find(
@@ -53,6 +57,13 @@ test("Given an embedded image prompt, When Codex emits its user item, Then the i
             throw new Error("Missing user image chunk");
         }
         expect(image.content).not.toHaveProperty("uri");
+        expect(updates).toContainEqual(
+            expect.objectContaining({
+                sessionUpdate: "user_message_chunk",
+                messageId: image.messageId,
+                content: resource,
+            }),
+        );
     } finally {
         await endpoint.close();
         connection.close();

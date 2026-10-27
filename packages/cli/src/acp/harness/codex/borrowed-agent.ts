@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout } from "node:timers/promises";
-import type { PromptResponse } from "@agentclientprotocol/sdk";
+import type { ContentBlock, PromptResponse } from "@agentclientprotocol/sdk";
 import { z } from "zod";
 import { AcpExecutionError } from "../../acp-error.ts";
 import { type AcpEndpointTermination, acpEndpointTerminationError } from "../../agent/in-process-endpoint.ts";
@@ -23,6 +23,7 @@ const queuePageSchema = z.object({
 });
 
 interface PendingPrompt {
+    readonly content: readonly ContentBlock[];
     readonly clientId: string;
     readonly completion: PromiseWithResolvers<PromptResponse>;
     input: { readonly kind: "awaiting" } | { readonly kind: "identified"; readonly messageId: string };
@@ -139,7 +140,12 @@ export class CodexBorrowedAcpAgent implements CodexSessionAgent {
                             )
                             .join("");
                         if (!baseline && !this.#seen.has(key)) {
-                            for (const update of userMessageUpdates(item)) {
+                            for (const update of userMessageUpdates(
+                                item,
+                                this.#pending !== null && clientId === this.#pending.clientId
+                                    ? this.#pending.content
+                                    : undefined,
+                            )) {
                                 await this.#emit(update);
                             }
                         }
@@ -190,7 +196,11 @@ export class CodexBorrowedAcpAgent implements CodexSessionAgent {
         }
     };
 
-    readonly prompt = async (input: readonly unknown[], signal: AbortSignal): Promise<PromptResponse> => {
+    readonly prompt = async (
+        input: readonly unknown[],
+        signal: AbortSignal,
+        content: readonly ContentBlock[],
+    ): Promise<PromptResponse> => {
         signal.throwIfAborted();
         if (this.#lifecycle.kind === "failed") {
             throw this.#lifecycle.error;
@@ -202,6 +212,7 @@ export class CodexBorrowedAcpAgent implements CodexSessionAgent {
             throw new AcpExecutionError("Another prompt is already running", {}, "session_busy");
         }
         const pending: PendingPrompt = {
+            content,
             clientId: randomUUID(),
             completion: Promise.withResolvers<PromptResponse>(),
             input: { kind: "awaiting" },

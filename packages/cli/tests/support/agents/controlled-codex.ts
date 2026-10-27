@@ -16,7 +16,7 @@ export class ControlledCodexFixture implements AsyncDisposable {
         });
     }
 
-    static async create(): Promise<ControlledCodexFixture> {
+    static async create(options: { readonly holdTurn?: boolean } = {}): Promise<ControlledCodexFixture> {
         const directory = await mkdtemp(join(tmpdir(), "mobius-controlled-codex-"));
         const executable = join(directory, "codex.mjs");
         await writeFile(
@@ -34,6 +34,7 @@ if (process.argv[2] !== "app-server") {
 
 let threadNumber = 0;
 let turnNumber = 0;
+let active;
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
 createInterface({ input: process.stdin }).on("line", (line) => {
     const request = JSON.parse(line);
@@ -45,6 +46,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     if (request.method === "turn/start") {
         const threadId = request.params.threadId;
         const turn = { id: "controlled-turn-" + ++turnNumber, status: "inProgress" };
+        active = { threadId, turn };
         send({ id: request.id, result: { turn } });
         send({ method: "item/started", params: { threadId, turnId: turn.id,
             item: { type: "userMessage", id: "controlled-user-" + turnNumber, content: request.params.input },
@@ -52,7 +54,18 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         send({ method: "thread/settings/updated", params: {
             threadId, threadSettings: { collaborationMode: { mode: "plan" } },
         } });
-        send({ method: "turn/completed", params: { threadId, turn: { ...turn, status: "completed" } } });
+        if (!${options.holdTurn === true}) {
+            send({ method: "turn/completed", params: { threadId, turn: { ...turn, status: "completed" } } });
+        }
+        return;
+    }
+    if (request.method === "turn/steer") {
+        send({ id: request.id, result: { turnId: active.turn.id } });
+        return;
+    }
+    if (request.method === "turn/interrupt") {
+        send({ id: request.id, result: {} });
+        send({ method: "turn/completed", params: { threadId: active.threadId, turn: { ...active.turn, status: "interrupted" } } });
         return;
     }
     const result = request.method === "model/list" ? { data: [], nextCursor: null } : {};

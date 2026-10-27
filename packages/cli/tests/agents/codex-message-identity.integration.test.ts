@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { methods, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import { expect, test } from "vitest";
+import { z } from "zod";
 import { createAcpClient } from "../../src/acp/connection/create-client.ts";
 import { CodexAcpAgent } from "../../src/acp/harness/codex/agent.ts";
 import { CodexAppServerClient } from "../../src/acp/harness/codex/app-server-client.ts";
@@ -107,19 +108,30 @@ test.each(["owned", "borrowed"])(
                     expect(loaded._meta).toMatchObject({ steering: { supported: false } });
                     updates.length = 0;
                 }
+                const resource = {
+                    type: "resource",
+                    resource: {
+                        uri: "morty://bot/instructions",
+                        mimeType: "text/plain",
+                        text: "Keep the reply concise",
+                    },
+                } satisfies import("@agentclientprotocol/sdk").ContentBlock;
                 const result = await connection.agent.request(
                     methods.agent.session.prompt,
                     {
                         sessionId,
-                        prompt: [{ type: "text", text: "Reply with a short greeting, without tools" }],
+                        prompt: [{ type: "text", text: "Reply with a short greeting, without tools" }, resource],
                     },
                     { cancellationSignal: signal },
                 );
                 const live = updates.filter((update) => update.sessionUpdate === "agent_message_chunk");
                 const userMessages = updates.filter((update) => update.sessionUpdate === "user_message_chunk");
-                expect(userMessages).toHaveLength(1);
+                expect(userMessages).toHaveLength(2);
+                expect(userMessages[1]).toMatchObject({ content: resource, messageId: userMessages[0]?.messageId });
                 expect(userMessages[0]?.messageId).toEqual(expect.any(String));
-                expect(result._meta?.["messageId"]).toBe(userMessages[0]?.messageId);
+                expect(z.object({ _meta: z.object({ messageId: z.string() }) }).parse(result)._meta.messageId).toBe(
+                    userMessages[0]?.messageId,
+                );
                 expect(live.length).toBeGreaterThan(0);
                 for (const update of live) {
                     expect(update.messageId).toEqual(expect.any(String));

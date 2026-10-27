@@ -135,15 +135,21 @@ export class AcpLiveSessions {
         signal.throwIfAborted();
         const { connection, scope } = this.#resolve(target);
         const prompt = buildPromptContent(content, scope.capabilities());
-        const response: unknown = await connection.race(
-            connection.connection.agent.request(
-                methods.agent.session.prompt,
-                { prompt, sessionId: target.nativeSessionId },
-                { cancellationSignal: signal },
-            ),
-            "ACP agent exited during a prompt",
-            signal,
-        );
+        const response: unknown = await connection
+            .race(
+                connection.connection.agent.request(
+                    methods.agent.session.prompt,
+                    { prompt, sessionId: target.nativeSessionId },
+                    { cancellationSignal: signal },
+                ),
+                "ACP agent exited during a prompt",
+                signal,
+            )
+            .catch(async (cause: unknown) => {
+                signal.throwIfAborted();
+                await connection.events.drained();
+                throw cause;
+            });
         await connection.events.drained();
         try {
             const decoded = decodeAgentPromptResponse(response);

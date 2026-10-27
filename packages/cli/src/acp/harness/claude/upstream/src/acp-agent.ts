@@ -2037,6 +2037,7 @@ export class ClaudeAcpAgent {
     private async promptWithMessageId(
         params: PromptRequest,
         promptUuid: ReturnType<typeof randomUUID>,
+        onSubmitted: () => void = () => {},
     ): Promise<PromptResponse> {
         if (this.providerUpdate !== null) {
             await this.providerUpdate;
@@ -2105,6 +2106,7 @@ export class ClaudeAcpAgent {
         session.turnQueue.push(turn);
         session.input.push(userMessage);
         this.ensureConsumer(session, params.sessionId);
+        onSubmitted();
         await this.publishGoalFromPrompt(params.sessionId, firstText, promptUuid);
         return response;
     }
@@ -2237,9 +2239,15 @@ export class ClaudeAcpAgent {
             // intentionally detached for compatibility with the existing contract.
             // This is the UUID assigned to the submitted SDK user message, not a separate acknowledgement ID.
             const messageId = randomUUID();
-            promptResultWithMessageId(this.promptWithMessageId(promptRequest, messageId), messageId).catch((error) => {
+            const submitted = Promise.withResolvers<void>();
+            promptResultWithMessageId(
+                this.promptWithMessageId(promptRequest, messageId, submitted.resolve),
+                messageId,
+            ).catch((error) => {
+                submitted.reject(error);
                 this.logger.error(`Session ${sessionId}: steered new turn failed: ${error}`);
             });
+            await submitted.promise;
             return { outcome: "startedNewTurn", messageId };
         }
 

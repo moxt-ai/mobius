@@ -217,7 +217,11 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                     }
                     return await promptResultWithMessageId(this.#sessionAgent.compact(context.signal), messageId);
                 }
-                return await this.#sessionAgent.prompt(promptInput(context.params.prompt), context.signal);
+                return await this.#sessionAgent.prompt(
+                    promptInput(context.params.prompt),
+                    context.signal,
+                    context.params.prompt,
+                );
             })
             .onRequest(
                 "_session/steering",

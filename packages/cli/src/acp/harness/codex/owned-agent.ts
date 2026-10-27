@@ -97,19 +97,27 @@ function steeringPrompt(prompt: readonly unknown[]): readonly SteeringPromptBloc
             const uri = Reflect.get(resource, "uri");
             const text = Reflect.get(resource, "text");
             const blob = Reflect.get(resource, "blob");
+            const mimeType = Reflect.get(resource, "mimeType");
             if (
                 typeof uri !== "string" ||
                 (typeof text !== "string" && typeof blob !== "string") ||
                 (text !== undefined && typeof text !== "string") ||
-                (blob !== undefined && typeof blob !== "string")
+                (blob !== undefined && typeof blob !== "string") ||
+                (mimeType !== undefined && typeof mimeType !== "string")
             ) {
                 throw new AcpExecutionError("Codex received an invalid steering prompt", {}, "invalid_request");
             }
             blocks.push({
                 content:
                     typeof text === "string"
-                        ? { resource: { text, uri }, type: "resource" }
-                        : { resource: { blob, uri }, type: "resource" },
+                        ? {
+                              resource: { text, uri, ...(typeof mimeType === "string" ? { mimeType } : {}) },
+                              type: "resource",
+                          }
+                        : {
+                              resource: { blob, uri, ...(typeof mimeType === "string" ? { mimeType } : {}) },
+                              type: "resource",
+                          },
                 input: { text: text ?? "", text_elements: [], type: "text" },
             });
             continue;
@@ -132,13 +140,9 @@ function steeringPrompt(prompt: readonly unknown[]): readonly SteeringPromptBloc
 }
 
 interface ActiveTurn {
+    readonly content: readonly ContentBlock[];
     readonly completion: PromiseWithResolvers<PromptResponse>;
     readonly turn: { id: string };
-    input: { readonly kind: "awaiting" } | { readonly kind: "identified"; readonly messageId: string };
-}
-
-interface PendingSteeringInput {
-    readonly completion: PromiseWithResolvers<string>;
     input: { readonly kind: "awaiting" } | { readonly kind: "identified"; readonly messageId: string };
 }
 
@@ -183,7 +187,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
     readonly #streamedReasoningSources = new Map<string, "summary" | "content">();
     readonly #agentMessages = new Map<string, "started" | "streaming">();
     #turn: ActiveTurn | null = null;
-    #steeringInput: PendingSteeringInput | null = null;
+    readonly #steeringContent: (readonly ContentBlock[])[] = [];
     #nativeTurnId: string | null = null;
     readonly #runningCommands = new Map<string, "foreground" | "background">();
     #updateTail: Promise<void> = Promise.resolve();
@@ -207,14 +211,12 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
 
     readonly nativeTurnId = (): string | null => this.#nativeTurnId;
     readonly onTerminated = (termination: AcpEndpointTermination): void => {
-        this.#steeringInput?.completion.reject(acpEndpointTerminationError(termination));
+        this.#steeringContent.length = 0;
         this.#turn?.completion.reject(acpEndpointTerminationError(termination));
         this.#settleCompaction("cancelled");
     };
     readonly close = async (): Promise<void> => {
-        this.#steeringInput?.completion.reject(
-            new AcpExecutionError("The Codex endpoint is closed", {}, "acp_endpoint_closed"),
-        );
+        this.#steeringContent.length = 0;
         this.#turn?.completion.reject(new AcpExecutionError("The Codex endpoint is closed", {}, "acp_endpoint_closed"));
         this.#settleCompaction("cancelled");
     };
@@ -288,7 +290,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
         const waitExpired = new AbortController();
         // Armed before the RPC is sent: a short compaction can complete before its
         // own response arrives, and a completion for an unarmed turn would be lost.
-        const turn: ActiveTurn = { completion, input: { kind: "awaiting" }, turn: { id: "" } };
+        const turn: ActiveTurn = { completion, content: [], input: { kind: "awaiting" }, turn: { id: "" } };
         this.#turn = turn;
         try {
             await this.#appServer.request(
@@ -481,14 +483,13 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
         }
         if (item.type === "userMessage") {
             if (method === "item/started") {
+                const submitted =
+                    this.#turn?.input.kind === "awaiting" ? this.#turn.content : this.#steeringContent.shift();
                 if (this.#turn?.input.kind === "awaiting") {
                     this.#turn.input = { kind: "identified", messageId: item.id };
-                } else if (this.#steeringInput !== null) {
-                    this.#steeringInput.input = { kind: "identified", messageId: item.id };
-                    this.#steeringInput.completion.resolve(item.id);
                 }
                 await this.#enqueue(async () => {
-                    for (const update of userMessageUpdates(item)) {
+                    for (const update of userMessageUpdates(item, submitted)) {
                         await this.#context.emit(update);
                     }
                 });
@@ -733,7 +734,11 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
         this.#appServer.respond(request.id, { action: response.action, content });
     };
 
-    readonly prompt = async (input: readonly unknown[], signal: AbortSignal): Promise<PromptResponse> => {
+    readonly prompt = async (
+        input: readonly unknown[],
+        signal: AbortSignal,
+        content: readonly ContentBlock[],
+    ): Promise<PromptResponse> => {
         signal.throwIfAborted();
         if (this.#turn !== null) {
             throw new AcpExecutionError("Another prompt is already running in this conversation", {}, "session_busy");
@@ -751,7 +756,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
         signal.addEventListener("abort", aborted, { once: true });
         // The turn is armed before `turn/start` is sent: a short turn can complete before its own
         // response arrives, and a completion for an unarmed turn would be lost.
-        const turn: ActiveTurn = { completion, input: { kind: "awaiting" }, turn: { id: "" } };
+        const turn: ActiveTurn = { completion, content, input: { kind: "awaiting" }, turn: { id: "" } };
         this.#agentMessages.clear();
         this.#streamedReasoningSources.clear();
         this.#turn = turn;
@@ -801,10 +806,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
     readonly steer = async (
         params: unknown,
         signal: AbortSignal,
-    ): Promise<
-        | { readonly outcome: "injected"; readonly messageId: string }
-        | { readonly outcome: "promptRequired"; readonly reason: string }
-    > => {
+    ): Promise<{ readonly outcome: "injected" } | { readonly outcome: "promptRequired"; readonly reason: string }> => {
         if (typeof params !== "object" || params === null) {
             throw new AcpExecutionError("Codex received an invalid steering request", {}, "invalid_request");
         }
@@ -821,18 +823,12 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
         if (steering.length === 0) {
             throw new AcpExecutionError("Codex received an empty steering request", {}, "invalid_request");
         }
-        if (this.#steeringInput !== null) {
-            throw new AcpExecutionError("Another steering request is pending", {}, "session_busy");
+        if (this.#steeringContent.length >= 100) {
+            throw new AcpExecutionError("Too many steering requests are pending consumption", {}, "session_busy");
         }
-        const pending: PendingSteeringInput = {
-            completion: Promise.withResolvers<string>(),
-            input: { kind: "awaiting" },
-        };
-        this.#steeringInput = pending;
-        void pending.completion.promise.catch(() => {});
+        const submitted = steering.map((block) => block.content);
+        this.#steeringContent.push(submitted);
         const bounded = AbortSignal.any([signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]);
-        const abort = (): void => pending.completion.reject(bounded.reason);
-        bounded.addEventListener("abort", abort, { once: true });
         try {
             const response = turnSteerResponseSchema.parse(
                 await this.#appServer.request(
@@ -848,18 +844,14 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
             if (response.turnId !== active.turn.id) {
                 throw new AcpExecutionError("Codex steered an unexpected turn", {}, "steering_target_unavailable");
             }
-            const messageId = await pending.completion.promise;
-            return { outcome: "injected", messageId };
+            // Native acceptance owns the input. Its user item and identity may arrive much later.
+            return { outcome: "injected" };
         } catch (cause) {
-            if (pending.input.kind === "identified" && !bounded.aborted) {
-                await promptResultWithMessageId(Promise.reject(cause), pending.input.messageId);
+            const index = this.#steeringContent.indexOf(submitted);
+            if (index !== -1) {
+                this.#steeringContent.splice(index, 1);
             }
             throw cause;
-        } finally {
-            bounded.removeEventListener("abort", abort);
-            if (this.#steeringInput === pending) {
-                this.#steeringInput = null;
-            }
         }
     };
 
