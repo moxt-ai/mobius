@@ -460,7 +460,7 @@ export class PlatformControlPlaneStorage {
     /**
      * The Projects a credential without all-Project access may use. Credentials issued before D1 owned this scope
      * kept it only in Project storage. A scoped credential always names a Project, so an empty D1 scope means it
-     * was not copied yet; the first read copies it, and D1 answers from then on.
+     * was not copied yet; this complete read copies it, and D1 answers from then on.
      */
     readonly credentialProjectIds = async (
         credential: Pick<CredentialRow, "all_projects" | "app_id" | "credential_id">,
@@ -469,18 +469,9 @@ export class PlatformControlPlaneStorage {
         if (credential.all_projects === 1) {
             return [];
         }
-        const database = platformDrizzle(this.#database);
-        const rows = await waitForD1(
-            () =>
-                database
-                    .select({ projectId: platformAppCredentialScope.projectId })
-                    .from(platformAppCredentialScope)
-                    .where(eq(platformAppCredentialScope.credentialId, credential.credential_id))
-                    .orderBy(asc(platformAppCredentialScope.projectId)),
-            signal,
-        );
-        if (rows.length > 0) {
-            return rows.map((row) => row.projectId);
+        const scope = await this.copiedScope(credential.credential_id, signal);
+        if (scope.length > 0) {
+            return scope;
         }
         const copied: { readonly projectId: string; readonly createdAt: number }[] = [];
         for (const project of await this.listProjects(credential.app_id, signal)) {
@@ -490,6 +481,7 @@ export class PlatformControlPlaneStorage {
             }
         }
         if (copied.length > 0) {
+            const database = platformDrizzle(this.#database);
             await waitForD1(
                 () =>
                     this.#database.batch(
@@ -506,6 +498,41 @@ export class PlatformControlPlaneStorage {
             );
         }
         return copied.map((row) => row.projectId).sort();
+    };
+
+    /**
+     * The candidates a scoped credential may use. Until its scope is copied to D1, only the candidates' Project
+     * storage is asked, so a request never depends on Projects it does not name.
+     */
+    readonly scopedProjects = async (
+        credentialId: string,
+        candidates: readonly string[],
+        signal: AbortSignal,
+    ): Promise<readonly string[]> => {
+        const scope = await this.copiedScope(credentialId, signal);
+        if (scope.length > 0) {
+            return candidates.filter((projectId) => scope.includes(projectId));
+        }
+        const scoped: string[] = [];
+        for (const projectId of candidates) {
+            if ((await this.projectStorageScope(credentialId, projectId, signal)) !== null) {
+                scoped.push(projectId);
+            }
+        }
+        return scoped;
+    };
+
+    private readonly copiedScope = async (credentialId: string, signal: AbortSignal): Promise<readonly string[]> => {
+        const rows = await waitForD1(
+            () =>
+                platformDrizzle(this.#database)
+                    .select({ projectId: platformAppCredentialScope.projectId })
+                    .from(platformAppCredentialScope)
+                    .where(eq(platformAppCredentialScope.credentialId, credentialId))
+                    .orderBy(asc(platformAppCredentialScope.projectId)),
+            signal,
+        );
+        return rows.map((row) => row.projectId);
     };
 
     readonly rotateAppCredential = async (

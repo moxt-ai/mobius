@@ -1175,7 +1175,8 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
             );
         }
         if (row.all_projects !== 1) {
-            const hasProject = (await this.#storage.credentialProjectIds(row, signal)).includes(projectId);
+            const hasProject =
+                (await this.#storage.scopedProjects(row.credential_id, [projectId], signal)).length === 1;
             if (!hasProject) {
                 throw new ProjectAuthenticationError(
                     "project_access_denied",
@@ -1211,8 +1212,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         if (row.all_projects === 1) {
             return Object.freeze(projects);
         }
-        const scope = new Set(await this.#storage.credentialProjectIds(row, signal));
-        return Object.freeze(projects.filter((projectId) => scope.has(projectId)));
+        return Object.freeze(await this.#storage.scopedProjects(row.credential_id, projects, signal));
     };
 
     private readonly createCredential = async (

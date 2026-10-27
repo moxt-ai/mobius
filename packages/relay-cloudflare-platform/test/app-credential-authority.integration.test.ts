@@ -308,6 +308,20 @@ it("Given a scoped AppCredential whose scope only Project storage holds, When it
     expect(rollbackScope).toEqual([legacy.credentialId, replacement.credentialId].sort());
 });
 
+it("Given a scoped AppCredential whose scope only Project storage holds, When an unrelated Project's storage fails, Then it is still authorized for its own Project", async () => {
+    const app = await application();
+    const other = await app.createProject("credential-authority-failing-project");
+    const legacy = await app.issueScopedCredential();
+    await env.PLATFORM_DIRECTORY_DATABASE.prepare("DELETE FROM platform_app_credential_scopes WHERE credential_id = ?")
+        .bind(legacy.credentialId)
+        .run();
+    await runInDurableObject(env.PROJECT_RELAY.getByName(other.projectId), (_instance, state) =>
+        state.storage.sql.exec("DROP TABLE platform_app_credential_projects"),
+    );
+
+    expect((await app.authenticateApp(legacy.credential)).status).toBe(201);
+});
+
 it("Given an active AppCredential, When rotation storage fails, Then the credential and audit changes roll back and a retry succeeds", async () => {
     const app = await application();
     const credentials = await app.listCredentials();
