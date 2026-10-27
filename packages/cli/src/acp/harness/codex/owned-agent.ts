@@ -134,12 +134,11 @@ interface ActiveTurn {
     readonly turn: { id: string };
 }
 
-export function agentMessageUpdate(nativeMessageId: string, text: string): CodexMessageUpdate {
+export function agentMessageUpdate(messageId: string, text: string): CodexMessageUpdate {
     // Commentary and final answers are public assistant messages; reasoning has separate events.
     return {
         content: { text, type: "text" },
-        messageId: nativeMessageId,
-        nativeMessageId,
+        messageId,
         sessionUpdate: "agent_message_chunk",
     };
 }
@@ -442,7 +441,6 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
                     await this.#context.emit({
                         content: { text: decoded.data.delta, type: "text" },
                         messageId: decoded.data.itemId,
-                        nativeMessageId: decoded.data.itemId,
                         sessionUpdate: "agent_thought_chunk",
                     });
                 });
@@ -536,7 +534,6 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
                     await this.#context.emit({
                         content: { text: reasoning, type: "text" },
                         messageId: item.id,
-                        nativeMessageId: item.id,
                         sessionUpdate: "agent_thought_chunk",
                     });
                 });

@@ -67,7 +67,6 @@ export async function replayCodexHistory(
                         await emit({
                             content: { type: "image", data: image.data, mimeType: image.mimeType },
                             messageId: item.id,
-                            nativeMessageId: item.id,
                             sessionUpdate: "user_message_chunk",
                         });
                     }
@@ -76,7 +75,6 @@ export async function replayCodexHistory(
                         await emit({
                             content: { text: restoredText, type: "text" },
                             messageId: item.id,
-                            nativeMessageId: item.id,
                             sessionUpdate: "user_message_chunk",
                         });
                     }
@@ -88,7 +86,6 @@ export async function replayCodexHistory(
                         await emit({
                             content: { text, type: "text" },
                             messageId: item.id,
-                            nativeMessageId: item.id,
                             sessionUpdate: "agent_thought_chunk",
                         });
                     }

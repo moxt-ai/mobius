@@ -8,7 +8,7 @@ import { type ClaudeSessionUpdate, createClaudeAcpApp } from "../../src/acp/harn
 import { ClaudeFixture } from "../support/agents/claude.ts";
 import { FakeAnthropicProvider } from "../support/llm/anthropic.ts";
 
-test("Given real Claude streams a message, When its harness emits chunks and replays history, Then each message has harness and native identities", async () => {
+test("Given real Claude streams a message, When its harness emits chunks and replays history, Then each message has a required messageId", async () => {
     await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "CLAUDE_IDENTITY_REPLY");
     await using fixture = await ClaudeFixture.create(provider);
     const cwd = await mkdtemp(join(tmpdir(), "mobius-claude-message-identity-"));
@@ -54,8 +54,6 @@ test("Given real Claude streams a message, When its harness emits chunks and rep
         expect(new Set(messages.map((update) => update.messageId)).size).toBe(1);
         for (const update of messages) {
             expect(update.messageId).toEqual(expect.any(String));
-            expect(update.nativeMessageId).toEqual(expect.any(String));
-            expect(update.nativeMessageId).toBe(update.messageId);
         }
         updates.length = 0;
         await connection.agent.request(
@@ -72,8 +70,6 @@ test("Given real Claude streams a message, When its harness emits chunks and rep
         expect(replay.length).toBeGreaterThan(0);
         for (const update of replay) {
             expect(update.messageId).toEqual(expect.any(String));
-            expect(update.nativeMessageId).toEqual(expect.any(String));
-            expect(update.messageId).toBe(update.nativeMessageId);
         }
     } finally {
         await claude.agent()?.dispose();

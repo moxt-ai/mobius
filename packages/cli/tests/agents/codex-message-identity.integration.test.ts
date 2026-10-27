@@ -130,8 +130,7 @@ test.each(["owned", "borrowed"])(
                     }),
                 );
                 for (const update of live) {
-                    expect(nativeIds).toContain(update.nativeMessageId);
-                    expect(update.messageId).toBe(update.nativeMessageId);
+                    expect(nativeIds).toContain(update.messageId);
                 }
                 updates.length = 0;
                 await connection.agent.request(
@@ -146,7 +145,7 @@ test.each(["owned", "borrowed"])(
                 const history = updates.filter((update) => update.sessionUpdate === "agent_message_chunk");
                 expect(history.length).toBeGreaterThan(0);
                 const historyIds = history.map((update) => update.messageId);
-                expect(new Set(history.map((update) => update.nativeMessageId))).toEqual(new Set(nativeIds));
+                expect(new Set(history.map((update) => update.messageId))).toEqual(new Set(nativeIds));
                 for (const update of live) {
                     expect(historyIds).toContain(update.messageId);
                 }

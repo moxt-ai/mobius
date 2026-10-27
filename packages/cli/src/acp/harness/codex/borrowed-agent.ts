@@ -136,7 +136,6 @@ export class CodexBorrowedAcpAgent implements CodexSessionAgent {
                             await this.#emit({
                                 sessionUpdate: "user_message_chunk",
                                 messageId: item.id,
-                                nativeMessageId: item.id,
                                 content: { type: "text", text },
                             });
                         }
@@ -158,7 +157,6 @@ export class CodexBorrowedAcpAgent implements CodexSessionAgent {
                                 sessionUpdate:
                                     item.type === "agentMessage" ? "agent_message_chunk" : "agent_thought_chunk",
                                 messageId: item.id,
-                                nativeMessageId: item.id,
                                 content: { type: "text", text },
                             });
                         }

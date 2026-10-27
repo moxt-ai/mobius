@@ -3168,7 +3168,6 @@ export class ClaudeAcpAgent {
                                     update: {
                                         sessionUpdate: "agent_message_chunk",
                                         messageId: message.uuid,
-                                        nativeMessageId: message.uuid,
                                         content: { type: "text", text: message.content },
                                     },
                                 });
@@ -3401,7 +3400,6 @@ export class ClaudeAcpAgent {
                                     update: {
                                         sessionUpdate: "agent_message_chunk",
                                         messageId: message.uuid,
-                                        nativeMessageId: message.uuid,
                                         content: { type: "text", text },
                                     },
                                 });
@@ -3565,7 +3563,6 @@ export class ClaudeAcpAgent {
                                     update: {
                                         sessionUpdate: "agent_message_chunk",
                                         messageId: message.uuid,
-                                        nativeMessageId: message.uuid,
                                         content: {
                                             type: "text",
                                             text: `**Model fallback:** ${message.original_model} declined this request${category}; retried with ${message.fallback_model}. ${outcome}${explanation}`,
@@ -3926,7 +3923,6 @@ export class ClaudeAcpAgent {
                                         update: {
                                             sessionUpdate: "agent_message_chunk",
                                             messageId: message.uuid,
-                                            nativeMessageId: message.uuid,
                                             content: { type: "text", text: lastRefusalExplanation },
                                         },
                                     });
@@ -5928,7 +5924,6 @@ export class ClaudeAcpAgent {
                 update: {
                     sessionUpdate: "agent_message_chunk",
                     messageId,
-                    nativeMessageId: messageId,
                     content: {
                         type: "text",
                         text: `**Fast mode turned off:** ${FAST_MODE_UNAVAILABLE_EXPLANATIONS[nextReason]}.`,
@@ -8028,14 +8023,13 @@ export function toAcpNotifications(
         if (content.length === 0) {
             return [];
         }
-        const nativeMessageId = options?.messageId;
-        if (typeof nativeMessageId !== "string" || nativeMessageId.length === 0) {
+        const messageId = options?.messageId;
+        if (typeof messageId !== "string" || messageId.length === 0) {
             throw RequestError.internalError({ code: "invalid_native_message_id" });
         }
         const update: SessionNotification["update"] = {
             sessionUpdate: role === "assistant" ? "agent_message_chunk" : "user_message_chunk",
-            messageId: nativeMessageId,
-            nativeMessageId,
+            messageId,
             content: {
                 type: "text",
                 text: content,
@@ -8077,14 +8071,13 @@ export function toAcpNotifications(
             case "text":
             case "text_delta": {
                 if (chunk.text) {
-                    const nativeMessageId = options?.messageId;
-                    if (typeof nativeMessageId !== "string" || nativeMessageId.length === 0) {
+                    const messageId = options?.messageId;
+                    if (typeof messageId !== "string" || messageId.length === 0) {
                         throw RequestError.internalError({ code: "invalid_native_message_id" });
                     }
                     update = {
                         sessionUpdate: role === "assistant" ? "agent_message_chunk" : "user_message_chunk",
-                        messageId: nativeMessageId,
-                        nativeMessageId,
+                        messageId,
                         content: {
                             type: "text",
                             text: chunk.text,
@@ -8094,14 +8087,13 @@ export function toAcpNotifications(
                 break;
             }
             case "image": {
-                const nativeMessageId = options?.messageId;
-                if (typeof nativeMessageId !== "string" || nativeMessageId.length === 0) {
+                const messageId = options?.messageId;
+                if (typeof messageId !== "string" || messageId.length === 0) {
                     throw RequestError.internalError({ code: "invalid_native_message_id" });
                 }
                 update = {
                     sessionUpdate: role === "assistant" ? "agent_message_chunk" : "user_message_chunk",
-                    messageId: nativeMessageId,
-                    nativeMessageId,
+                    messageId,
                     content: {
                         type: "image",
                         data: chunk.source.type === "base64" ? chunk.source.data : "",
@@ -8116,14 +8108,13 @@ export function toAcpNotifications(
                 // Recent models default `thinking.display` to "omitted", which streams
                 // signature-only thinking blocks whose text is empty.
                 if (chunk.thinking) {
-                    const nativeMessageId = options?.messageId;
-                    if (typeof nativeMessageId !== "string" || nativeMessageId.length === 0) {
+                    const messageId = options?.messageId;
+                    if (typeof messageId !== "string" || messageId.length === 0) {
                         throw RequestError.internalError({ code: "invalid_native_message_id" });
                     }
                     update = {
                         sessionUpdate: "agent_thought_chunk",
-                        messageId: nativeMessageId,
-                        nativeMessageId,
+                        messageId,
                         content: {
                             type: "text",
                             text: chunk.thinking,

@@ -7,7 +7,6 @@ type MessageUpdate = Extract<
 >;
 export type CodexMessageUpdate = MessageUpdate & {
     readonly messageId: string;
-    readonly nativeMessageId: string;
 };
 export type CodexSessionUpdate = CodexMessageUpdate | Exclude<SessionUpdate, MessageUpdate>;
 export interface CodexSessionNotification extends Omit<SessionNotification, "update"> {

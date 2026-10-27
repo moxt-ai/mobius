@@ -6,7 +6,6 @@ type MessageUpdate = Extract<
 >;
 export type ClaudeMessageUpdate = MessageUpdate & {
     readonly messageId: string;
-    readonly nativeMessageId: string;
 };
 export type ClaudeSessionUpdate = ClaudeMessageUpdate | Exclude<SessionUpdate, MessageUpdate>;
 export interface ClaudeSessionNotification extends Omit<SessionNotification, "update"> {

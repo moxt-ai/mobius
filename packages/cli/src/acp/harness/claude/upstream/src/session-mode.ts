@@ -218,7 +218,6 @@ export class SessionModeManager<S extends SessionMode> {
                 update: {
                     sessionUpdate: "agent_message_chunk",
                     messageId,
-                    nativeMessageId: messageId,
                     content: { type: "text", text: AUTO_MODE_FALLBACK_NOTICE },
                 },
             });
