@@ -1,5 +1,6 @@
 import { createDurableObjectContext, type DurableObjectSqlDatabase } from "@moxt-ai/mobius-relay-core";
 import { PlatformSessionRecording, platformRecordingProvider } from "../gateway/platform-session-recording.ts";
+import { PlatformSessionStatusNotifications } from "../gateway/platform-session-status-notifications.ts";
 import { PlatformProjectStorageDirectory } from "../infra/platform-project-storage-directory.ts";
 import { AppSessionStatusWebhookService } from "../service/app-session-status-webhook-service.ts";
 import { AppSessionStatusWebhookStorage } from "../storage/app-session-status-webhook-storage.ts";
@@ -39,9 +40,9 @@ export function createPlatformDurableObjectContext(
         recording: new PlatformSessionRecording(
             new RecordingPolicyStorage(environment.PLATFORM_DIRECTORY_DATABASE),
             platformRecordingProvider(environment),
-            webhookStorage,
-            webhookService,
-            (operation) => state.waitUntil(operation),
+        ),
+        notifications: new PlatformSessionStatusNotifications(webhookStorage, webhookService, (operation) =>
+            state.waitUntil(operation),
         ),
     });
 }
