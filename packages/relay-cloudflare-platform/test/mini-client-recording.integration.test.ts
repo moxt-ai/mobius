@@ -3,7 +3,9 @@ import { env } from "cloudflare:workers";
 import { DurableObjectSqlDatabase, RuntimeRelay } from "@moxt-ai/mobius-relay-core";
 import {
     decodeSessionRecordingDirectory,
+    decodeSessionRecordingDirectoryV2,
     decodeSessionRecordingHistory,
+    decodeSessionRecordingSummaryV2,
     encodeSessionEventEnvelope,
     MOBIUS_API_PREFIX,
 } from "@moxt-ai/mobius-sdk/protocol";
@@ -27,7 +29,6 @@ function bindings(): PlatformRelayBindings {
         throw new Error("Expected the Recording provider binding");
     }
     return {
-        APP_CREDENTIAL_CACHE: env.APP_CREDENTIAL_CACHE,
         MOBIUS_SESSION_WEBHOOK_SECRET_ENCRYPTION_KEY: env.MOBIUS_SESSION_WEBHOOK_SECRET_ENCRYPTION_KEY,
         PLATFORM_DIRECTORY_DATABASE: env.PLATFORM_DIRECTORY_DATABASE,
         PROJECT_RELAY: env.PROJECT_RELAY,
@@ -273,6 +274,32 @@ describe.sequential("Mini-client Recording integration", () => {
         expect(decodeSessionRecordingDirectory(JSON.stringify(directory))).toMatchObject({
             sessions: [{ sessionId, status: "idle", title: "Mini-client recording prompt" }],
         });
+        const summaryPath = `${relayOrigin}${MOBIUS_API_PREFIX}/v2/projects/${projectId}/recording/sessions`;
+        const metadata = await json(
+            await worker.request(
+                `${summaryPath}?runtimeId=${runtimeId}&sessionId=${sessionId}`,
+                { headers: { authorization: `Bearer ${credential}` } },
+                environment,
+            ),
+            200,
+        );
+        const summaries = decodeSessionRecordingDirectoryV2(JSON.stringify(metadata));
+        expect(summaries.sessions).toEqual([
+            expect.objectContaining({ sessionId, title: "Mini-client recording prompt" }),
+        ]);
+        expect(metadata).toEqual(summaries);
+        const single = await json(
+            await worker.request(
+                `${summaryPath}/${sessionId}?runtimeId=${runtimeId}`,
+                { headers: { authorization: `Bearer ${credential}` } },
+                environment,
+            ),
+            200,
+        );
+        expect(single).toEqual(decodeSessionRecordingSummaryV2(JSON.stringify(single)));
+        expect(single).toEqual(summaries.sessions[0]);
+        const denied = await worker.request(`${summaryPath}?runtimeId=${runtimeId}`, {}, environment);
+        expect(denied.status).toBe(401);
     });
 
     it("Given an Agent streaming hundreds of reply chunks back to back, When history is read, Then every chunk is recorded in order", async () => {

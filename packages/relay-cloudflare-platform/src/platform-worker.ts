@@ -55,7 +55,11 @@ import {
 import { routeRuntimeSessionRequest } from "./gateway/runtime-session-routing.ts";
 import { createPlatformControlApplication } from "./http/platform-routes.ts";
 import { createProjectApplication } from "./http/project-routes.ts";
-import { recordingReadRoutes, recordingSessionStatusRoutes } from "./http/recording-read-routes.ts";
+import {
+    recordingReadRoutes,
+    recordingSessionStatusRoutes,
+    recordingSummaryV2Routes,
+} from "./http/recording-read-routes.ts";
 import { ClerkOrganizationGateway } from "./infra/clerk-organization-gateway.ts";
 import type { OrganizationMembershipGateway } from "./infra/organization-membership-gateway.ts";
 import { PlatformProjectStorageDirectory } from "./infra/platform-project-storage-directory.ts";
@@ -70,7 +74,6 @@ import { OrganizationInviteService } from "./service/organization-invite-service
 import { PlatformControlPlaneService } from "./service/platform-control-plane-service.ts";
 import { RecordingPolicyService } from "./service/recording-policy-service.ts";
 import { SessionAccessService, type SessionAccessTarget } from "./service/session-access-service.ts";
-import { AppCredentialCacheStorage } from "./storage/app-credential-cache-storage.ts";
 import { AppSessionStatusWebhookStorage } from "./storage/app-session-status-webhook-storage.ts";
 import { OrganizationInviteStorage } from "./storage/organization-invite-storage.ts";
 import { PlatformControlPlaneStorage } from "./storage/platform-control-plane-storage.ts";
@@ -84,7 +87,6 @@ import { RecordingPolicyStorage } from "./storage/recording-policy-storage.ts";
 
 export interface PlatformRelayBindings extends PlatformStorageBindings, ProjectWorkerRoutingBindings {
     readonly CLERK_SECRET_KEY?: string;
-    readonly APP_CREDENTIAL_CACHE: KVNamespace;
     readonly MOBIUS_SESSION_EVENT_PUSH_SECRET?: string;
     readonly MOBIUS_SESSION_STATUS_WEBHOOK_URL?: string;
     readonly MOBIUS_SESSION_WEBHOOK_SECRET_ENCRYPTION_KEY?: string;
@@ -889,20 +891,16 @@ export function createPlatformApplication(
             const projectDatabases = execution === null ? [] : [execution.database];
             const controlStorage = new PlatformControlPlaneStorage(environment.PLATFORM_DIRECTORY_DATABASE, databases);
             const storageRegistry = new PlatformStorageRegistry(environment);
-            const appAuthentication = new AppCredentialAuthenticationService(
-                controlStorage,
-                new AppCredentialCacheStorage(environment.APP_CREDENTIAL_CACHE),
-                {
-                    waitUntil: (operation) => {
-                        try {
-                            context.executionCtx.waitUntil(operation);
-                        } catch {
-                            // Direct application callers do not provide a Worker execution context.
-                            // The already-started operation remains best-effort for those adapters.
-                        }
-                    },
+            const appAuthentication = new AppCredentialAuthenticationService(controlStorage, {
+                waitUntil: (operation) => {
+                    try {
+                        context.executionCtx.waitUntil(operation);
+                    } catch {
+                        // Direct application callers do not provide a Worker execution context.
+                        // The already-started operation remains best-effort for those adapters.
+                    }
                 },
-            );
+            });
             const control = new PlatformControlPlaneService(
                 controlStorage,
                 authentication,
@@ -953,6 +951,7 @@ export function createPlatformApplication(
             await next();
         })
         .route(MOBIUS_API_PREFIX, new Hono<DispatchEnvironment>().route("/v1", versionedRoutes))
+        .route(`${MOBIUS_API_PREFIX}/v2/projects/:projectId/recording`, recordingSummaryV2Routes)
         .all("*", (context) => projectApplication.fetch(context.req.raw, context.var.relay));
     const platformApplication: Hono<{ Bindings: PlatformApplicationBindings }> = new Hono<{
         Bindings: PlatformApplicationBindings;

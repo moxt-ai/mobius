@@ -18,7 +18,7 @@ import {
 import { packedRelease } from "../support/packed-daemon-release.ts";
 
 describe("Daemon hourly npm upgrade", () => {
-    it("Given a CLI outside the managed installation, When start and upgrade run, Then both use managed releases and failed upgrades roll back", async () => {
+    it("Given a CLI outside the managed installation, When start and upgrade run, Then both use managed releases and failed upgrades roll back and discard the failed version's data", async () => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-upgrade-journey-"));
         const signal = AbortSignal.timeout(240_000);
         const stateRoot = join(directory, "state");
@@ -254,6 +254,8 @@ describe("Daemon hourly npm upgrade", () => {
                     await sendLocalRequest(control.stateDirectory, "manager", { kind: "status" }, signal),
                 ).toMatchObject({ worker: { version: reuse } });
             }
+            // Data for the failing version that is not current, as its CLI leaves when it runs before the switch.
+            await cp(join(stateRoot, "versions", reuse), join(stateRoot, "versions", bad), { recursive: true });
             latest = bad;
             await tick(manager, 2_000);
             await tick(await readFile(join(control.stateDirectory, "worker.lock"), "utf8"), 3_600_000);
@@ -271,6 +273,10 @@ describe("Daemon hourly npm upgrade", () => {
             expect(await sendLocalRequest(control.stateDirectory, "manager", { kind: "status" }, signal)).toMatchObject(
                 { worker: { version: reuse } },
             );
+            // The rolled-back version's data never became current, so its next attempt inherits the current data.
+            await expect(readFile(join(stateRoot, "versions", bad, "retained-data"))).rejects.toMatchObject({
+                code: "ENOENT",
+            });
             const worker = await readFile(join(control.stateDirectory, "worker.lock"), "utf8");
             const queriesBeforeCooldown = queries;
             await tick(worker, 7 * 3_600_000);

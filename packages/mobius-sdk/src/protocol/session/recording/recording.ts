@@ -32,6 +32,7 @@ const sessionRecordingHistorySchema = z
     })
     .readonly();
 
+/** Legacy lifecycle observations from recorded events; never authoritative execution state. */
 export const sessionRecordingStatusSchema = z.enum(["running", "idle", "failed"]);
 
 // Recording cursors are opaque append-order tokens. The ordinal locates a recorded batch and the
@@ -54,17 +55,24 @@ const sessionRecordingHistoryPageSchema = z
     })
     .readonly();
 
+const sessionRecordingSummaryFields = {
+    additionalDirectoryIds: z.array(DIRECTORY_IDENTIFIER).max(16).readonly(),
+    agentId: identifierStringSchema,
+    directoryId: DIRECTORY_IDENTIFIER,
+    runtimeId: identifierStringSchema,
+    sessionId: identifierStringSchema,
+    title: z.string().max(1_000),
+    updatedAt: z.iso.datetime({ offset: true }),
+};
+
+const sessionRecordingSummaryV2Schema = z.object(sessionRecordingSummaryFields).readonly();
+const sessionRecordingDirectoryV2Schema = z
+    .object({ sessions: z.array(sessionRecordingSummaryV2Schema).max(100_000).readonly() })
+    .readonly();
+
+// Preserve the V1 wire contract for existing SDKs while V2 carries metadata only.
 const sessionRecordingSummarySchema = z
-    .object({
-        additionalDirectoryIds: z.array(DIRECTORY_IDENTIFIER).max(16).readonly(),
-        agentId: identifierStringSchema,
-        directoryId: DIRECTORY_IDENTIFIER,
-        runtimeId: identifierStringSchema,
-        sessionId: identifierStringSchema,
-        status: sessionRecordingStatusSchema,
-        title: z.string().max(1_000),
-        updatedAt: z.iso.datetime({ offset: true }),
-    })
+    .object({ ...sessionRecordingSummaryFields, status: sessionRecordingStatusSchema })
     .readonly();
 
 const sessionRecordingDirectorySchema = z
@@ -76,9 +84,13 @@ const sessionRecordingDirectorySchema = z
 export type SessionRecordingWrite = z.infer<typeof sessionRecordingWriteSchema>;
 export type SessionRecordingHistory = z.infer<typeof sessionRecordingHistorySchema>;
 export type SessionRecordingHistoryPage = z.infer<typeof sessionRecordingHistoryPageSchema>;
+/** @deprecated Use SessionRecordingSummaryV2; query the daemon for current execution state. */
 export type SessionRecordingSummary = z.infer<typeof sessionRecordingSummarySchema>;
 export type SessionRecordingStatus = z.infer<typeof sessionRecordingStatusSchema>;
+/** @deprecated Use SessionRecordingDirectoryV2 with the V2 Recording summary endpoints. */
 export type SessionRecordingDirectory = z.infer<typeof sessionRecordingDirectorySchema>;
+export type SessionRecordingSummaryV2 = z.infer<typeof sessionRecordingSummaryV2Schema>;
+export type SessionRecordingDirectoryV2 = z.infer<typeof sessionRecordingDirectoryV2Schema>;
 
 export const decodeSessionRecordingWrite = (encoded: string): SessionRecordingWrite =>
     decode(encoded, sessionRecordingWriteSchema);
@@ -98,8 +110,18 @@ export const decodeSessionRecordingHistoryPage = (encoded: string): SessionRecor
 export const encodeSessionRecordingHistoryPage = (value: SessionRecordingHistoryPage): string =>
     encode(value, sessionRecordingHistoryPageSchema);
 
+/** @deprecated Use decodeSessionRecordingDirectoryV2 with the V2 Recording summary endpoints. */
 export const decodeSessionRecordingDirectory = (encoded: string): SessionRecordingDirectory =>
     decode(encoded, sessionRecordingDirectorySchema);
 
 export const encodeSessionRecordingDirectory = (value: SessionRecordingDirectory): string =>
     encode(value, sessionRecordingDirectorySchema);
+
+export const decodeSessionRecordingSummaryV2 = (encoded: string): SessionRecordingSummaryV2 =>
+    decode(encoded, sessionRecordingSummaryV2Schema);
+
+export const decodeSessionRecordingDirectoryV2 = (encoded: string): SessionRecordingDirectoryV2 =>
+    decode(encoded, sessionRecordingDirectoryV2Schema);
+
+export const encodeSessionRecordingDirectoryV2 = (value: SessionRecordingDirectoryV2): string =>
+    encode(value, sessionRecordingDirectoryV2Schema);

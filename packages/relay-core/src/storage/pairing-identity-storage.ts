@@ -10,7 +10,7 @@ import {
     channelHostCredential,
     pairingChannel,
     projectBrowserCredential,
-} from "../schema/d1/index.ts";
+} from "../schema/project-do/index.ts";
 
 export interface IdentityDatabaseSource {
     readonly sourceId: string;

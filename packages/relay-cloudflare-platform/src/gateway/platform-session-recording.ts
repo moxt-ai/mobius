@@ -9,6 +9,7 @@ import {
     encodeSessionRecordingWrite,
     encodeSessionStatusWebhookBody,
     isIdentifier,
+    lastRecordedLifecycleStatus,
     type SessionEvent,
     type SessionEventEnvelope,
     type SessionStatusWebhookCommand,
@@ -152,7 +153,10 @@ export class PlatformSessionRecording implements SessionRecording {
                 if (result.kind !== "recorded" || commands.length === 0) {
                     continue;
                 }
-                const notification: TerminalStatusNotification = { commands, status: terminalStatus(events) ?? "idle" };
+                const notification: TerminalStatusNotification = {
+                    commands,
+                    status: lastRecordedLifecycleStatus(events) ?? "idle",
+                };
                 // A slow webhook must not hold every Session in an already committed Recording batch.
                 const publication = this.#webhookMessages
                     .run(
@@ -280,29 +284,6 @@ export class PlatformSessionRecording implements SessionRecording {
         }
     }
 }
-function terminalStatus(events: readonly SessionEvent[]): "running" | "idle" | "failed" | null {
-    let status: "running" | "idle" | "failed" | null = null;
-    for (const event of events) {
-        if (event.type !== "lifecycle-metadata") {
-            continue;
-        }
-        switch (event.payload.kind) {
-            case "prompt.requested":
-            case "prompt.started":
-                status = "running";
-                break;
-            case "prompt.completed":
-                status = "idle";
-                break;
-            case "prompt.failed":
-            case "prompt.failed-before-start":
-                status = "failed";
-                break;
-        }
-    }
-    return status;
-}
-
 /**
  * The commands this delivery watched finish, newest terminal outcome per command. The delivery only
  * observes the events it carries, so a command that ended earlier is absent here and must not be

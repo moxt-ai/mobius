@@ -7,6 +7,7 @@ import {
     lifecycleCommand,
     type WorkerLaunch,
 } from "../control/protocol.ts";
+import { discardRolledBackData } from "../upgrades/data.ts";
 import { surviveUnhandledRejections } from "./unhandled-rejection.ts";
 import { WorkerLifecycleLog } from "./worker-lifecycle-log.ts";
 import { decodeWorkerLaunch, WorkerProcess, WorkerStartupError } from "./worker-process.ts";
@@ -107,6 +108,7 @@ export async function runManager(stateDirectory: string, signal: AbortSignal): P
                 retryAfter: Date.now() + 8 * 3_600_000,
             };
             await start(transition.previous);
+            await discardRolledBackData(transition.next.version, combined);
         }
     };
     const handle = async (value: unknown, requestSignal: AbortSignal): Promise<LifecycleResponse> => {

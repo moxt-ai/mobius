@@ -1,7 +1,7 @@
 import { decodeProjectPermissions, hashSecret, ProjectAuthenticationError } from "@moxt-ai/mobius-relay-core";
+import { DatabaseError } from "@moxt-ai/mobius-relay-core/database";
 import { type PlatformApplicationIdentity, PlatformControlPlaneError } from "../entity/platform-control-plane.ts";
 import type { CredentialRow } from "../entity/platform-records.ts";
-import { AppCredentialCacheError, type AppCredentialCacheStorage } from "../storage/app-credential-cache-storage.ts";
 import type { PlatformControlPlaneStorage } from "../storage/platform-control-plane-storage.ts";
 
 export interface AppCredentialBackgroundTasks {
@@ -10,16 +10,13 @@ export interface AppCredentialBackgroundTasks {
 
 export class AppCredentialAuthenticationService {
     readonly #storage: Pick<PlatformControlPlaneStorage, "readCredentialByPublicId" | "touchCredential">;
-    readonly #cache: AppCredentialCacheStorage;
     readonly #backgroundTasks: AppCredentialBackgroundTasks;
 
     constructor(
         storage: Pick<PlatformControlPlaneStorage, "readCredentialByPublicId" | "touchCredential">,
-        cache: AppCredentialCacheStorage,
         backgroundTasks: AppCredentialBackgroundTasks,
     ) {
         this.#storage = storage;
-        this.#cache = cache;
         this.#backgroundTasks = backgroundTasks;
     }
 
@@ -54,85 +51,53 @@ export class AppCredentialAuthenticationService {
         }
         const digest = await hashSecret(credentialValue);
         signal.throwIfAborted();
-        const cached = await this.#cache.read(digest, signal);
-        if (cached !== null && cached.public_credential_id === publicCredentialId) {
-            this.requireActive(cached);
-            return cached;
-        }
-        const validatedAt = Date.now();
-        const row = await this.#storage.readCredentialByPublicId(publicCredentialId, signal);
-        if (row === null) {
-            throw new ProjectAuthenticationError("project_credential_invalid", "The AppCredential is invalid");
-        }
+        const row = await this.readCredential(publicCredentialId, signal);
         if (!constantTimeEqual(digest, row.secret_digest)) {
             throw new ProjectAuthenticationError("project_credential_invalid", "The AppCredential is invalid");
         }
-        if (this.isInactive(row)) {
-            await this.#cache.write(row, validatedAt, signal);
-            this.requireActive(row);
-        }
         const now = Date.now();
-        if (!(await this.#storage.touchCredential(row.credential_id, now, signal))) {
-            throw new ProjectAuthenticationError("credential_revoked", "The AppCredential is no longer active");
-        }
-        const used = { ...row, last_used_at: now };
-        await this.#cache.write(used, validatedAt, signal);
-        this.requireActive(used);
-        return used;
+        requireActiveCredential(row, now);
+        this.touchLater(row.credential_id, now);
+        return row;
     };
 
     readonly readActiveCredentialByPublicId = async (
         publicCredentialId: string,
         signal: AbortSignal,
     ): Promise<CredentialRow> => {
-        signal.throwIfAborted();
-        const cached = await this.#cache.readByPublicId(publicCredentialId, signal);
-        if (cached !== null) {
-            this.requireActive(cached);
-            this.touchLater(cached.credential_id);
-            return cached;
-        }
-        const validatedAt = Date.now();
-        const credential = await this.#storage.readCredentialByPublicId(publicCredentialId, signal);
-        if (credential === null) {
-            throw new ProjectAuthenticationError("project_credential_invalid", "The AppCredential is invalid");
-        }
-        this.requireActive(credential);
-        await this.#cache.write(credential, validatedAt, signal);
-        this.touchLater(credential.credential_id);
+        const credential = await this.readCredential(publicCredentialId, signal);
+        const now = Date.now();
+        requireActiveCredential(credential, now);
+        this.touchLater(credential.credential_id, now);
         return credential;
     };
 
-    readonly invalidate = async (row: CredentialRow, signal: AbortSignal): Promise<void> => {
+    private readonly readCredential = async (
+        publicCredentialId: string,
+        signal: AbortSignal,
+    ): Promise<CredentialRow> => {
+        signal.throwIfAborted();
         try {
-            await this.#cache.invalidate(row, signal);
+            // Read the D1 primary on every authorization. A snapshot may serve this check only;
+            // checks started after a committed revocation must observe that revocation.
+            const row = await this.#storage.readCredentialByPublicId(publicCredentialId, signal);
+            if (row === null) {
+                throw new ProjectAuthenticationError("project_credential_invalid", "The AppCredential is invalid");
+            }
+            return row;
         } catch (cause) {
             signal.throwIfAborted();
-            throw new PlatformControlPlaneError(
-                cause instanceof AppCredentialCacheError && cause.code === "app_credential_cache_timeout"
-                    ? "app_credential_cache_invalidation_timeout"
-                    : "app_credential_cache_invalidation_failed",
-                "The credential changed but its cache could not be invalidated",
-                503,
-                { cause },
-            );
+            if (
+                cause instanceof DatabaseError &&
+                (cause.code === "database_unavailable" || cause.code === "database_timeout")
+            ) {
+                throw new PlatformControlPlaneError(cause.code, "App authentication is unavailable", 503, { cause });
+            }
+            throw cause;
         }
     };
 
-    private readonly isInactive = (row: CredentialRow): boolean =>
-        row.revoked_at !== null ||
-        (row.replaced_by_credential_id !== null &&
-            (typeof row.overlap_ends_at !== "number" || row.overlap_ends_at <= Date.now())) ||
-        row.app_lifecycle !== "active" ||
-        row.tenant_lifecycle !== "active";
-
-    private readonly requireActive = (row: CredentialRow): void => {
-        if (this.isInactive(row)) {
-            throw new ProjectAuthenticationError("credential_revoked", "The AppCredential is no longer active");
-        }
-    };
-
-    private readonly touchLater = (credentialId: string): void => {
+    private readonly touchLater = (credentialId: string, usedAt: number): void => {
         // Authorization runs in RuntimeRelay too; an uncancellable AbortSignal.timeout would keep it awake
         // for the whole deadline after a fast update.
         const timeout = new AbortController();
@@ -141,7 +106,7 @@ export class AppCredentialAuthenticationService {
             15_000,
         );
         const operation = this.#storage
-            .touchCredential(credentialId, Date.now(), timeout.signal)
+            .touchCredential(credentialId, usedAt, timeout.signal)
             .then((updated) => {
                 if (!updated) {
                     console.warn("App credential last-used update skipped", {
@@ -160,6 +125,18 @@ export class AppCredentialAuthenticationService {
             .finally(() => clearTimeout(timer));
         this.#backgroundTasks.waitUntil(operation);
     };
+}
+
+function requireActiveCredential(row: CredentialRow, now: number): void {
+    if (
+        row.revoked_at !== null ||
+        (row.replaced_by_credential_id !== null &&
+            (typeof row.overlap_ends_at !== "number" || row.overlap_ends_at <= now)) ||
+        row.app_lifecycle !== "active" ||
+        row.tenant_lifecycle !== "active"
+    ) {
+        throw new ProjectAuthenticationError("credential_revoked", "The AppCredential is no longer active");
+    }
 }
 
 function constantTimeEqual(left: string, right: string): boolean {
