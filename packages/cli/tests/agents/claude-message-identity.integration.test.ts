@@ -1,9 +1,12 @@
+import { addAbortListener } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { methods, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import { expect, test } from "vitest";
+import { z } from "zod";
 import { createAcpClient } from "../../src/acp/connection/create-client.ts";
+import { getEnvironmentSessionMessages } from "../../src/acp/harness/claude/upstream/dist/environment-session-messages.js";
 import { type ClaudeSessionUpdate, createClaudeAcpApp } from "../../src/acp/harness/claude/upstream/dist/lib.js";
 import { ClaudeFixture } from "../support/agents/claude.ts";
 import { FakeAnthropicProvider } from "../support/llm/anthropic.ts";
@@ -13,10 +16,20 @@ test("Given real Claude streams a message, When its harness emits chunks and rep
     await using fixture = await ClaudeFixture.create(provider);
     const cwd = await mkdtemp(join(tmpdir(), "mobius-claude-message-identity-"));
     const updates: ClaudeSessionUpdate[] = [];
+    const followUp = "A new prompt from idle steering";
+    const submittedFollowUp = Promise.withResolvers<string>();
+    const environment = { ...process.env, ...fixture.environment, CLAUDE_CODE_EXECUTABLE: fixture.executable };
     const claude = createClaudeAcpApp({
-        environment: { ...process.env, ...fixture.environment, CLAUDE_CODE_EXECUTABLE: fixture.executable },
+        environment,
         onSessionUpdate: async ({ update }) => {
             updates.push(update);
+            if (
+                update.sessionUpdate === "user_message_chunk" &&
+                update.content.type === "text" &&
+                update.content.text === followUp
+            ) {
+                submittedFollowUp.resolve(update.messageId);
+            }
         },
     });
     const connection = createAcpClient({
@@ -41,11 +54,15 @@ test("Given real Claude streams a message, When its harness emits chunks and rep
             { cwd, mcpServers: [] },
             { cancellationSignal: signal },
         );
-        await connection.agent.request(
+        const result = await connection.agent.request(
             methods.agent.session.prompt,
             { sessionId, prompt: [{ type: "text", text: "Stream a short greeting, without tools" }] },
             { cancellationSignal: signal },
         );
+        const userMessages = updates.filter((update) => update.sessionUpdate === "user_message_chunk");
+        expect(userMessages).toHaveLength(1);
+        expect(userMessages[0]?.messageId).toEqual(expect.any(String));
+        expect(result._meta?.["messageId"]).toBe(userMessages[0]?.messageId);
         const messages = updates.filter((update) => update.sessionUpdate === "agent_message_chunk");
         expect(messages.length).toBeGreaterThan(1);
         expect(
@@ -71,6 +88,33 @@ test("Given real Claude streams a message, When its harness emits chunks and rep
         for (const update of replay) {
             expect(update.messageId).toEqual(expect.any(String));
         }
+        expect(
+            replay.filter((update) => update.sessionUpdate === "user_message_chunk").map((update) => update.messageId),
+        ).toContain(userMessages[0]?.messageId);
+        const steering = z
+            .object({ outcome: z.literal("startedNewTurn"), messageId: z.string().min(1) })
+            .parse(
+                await connection.agent.request(
+                    "_session/steering",
+                    { sessionId, prompt: [{ type: "text", text: followUp }] },
+                    { cancellationSignal: signal },
+                ),
+            );
+        using _listener = addAbortListener(signal, () => {
+            submittedFollowUp.reject(signal.reason);
+        });
+        expect(await submittedFollowUp.promise).toBe(steering.messageId);
+        // A subsequent completed prompt proves the detached input has passed through Claude,
+        // rather than mistaking an earlier turn's trailing output for its persistence boundary.
+        await connection.agent.request(
+            methods.agent.session.prompt,
+            { sessionId, prompt: [{ type: "text", text: "Finish with a short confirmation" }] },
+            { cancellationSignal: signal },
+        );
+        const saved = await getEnvironmentSessionMessages(environment, sessionId, signal);
+        expect(saved.filter((message) => message.type === "user")).toEqual(
+            expect.arrayContaining([expect.objectContaining({ uuid: steering.messageId })]),
+        );
     } finally {
         await claude.agent()?.dispose();
         connection.close();

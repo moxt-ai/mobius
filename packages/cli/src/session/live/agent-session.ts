@@ -8,7 +8,7 @@ import {
     type SessionConfigOption,
     type SessionEventPayload,
 } from "@moxt-ai/mobius-sdk/protocol";
-import { AcpExecutionError } from "../../acp/acp-error.ts";
+import { AcpExecutionError, AcpPromptExecutionError } from "../../acp/acp-error.ts";
 import {
     initializeAgentConnection,
     RetryableAcpInitializationError,
@@ -610,7 +610,12 @@ export class AgentSession implements AgentSessionRestore {
             this.writeStoredSession(new Date().toISOString());
             if (lifecycle !== undefined) {
                 await this.recordLifecycleEvent({
-                    payload: { commandId: options.commandId, kind: "prompt.completed", stopReason: result.stopReason },
+                    payload: {
+                        commandId: options.commandId,
+                        kind: "prompt.completed",
+                        messageId: result.messageId,
+                        stopReason: result.stopReason,
+                    },
                     type: "lifecycle-metadata",
                 });
             }
@@ -630,6 +635,9 @@ export class AgentSession implements AgentSessionRestore {
                                   code: failure.code,
                                   commandId: options.commandId,
                                   kind: "prompt.failed",
+                                  ...(failure instanceof AcpPromptExecutionError
+                                      ? { messageId: failure.messageId }
+                                      : {}),
                                   message: truncate(failure.message, 500),
                               },
                     type: "lifecycle-metadata",
@@ -683,11 +691,16 @@ export class AgentSession implements AgentSessionRestore {
             const outcome = await this.#adapter.steer(this.#target(), options, options.signal);
             if (lifecycle !== undefined) {
                 await this.recordLifecycleEvent({
-                    payload: { commandId: options.commandId, kind: "prompt.completed", stopReason: "steered" },
+                    payload: {
+                        commandId: options.commandId,
+                        kind: "prompt.completed",
+                        messageId: outcome.messageId,
+                        stopReason: "steered",
+                    },
                     type: "lifecycle-metadata",
                 });
             }
-            return outcome;
+            return outcome.outcome;
         } catch (error) {
             const failure =
                 error instanceof AcpExecutionError
@@ -700,6 +713,7 @@ export class AgentSession implements AgentSessionRestore {
                         code: failure.code,
                         commandId: options.commandId,
                         kind: "prompt.failed",
+                        ...(failure instanceof AcpPromptExecutionError ? { messageId: failure.messageId } : {}),
                         message: truncate(failure.message, 500),
                     },
                     type: "lifecycle-metadata",

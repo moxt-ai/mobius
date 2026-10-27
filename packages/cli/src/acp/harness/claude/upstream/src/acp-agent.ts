@@ -143,6 +143,7 @@ import { decodeClaudePermissionResponse } from "./permissions/response.js";
 import { DEFAULT_AGENT_ID, EFFORT_CONFIG_ID } from "./session-config-ids.js";
 import { SessionTitles, sanitizeTitle } from "./session-titles.js";
 import type { ClaudeSessionNotification, ClaudeSessionNotification as SessionNotification } from "./session-update.js";
+import { promptResultWithMessageId } from "./session-update.js";
 import { SettingsManager } from "./settings.js";
 import { parseToolResultMeta } from "./tool-result-meta.js";
 import {
@@ -320,8 +321,8 @@ export type SteerRequest = {
  *  remains the default idle behavior; `promptRequired` is returned only when the
  *  Host explicitly opts into the host-owned fallback in request `_meta`. */
 export type SteerResponse =
-    | { outcome: "injected" }
-    | { outcome: "startedNewTurn" }
+    | { outcome: "injected"; readonly messageId: string }
+    | { outcome: "startedNewTurn"; readonly messageId: string }
     | { outcome: "promptRequired"; reason: "noRunningTurn" };
 
 /** Validate raw JSON-RPC params into a {@link SteerRequest}. Kept minimal — the
@@ -2029,6 +2030,14 @@ export class ClaudeAcpAgent {
     }
 
     async prompt(params: PromptRequest): Promise<PromptResponse> {
+        const messageId = randomUUID();
+        return promptResultWithMessageId(this.promptWithMessageId(params, messageId), messageId);
+    }
+
+    private async promptWithMessageId(
+        params: PromptRequest,
+        promptUuid: ReturnType<typeof randomUUID>,
+    ): Promise<PromptResponse> {
         if (this.providerUpdate !== null) {
             await this.providerUpdate;
         }
@@ -2052,8 +2061,13 @@ export class ClaudeAcpAgent {
         }
 
         const userMessage = promptToClaude(params);
-        const promptUuid = randomUUID();
         userMessage.uuid = promptUuid;
+        for (const content of params.prompt) {
+            await this.client.sessionUpdate({
+                sessionId: params.sessionId,
+                update: { sessionUpdate: "user_message_chunk", messageId: promptUuid, content },
+            });
+        }
 
         // Local-only commands (e.g. `/clear`) return a result without replaying the
         // user message, so the consumer can't promote the turn from the echo.
@@ -2221,10 +2235,12 @@ export class ClaudeAcpAgent {
 
             // Preserve the established default for Hosts that do not opt in. This is
             // intentionally detached for compatibility with the existing contract.
-            this.prompt(promptRequest).catch((error) => {
+            // This is the UUID assigned to the submitted SDK user message, not a separate acknowledgement ID.
+            const messageId = randomUUID();
+            promptResultWithMessageId(this.promptWithMessageId(promptRequest, messageId), messageId).catch((error) => {
                 this.logger.error(`Session ${sessionId}: steered new turn failed: ${error}`);
             });
-            return { outcome: "startedNewTurn" };
+            return { outcome: "startedNewTurn", messageId };
         }
 
         const promptRequest: PromptRequest = {
@@ -2252,8 +2268,14 @@ export class ClaudeAcpAgent {
         }
         session.input.push(userMessage);
         const firstText = params.prompt[0]?.type === "text" ? params.prompt[0].text : "";
+        for (const content of params.prompt) {
+            await this.client.sessionUpdate({
+                sessionId,
+                update: { sessionUpdate: "user_message_chunk", messageId: steeredUuid, content },
+            });
+        }
         await this.publishGoalFromPrompt(sessionId, firstText, steeredUuid);
-        return { outcome: "injected" };
+        return { outcome: "injected", messageId: steeredUuid };
     }
 
     /** Lazily start the per-session consumer that drains the SDK query stream for

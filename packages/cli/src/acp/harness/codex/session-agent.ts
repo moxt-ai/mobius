@@ -9,7 +9,10 @@ export interface CodexSessionAgent {
     readonly steer: (
         params: unknown,
         signal: AbortSignal,
-    ) => Promise<{ readonly outcome: "injected" | "promptRequired"; readonly reason?: string }>;
+    ) => Promise<
+        | { readonly outcome: "injected"; readonly messageId: string }
+        | { readonly outcome: "promptRequired"; readonly reason: string }
+    >;
     readonly cancel: () => Promise<void>;
     readonly close: () => Promise<void>;
     readonly nativeTurnId: () => string | null;

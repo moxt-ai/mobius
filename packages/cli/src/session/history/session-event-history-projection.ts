@@ -161,22 +161,7 @@ export class SessionEventHistoryProjection {
     ): SessionEventHistoryProjectionMutation => {
         if (liveEvent.type === "lifecycle-metadata") {
             this.#latestEvent = null;
-            const prompt = liveEvent.payload;
-            if (prompt.kind === "prompt.requested") {
-                // Retain user content, not the execution lifecycle envelope. Keep the
-                // first identity so a history handoff replaces the live prompt bubble.
-                const events = prompt.content.map(
-                    (content, index): AcpSessionEvent => ({
-                        eventId: index === 0 ? liveEvent.eventId : `${liveEvent.eventId}-content-${index}`,
-                        payload: { content, messageId: liveEvent.eventId, sessionUpdate: "user_message_chunk" },
-                        recordedAt: liveEvent.recordedAt,
-                        sessionGenerationId: liveEvent.sessionGenerationId,
-                        sessionId: liveEvent.sessionId,
-                        type: "acp",
-                    }),
-                );
-                return { events, kind: "append" };
-            }
+            // User content arrives as explicit ACP chunks after prompt.requested.
             return { kind: "skip" };
         }
         if (liveEvent.type === "acp" && liveEvent.payload.sessionUpdate === "tool_call_update") {

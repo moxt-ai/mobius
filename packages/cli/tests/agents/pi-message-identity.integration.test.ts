@@ -57,12 +57,16 @@ test("Given real Pi streams multiple messages, When the harness emits chunks, re
             "Stream another short greeting, without tools",
         ]) {
             updates.length = 0;
-            await connection.agent.request(
+            const result = await connection.agent.request(
                 methods.agent.session.prompt,
                 { sessionId, prompt: [{ type: "text", text: prompt }] },
                 { cancellationSignal: signal },
             );
             const messages = updates.filter((update) => update.sessionUpdate === "agent_message_chunk");
+            const userMessages = updates.filter((update) => update.sessionUpdate === "user_message_chunk");
+            expect(userMessages).toHaveLength(1);
+            expect(userMessages[0]?.messageId).toEqual(expect.any(String));
+            expect(result._meta?.["messageId"]).toBe(userMessages[0]?.messageId);
             expect(messages.length).toBeGreaterThan(1);
             expect(
                 messages.flatMap((update) => (update.content.type === "text" ? [update.content.text] : [])).join(""),

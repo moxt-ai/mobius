@@ -6,7 +6,7 @@ import { arraysEqual, isRecord, truncate } from "../../util/value-utils.ts";
 import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "../acp-error.ts";
 import { buildPromptContent, type PromptContent } from "../client/prompt-content.ts";
 import type { AcpContentExternalizer } from "../content/content-externalizer.ts";
-import type { AdapterSessionTarget } from "../native-history/preview-contract.ts";
+import type { AdapterPromptResult, AdapterSessionTarget } from "../native-history/preview-contract.ts";
 import { nativeSessionIdSchema } from "../protocol/native-session.ts";
 import {
     SessionConfigProtocolError,
@@ -21,6 +21,7 @@ interface LiveSession {
 }
 
 const absolutePathSchema = z.string().min(1).refine(isAbsolute);
+const steeringMetadataSchema = z.object({ messageId: z.string().min(1).max(2_048) });
 const targetSchema = z.object({
     nativeSessionId: nativeSessionIdSchema,
     cwd: absolutePathSchema,
@@ -127,7 +128,11 @@ export class AcpLiveSessions {
         signal.throwIfAborted();
     };
 
-    readonly prompt = async (target: AdapterSessionTarget, content: PromptContent, signal: AbortSignal) => {
+    readonly prompt = async (
+        target: AdapterSessionTarget,
+        content: PromptContent,
+        signal: AbortSignal,
+    ): Promise<AdapterPromptResult> => {
         signal.throwIfAborted();
         const { connection, scope } = this.#resolve(target);
         const prompt = buildPromptContent(content, scope.capabilities());
@@ -142,7 +147,14 @@ export class AcpLiveSessions {
         );
         await connection.events.drained();
         try {
-            return decodeAgentPromptResponse(response);
+            const decoded = decodeAgentPromptResponse(response);
+            const identity = steeringMetadataSchema.parse(decoded._meta);
+            return {
+                messageId: identity.messageId,
+                stopReason: decoded.stopReason,
+                ...(decoded.usage === undefined ? {} : { usage: decoded.usage }),
+                ...(decoded._meta === undefined ? {} : { _meta: decoded._meta }),
+            };
         } catch (cause) {
             throw new AcpExecutionError(
                 "ACP agent returned an invalid prompt response",
@@ -156,7 +168,10 @@ export class AcpLiveSessions {
         target: AdapterSessionTarget,
         content: PromptContent,
         signal: AbortSignal,
-    ): Promise<"injected" | "startedNewTurn"> => {
+    ): Promise<
+        | { readonly outcome: "injected"; readonly messageId: string }
+        | { readonly outcome: "startedNewTurn"; readonly messageId: string }
+    > => {
         signal.throwIfAborted();
         const { connection, scope } = this.#resolve(target);
         if (!scope.capabilities().steering) {
@@ -182,7 +197,15 @@ export class AcpLiveSessions {
         if (isRecord(response)) {
             const outcome = response["outcome"];
             if (outcome === "injected" || outcome === "startedNewTurn") {
-                return outcome;
+                const identity = steeringMetadataSchema.safeParse(response);
+                if (!identity.success) {
+                    throw new AcpExecutionError(
+                        "ACP agent returned an invalid steering identity",
+                        { cause: identity.error },
+                        "acp_invalid_steering_response",
+                    );
+                }
+                return { outcome, messageId: identity.data.messageId };
             }
             if (outcome === "promptRequired") {
                 throw new AcpExecutionError(

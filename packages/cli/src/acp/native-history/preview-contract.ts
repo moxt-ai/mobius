@@ -1,11 +1,13 @@
 import type {
-    AgentPromptResponse,
+    promptMetadataSchema,
+    promptUsageSchema,
     SessionCapabilities,
     SessionConfigOption,
     SessionEvent,
     SessionEventPayload,
     SessionLiveEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
+import type { z } from "zod";
 import type { AgentProcessPool } from "../../session/process/agent-process-pool.ts";
 import type { AdapterSessionConnection, LiveSessionConnectionOptions } from "../adapter/session-events.ts";
 import type { AcpAgentDefinition } from "../agent/agent-definition.ts";
@@ -84,6 +86,13 @@ export interface AdapterSessionTarget {
     readonly additionalDirectories: readonly string[];
 }
 
+export interface AdapterPromptResult {
+    readonly messageId: string;
+    readonly stopReason: "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" | "cancelled";
+    readonly usage?: z.infer<typeof promptUsageSchema> | null;
+    readonly _meta?: z.infer<typeof promptMetadataSchema> | null;
+}
+
 /** Business-facing session operations. Transport and initialization belong to the adapter. */
 export interface Adapter {
     readonly connectSession: (options: LiveSessionConnectionOptions) => AdapterSessionConnection;
@@ -93,12 +102,15 @@ export interface Adapter {
         target: AdapterSessionTarget,
         content: PromptContent,
         signal: AbortSignal,
-    ) => Promise<AgentPromptResponse>;
+    ) => Promise<AdapterPromptResult>;
     readonly steer: (
         target: AdapterSessionTarget,
         content: PromptContent,
         signal: AbortSignal,
-    ) => Promise<"injected" | "startedNewTurn">;
+    ) => Promise<
+        | { readonly outcome: "injected"; readonly messageId: string }
+        | { readonly outcome: "startedNewTurn"; readonly messageId: string }
+    >;
     readonly renameSession: (
         target: AdapterSessionTarget,
         title: string,

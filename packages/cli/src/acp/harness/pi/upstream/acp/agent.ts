@@ -42,6 +42,7 @@ import { findPiSession, listPiSessions } from "./pi-sessions.js";
 import { getAgentDir, getEnableSkillCommands, getQuietStartup } from "./pi-settings.js";
 import { type PiAcpSession, SessionManager } from "./session.js";
 import { SessionStore } from "./session-store.js";
+import { promptResultWithMessageId } from "./session-update.js";
 import { loadSlashCommands, parseCommandArgs, toAvailableCommands } from "./slash-commands.js";
 import { bashCommand, bashResultText, isBashTool } from "./translate/bash.js";
 import { normalizePiAssistantText, normalizePiMessageText } from "./translate/pi-messages.js";
@@ -500,7 +501,18 @@ export class PiAcpAgent {
     }
 
     async prompt(params: PromptRequest): Promise<PromptResponse> {
+        const messageId = randomUUID();
+        return promptResultWithMessageId(this.promptWithMessageId(params, messageId), messageId);
+    }
+
+    private async promptWithMessageId(params: PromptRequest, messageId: string): Promise<PromptResponse> {
         const session = await this.restoreSession(params.sessionId);
+        for (const content of params.prompt) {
+            await this.conn.sessionUpdate({
+                sessionId: params.sessionId,
+                update: { sessionUpdate: "user_message_chunk", messageId, content },
+            });
+        }
 
         const { message, images } = promptToPiMessage(params.prompt);
 
@@ -1044,7 +1056,10 @@ export class PiAcpAgent {
     async steer(
         params: unknown,
         signal: AbortSignal,
-    ): Promise<{ readonly outcome: "injected" | "promptRequired"; readonly reason?: string }> {
+    ): Promise<
+        | { readonly outcome: "injected"; readonly messageId: string }
+        | { readonly outcome: "promptRequired"; readonly reason: string }
+    > {
         signal.throwIfAborted();
         const parsed = steerRequestSchema.safeParse(params);
         if (!parsed.success) {
@@ -1059,8 +1074,17 @@ export class PiAcpAgent {
         switch (steering.kind) {
             case "idle":
                 return { outcome: "promptRequired", reason: "noRunningTurn" };
-            case "injected":
-                return { outcome: "injected" };
+            case "injected": {
+                const messageId = randomUUID();
+                for (const content of parsed.data.prompt) {
+                    signal.throwIfAborted();
+                    await this.conn.sessionUpdate({
+                        sessionId: parsed.data.sessionId,
+                        update: { sessionUpdate: "user_message_chunk", messageId, content },
+                    });
+                }
+                return { outcome: "injected", messageId };
+            }
         }
     }
 

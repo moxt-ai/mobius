@@ -352,7 +352,7 @@ function prompt(fixture: Fixture, text: string): SessionPromptCommand {
         targetCommandId: "",
     };
 }
-async function nextLive(fixture: Fixture): Promise<SessionLiveEvent> {
+async function nextLive(fixture: Fixture, allowPromptFailure = false): Promise<SessionLiveEvent> {
     const pending = pendingLiveEvents.get(fixture) ?? [];
     const buffered = pending.shift();
     if (buffered !== undefined) {
@@ -390,7 +390,7 @@ async function nextLive(fixture: Fixture): Promise<SessionLiveEvent> {
                 event.type === "lifecycle-metadata" &&
                 (event.payload.kind === "prompt.failed" || event.payload.kind === "prompt.failed-before-start"),
         );
-        if (failure !== undefined) {
+        if (failure !== undefined && !allowPromptFailure) {
             throw new Error(frame);
         }
         const event = events.shift();
@@ -471,16 +471,40 @@ async function activeTurn(fixture: Fixture, command: SessionPromptCommand) {
     }
 }
 describe("daemon V2 live delivery", () => {
+    it("Given a harness identifies a user message and fails its prompt, When the daemon publishes the failure, Then the native message identity is preserved", async () => {
+        const fixture = await startControlledDaemon();
+        try {
+            sendText(fixture.socket, encodeSessionPromptCommand(prompt(fixture, "fail with model unavailable")));
+            const events: SessionLiveEvent[] = [];
+            for (;;) {
+                const event = await nextLive(fixture, true);
+                events.push(event);
+                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
+                    expect(event.payload.messageId).toBe("user-1");
+                    break;
+                }
+            }
+            expect(events).toContainEqual(
+                expect.objectContaining({
+                    type: "acp",
+                    payload: expect.objectContaining({ sessionUpdate: "user_message_chunk", messageId: "user-1" }),
+                }),
+            );
+        } finally {
+            await fixture.close();
+        }
+    });
+
     it("Given a running turn with a queued follow-up, When another prompt steers the turn, Then history retains executed user messages once and omits queue lifecycle metadata", async () => {
         const fixture = await startControlledDaemon();
         try {
             const running = prompt(fixture, "wait for steering");
-            const requestedEventIds = new Map<string, string>();
+            const userMessageIds: string[] = [];
             sendText(fixture.socket, encodeSessionPromptCommand(running));
             for (;;) {
                 const event = await nextLive(fixture);
-                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.requested") {
-                    requestedEventIds.set(event.payload.commandId, event.eventId);
+                if (event.type === "acp" && event.payload.sessionUpdate === "user_message_chunk") {
+                    userMessageIds.push(event.payload.messageId ?? "");
                 }
                 if (event.type === "acp" && event.payload.sessionUpdate === "agent_message_chunk") {
                     break;
@@ -508,7 +532,7 @@ describe("daemon V2 live delivery", () => {
                         ? [event.payload.messageId]
                         : [],
                 ),
-            ).toEqual([requestedEventIds.get(running.commandId)]);
+            ).toEqual([userMessageIds[0]]);
 
             const steering: SessionPromptCommand = {
                 ...running,
@@ -521,8 +545,8 @@ describe("daemon V2 live delivery", () => {
             const completed = new Set<string>();
             while (completed.size < 3) {
                 const event = await nextLive(fixture);
-                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.requested") {
-                    requestedEventIds.set(event.payload.commandId, event.eventId);
+                if (event.type === "acp" && event.payload.sessionUpdate === "user_message_chunk") {
+                    userMessageIds.push(event.payload.messageId ?? "");
                 }
                 if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
                     completed.add(event.payload.commandId);
@@ -536,9 +560,9 @@ describe("daemon V2 live delivery", () => {
                     event.type === "acp" && event.payload.sessionUpdate === "user_message_chunk" ? [event.payload] : [],
                 ),
             ).toEqual(
-                [running, steering, queued].map((command) => ({
+                [running, steering, queued].map((command, index) => ({
                     content: { text: command.prompt, type: "text" },
-                    messageId: requestedEventIds.get(command.commandId),
+                    messageId: userMessageIds[index],
                     sessionUpdate: "user_message_chunk",
                 })),
             );
@@ -573,6 +597,13 @@ describe("daemon V2 live delivery", () => {
                 expect(lifecycleKinds).toEqual(
                     expect.arrayContaining(["prompt.requested", "prompt.started", "prompt.completed"]),
                 );
+                expect(
+                    live.find(
+                        (event) => event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed",
+                    ),
+                ).toMatchObject({
+                    payload: { messageId: "user-1" },
+                });
 
                 const page = await history(fixture, command);
                 expect(page.events.length).toBeGreaterThan(0);
@@ -584,12 +615,24 @@ describe("daemon V2 live delivery", () => {
                     (event) => event.type === "lifecycle-metadata" && event.payload.kind === "prompt.requested",
                 )?.eventId;
                 expect(requestedEventId).toBeDefined();
+                const liveUserMessages = live.filter(
+                    (event) => event.type === "acp" && event.payload.sessionUpdate === "user_message_chunk",
+                );
+                expect(liveUserMessages.map((event) => event.payload)).toEqual(
+                    userMessages.map((event) => event.payload),
+                );
+                const requestedIndex = live.findIndex((event) => event.eventId === requestedEventId);
+                const firstChunkIndex = live.findIndex((event) => event.eventId === liveUserMessages[0]?.eventId);
+                expect(firstChunkIndex).toBeGreaterThan(requestedIndex);
+                expect(live.slice(firstChunkIndex, firstChunkIndex + liveUserMessages.length)).toEqual(
+                    liveUserMessages,
+                );
                 expect(userMessages).toHaveLength(scenario === "text-only" ? 1 : 2);
                 expect(userMessages[0]).toMatchObject({
-                    eventId: requestedEventId,
+                    eventId: liveUserMessages[0]?.eventId,
                     payload: {
                         content: { text: command.prompt, type: "text" },
-                        messageId: requestedEventId,
+                        messageId: "user-1",
                         sessionUpdate: "user_message_chunk",
                     },
                 });
@@ -603,7 +646,7 @@ describe("daemon V2 live delivery", () => {
                                 type: "external_resource",
                                 uri: "attachment:///context.txt",
                             },
-                            messageId: requestedEventId,
+                            messageId: "user-1",
                             sessionUpdate: "user_message_chunk",
                         },
                     });

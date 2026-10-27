@@ -25,6 +25,7 @@ import { replayCodexHistory } from "./history.ts";
 import { CodexOwnedAcpAgent } from "./owned-agent.ts";
 import type { CodexSessionAgent } from "./session-agent.ts";
 import type { CodexEndpointOptions, CodexSessionNotification, CodexSessionUpdate } from "./session-update.ts";
+import { promptResultWithMessageId } from "./session-update.ts";
 import { CodexSettings } from "./settings.ts";
 
 const APPROVAL_TIMEOUT_MILLISECONDS = 3_600_000;
@@ -210,7 +211,11 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             })
             .onRequest(methods.agent.session.prompt, async (context) => {
                 if (isCompactCommand(context.params.prompt)) {
-                    return await this.#sessionAgent.compact(context.signal);
+                    const messageId = randomUUID();
+                    for (const content of context.params.prompt) {
+                        await this.#emit({ sessionUpdate: "user_message_chunk", messageId, content });
+                    }
+                    return await promptResultWithMessageId(this.#sessionAgent.compact(context.signal), messageId);
                 }
                 return await this.#sessionAgent.prompt(promptInput(context.params.prompt), context.signal);
             })
@@ -372,3 +377,5 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
         });
     };
 }
+
+import { randomUUID } from "node:crypto";

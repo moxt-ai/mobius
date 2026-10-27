@@ -107,7 +107,7 @@ test.each(["owned", "borrowed"])(
                     expect(loaded._meta).toMatchObject({ steering: { supported: false } });
                     updates.length = 0;
                 }
-                await connection.agent.request(
+                const result = await connection.agent.request(
                     methods.agent.session.prompt,
                     {
                         sessionId,
@@ -116,6 +116,10 @@ test.each(["owned", "borrowed"])(
                     { cancellationSignal: signal },
                 );
                 const live = updates.filter((update) => update.sessionUpdate === "agent_message_chunk");
+                const userMessages = updates.filter((update) => update.sessionUpdate === "user_message_chunk");
+                expect(userMessages).toHaveLength(1);
+                expect(userMessages[0]?.messageId).toEqual(expect.any(String));
+                expect(result._meta?.["messageId"]).toBe(userMessages[0]?.messageId);
                 expect(live.length).toBeGreaterThan(0);
                 for (const update of live) {
                     expect(update.messageId).toEqual(expect.any(String));

@@ -12,6 +12,15 @@ export class AcpExecutionError extends OperationError {
     }
 }
 
+export class AcpPromptExecutionError extends AcpExecutionError {
+    readonly messageId: string;
+
+    constructor(messageId: string, message: string, options: ErrorOptions, code: string) {
+        super(message, options, code);
+        this.messageId = messageId;
+    }
+}
+
 export class AcpConfigurationValueUnavailableError extends AcpExecutionError {
     readonly configId: string;
     readonly offeredValueCount: number;
