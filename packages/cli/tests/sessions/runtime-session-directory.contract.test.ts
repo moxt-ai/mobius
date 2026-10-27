@@ -6,66 +6,78 @@ import { RUNTIME_WORKSPACE_BINDING_ID } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, it } from "vitest";
 import { startTestPlatform } from "../support/platform.ts";
 
-it("Given a prompted local conversation, When its Runtime Session directory is loaded, Then the conversation is listed", async () => {
-    const cancellation = new AbortController();
-    await using platform = await startTestPlatform();
-    try {
-        const project = await platform.developer.createProject(
-            platform.appId,
-            {
-                clientReference: `client-${crypto.randomUUID()}`,
-                displayName: "Runtime Session directory",
-                idempotencyKey: `project-${crypto.randomUUID()}`,
-                locationHint: "wnam",
-            },
-            cancellation.signal,
-        );
-        const runtime = await platform.connectAgent(project.projectId);
-        const sessionId = `session-${crypto.randomUUID()}`;
-        await runtime.client.sessions.create(
-            {
-                additionalDirectoryIds: [],
-                agentId: "claude",
-                bindingId: RUNTIME_WORKSPACE_BINDING_ID,
-                directoryId: "default",
-                policy: new MobiusRecordingPolicy("full", 60_000, 10, 1_024),
-                runtimeId: runtime.runtimeId,
+it.each([
+    { name: "no legacy recording policy", legacy: {} },
+    {
+        name: "a legacy full recording policy",
+        legacy: { policy: new MobiusRecordingPolicy("full", 60_000, 10, 1_024) },
+    },
+])(
+    "Given $name, When the SDK creates and prompts a Session, Then its conversation is listed without enabling Recording",
+    async ({ legacy }) => {
+        const cancellation = new AbortController();
+        await using platform = await startTestPlatform();
+        try {
+            const project = await platform.developer.createProject(
+                platform.appId,
+                {
+                    clientReference: `client-${crypto.randomUUID()}`,
+                    displayName: "Runtime Session directory",
+                    idempotencyKey: `project-${crypto.randomUUID()}`,
+                    locationHint: "wnam",
+                },
+                cancellation.signal,
+            );
+            const runtime = await platform.connectAgent(project.projectId);
+            const sessionId = `session-${crypto.randomUUID()}`;
+            await runtime.client.sessions.create(
+                {
+                    additionalDirectoryIds: [],
+                    agentId: "claude",
+                    bindingId: RUNTIME_WORKSPACE_BINDING_ID,
+                    directoryId: "default",
+                    ...legacy,
+                    runtimeId: runtime.runtimeId,
+                    sessionId,
+                    title: "Remembered conversation",
+                },
+                cancellation.signal,
+            );
+            await runtime.client.turns.submitToRuntime(
+                runtime.runtimeId,
                 sessionId,
-                title: "Remembered conversation",
-            },
-            cancellation.signal,
-        );
-        await runtime.client.turns.submitToRuntime(
-            runtime.runtimeId,
-            sessionId,
-            {
-                additionalDirectoryIds: [],
-                agentId: "claude",
-                content: "Remember this conversation",
-                directoryId: "default",
-                idempotencyKey: `turn-${crypto.randomUUID()}`,
-                images: [],
-                resources: [],
-            },
-            cancellation.signal,
-        );
+                {
+                    additionalDirectoryIds: [],
+                    agentId: "claude",
+                    content: "Remember this conversation",
+                    directoryId: "default",
+                    idempotencyKey: `turn-${crypto.randomUUID()}`,
+                    images: [],
+                    resources: [],
+                },
+                cancellation.signal,
+            );
 
-        await expect(
-            runtime.client.runtimes.listSessions(runtime.runtimeId, 100, cancellation.signal),
-        ).resolves.toEqual([
-            expect.objectContaining({
-                agentId: "claude",
-                directoryId: expect.any(String),
-                prompted: true,
-                sessionId,
-                status: { kind: "idle" },
-                title: "Remember this conversation",
-            }),
-        ]);
-    } finally {
-        cancellation.abort(new Error("Runtime Session directory test completed"));
-    }
-});
+            await expect(
+                runtime.client.runtimes.listSessions(runtime.runtimeId, 100, cancellation.signal),
+            ).resolves.toEqual([
+                expect.objectContaining({
+                    agentId: "claude",
+                    directoryId: expect.any(String),
+                    prompted: true,
+                    sessionId,
+                    status: { kind: "idle" },
+                    title: "Remember this conversation",
+                }),
+            ]);
+            await expect(
+                platform.developer.readProjectRecordingPolicy(project.projectId, cancellation.signal),
+            ).resolves.toMatchObject({ effectiveMode: "disabled", inheritedFrom: "system", mode: "inherit" });
+        } finally {
+            cancellation.abort(new Error("Runtime Session directory test completed"));
+        }
+    },
+);
 
 it("Given long ASCII and multibyte directory references, When the SDK browses them, Then the local filesystem remains the authority for directory availability", async () => {
     await using platform = await startTestPlatform();

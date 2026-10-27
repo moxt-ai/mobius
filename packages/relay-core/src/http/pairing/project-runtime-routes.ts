@@ -44,13 +44,17 @@ const sessionIdentitySchema = v.strictObject({
 const createSessionSchema = v.strictObject({
     ...sessionIdentitySchema.entries,
     bindingId: identifier,
-    policy: v.strictObject({
-        contentLimitBytes: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
-        hotEventLimit: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
-        idempotencyRetentionMilliseconds: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
-        level: v.string(),
-        retentionMilliseconds: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
-    }),
+    // Legacy clients send this field. Recording is controlled by app/project policy;
+    // these Session fields do not configure recording or enforce retention and limits.
+    policy: v.optional(
+        v.strictObject({
+            contentLimitBytes: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
+            hotEventLimit: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
+            idempotencyRetentionMilliseconds: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
+            level: v.string(),
+            retentionMilliseconds: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
+        }),
+    ),
     runtimeId: identifier,
     sessionId: identifier,
     title: v.pipe(v.string(), v.maxLength(512)),
