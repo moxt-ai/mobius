@@ -1,0 +1,379 @@
+{
+    "version": "6",
+    "dialect": "sqlite",
+    "id": "cf9b639c-0ce7-48ef-8a9b-0446f85f5596",
+    "prevId": "c1b75865-f7bd-4e9c-a720-f0d4de983fcb",
+    "tables": {
+        "projected_session_events": {
+            "name": "projected_session_events",
+            "columns": {
+                "generation_id": {
+                    "name": "generation_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "event_id": {
+                    "name": "event_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {},
+            "foreignKeys": {},
+            "compositePrimaryKeys": {
+                "projected_session_events_generation_id_event_id_pk": {
+                    "columns": ["generation_id", "event_id"],
+                    "name": "projected_session_events_generation_id_event_id_pk"
+                }
+            },
+            "uniqueConstraints": {},
+            "checkConstraints": {}
+        },
+        "recorded_interactions": {
+            "name": "recorded_interactions",
+            "columns": {
+                "interaction_id": {
+                    "name": "interaction_id",
+                    "type": "text",
+                    "primaryKey": true,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "command_id": {
+                    "name": "command_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "resolved": {
+                    "name": "resolved",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "requested_at": {
+                    "name": "requested_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "request_json": {
+                    "name": "request_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {
+                "recorded_interactions_pending": {
+                    "name": "recorded_interactions_pending",
+                    "columns": ["resolved", "requested_at", "interaction_id"],
+                    "isUnique": false
+                },
+                "recorded_interactions_command": {
+                    "name": "recorded_interactions_command",
+                    "columns": ["command_id", "resolved"],
+                    "isUnique": false
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {},
+            "uniqueConstraints": {},
+            "checkConstraints": {}
+        },
+        "recorded_session_events_v2": {
+            "name": "recorded_session_events_v2",
+            "columns": {
+                "first_position": {
+                    "name": "first_position",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "last_position": {
+                    "name": "last_position",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "ordinal": {
+                    "name": "ordinal",
+                    "type": "integer",
+                    "primaryKey": true,
+                    "notNull": true,
+                    "autoincrement": true
+                },
+                "envelope_json": {
+                    "name": "envelope_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "recorded_at": {
+                    "name": "recorded_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_generation_id": {
+                    "name": "session_generation_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {
+                "recorded_session_events_v2_last_position": {
+                    "name": "recorded_session_events_v2_last_position",
+                    "columns": ["last_position"],
+                    "isUnique": false
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {},
+            "uniqueConstraints": {},
+            "checkConstraints": {}
+        },
+        "recorded_turns": {
+            "name": "recorded_turns",
+            "columns": {
+                "command_id": {
+                    "name": "command_id",
+                    "type": "text",
+                    "primaryKey": true,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "turn_order": {
+                    "name": "turn_order",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "open": {
+                    "name": "open",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "turn_json": {
+                    "name": "turn_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {
+                "recorded_turns_turn_order_unique": {
+                    "name": "recorded_turns_turn_order_unique",
+                    "columns": ["turn_order"],
+                    "isUnique": true
+                },
+                "recorded_turns_open": {
+                    "name": "recorded_turns_open",
+                    "columns": ["open"],
+                    "isUnique": false
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {},
+            "uniqueConstraints": {},
+            "checkConstraints": {}
+        },
+        "recorded_turn_items": {
+            "name": "recorded_turn_items",
+            "columns": {
+                "command_id": {
+                    "name": "command_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "item_id": {
+                    "name": "item_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "sequence": {
+                    "name": "sequence",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "item_json": {
+                    "name": "item_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "text": {
+                    "name": "text",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false,
+                    "default": "''"
+                },
+                "listing_json": {
+                    "name": "listing_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {
+                "recorded_turn_items_sequence": {
+                    "name": "recorded_turn_items_sequence",
+                    "columns": ["command_id", "sequence"],
+                    "isUnique": true
+                },
+                "recorded_turn_items_item": {
+                    "name": "recorded_turn_items_item",
+                    "columns": ["item_id"],
+                    "isUnique": false
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {
+                "recorded_turn_items_command_id_item_id_pk": {
+                    "columns": ["command_id", "item_id"],
+                    "name": "recorded_turn_items_command_id_item_id_pk"
+                }
+            },
+            "uniqueConstraints": {},
+            "checkConstraints": {}
+        },
+        "recording_metadata": {
+            "name": "recording_metadata",
+            "columns": {
+                "singleton": {
+                    "name": "singleton",
+                    "type": "integer",
+                    "primaryKey": true,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "project_id": {
+                    "name": "project_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "runtime_id": {
+                    "name": "runtime_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "created_at": {
+                    "name": "created_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {},
+            "foreignKeys": {},
+            "compositePrimaryKeys": {},
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "recording_metadata_singleton_check": {
+                    "name": "recording_metadata_singleton_check",
+                    "value": "\"recording_metadata\".\"singleton\" = 1"
+                }
+            }
+        },
+        "recording_projection": {
+            "name": "recording_projection",
+            "columns": {
+                "singleton": {
+                    "name": "singleton",
+                    "type": "integer",
+                    "primaryKey": true,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "folded_through_ordinal": {
+                    "name": "folded_through_ordinal",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "turn_count": {
+                    "name": "turn_count",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "state_json": {
+                    "name": "state_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "failure_json": {
+                    "name": "failure_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {},
+            "foreignKeys": {},
+            "compositePrimaryKeys": {},
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "recording_projection_singleton_check": {
+                    "name": "recording_projection_singleton_check",
+                    "value": "\"recording_projection\".\"singleton\" = 1"
+                }
+            }
+        }
+    },
+    "views": {},
+    "enums": {},
+    "_meta": {
+        "schemas": {},
+        "tables": {},
+        "columns": {}
+    },
+    "internal": {
+        "indexes": {}
+    }
+}

@@ -1,3 +1,4 @@
+export { projectedSessionEvent } from "./projected-session-event.ts";
 export { recordedInteraction } from "./recorded-interaction.ts";
 export { recordedSessionEvent } from "./recorded-session-event.ts";
 export { recordedTurn } from "./recorded-turn.ts";
