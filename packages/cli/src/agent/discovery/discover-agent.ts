@@ -1,16 +1,8 @@
 import type { SessionCapabilities } from "@moxt-ai/mobius-sdk/protocol";
-import {
-    type AcpAgentDefinition,
-    InProcessAcpAgentDefinition as InProcessAgentDefinition,
-    LocalAgentDefinition,
-} from "../../acp/agent/agent-definition.ts";
+import { AcpAgentDefinition } from "../../acp/agent/agent-definition.ts";
 import { unsupportedSessionCapabilities } from "../../acp/protocol/session-capabilities.ts";
 import { ProcessExecutionError } from "../../util/process/executable.ts";
-import {
-    DirectAcpAgentSpecification,
-    InProcessAcpAgentSpecification,
-    type LocalAgentSpecification,
-} from "../specification/agent-specification.ts";
+import { InProcessAcpAgentSpecification, type LocalAgentSpecification } from "../specification/agent-specification.ts";
 import { probeAcpReadiness } from "./acp-readiness-probe.ts";
 import {
     type AgentDiscovery,
@@ -142,7 +134,7 @@ export async function discoverAgent(
         }
 
         for (const adapter of adapters) {
-            if (specification instanceof DirectAcpAgentSpecification && adapter.path !== agent.path) {
+            if (adapter.path !== agent.path) {
                 continue;
             }
             let adapterVersion = "";
@@ -179,29 +171,17 @@ export async function discoverAgent(
                 verifiedAdapterVersion: string,
                 capabilities: SessionCapabilities,
             ): AcpAgentDefinition =>
-                specification instanceof InProcessAcpAgentSpecification
-                    ? new InProcessAgentDefinition(
-                          specification.id,
-                          specification.label,
-                          agent.path,
-                          specification.createEndpoint,
-                          launchEnvironment,
-                          agentVersion.length > 0 ? agentVersion : verifiedAdapterVersion,
-                          agent.identity,
-                          capabilities,
-                      )
-                    : new LocalAgentDefinition(
-                          specification.id,
-                          specification.label,
-                          adapter.path,
-                          specification.launchArguments,
-                          launchEnvironment,
-                          verifiedAdapterVersion,
-                          agentVersion,
-                          adapter.identity,
-                          agent.identity,
-                          capabilities,
-                      );
+                new AcpAgentDefinition(
+                    specification.id,
+                    specification.label,
+                    agent.path,
+                    specification.createConnection,
+                    launchEnvironment,
+                    agentVersion.length > 0 ? agentVersion : verifiedAdapterVersion,
+                    agent.identity,
+                    capabilities,
+                    specification instanceof InProcessAcpAgentSpecification ? agentVersion : verifiedAdapterVersion,
+                );
             try {
                 const readiness = await probeWithRetry(
                     context.signal,

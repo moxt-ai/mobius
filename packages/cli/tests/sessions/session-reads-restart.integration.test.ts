@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
+import { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
 import { NullSessionObserver } from "../../src/session/api/session-api.ts";
 import {
@@ -14,6 +14,7 @@ import { AcpSessionTable } from "../../src/storage/session/acp-session-table.ts"
 import { openAcpSessionDatabase } from "../../src/storage/sqlite/local-databases.ts";
 import { systemTimer } from "../../src/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
+import { ControlledAcpConnection } from "../support/agents/controlled-acp-connection.ts";
 import { SessionRuntimeFixture as SessionManager } from "../support/session-runtime.ts";
 import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
 import { fakeAgentPath } from "./acp-feature-fixture.ts";
@@ -21,13 +22,22 @@ import { fakeAgentPath } from "./acp-feature-fixture.ts";
 async function controlledAgent(
     agentId: string,
     additionalArguments: readonly string[] = [],
-): Promise<{ agent: LocalAgentDefinition; stateDirectory: string }> {
+): Promise<{ agent: AcpAgentDefinition; stateDirectory: string }> {
     const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-session-config-reads-"));
-    const agent = new LocalAgentDefinition(
+    const agent = new AcpAgentDefinition(
         agentId,
         "Controlled ACP",
         process.execPath,
-        [fakeAgentPath, ...additionalArguments],
+        (options) =>
+            new ControlledAcpConnection(
+                {
+                    id: agentId,
+                    adapterPath: process.execPath,
+                    arguments: [fakeAgentPath, ...additionalArguments],
+                    environment: options.environment,
+                },
+                options,
+            ),
         {
             MOBIUS_FAKE_ACP_STATE_DIRECTORY: stateDirectory,
         },

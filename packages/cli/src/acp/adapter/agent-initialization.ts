@@ -15,10 +15,7 @@ export class RetryableAcpInitializationError extends AcpExecutionError {
 
 export async function validateAgentRuntime(agent: AcpAgentDefinition, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
-    const unchanged = await Promise.all([
-        agent.kind === "acp-adapter-process" ? revalidateExecutable(agent.adapterIdentity) : Promise.resolve(true),
-        revalidateExecutable(agent.agentIdentity),
-    ]);
+    const unchanged = await Promise.all(agent.runtimeExecutables.map((identity) => revalidateExecutable(identity)));
     signal.throwIfAborted();
     if (unchanged.some((result) => !result)) {
         throw new AcpExecutionError(
@@ -35,18 +32,12 @@ export async function initializeAgentConnection(
     verifiedVersion: string,
     signal: AbortSignal,
 ) {
-    if (connection.inProcessAgent !== null) {
-        await connection
-            .race(
-                connection.inProcessAgent.initialize(signal),
-                "The Codex app-server exited during initialization",
-                signal,
-            )
-            .catch((cause: unknown) => {
-                signal.throwIfAborted();
-                throw new RetryableAcpInitializationError(cause);
-            });
-    }
+    await connection
+        .race(connection.initialize(signal), "The Agent runtime exited during initialization", signal)
+        .catch((cause: unknown) => {
+            signal.throwIfAborted();
+            throw new RetryableAcpInitializationError(cause);
+        });
     const initialized = await connection
         .race(
             connection.connection.agent.request(

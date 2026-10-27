@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AcpSessionUpdate, NativeSessionCommand, SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
-import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
+import { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
 import type { AdapterResolver } from "../../src/acp/native-history/preview-contract.ts";
 import { RuntimeAgentDependencies } from "../../src/agent/runtime-agents.ts";
@@ -13,6 +13,7 @@ import { MemorySessionStore } from "../../src/session/record/session-store.ts";
 import { WorkspaceDirectoryService } from "../../src/session/workspace/workspace-directory.ts";
 import { systemTimer } from "../../src/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
+import { ControlledAcpConnection } from "../support/agents/controlled-acp-connection.ts";
 import { SessionRuntimeFixture as SessionManager } from "../support/session-runtime.ts";
 import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
 
@@ -58,21 +59,35 @@ export async function fixture(
     const executable = join(temporary, "agent.mjs");
     await writeFile(executable, `#!${process.execPath}\nawait import(${JSON.stringify(acpUrl)});\n`, { mode: 0o700 });
     const agentId = label === "Claude Code" ? "claude" : label === "Codex" ? "codex" : "pi";
-    const agent = new LocalAgentDefinition(agentId, label, executable, [
-        "--agent-name",
+    const agent = new AcpAgentDefinition(
+        agentId,
         label,
-        ...(profile === "load-only" ? ["--load-only"] : []),
-        ...(profile === "replay-history-once" ? ["--load-only", "--replay-history-once"] : []),
-        ...(profile === "unsupported"
-            ? ["--no-native-sessions"]
-            : profile === "invalid-fork"
-              ? ["--reuse-session-on-fork"]
-              : profile === "exclusive-writer"
-                ? ["--exclusive-writer"]
-                : profile === "persist-after-first-prompt"
-                  ? ["--persist-after-first-prompt"]
-                  : []),
-    ]);
+        executable,
+        (options) =>
+            new ControlledAcpConnection(
+                {
+                    id: agentId,
+                    adapterPath: executable,
+                    arguments: [
+                        "--agent-name",
+                        label,
+                        ...(profile === "load-only" ? ["--load-only"] : []),
+                        ...(profile === "replay-history-once" ? ["--load-only", "--replay-history-once"] : []),
+                        ...(profile === "unsupported"
+                            ? ["--no-native-sessions"]
+                            : profile === "invalid-fork"
+                              ? ["--reuse-session-on-fork"]
+                              : profile === "exclusive-writer"
+                                ? ["--exclusive-writer"]
+                                : profile === "persist-after-first-prompt"
+                                  ? ["--persist-after-first-prompt"]
+                                  : []),
+                    ],
+                    environment: options.environment,
+                },
+                options,
+            ),
+    );
     const store = new MemorySessionStore();
     const observer = new NativeSessionObserver();
     let sessions = new SessionManager({

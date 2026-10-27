@@ -1,12 +1,13 @@
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
-import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
+import { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
 import { NullSessionObserver } from "../../src/session/api/session-api.ts";
 import { MemorySessionStore } from "../../src/session/record/session-store.ts";
 import { systemTimer } from "../../src/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
+import { ControlledAcpConnection } from "../support/agents/controlled-acp-connection.ts";
 import { SessionRuntimeFixture as SessionManager } from "../support/session-runtime.ts";
 import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
 
@@ -35,10 +36,21 @@ describe("Agent setting capabilities", () => {
             timer: systemTimer,
             maxProcesses: null,
         });
-        const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
-            fakeAgentPath,
-            "--effort-provider-default",
-        ]);
+        const agent = new AcpAgentDefinition(
+            "controlled-acp",
+            "Controlled ACP",
+            process.execPath,
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "controlled-acp",
+                        adapterPath: process.execPath,
+                        arguments: [fakeAgentPath, "--effort-provider-default"],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
+        );
         const session = {
             additionalDirectories: [],
             agent,
@@ -104,10 +116,21 @@ describe("Agent setting capabilities", () => {
             timer: systemTimer,
             maxProcesses: null,
         });
-        const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
-            fakeAgentPath,
-            "--without-reasoning-effort",
-        ]);
+        const agent = new AcpAgentDefinition(
+            "controlled-acp",
+            "Controlled ACP",
+            process.execPath,
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "controlled-acp",
+                        adapterPath: process.execPath,
+                        arguments: [fakeAgentPath, "--without-reasoning-effort"],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
+        );
         const session = {
             additionalDirectories: [],
             agent,
@@ -156,11 +179,21 @@ describe("Agent setting capabilities", () => {
             timer: systemTimer,
             maxProcesses: null,
         });
-        const agent = new LocalAgentDefinition("pi", "Pi", process.execPath, [
-            fakeAgentPath,
-            "--without-model",
-            "--without-reasoning-effort",
-        ]);
+        const agent = new AcpAgentDefinition(
+            "pi",
+            "Pi",
+            process.execPath,
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "pi",
+                        adapterPath: process.execPath,
+                        arguments: [fakeAgentPath, "--without-model", "--without-reasoning-effort"],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
+        );
 
         try {
             const prepared = await manager.prepareSession({
@@ -202,10 +235,21 @@ describe("Agent setting capabilities", () => {
             timer: systemTimer,
             maxProcesses: null,
         });
-        const agent = new LocalAgentDefinition("fake", "Fake", process.execPath, [
-            fakeAgentPath,
-            "--ignore-config-update",
-        ]);
+        const agent = new AcpAgentDefinition(
+            "fake",
+            "Fake",
+            process.execPath,
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "fake",
+                        adapterPath: process.execPath,
+                        arguments: [fakeAgentPath, "--ignore-config-update"],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
+        );
         const session = {
             additionalDirectories: [],
             agent,

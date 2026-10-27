@@ -1,116 +1,64 @@
 import type { SessionCapabilities } from "@moxt-ai/mobius-sdk/protocol";
 import type { ExecutableIdentity } from "../../util/process/executable.ts";
 import { readExecutableIdentity } from "../../util/process/local-executable.ts";
+import type {
+    AgentConnection,
+    AgentConnectionFactory,
+    AgentConnectionOptions,
+} from "../connection/agent-connection.ts";
 import { unsupportedSessionCapabilities } from "../protocol/session-capabilities.ts";
-import type { InProcessAcpEndpointFactory } from "./in-process-endpoint.ts";
 
-abstract class AgentDefinition {
+/** A verified local Agent. Its adapter owns how connections are established. */
+export class AcpAgentDefinition {
     readonly agentIdentity: ExecutableIdentity;
     readonly agentVersion: string;
+    readonly adapterVersion: string;
     readonly capabilities: SessionCapabilities;
     readonly command: string;
     readonly environment: Readonly<Record<string, string>>;
     readonly id: string;
     readonly label: string;
+    readonly runtimeExecutables: readonly ExecutableIdentity[];
+    readonly #connectionFactory: AgentConnectionFactory;
 
-    protected constructor(
+    constructor(
         id: string,
         label: string,
-        _command: string,
-        environment: Readonly<Record<string, string>>,
-        agentVersion: string,
-        agentIdentity: ExecutableIdentity,
-        capabilities: SessionCapabilities,
+        command: string,
+        createConnection: AgentConnectionFactory,
+        environment: Readonly<Record<string, string>> = {},
+        agentVersion = "",
+        agentIdentity: ExecutableIdentity = readExecutableIdentity(command),
+        capabilities: SessionCapabilities = unsupportedSessionCapabilities(),
+        adapterVersion = agentVersion,
+        runtimeExecutables: readonly ExecutableIdentity[] = [agentIdentity],
     ) {
         this.agentIdentity = agentIdentity;
         this.agentVersion = agentVersion;
+        this.adapterVersion = adapterVersion;
         this.capabilities = Object.freeze({ ...capabilities });
         this.command = agentIdentity.realPath;
         this.environment = Object.freeze({ ...environment });
         this.id = id;
         this.label = label;
+        this.runtimeExecutables = Object.freeze([...new Set([agentIdentity, ...runtimeExecutables])]);
+        this.#connectionFactory = createConnection;
     }
 
-    abstract readonly withEnvironment: (environment: Readonly<Record<string, string>>) => AcpAgentDefinition;
-}
+    readonly createConnection = (options: AgentConnectionOptions): AgentConnection =>
+        this.#connectionFactory({ ...options, command: this.command, environment: this.environment });
 
-// A vendor CLI that speaks ACP only through a separate adapter process. Mobius spawns the adapter,
-// and the vendor binary is handed to it through an environment variable.
-export class LocalAgentDefinition extends AgentDefinition {
-    readonly kind = "acp-adapter-process";
-    readonly adapterIdentity: ExecutableIdentity;
-    readonly adapterPath: string;
-    readonly adapterVersion: string;
-    readonly arguments: readonly string[];
-
-    constructor(
-        id: string,
-        label: string,
-        command: string,
-        arguments_: readonly string[],
-        environment: Readonly<Record<string, string>> = {},
-        adapterVersion = "",
-        agentVersion = "",
-        adapterIdentity: ExecutableIdentity = readExecutableIdentity(command),
-        agentIdentity: ExecutableIdentity = adapterIdentity,
-        capabilities: SessionCapabilities = unsupportedSessionCapabilities(),
-    ) {
-        super(id, label, command, environment, agentVersion, agentIdentity, capabilities);
-        this.adapterIdentity = adapterIdentity;
-        this.adapterPath = adapterIdentity.realPath;
-        this.adapterVersion = adapterVersion;
-        this.arguments = Object.freeze([...arguments_]);
-    }
-
-    override readonly withEnvironment = (environment: Readonly<Record<string, string>>): LocalAgentDefinition =>
-        new LocalAgentDefinition(
+    readonly withEnvironment = (environment: Readonly<Record<string, string>>): AcpAgentDefinition =>
+        new AcpAgentDefinition(
             this.id,
             this.label,
             this.command,
-            this.arguments,
+            this.#connectionFactory,
             environment,
+            this.agentVersion,
+            this.agentIdentity,
+            this.capabilities,
             this.adapterVersion,
-            this.agentVersion,
-            this.adapterIdentity,
-            this.agentIdentity,
-            this.capabilities,
+            this.runtimeExecutables,
         );
 }
-
-// A vendor CLI that Mobius drives through the vendor's own protocol from an ACP Agent hosted inside
-// the daemon. There is no adapter process. `command` is the vendor binary the endpoint spawns, and
-// `createEndpoint` is how the daemon builds that Agent without naming a vendor.
-export class InProcessAcpAgentDefinition extends AgentDefinition {
-    readonly kind = "in-process-acp";
-    readonly createEndpoint: InProcessAcpEndpointFactory;
-
-    constructor(
-        id: string,
-        label: string,
-        command: string,
-        createEndpoint: InProcessAcpEndpointFactory,
-        environment: Readonly<Record<string, string>> = {},
-        agentVersion = "",
-        agentIdentity: ExecutableIdentity = readExecutableIdentity(command),
-        capabilities: SessionCapabilities = unsupportedSessionCapabilities(),
-    ) {
-        super(id, label, command, environment, agentVersion, agentIdentity, capabilities);
-        this.createEndpoint = createEndpoint;
-    }
-
-    override readonly withEnvironment = (environment: Readonly<Record<string, string>>): InProcessAcpAgentDefinition =>
-        new InProcessAcpAgentDefinition(
-            this.id,
-            this.label,
-            this.command,
-            this.createEndpoint,
-            environment,
-            this.agentVersion,
-            this.agentIdentity,
-            this.capabilities,
-        );
-}
-
-// A ready Agent Mobius can start a session against. The variant decides how the ACP connection is
-// established: an adapter child process, or an in-process agent over the vendor's own protocol.
-export type AcpAgentDefinition = LocalAgentDefinition | InProcessAcpAgentDefinition;

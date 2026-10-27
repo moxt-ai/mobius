@@ -23,9 +23,10 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { listen, port, sendText } from "@moxt-ai/mobius-test/websocket";
 import { describe, expect, it } from "vitest";
-import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
+import { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { RuntimeLocalContext } from "../../src/runtime/config.ts";
 import { runRuntime } from "../../src/runtime/run.ts";
+import { ControlledAcpConnection } from "../support/agents/controlled-acp-connection.ts";
 import { createControlledRuntimeConfig as createRuntimeConfig } from "../support/controlled-runtime-config.ts";
 
 const websocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -238,11 +239,20 @@ describe("daemon session configuration boundary", () => {
 
         const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
         relayUrl.searchParams.set("token", "d".repeat(43));
-        const agent = new LocalAgentDefinition(
+        const agent = new AcpAgentDefinition(
             "codex",
             "Codex",
             process.execPath,
-            [fakeAgentPath, "--change-model-catalog-after-first-process"],
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "codex",
+                        adapterPath: process.execPath,
+                        arguments: [fakeAgentPath, "--change-model-catalog-after-first-process"],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
             { MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory },
         );
         const config = createRuntimeConfig(
@@ -331,11 +341,20 @@ describe("daemon session configuration boundary", () => {
         // The Agent withholds reasoning effort for its default model, so a
         // session that never switches models must still learn that model's
         // capability instead of offering no effort control at all.
-        const agent = new LocalAgentDefinition(
+        const agent = new AcpAgentDefinition(
             "controlled-acp",
             "Controlled ACP",
             process.execPath,
-            [fakeAgentPath, "--agent-name", "Controlled ACP", "--without-reasoning-effort"],
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "controlled-acp",
+                        adapterPath: process.execPath,
+                        arguments: [fakeAgentPath, "--agent-name", "Controlled ACP", "--without-reasoning-effort"],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
             {
                 MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory,
             },
@@ -428,11 +447,26 @@ describe("daemon session configuration boundary", () => {
         relayUrl.searchParams.set("token", "d".repeat(43));
         // A Pi user with one configured non-reasoning model: the model cannot be
         // switched and no effort is offered, so discovery must still succeed.
-        const agent = new LocalAgentDefinition(
+        const agent = new AcpAgentDefinition(
             "controlled-acp",
             "Controlled ACP",
             process.execPath,
-            [fakeAgentPath, "--agent-name", "Controlled ACP", "--without-reasoning-effort", "--acp-omits-custom-model"],
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "controlled-acp",
+                        adapterPath: process.execPath,
+                        arguments: [
+                            fakeAgentPath,
+                            "--agent-name",
+                            "Controlled ACP",
+                            "--without-reasoning-effort",
+                            "--acp-omits-custom-model",
+                        ],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
             {
                 MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory,
             },
@@ -523,11 +557,20 @@ describe("daemon session configuration boundary", () => {
 
         const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
         relayUrl.searchParams.set("token", "d".repeat(43));
-        const agent = new LocalAgentDefinition(
+        const agent = new AcpAgentDefinition(
             "controlled-acp",
             "Controlled ACP",
             process.execPath,
-            [fakeAgentPath, "--agent-name", "Controlled ACP"],
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "controlled-acp",
+                        adapterPath: process.execPath,
+                        arguments: [fakeAgentPath, "--agent-name", "Controlled ACP"],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
             {
                 MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory,
             },
@@ -623,11 +666,25 @@ describe("daemon session configuration boundary", () => {
         relayUrl.searchParams.set("token", "d".repeat(43));
         // The Agent reveals reasoning effort only for test-large, so the settings
         // snapshot that names it cannot match a Session parked on test-small.
-        const agent = new LocalAgentDefinition(
+        const agent = new AcpAgentDefinition(
             "controlled-acp",
             "Controlled ACP",
             process.execPath,
-            [fakeAgentPath, "--agent-name", "Controlled ACP", "--reasoning-effort-for-test-large-only"],
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "controlled-acp",
+                        adapterPath: process.execPath,
+                        arguments: [
+                            fakeAgentPath,
+                            "--agent-name",
+                            "Controlled ACP",
+                            "--reasoning-effort-for-test-large-only",
+                        ],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
             { MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory },
         );
         const config = createRuntimeConfig(

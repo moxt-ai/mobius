@@ -1,16 +1,19 @@
 // The public `@moxt-ai/mobius/runtime` entry. It is the package root, so it may name every layer;
 // the runtime layer itself imports only the session layer and below.
-export type { AcpAgentDefinition } from "./acp/agent/agent-definition.ts";
-export {
-    InProcessAcpAgentDefinition,
-    LocalAgentDefinition,
-} from "./acp/agent/agent-definition.ts";
+export { AcpAgentDefinition } from "./acp/agent/agent-definition.ts";
 export type {
     AcpEndpointTermination,
     InProcessAcpEndpoint,
     InProcessAcpEndpointFactory,
     InProcessAcpEndpointOptions,
 } from "./acp/agent/in-process-endpoint.ts";
+export type {
+    AgentConnection,
+    AgentConnectionFactory,
+    AgentConnectionLaunchOptions,
+    AgentConnectionOptions,
+} from "./acp/connection/agent-connection.ts";
+export { EndpointAgentConnection } from "./acp/connection/endpoint-agent-connection.ts";
 export { RuntimeAgentDependencies } from "./agent/runtime-agents.ts";
 export {
     type MobiusRuntimePairingOptions,
