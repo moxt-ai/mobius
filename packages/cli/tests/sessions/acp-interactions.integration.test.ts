@@ -101,7 +101,10 @@ describe("acp interactions", () => {
             fields: [expect.objectContaining({ name: "branch", required: true })],
             mode: "form",
         });
-        expect(result.completed).toEqual({ stopReason: "end_turn" });
+        expect(result.completed).toEqual({
+            stopReason: "end_turn",
+            _meta: { messageId: "user-1" },
+        });
         expect(result.text).toContain("main");
         expect(
             session.observer.events.flatMap(({ event }) =>
@@ -147,7 +150,10 @@ describe("acp interactions", () => {
             interactionId: elicitation.interactionId,
             sessionId: session.request.sessionId,
         });
-        await expect(running).resolves.toEqual({ stopReason: "end_turn" });
+        await expect(running).resolves.toEqual({
+            stopReason: "end_turn",
+            _meta: { messageId: "user-1" },
+        });
         expect(session.observer.elicitationResolutions.map((event) => event.action)).toEqual(["accept", "complete"]);
     });
 });

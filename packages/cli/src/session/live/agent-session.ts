@@ -610,7 +610,11 @@ export class AgentSession implements AgentSessionRestore {
             this.writeStoredSession(new Date().toISOString());
             if (lifecycle !== undefined) {
                 await this.recordLifecycleEvent({
-                    payload: { commandId: options.commandId, kind: "prompt.completed", stopReason: result.stopReason },
+                    payload: {
+                        commandId: options.commandId,
+                        kind: "prompt.completed",
+                        stopReason: result.stopReason,
+                    },
                     type: "lifecycle-metadata",
                 });
             }
@@ -683,11 +687,15 @@ export class AgentSession implements AgentSessionRestore {
             const outcome = await this.#adapter.steer(this.#target(), options, options.signal);
             if (lifecycle !== undefined) {
                 await this.recordLifecycleEvent({
-                    payload: { commandId: options.commandId, kind: "prompt.completed", stopReason: "steered" },
+                    payload: {
+                        commandId: options.commandId,
+                        kind: "prompt.completed",
+                        stopReason: "steered",
+                    },
                     type: "lifecycle-metadata",
                 });
             }
-            return outcome;
+            return outcome.outcome;
         } catch (error) {
             const failure =
                 error instanceof AcpExecutionError

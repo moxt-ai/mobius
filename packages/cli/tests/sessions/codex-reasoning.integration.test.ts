@@ -32,7 +32,7 @@ it("Given Codex streams detailed reasoning and a summary, When Mobius forwards t
         threadId: () => "thread",
     });
 
-    const running = agent.prompt([], AbortSignal.timeout(10_000));
+    const running = agent.prompt([], AbortSignal.timeout(10_000), []);
     resolveTurnStart?.({ turn: { id: "turn", status: "inProgress" } });
     await Promise.resolve();
     await Promise.resolve();

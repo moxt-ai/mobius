@@ -1,4 +1,10 @@
-import { type AgentApp, type AgentConnection, agent as createAgentApp, methods } from "@agentclientprotocol/sdk";
+import {
+    type AgentApp,
+    type AgentConnection,
+    agent as createAgentApp,
+    methods,
+    type SessionNotification,
+} from "@agentclientprotocol/sdk";
 import type {
     AcpEndpointTermination,
     InProcessAcpEndpoint,
@@ -15,7 +21,11 @@ export class PiAcpEndpoint implements InProcessAcpEndpoint {
     readonly #resolveTermination: (termination: AcpEndpointTermination) => void;
     readonly terminated: Promise<AcpEndpointTermination>;
 
-    constructor(options: InProcessAcpEndpointOptions) {
+    constructor(
+        options: Omit<InProcessAcpEndpointOptions, "onSessionUpdate"> & {
+            readonly onSessionUpdate: (notification: SessionNotification) => Promise<void>;
+        },
+    ) {
         const termination = Promise.withResolvers<AcpEndpointTermination>();
         this.terminated = termination.promise;
         this.#resolveTermination = termination.resolve;

@@ -143,6 +143,7 @@ import { decodeClaudePermissionResponse } from "./permissions/response.js";
 import { DEFAULT_AGENT_ID, EFFORT_CONFIG_ID } from "./session-config-ids.js";
 import { SessionTitles, sanitizeTitle } from "./session-titles.js";
 import type { ClaudeSessionNotification, ClaudeSessionNotification as SessionNotification } from "./session-update.js";
+import { promptResultWithMessageId } from "./session-update.js";
 import { SettingsManager } from "./settings.js";
 import { parseToolResultMeta } from "./tool-result-meta.js";
 import {
@@ -320,8 +321,8 @@ export type SteerRequest = {
  *  remains the default idle behavior; `promptRequired` is returned only when the
  *  Host explicitly opts into the host-owned fallback in request `_meta`. */
 export type SteerResponse =
-    | { outcome: "injected" }
-    | { outcome: "startedNewTurn" }
+    | { outcome: "injected"; readonly messageId: string }
+    | { outcome: "startedNewTurn"; readonly messageId: string }
     | { outcome: "promptRequired"; reason: "noRunningTurn" };
 
 /** Validate raw JSON-RPC params into a {@link SteerRequest}. Kept minimal — the
@@ -1532,6 +1533,7 @@ async function waitForMcpAuthentication(
 }
 
 export class ClaudeAcpAgent {
+    private readonly pendingSubmissions = new Map<string, Set<AbortController>>();
     sessions: {
         [key: string]: Session;
     };
@@ -2029,6 +2031,35 @@ export class ClaudeAcpAgent {
     }
 
     async prompt(params: PromptRequest): Promise<PromptResponse> {
+        const messageId = randomUUID();
+        return promptResultWithMessageId(this.promptWithMessageId(params, messageId), messageId);
+    }
+
+    private async promptWithMessageId(
+        params: PromptRequest,
+        promptUuid: ReturnType<typeof randomUUID>,
+        onSubmitted: () => void = () => {},
+    ): Promise<PromptResponse> {
+        const controller = new AbortController();
+        const pending = this.pendingSubmissions.get(params.sessionId) ?? new Set<AbortController>();
+        pending.add(controller);
+        this.pendingSubmissions.set(params.sessionId, pending);
+        try {
+            return await this.promptSubmission(params, promptUuid, onSubmitted, controller.signal);
+        } finally {
+            pending.delete(controller);
+            if (pending.size === 0) {
+                this.pendingSubmissions.delete(params.sessionId);
+            }
+        }
+    }
+
+    private async promptSubmission(
+        params: PromptRequest,
+        promptUuid: ReturnType<typeof randomUUID>,
+        onSubmitted: () => void,
+        submission: AbortSignal,
+    ): Promise<PromptResponse> {
         if (this.providerUpdate !== null) {
             await this.providerUpdate;
         }
@@ -2052,9 +2083,22 @@ export class ClaudeAcpAgent {
         }
 
         const userMessage = promptToClaude(params);
-        const promptUuid = randomUUID();
         userMessage.uuid = promptUuid;
+        for (const content of params.prompt) {
+            if (submission.aborted) {
+                onSubmitted();
+                return { stopReason: "cancelled" };
+            }
+            await this.client.sessionUpdate({
+                sessionId: params.sessionId,
+                update: { sessionUpdate: "user_message_chunk", messageId: promptUuid, content },
+            });
+        }
 
+        if (submission.aborted) {
+            onSubmitted();
+            return { stopReason: "cancelled" };
+        }
         // Local-only commands (e.g. `/clear`) return a result without replaying the
         // user message, so the consumer can't promote the turn from the echo.
         const firstText = params.prompt[0]?.type === "text" ? params.prompt[0].text : "";
@@ -2091,6 +2135,7 @@ export class ClaudeAcpAgent {
         session.turnQueue.push(turn);
         session.input.push(userMessage);
         this.ensureConsumer(session, params.sessionId);
+        onSubmitted();
         await this.publishGoalFromPrompt(params.sessionId, firstText, promptUuid);
         return response;
     }
@@ -2221,10 +2266,18 @@ export class ClaudeAcpAgent {
 
             // Preserve the established default for Hosts that do not opt in. This is
             // intentionally detached for compatibility with the existing contract.
-            this.prompt(promptRequest).catch((error) => {
+            // This is the UUID assigned to the submitted SDK user message, not a separate acknowledgement ID.
+            const messageId = randomUUID();
+            const submitted = Promise.withResolvers<void>();
+            promptResultWithMessageId(
+                this.promptWithMessageId(promptRequest, messageId, submitted.resolve),
+                messageId,
+            ).catch((error) => {
+                submitted.reject(error);
                 this.logger.error(`Session ${sessionId}: steered new turn failed: ${error}`);
             });
-            return { outcome: "startedNewTurn" };
+            await submitted.promise;
+            return { outcome: "startedNewTurn", messageId };
         }
 
         const promptRequest: PromptRequest = {
@@ -2252,8 +2305,14 @@ export class ClaudeAcpAgent {
         }
         session.input.push(userMessage);
         const firstText = params.prompt[0]?.type === "text" ? params.prompt[0].text : "";
+        for (const content of params.prompt) {
+            await this.client.sessionUpdate({
+                sessionId,
+                update: { sessionUpdate: "user_message_chunk", messageId: steeredUuid, content },
+            });
+        }
         await this.publishGoalFromPrompt(sessionId, firstText, steeredUuid);
-        return { outcome: "injected" };
+        return { outcome: "injected", messageId: steeredUuid };
     }
 
     /** Lazily start the per-session consumer that drains the SDK query stream for
@@ -4719,6 +4778,9 @@ export class ClaudeAcpAgent {
     }
 
     async cancel(params: CancelNotification): Promise<void> {
+        for (const submission of this.pendingSubmissions.get(params.sessionId) ?? []) {
+            submission.abort();
+        }
         this.exitPlan.cancel(params.sessionId);
         const session = this.sessions[params.sessionId];
         if (!session) {

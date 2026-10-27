@@ -158,6 +158,50 @@ describe("Recording Turn history", () => {
             expect(await rebuiltRaw.json()).toMatchObject({ events: frames });
         },
     );
+    it("Given terminal events without message identities, When Recording persists and reads them, Then their outcomes round-trip unchanged", async () => {
+        const events = [
+            lifecycle({
+                commandId: "completed",
+                kind: "prompt.completed",
+                stopReason: "end_turn",
+            }),
+            lifecycle({
+                commandId: "failed",
+                attemptId: "attempt-2",
+                kind: "prompt.failed",
+                code: "agent_failed",
+                message: "The prompt failed",
+            }),
+            completed("completed-without-id"),
+            lifecycle({
+                commandId: "failed-without-id",
+                attemptId: "attempt-4",
+                kind: "prompt.failed",
+                code: "agent_failed",
+                message: "The prompt failed",
+            }),
+        ];
+        await record(events);
+        const response = await worker.fetch(new Request(sessionPath("events?limit=100")), env);
+        expect(response.status).toBe(200);
+        const page = decodeSessionRecordingHistoryPage(await response.text());
+        expect(page.events).toEqual(events);
+    });
+
+    it("Given a prompt request followed by live user chunks, When a client reads recorded Turns, Then the request remains the single prompt", async () => {
+        const request = requested("command-1", "Inspect the repository");
+        const chunk = () =>
+            acp({
+                content: { text: "Inspect the repository", type: "text" },
+                messageId: request.eventId,
+                sessionUpdate: "user_message_chunk",
+            });
+        await record([request, chunk(), started("command-1"), chunk(), answer("Done"), completed("command-1")]);
+        const page = await turnPage();
+        expect(promptText(page)).toEqual(["Inspect the repository"]);
+        expect(page.turns).toHaveLength(1);
+        expect(page.turns[0]?.itemCount).toBe(1);
+    });
 
     it("Given streamed answer, reasoning, and tool chunks, When a client reads the newest Turns, Then each Turn lists merged items in order", async () => {
         await record([requested("command-1", "Inspect the repository"), started("command-1")]);

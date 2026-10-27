@@ -523,6 +523,14 @@ describe("ACP conversation sessions", () => {
             });
             first.append("session-1", {
                 payload: {
+                    content: { text: "cached prompt", type: "text" },
+                    messageId: requested.eventId,
+                    sessionUpdate: "user_message_chunk",
+                },
+                type: "acp",
+            });
+            first.append("session-1", {
+                payload: {
                     content: { text: "cached update", type: "text" },
                     messageId: "message-1",
                     sessionUpdate: "user_message_chunk",

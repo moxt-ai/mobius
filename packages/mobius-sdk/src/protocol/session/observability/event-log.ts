@@ -371,7 +371,13 @@ export const lifecycleMetadataSchema = z.discriminatedUnion("kind", [
     z
         .object({ ...lifecycleBase, attemptId: identifier, epoch: identifier, kind: z.literal("prompt.started") })
         .readonly(),
-    z.object({ ...lifecycleBase, kind: z.literal("prompt.completed"), stopReason: shortString }).readonly(),
+    z
+        .object({
+            ...lifecycleBase,
+            kind: z.literal("prompt.completed"),
+            stopReason: shortString,
+        })
+        .readonly(),
     z
         .object({
             ...lifecycleBase,

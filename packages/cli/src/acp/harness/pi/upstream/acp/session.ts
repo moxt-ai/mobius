@@ -381,7 +381,6 @@ export class PiAcpSession {
         this.extensionQuestions = new PiExtensionQuestions(this.sessionId, this.conn, this.proc, async (text) => {
             this.emit({
                 sessionUpdate: "agent_message_chunk",
-                messageId: randomUUID(),
                 content: { type: "text", text },
             });
             await this.flushEmits();
@@ -441,7 +440,6 @@ export class PiAcpSession {
 
         this.emit({
             sessionUpdate: "agent_message_chunk",
-            messageId: randomUUID(),
             content: { type: "text", text: this.startupInfo },
         });
     }
@@ -461,7 +459,6 @@ export class PiAcpSession {
                 // This doesn't work in Zed yet, needs to be revisited
                 this.emit({
                     sessionUpdate: "agent_message_chunk",
-                    messageId: randomUUID(),
                     content: {
                         type: "text",
                         text: `Queued message (position ${this.turnQueue.length}).`,
@@ -543,7 +540,6 @@ export class PiAcpSession {
 
             this.emit({
                 sessionUpdate: "agent_message_chunk",
-                messageId: randomUUID(),
                 content: { type: "text", text: "Cleared queued prompts." },
             });
             this.emit({
@@ -645,7 +641,6 @@ export class PiAcpSession {
         if (next) {
             this.emit({
                 sessionUpdate: "agent_message_chunk",
-                messageId: randomUUID(),
                 content: { type: "text", text: `Starting queued message. (${this.turnQueue.length} remaining)` },
             });
             this.startTurn(next);
@@ -745,20 +740,10 @@ export class PiAcpSession {
         });
     }
 
-    private streamedMessage: { readonly kind: "idle" } | { readonly kind: "active"; readonly messageId: string } = {
-        kind: "idle",
-    };
-
     private handlePiEvent(ev: PiRpcEvent) {
         const type = String((ev as any).type ?? "");
 
         switch (type) {
-            case "message_start":
-                this.streamedMessage = { kind: "active", messageId: randomUUID() };
-                break;
-            case "message_end":
-                this.streamedMessage = { kind: "idle" };
-                break;
             case "message_update": {
                 const ame = (ev as any).assistantMessageEvent;
 
@@ -779,24 +764,16 @@ export class PiAcpSession {
 
                 // Stream assistant text.
                 if (ame?.type === "text_delta" && typeof ame.delta === "string") {
-                    if (this.streamedMessage.kind !== "active") {
-                        throw RequestError.internalError({ code: "invalid_message_boundary" });
-                    }
                     this.emit({
                         sessionUpdate: "agent_message_chunk",
-                        messageId: this.streamedMessage.messageId,
                         content: { type: "text", text: ame.delta } satisfies ContentBlock,
                     });
                     break;
                 }
 
                 if (ame?.type === "thinking_delta" && typeof ame.delta === "string") {
-                    if (this.streamedMessage.kind !== "active") {
-                        throw RequestError.internalError({ code: "invalid_message_boundary" });
-                    }
                     this.emit({
                         sessionUpdate: "agent_thought_chunk",
-                        messageId: this.streamedMessage.messageId,
                         content: { type: "text", text: ame.delta } satisfies ContentBlock,
                     });
                     break;
@@ -1044,7 +1021,6 @@ export class PiAcpSession {
                 if (ev.method === "notify") {
                     this.emit({
                         sessionUpdate: "agent_message_chunk",
-                        messageId: randomUUID(),
                         content: { type: "text", text: stringProp(ev, "message") ?? "Pi notification" },
                         _meta: { piAcp: { notify: { level: stringProp(ev, "notifyType") ?? "info" } } },
                     });
