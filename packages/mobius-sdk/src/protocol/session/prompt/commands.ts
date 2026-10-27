@@ -102,7 +102,10 @@ export function decodeSessionPromptCommand(encoded: string): SessionPromptComman
     assertKind(value, SESSION_PROMPT_KIND);
 
     const prompt = readText(value, "prompt", MAX_PROMPT_LENGTH);
-    const attachments = decodePromptAttachmentsValue(value["attachments"]);
+    const attachments =
+        !Object.hasOwn(value, "attachments") && Array.isArray(value["images"]) && Array.isArray(value["resources"])
+            ? []
+            : decodePromptAttachmentsValue(value["attachments"]);
     const attachmentBytes = attachments.reduce((total, attachment) => total + attachment.byteLength, 0);
     if (attachmentBytes > MAX_PROMPT_ATTACHMENT_BYTES) {
         throw new ProtocolMessageError("Prompt attachments are too large");
