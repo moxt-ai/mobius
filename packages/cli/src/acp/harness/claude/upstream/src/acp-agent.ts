@@ -142,6 +142,7 @@ import { buildClaudePermissionPresentation } from "./permissions/presentation.js
 import { decodeClaudePermissionResponse } from "./permissions/response.js";
 import { DEFAULT_AGENT_ID, EFFORT_CONFIG_ID } from "./session-config-ids.js";
 import { SessionTitles, sanitizeTitle } from "./session-titles.js";
+import { type ClaudeSessionNotification, claudeSessionNotification } from "./session-update.js";
 import { SettingsManager } from "./settings.js";
 import { parseToolResultMeta } from "./tool-result-meta.js";
 import {
@@ -1318,14 +1319,15 @@ export interface AcpClient {
 class ClientConnection implements AcpClient {
     constructor(
         private readonly ctx: AgentContext,
-        private readonly onSessionUpdate?: (params: SessionNotification) => Promise<void>,
+        private readonly onSessionUpdate?: (params: ClaudeSessionNotification) => Promise<void>,
     ) {}
 
     sessionUpdate(params: SessionNotification): Promise<void> {
+        const notification = claudeSessionNotification(params);
         if (this.onSessionUpdate !== undefined) {
-            return this.onSessionUpdate(params);
+            return this.onSessionUpdate(notification);
         }
-        return this.ctx.notify(methods.client.session.update, params);
+        return this.ctx.notify(methods.client.session.update, notification);
     }
 
     requestPermission(params: RequestPermissionRequest, signal?: AbortSignal): Promise<RequestPermissionResponse> {
@@ -3167,6 +3169,7 @@ export class ClaudeAcpAgent {
                                     sessionId: message.session_id,
                                     update: {
                                         sessionUpdate: "agent_message_chunk",
+                                        messageId: message.uuid,
                                         content: { type: "text", text: message.content },
                                     },
                                 });
@@ -3398,6 +3401,7 @@ export class ClaudeAcpAgent {
                                     sessionId: message.session_id,
                                     update: {
                                         sessionUpdate: "agent_message_chunk",
+                                        messageId: message.uuid,
                                         content: { type: "text", text },
                                     },
                                 });
@@ -3560,6 +3564,7 @@ export class ClaudeAcpAgent {
                                     sessionId: message.session_id,
                                     update: {
                                         sessionUpdate: "agent_message_chunk",
+                                        messageId: message.uuid,
                                         content: {
                                             type: "text",
                                             text: `**Model fallback:** ${message.original_model} declined this request${category}; retried with ${message.fallback_model}. ${outcome}${explanation}`,
@@ -3919,6 +3924,7 @@ export class ClaudeAcpAgent {
                                         sessionId: params.sessionId,
                                         update: {
                                             sessionUpdate: "agent_message_chunk",
+                                            messageId: message.uuid,
                                             content: { type: "text", text: lastRefusalExplanation },
                                         },
                                     });
@@ -8622,7 +8628,7 @@ export interface ClaudeAcpAppOptions {
     readonly logger?: Logger;
     readonly onConnect?: (connection: AgentConnection) => void;
     /** In-process delivery waits for consumption; standalone ACP uses the wire transport. */
-    readonly onSessionUpdate?: (params: SessionNotification) => Promise<void>;
+    readonly onSessionUpdate?: (params: ClaudeSessionNotification) => Promise<void>;
     readonly onBackgroundActivity?: (active: boolean) => void;
 }
 

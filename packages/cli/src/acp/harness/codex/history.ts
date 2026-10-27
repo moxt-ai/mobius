@@ -1,17 +1,17 @@
 import { createHash } from "node:crypto";
-import type { SessionNotification } from "@agentclientprotocol/sdk";
 import { AcpExecutionError } from "../../acp-error.ts";
 import { embedLocalHistoryImages } from "../../native-history/codex/history-images.ts";
 import type { CodexAppServerClient } from "./app-server-client.ts";
 import { CODEX_HISTORY_TURN_PAGE_LIMIT, threadTurnsPageSchema } from "./app-server-protocol.ts";
 import { decodeThreadItem, reasoningText, toolCallUpdate } from "./items.ts";
 import { agentMessageUpdate } from "./owned-agent.ts";
+import type { CodexSessionUpdate } from "./session-update.ts";
 
 /** Reads and projects saved items without resuming or changing the thread. */
 export async function replayCodexHistory(
     client: CodexAppServerClient,
     threadId: string,
-    emit: (update: SessionNotification["update"]) => Promise<void>,
+    emit: (update: CodexSessionUpdate) => Promise<void>,
     signal: AbortSignal,
 ): Promise<void> {
     const deadline = AbortSignal.any([signal, AbortSignal.timeout(60_000)]);
@@ -67,6 +67,7 @@ export async function replayCodexHistory(
                         await emit({
                             content: { type: "image", data: image.data, mimeType: image.mimeType },
                             messageId: item.id,
+                            nativeMessageId: item.id,
                             sessionUpdate: "user_message_chunk",
                         });
                     }
@@ -75,6 +76,7 @@ export async function replayCodexHistory(
                         await emit({
                             content: { text: restoredText, type: "text" },
                             messageId: item.id,
+                            nativeMessageId: item.id,
                             sessionUpdate: "user_message_chunk",
                         });
                     }
@@ -86,6 +88,7 @@ export async function replayCodexHistory(
                         await emit({
                             content: { text, type: "text" },
                             messageId: item.id,
+                            nativeMessageId: item.id,
                             sessionUpdate: "agent_thought_chunk",
                         });
                     }

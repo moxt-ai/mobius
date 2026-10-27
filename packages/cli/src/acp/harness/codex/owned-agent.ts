@@ -1,12 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import type {
-    AgentConnection,
-    ContentBlock,
-    PermissionOption,
-    PromptResponse,
-    SessionNotification,
-} from "@agentclientprotocol/sdk";
+import type { AgentConnection, ContentBlock, PermissionOption, PromptResponse } from "@agentclientprotocol/sdk";
 import { methods } from "@agentclientprotocol/sdk";
 import { AcpExecutionError } from "../../acp-error.ts";
 import { type AcpEndpointTermination, acpEndpointTerminationError } from "../../agent/in-process-endpoint.ts";
@@ -26,6 +20,7 @@ import {
 } from "./app-server-protocol.ts";
 import { decodeThreadItem, reasoningText, toolCallUpdate } from "./items.ts";
 import type { CodexSessionAgent } from "./session-agent.ts";
+import type { CodexMessageUpdate, CodexSessionUpdate } from "./session-update.ts";
 import type { CodexSettings } from "./settings.ts";
 
 const APPROVAL_REASON_CHARACTER_LIMIT = 500;
@@ -42,7 +37,7 @@ interface OwnedAgentContext {
     readonly settings: CodexSettings;
     readonly threadId: () => string;
     readonly connection: () => AgentConnection | null;
-    readonly emit: (update: SessionNotification["update"]) => Promise<void>;
+    readonly emit: (update: CodexSessionUpdate) => Promise<void>;
     readonly close: () => Promise<void>;
 }
 
@@ -139,11 +134,12 @@ interface ActiveTurn {
     readonly turn: { id: string };
 }
 
-export function agentMessageUpdate(messageId: string, text: string): SessionNotification["update"] {
+export function agentMessageUpdate(nativeMessageId: string, text: string): CodexMessageUpdate {
     // Commentary and final answers are public assistant messages; reasoning has separate events.
     return {
         content: { text, type: "text" },
-        messageId,
+        messageId: nativeMessageId,
+        nativeMessageId,
         sessionUpdate: "agent_message_chunk",
     };
 }
@@ -224,7 +220,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
         if (open === null) {
             return null;
         }
-        const update: SessionNotification["update"] = {
+        const update: CodexSessionUpdate = {
             compactionId: open.compactionId,
             ...(status === "failed" && error !== undefined ? { error } : {}),
             sessionUpdate: "compaction_update",
@@ -446,6 +442,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
                     await this.#context.emit({
                         content: { text: decoded.data.delta, type: "text" },
                         messageId: decoded.data.itemId,
+                        nativeMessageId: decoded.data.itemId,
                         sessionUpdate: "agent_thought_chunk",
                     });
                 });
@@ -539,6 +536,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
                     await this.#context.emit({
                         content: { text: reasoning, type: "text" },
                         messageId: item.id,
+                        nativeMessageId: item.id,
                         sessionUpdate: "agent_thought_chunk",
                     });
                 });
