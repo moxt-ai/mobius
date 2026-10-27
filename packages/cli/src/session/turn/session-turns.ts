@@ -90,6 +90,7 @@ export class SessionTurns {
                     commandId: candidate.command.commandId,
                     prompt: candidate.command.prompt,
                     images: candidate.command.images,
+                    resources: candidate.command.resources,
                 });
             }
             return { turn: turnSnapshot ?? null, queued };
