@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+    encodeSessionCancelBeforeStartCommand,
     type SessionEventPayload,
     type SessionLiveEvent,
     sessionEventPayloadSchema,
@@ -98,6 +99,39 @@ export class ExecutionReceipts {
         return receipt?.outcome === null || receipt === undefined
             ? undefined
             : sessionEventPayloadSchema.parse(JSON.parse(receipt.outcome));
+    };
+    /** Reserves an unseen command for cancellation before a delayed prompt can claim its identity. */
+    readonly recordCancellationBeforeAdmission = (
+        commandId: string,
+        sessionId: string,
+    ): SessionEventPayload | undefined => {
+        const existing = this.#executions.get(commandId);
+        if (existing !== undefined) {
+            return existing.sessionId === sessionId && isTerminal(existing.state) ? this.outcome(commandId) : undefined;
+        }
+        const outcome: SessionEventPayload = {
+            type: "lifecycle-metadata",
+            payload: { kind: "prompt.completed", commandId, stopReason: "cancelled" },
+        };
+        // The identifier belongs to the cancellation, so a later prompt conflicts rather than executing.
+        const commandHash = createHash("sha256")
+            .update(
+                encodeSessionCancelBeforeStartCommand({
+                    commandId,
+                    kind: "session.cancel-before-start",
+                    sessionId,
+                }),
+            )
+            .digest("hex");
+        this.#save(commandId, {
+            attemptId: randomUUID(),
+            commandHash,
+            sessionId,
+            state: "cancelled",
+            started: false,
+            outcome: JSON.stringify({ ...outcome, recordedAt: new Date().toISOString() }),
+        });
+        return outcome;
     };
     readonly recordOutcome = (event: SessionLiveEvent): void => {
         if (event.type !== "lifecycle-metadata") {

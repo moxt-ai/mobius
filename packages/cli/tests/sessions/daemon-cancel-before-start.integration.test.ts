@@ -141,3 +141,90 @@ test("Given running and queued work, When cancellation permits only unstarted wo
         vi.useRealTimers();
     }
 }, 90_000);
+
+// @no-uc: Technical regression; cancelling an unacknowledged command prevents its delayed admission.
+test("Given an unacknowledged command, When Stop arrives before its prompt, Then a recorded cancellation prevents later execution", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-27T00:00:00Z"));
+    const directory = await mkdtemp(join(tmpdir(), "mobius-cancel-admission-"));
+    try {
+        const executableDirectory = await writeControlledAcpExecutable(directory);
+        await withControlledDaemon(
+            new ControlledAcpAgentSpecification(),
+            {
+                MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(directory, "agent"),
+                PATH: executableDirectory,
+            },
+            async (peer) => {
+                const stopped = randomUUID();
+                peer.send(
+                    JSON.stringify({
+                        commandId: stopped,
+                        kind: "session.cancel-before-start",
+                        sessionId: peer.sessionId,
+                    }),
+                );
+                let cancelled = false;
+                while (!cancelled) {
+                    const raw = await peer.nextMessage();
+                    if (decodeMessageKind(raw) === "session.operation.failed") {
+                        const failure = decodeSessionOperationFailedEvent(raw);
+                        expect(failure.requestId).not.toBe(stopped);
+                    }
+                    if (decodeMessageKind(raw) !== SESSION_EVENT_KIND) {
+                        continue;
+                    }
+                    cancelled = decodeSessionEventEnvelope(raw).events.some(
+                        (event) =>
+                            event.type === "lifecycle-metadata" &&
+                            event.payload.kind === "prompt.completed" &&
+                            event.payload.commandId === stopped &&
+                            event.payload.stopReason === "cancelled",
+                    );
+                }
+                const prompt = (commandId: string) =>
+                    encodeSessionPromptCommand({
+                        additionalDirectoryIds: [],
+                        agentId: "controlled-acp",
+                        bindingId: peer.bindingId,
+                        commandId,
+                        directoryId: "default",
+                        disposition: "reject",
+                        images: [],
+                        resources: [],
+                        kind: "session.prompt",
+                        prompt: "This request completes normally",
+                        sessionId: peer.sessionId,
+                        targetCommandId: "",
+                    });
+                peer.send(prompt(stopped));
+                const next = randomUUID();
+                peer.send(prompt(next));
+                let stoppedStarted = false;
+                let nextCompleted = false;
+                while (!nextCompleted) {
+                    const raw = await peer.nextMessage();
+                    if (decodeMessageKind(raw) !== SESSION_EVENT_KIND) {
+                        continue;
+                    }
+                    for (const event of decodeSessionEventEnvelope(raw).events) {
+                        if (event.type !== "lifecycle-metadata") {
+                            continue;
+                        }
+                        if (event.payload.kind === "prompt.started" && event.payload.commandId === stopped) {
+                            stoppedStarted = true;
+                        }
+                        if (event.payload.kind === "prompt.completed" && event.payload.commandId === next) {
+                            expect(event.payload.stopReason).toBe("end_turn");
+                            nextCompleted = true;
+                        }
+                    }
+                }
+                expect(stoppedStarted).toBe(false);
+            },
+        );
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+        vi.useRealTimers();
+    }
+}, 90_000);

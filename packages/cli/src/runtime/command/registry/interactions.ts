@@ -37,12 +37,19 @@ export const sessionCancelCommand: RuntimeCommand = {
 
 export const sessionCancelBeforeStartCommand: RuntimeCommand = {
     kind: SESSION_CANCEL_BEFORE_START_KIND,
-    handle: ({ sessionTurns, socket }, message): void => {
+    handle: ({ eventProjection, operations, sessionTurns, socket }, message): void => {
         if (message.kind !== SESSION_CANCEL_BEFORE_START_KIND) {
             throw new Error("Command kind mismatch");
         }
         const turn = sessionTurns.get(message.commandId, message.sessionId);
         if (turn === undefined) {
+            const outcome = operations.recordCancellationBeforeAdmission(message.commandId, message.sessionId);
+            if (outcome !== undefined) {
+                void eventProjection.replayOutcome(message.sessionId, outcome).catch((error: unknown) => {
+                    reportOperationFailure(socket, message.commandId, message.sessionId, error);
+                });
+                return;
+            }
             reportOperationFailure(
                 socket,
                 message.commandId,

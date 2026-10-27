@@ -236,6 +236,11 @@ export async function settleAbandonedTurn(
     operations: ExecutionReceipts,
     cancellation: SessionCancelCommand,
 ): Promise<void> {
+    const outcome = operations.recordCancellationBeforeAdmission(cancellation.commandId, cancellation.sessionId);
+    if (outcome !== undefined) {
+        await projection.replayOutcome(cancellation.sessionId, outcome);
+        return;
+    }
     const attemptId = operations.findUnsettledAttemptId(cancellation.commandId, cancellation.sessionId);
     if (attemptId === null) {
         console.warn("Mobius daemon ignored cancellation for an inactive turn");
