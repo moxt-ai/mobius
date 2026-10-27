@@ -1,5 +1,5 @@
 import { relayDrizzle } from "@moxt-ai/mobius-relay-core/database";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import {
     type ActiveCountRow,
     ActiveCountRowSchema,
@@ -24,7 +24,7 @@ import {
     type TenantRow,
     TenantRowSchema,
 } from "../entity/platform-records.ts";
-import { platformDashboardAuditEvent } from "../schema/d1/index.ts";
+import { platformAppCredential, platformDashboardAuditEvent } from "../schema/d1/index.ts";
 import { platformAuditEvent } from "../schema/project-do/index.ts";
 import { waitForD1 } from "./d1-operation.ts";
 import { decodeOptionalStorageRecord, decodeStorageRecord, decodeStorageRecords } from "./decode-storage-record.ts";
@@ -507,25 +507,74 @@ export class PlatformControlPlaneStorage {
                 signal,
             );
         }
+        const database = platformDrizzle(this.#database);
+        // A zero-row update does not abort a D1 batch. Gate both inserts on this
+        // attempt's replacement ID within the same transaction.
         const results = await waitForD1(
             () =>
-                this.#database.batch([
-                    this.credentialInsertStatement(credential),
-                    this.#database
-                        .prepare(
-                            `UPDATE platform_app_credentials
-                                SET replaced_by_credential_id = ?, overlap_ends_at = ?
-                              WHERE credential_id = ? AND revoked_at IS NULL AND replaced_by_credential_id IS NULL`,
-                        )
-                        .bind(credential.credentialId, overlapEndsAt, sourceCredentialId),
-                    this.dashboardAuditStatement(audit),
+                database.batch([
+                    database
+                        .update(platformAppCredential)
+                        .set({ replacedByCredentialId: credential.credentialId, overlapEndsAt })
+                        .where(
+                            and(
+                                eq(platformAppCredential.credentialId, sourceCredentialId),
+                                isNull(platformAppCredential.revokedAt),
+                                isNull(platformAppCredential.replacedByCredentialId),
+                            ),
+                        ),
+                    database.insert(platformAppCredential).select(
+                        database
+                            .select({
+                                credentialId: sql<string>`${credential.credentialId}`.as("credentialId"),
+                                publicCredentialId: sql<string>`${credential.publicCredentialId}`.as(
+                                    "publicCredentialId",
+                                ),
+                                appId: sql<string>`${credential.appId}`.as("appId"),
+                                secretDigest: sql<string>`${credential.secretDigest}`.as("secretDigest"),
+                                permissionsJson: sql<string>`${credential.permissionsJson}`.as("permissionsJson"),
+                                allProjects: sql<number>`${credential.allProjects ? 1 : 0}`.as("allProjects"),
+                                revision: sql<number>`${credential.revision}`.as("revision"),
+                                issuedAt: sql<number>`${credential.issuedAt}`.as("issuedAt"),
+                                lastUsedAt: sql<number>`${credential.issuedAt}`.as("lastUsedAt"),
+                                overlapEndsAt: sql<null>`NULL`.as("overlapEndsAt"),
+                                replacedByCredentialId: sql<null>`NULL`.as("replacedByCredentialId"),
+                                revokedAt: sql<null>`NULL`.as("revokedAt"),
+                            })
+                            .from(platformAppCredential)
+                            .where(
+                                and(
+                                    eq(platformAppCredential.credentialId, sourceCredentialId),
+                                    eq(platformAppCredential.replacedByCredentialId, credential.credentialId),
+                                ),
+                            ),
+                    ),
+                    database.insert(platformDashboardAuditEvent).select(
+                        database
+                            .select({
+                                auditId: sql<string>`${audit.auditId}`.as("auditId"),
+                                tenantId: sql<string>`${audit.tenantId}`.as("tenantId"),
+                                appId: sql<string>`${audit.appId}`.as("appId"),
+                                projectId: sql<string>`${audit.projectId}`.as("projectId"),
+                                actorKind: sql<string>`${audit.actorKind}`.as("actorKind"),
+                                actorId: sql<string>`${audit.actorId}`.as("actorId"),
+                                actorRef: sql<string>`${audit.actorRef}`.as("actorRef"),
+                                action: sql<string>`${audit.action}`.as("action"),
+                                subjectId: sql<string>`${audit.subjectId}`.as("subjectId"),
+                                outcome: sql<"succeeded" | "denied">`${audit.outcome}`.as("outcome"),
+                                detailsJson: sql<string>`${audit.detailsJson}`.as("detailsJson"),
+                                recordedAt: sql<number>`${audit.recordedAt}`.as("recordedAt"),
+                            })
+                            .from(platformAppCredential)
+                            .where(eq(platformAppCredential.credentialId, credential.credentialId)),
+                    ),
                 ]),
             signal,
         );
         return {
-            credentialInserted: results[0]?.meta.changes === 1,
-            sourceRotated: results[1]?.meta.changes === 1,
-            auditRecorded: results[2]?.meta.changes === 1,
+            sourceRotated: results[0].meta.changes === 1,
+            credentialInserted: results[1].meta.changes === 1,
+            auditRecorded: results[2].meta.changes === 1,
         };
     };
 

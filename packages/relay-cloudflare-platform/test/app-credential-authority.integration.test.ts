@@ -1,6 +1,8 @@
 import { abortAllDurableObjects, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { DurableObjectDatabaseAdapter } from "@moxt-ai/mobius-relay-core";
+import { StaticMobiusCredentialProvider } from "@moxt-ai/mobius-sdk";
+import { MobiusPlatformDeveloperClient } from "@moxt-ai/mobius-sdk/platform";
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-sdk/protocol";
 import * as v from "valibot";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -38,6 +40,14 @@ async function application() {
         "content-type": "application/json",
         "x-mobius-oidc-provider": "clerk",
     };
+    const developer = new MobiusPlatformDeveloperClient({
+        endpoint: origin,
+        authenticationProviderId: "clerk",
+        credentialProvider: new StaticMobiusCredentialProvider(
+            clerk.session("developer-1", clerk.defaultOrganizationId),
+        ),
+        transport: { fetch: async (request) => await worker.fetch(request, env) },
+    });
     const dashboard = async (path: string, body?: object) =>
         await worker.fetch(
             new Request(`${origin}/dashboard/v1/${path}`, {
@@ -125,6 +135,14 @@ async function application() {
     return {
         appId,
         projectId,
+        defaultCredential,
+        listCredentials: async () => await responseJson(await dashboard(`apps/${appId}/credentials`), 200),
+        listAuditEvents: async () =>
+            await responseJson(await dashboard(`platform/tenants/${tenant.tenantId}/audit-events`), 200),
+        requestRotation: async (credentialId = defaultCredential.credentialId) =>
+            await dashboard(`platform/app-credentials/${credentialId}/rotate`, {
+                overlapSeconds: 60,
+            }),
         authenticateApp,
         deleteApp: async () =>
             await worker.fetch(
@@ -169,15 +187,7 @@ async function application() {
                 200,
             ),
         rotate: async () =>
-            v.parse(
-                v.object({ credential: v.string(), overlapEndsAt: v.string() }),
-                await responseJson(
-                    await dashboard(`platform/app-credentials/${defaultCredential.credentialId}/rotate`, {
-                        overlapSeconds: 60,
-                    }),
-                    201,
-                ),
-            ),
+            await developer.rotateAppCredential(defaultCredential.credentialId, 60, new AbortController().signal),
         publishOldCache: async () => {
             await env.APP_CREDENTIAL_CACHE.put(`app-secret:v1:${keys.secret_digest}`, legacyCacheRecord);
             await env.APP_CREDENTIAL_CACHE.put(`app-public:v1:${keys.public_credential_id}`, legacyCacheRecord);
@@ -189,6 +199,77 @@ async function expectRejected(response: Response, code: string, status = 401): P
     expect.soft(response.status).toBe(status);
     expect.soft(await response.json()).toMatchObject({ error: { code } });
 }
+
+it.each(["rotated", "revoked"] as const)(
+    "Given a %s AppCredential, When rotation is retried, Then it returns the existing conflict without creating a credential or success audit",
+    async (state) => {
+        const app = await application();
+        if (state === "rotated") {
+            await app.rotate();
+        } else {
+            await app.revoke();
+        }
+        const credentials = await app.listCredentials();
+        const audits = await app.listAuditEvents();
+
+        await expectRejected(await app.requestRotation(), "app_credential_rotation_conflict", 409);
+
+        expect(await app.listCredentials()).toEqual(credentials);
+        expect(await app.listAuditEvents()).toEqual(audits);
+    },
+);
+
+it("Given an active AppCredential, When two rotations compete, Then only the returned replacement is created and audited", async () => {
+    const app = await application();
+    const source = await app.issueScopedCredential();
+    const responses = await Promise.all([
+        app.requestRotation(source.credentialId),
+        app.requestRotation(source.credentialId),
+    ]);
+    expect(responses.map((response) => response.status).sort()).toEqual([201, 409]);
+    const succeeded = responses.find((response) => response.status === 201);
+    const conflicted = responses.find((response) => response.status === 409);
+    if (succeeded === undefined || conflicted === undefined) {
+        throw new Error("Expected one successful rotation and one conflict");
+    }
+    const replacement = v.parse(credentialResource, await responseJson(succeeded, 201));
+    await expectRejected(conflicted, "app_credential_rotation_conflict", 409);
+    const { credentials } = v.parse(
+        v.object({ credentials: v.array(v.object({ credentialId: v.string() })) }),
+        await app.listCredentials(),
+    );
+    expect(credentials.map((item) => item.credentialId).sort()).toEqual(
+        [app.defaultCredential.credentialId, source.credentialId, replacement.credentialId].sort(),
+    );
+    const { events } = v.parse(
+        v.object({ events: v.array(v.object({ action: v.string(), subjectId: v.string() })) }),
+        await app.listAuditEvents(),
+    );
+    expect(events.filter((event) => event.action === "app-credential.rotated")).toEqual([
+        { action: "app-credential.rotated", subjectId: source.credentialId },
+    ]);
+    expect((await app.authenticateApp(replacement.credential)).status).toBe(201);
+});
+
+it("Given an active AppCredential, When rotation storage fails, Then the credential and audit changes roll back and a retry succeeds", async () => {
+    const app = await application();
+    const credentials = await app.listCredentials();
+    const audits = await app.listAuditEvents();
+    await env.PLATFORM_DIRECTORY_DATABASE.prepare(
+        `CREATE TRIGGER reject_rotation_audit BEFORE INSERT ON platform_dashboard_audit_events
+         WHEN NEW.action = 'app-credential.rotated'
+         BEGIN SELECT RAISE(ABORT, 'Controlled rotation failure'); END`,
+    ).run();
+    try {
+        await expectRejected(await app.requestRotation(), "internal_error", 500);
+        expect(await app.listCredentials()).toEqual(credentials);
+        expect(await app.listAuditEvents()).toEqual(audits);
+    } finally {
+        await env.PLATFORM_DIRECTORY_DATABASE.prepare("DROP TRIGGER reject_rotation_audit").run();
+    }
+    const replacement = await app.rotate();
+    expect((await app.authenticateApp(replacement.credential)).status).toBe(201);
+});
 
 it("Given an active AppCredential and its Session credential, When revocation succeeds before an old cache fill arrives, Then both reject new requests", async () => {
     const app = await application();
