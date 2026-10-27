@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { type FileHandle, mkdir, open, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { isNodeError } from "../../util/node-error.ts";
+import { STATE_ROOT_LAYOUT } from "../state-root-layout.ts";
 
 // One application's installations live in `<root>/installations/<applicationId>/`. `current.json`
 // points at the current installation, whose directory keeps one file per saved connection in
@@ -10,7 +11,7 @@ import { isNodeError } from "../../util/node-error.ts";
 const MAXIMUM_FILE_BYTES = 16 * 1024;
 
 export function applicationDirectory(root: string, applicationId: string): string {
-    return join(root, "installations", applicationId);
+    return join(root, STATE_ROOT_LAYOUT.installations, applicationId);
 }
 
 export function installationPointerPath(applicationDirectory: string): string {
