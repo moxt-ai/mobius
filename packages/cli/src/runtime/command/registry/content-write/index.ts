@@ -124,7 +124,11 @@ export function createContentWriteCommands(context: CommandContext): ContentWrit
         receiveChunk: (frame) => {
             const state = pending.get(frame.requestId);
             if (state === undefined) {
-                throw new Error("The content upload is unavailable");
+                context.diagnostics.daemonDiagnostic("content_chunk_discarded", frame.requestId, {
+                    reason: "upload_unavailable",
+                    sequence: frame.sequence.toString(),
+                });
+                return;
             }
             if (
                 frame.sequence !== state.sequence ||
