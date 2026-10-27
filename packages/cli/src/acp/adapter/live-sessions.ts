@@ -21,7 +21,6 @@ interface LiveSession {
 }
 
 const absolutePathSchema = z.string().min(1).refine(isAbsolute);
-const steeringMetadataSchema = z.object({ messageId: z.string().min(1).max(2_048) });
 const targetSchema = z.object({
     nativeSessionId: nativeSessionIdSchema,
     cwd: absolutePathSchema,
@@ -148,9 +147,7 @@ export class AcpLiveSessions {
         await connection.events.drained();
         try {
             const decoded = decodeAgentPromptResponse(response);
-            const identity = steeringMetadataSchema.parse(decoded._meta);
             return {
-                messageId: identity.messageId,
                 stopReason: decoded.stopReason,
                 ...(decoded.usage === undefined ? {} : { usage: decoded.usage }),
                 ...(decoded._meta === undefined ? {} : { _meta: decoded._meta }),
@@ -168,10 +165,7 @@ export class AcpLiveSessions {
         target: AdapterSessionTarget,
         content: PromptContent,
         signal: AbortSignal,
-    ): Promise<
-        | { readonly outcome: "injected"; readonly messageId: string }
-        | { readonly outcome: "startedNewTurn"; readonly messageId: string }
-    > => {
+    ): Promise<{ readonly outcome: "injected" } | { readonly outcome: "startedNewTurn" }> => {
         signal.throwIfAborted();
         const { connection, scope } = this.#resolve(target);
         if (!scope.capabilities().steering) {
@@ -197,15 +191,7 @@ export class AcpLiveSessions {
         if (isRecord(response)) {
             const outcome = response["outcome"];
             if (outcome === "injected" || outcome === "startedNewTurn") {
-                const identity = steeringMetadataSchema.safeParse(response);
-                if (!identity.success) {
-                    throw new AcpExecutionError(
-                        "ACP agent returned an invalid steering identity",
-                        { cause: identity.error },
-                        "acp_invalid_steering_response",
-                    );
-                }
-                return { outcome, messageId: identity.data.messageId };
+                return { outcome };
             }
             if (outcome === "promptRequired") {
                 throw new AcpExecutionError(

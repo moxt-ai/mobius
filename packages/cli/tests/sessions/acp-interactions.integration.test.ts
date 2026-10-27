@@ -102,7 +102,6 @@ describe("acp interactions", () => {
             mode: "form",
         });
         expect(result.completed).toEqual({
-            messageId: "user-1",
             stopReason: "end_turn",
             _meta: { messageId: "user-1" },
         });
@@ -152,7 +151,6 @@ describe("acp interactions", () => {
             sessionId: session.request.sessionId,
         });
         await expect(running).resolves.toEqual({
-            messageId: "user-1",
             stopReason: "end_turn",
             _meta: { messageId: "user-1" },
         });

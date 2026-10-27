@@ -87,7 +87,6 @@ export interface AdapterSessionTarget {
 }
 
 export interface AdapterPromptResult {
-    readonly messageId: string;
     readonly stopReason: "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" | "cancelled";
     readonly usage?: z.infer<typeof promptUsageSchema> | null;
     readonly _meta?: z.infer<typeof promptMetadataSchema> | null;
@@ -107,10 +106,7 @@ export interface Adapter {
         target: AdapterSessionTarget,
         content: PromptContent,
         signal: AbortSignal,
-    ) => Promise<
-        | { readonly outcome: "injected"; readonly messageId: string }
-        | { readonly outcome: "startedNewTurn"; readonly messageId: string }
-    >;
+    ) => Promise<{ readonly outcome: "injected" } | { readonly outcome: "startedNewTurn" }>;
     readonly renameSession: (
         target: AdapterSessionTarget,
         title: string,

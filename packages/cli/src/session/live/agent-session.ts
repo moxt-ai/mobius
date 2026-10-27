@@ -8,7 +8,7 @@ import {
     type SessionConfigOption,
     type SessionEventPayload,
 } from "@moxt-ai/mobius-sdk/protocol";
-import { AcpExecutionError, AcpPromptExecutionError } from "../../acp/acp-error.ts";
+import { AcpExecutionError } from "../../acp/acp-error.ts";
 import {
     initializeAgentConnection,
     RetryableAcpInitializationError,
@@ -613,7 +613,6 @@ export class AgentSession implements AgentSessionRestore {
                     payload: {
                         commandId: options.commandId,
                         kind: "prompt.completed",
-                        messageId: result.messageId,
                         stopReason: result.stopReason,
                     },
                     type: "lifecycle-metadata",
@@ -635,9 +634,6 @@ export class AgentSession implements AgentSessionRestore {
                                   code: failure.code,
                                   commandId: options.commandId,
                                   kind: "prompt.failed",
-                                  ...(failure instanceof AcpPromptExecutionError
-                                      ? { messageId: failure.messageId }
-                                      : {}),
                                   message: truncate(failure.message, 500),
                               },
                     type: "lifecycle-metadata",
@@ -694,7 +690,6 @@ export class AgentSession implements AgentSessionRestore {
                     payload: {
                         commandId: options.commandId,
                         kind: "prompt.completed",
-                        messageId: outcome.messageId,
                         stopReason: "steered",
                     },
                     type: "lifecycle-metadata",
@@ -713,7 +708,6 @@ export class AgentSession implements AgentSessionRestore {
                         code: failure.code,
                         commandId: options.commandId,
                         kind: "prompt.failed",
-                        ...(failure instanceof AcpPromptExecutionError ? { messageId: failure.messageId } : {}),
                         message: truncate(failure.message, 500),
                     },
                     type: "lifecycle-metadata",

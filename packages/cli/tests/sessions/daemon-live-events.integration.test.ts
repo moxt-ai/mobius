@@ -471,7 +471,7 @@ async function activeTurn(fixture: Fixture, command: SessionPromptCommand) {
     }
 }
 describe("daemon V2 live delivery", () => {
-    it("Given a harness identifies a user message and fails its prompt, When the daemon publishes the failure, Then the native message identity is preserved", async () => {
+    it("Given a harness identifies a user message and fails its prompt, When the daemon publishes the failure, Then only the user chunk carries its identity", async () => {
         const fixture = await startControlledDaemon();
         try {
             sendText(fixture.socket, encodeSessionPromptCommand(prompt(fixture, "fail with model unavailable")));
@@ -480,7 +480,7 @@ describe("daemon V2 live delivery", () => {
                 const event = await nextLive(fixture, true);
                 events.push(event);
                 if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
-                    expect(event.payload.messageId).toBe("user-1");
+                    expect(event.payload).not.toHaveProperty("messageId");
                     break;
                 }
             }
@@ -597,13 +597,10 @@ describe("daemon V2 live delivery", () => {
                 expect(lifecycleKinds).toEqual(
                     expect.arrayContaining(["prompt.requested", "prompt.started", "prompt.completed"]),
                 );
-                expect(
-                    live.find(
-                        (event) => event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed",
-                    ),
-                ).toMatchObject({
-                    payload: { messageId: "user-1" },
-                });
+                const completed = live.find(
+                    (event) => event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed",
+                );
+                expect(completed?.payload).not.toHaveProperty("messageId");
 
                 const page = await history(fixture, command);
                 expect(page.events.length).toBeGreaterThan(0);

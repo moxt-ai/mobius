@@ -1,14 +1,70 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { methods, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
+import { methods, PROTOCOL_VERSION, type SessionUpdate } from "@agentclientprotocol/sdk";
 import { expect, test } from "vitest";
 import { z } from "zod";
+import { PiAgentConnection } from "../../src/acp/adapter/pi/agent-connection.ts";
 import { createAcpClient } from "../../src/acp/connection/create-client.ts";
 import type { IdentifiedSessionUpdate } from "../../src/acp/connection/session-notification.ts";
 import { PiAcpEndpoint } from "../../src/acp/harness/pi/endpoint.ts";
 import { PiFixture } from "../support/agents/pi.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
+
+test("Given the raw Pi harness, When a user submits a prompt, Then its chunks and result contain no adapter-generated message identity", async () => {
+    await using provider = await FakeOpenAiProvider.start("gpt-4.1", "PI_RAW_REPLY");
+    await using fixture = await PiFixture.create(provider);
+    const cwd = await mkdtemp(join(tmpdir(), "mobius-pi-raw-identity-"));
+    const updates: SessionUpdate[] = [];
+    const endpoint = new PiAcpEndpoint({
+        command: fixture.executable,
+        environment: fixture.environment,
+        cwd,
+        onSessionUpdate: async ({ update }) => {
+            updates.push(update);
+        },
+    });
+    const rejectInteraction = async (): Promise<never> => {
+        throw new Error("Unexpected interaction");
+    };
+    const connection = createAcpClient({
+        onUpdate: async () => undefined,
+        onPermission: rejectInteraction,
+        onElicitation: rejectInteraction,
+        onElicitationComplete: async () => undefined,
+    }).connect(endpoint.app());
+    const signal = AbortSignal.timeout(60_000);
+    try {
+        await endpoint.initialize(signal);
+        await connection.agent.request(
+            methods.agent.initialize,
+            { protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} },
+            { cancellationSignal: signal },
+        );
+        const session = await connection.agent.request(
+            methods.agent.session.new,
+            { cwd, mcpServers: [] },
+            { cancellationSignal: signal },
+        );
+        const response = await connection.agent.request(
+            methods.agent.session.prompt,
+            { sessionId: session.sessionId, prompt: [{ type: "text", text: "Reply without tools" }] },
+            { cancellationSignal: signal },
+        );
+        const chunks = updates.filter(
+            (update) => update.sessionUpdate === "user_message_chunk" || update.sessionUpdate === "agent_message_chunk",
+        );
+        expect(chunks.length).toBeGreaterThan(1);
+        for (const chunk of chunks) {
+            expect(chunk).not.toHaveProperty("messageId");
+        }
+        expect(response._meta ?? {}).not.toHaveProperty("messageId");
+    } finally {
+        await endpoint.close();
+        connection.close();
+        await rm(cwd, { recursive: true, force: true });
+    }
+});
 
 test("Given real Pi streams multiple messages, When the harness emits chunks, replays history and exports a session, Then each message has one messageId and no nativeMessageId", async () => {
     await using provider = await FakeOpenAiProvider.start("gpt-4.1", "PI_IDENTITY_REPLY");
@@ -17,25 +73,25 @@ test("Given real Pi streams multiple messages, When the harness emits chunks, re
     const cwd = await mkdtemp(join(tmpdir(), "mobius-pi-message-identity-"));
     const updates: IdentifiedSessionUpdate[] = [];
     const observed: IdentifiedSessionUpdate[] = [];
-    const endpoint = new PiAcpEndpoint({
+    const endpoint = new PiAgentConnection({
         command: fixture.executable,
         environment: fixture.environment,
         cwd,
-        onSessionUpdate: async ({ update }) => {
-            updates.push(update);
-            observed.push(update);
+        client: {
+            onUpdate: async ({ update }) => {
+                updates.push(update);
+                observed.push(update);
+            },
+            onPermission: async () => {
+                throw new Error("The identity scenario must not request permission");
+            },
+            onElicitation: async () => {
+                throw new Error("The identity scenario must not request input");
+            },
+            onElicitationComplete: async () => undefined,
         },
     });
-    const connection = createAcpClient({
-        onUpdate: async () => undefined,
-        onPermission: async () => {
-            throw new Error("The identity scenario must not request permission");
-        },
-        onElicitation: async () => {
-            throw new Error("The identity scenario must not request input");
-        },
-        onElicitationComplete: async () => undefined,
-    }).connect(endpoint.app());
+    const connection = endpoint.connection;
     const signal = AbortSignal.timeout(60_000);
     try {
         await endpoint.initialize(signal);
@@ -66,7 +122,7 @@ test("Given real Pi streams multiple messages, When the harness emits chunks, re
             const userMessages = updates.filter((update) => update.sessionUpdate === "user_message_chunk");
             expect(userMessages).toHaveLength(1);
             expect(userMessages[0]?.messageId).toEqual(expect.any(String));
-            expect(result._meta?.["messageId"]).toBe(userMessages[0]?.messageId);
+            expect(result._meta ?? {}).not.toHaveProperty("messageId");
             expect(messages.length).toBeGreaterThan(1);
             expect(
                 messages.flatMap((update) => (update.content.type === "text" ? [update.content.text] : [])).join(""),
@@ -128,9 +184,23 @@ test("Given real Pi streams multiple messages, When the harness emits chunks, re
             expect(update.messageId).toEqual(expect.any(String));
             expect(Object.hasOwn(update, "nativeMessageId")).toBe(false);
         }
+        for (const [index, update] of observed.entries()) {
+            if (
+                update.sessionUpdate !== "user_message_chunk" &&
+                update.sessionUpdate !== "agent_message_chunk" &&
+                update.sessionUpdate !== "agent_thought_chunk"
+            ) {
+                continue;
+            }
+            const previous = observed[index - 1];
+            if (previous?.sessionUpdate === update.sessionUpdate) {
+                expect(update.messageId).toBe(previous.messageId);
+            } else if (previous !== undefined && "messageId" in previous) {
+                expect(update.messageId).not.toBe(previous.messageId);
+            }
+        }
     } finally {
-        await endpoint.close();
-        connection.close();
+        await endpoint.closeProcess();
         await rm(cwd, { recursive: true, force: true });
     }
 });

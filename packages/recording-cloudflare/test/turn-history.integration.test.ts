@@ -158,19 +158,17 @@ describe("Recording Turn history", () => {
             expect(await rebuiltRaw.json()).toMatchObject({ events: frames });
         },
     );
-    it("Given terminal events from new and older harnesses, When Recording persists and reads them, Then optional message identities round-trip unchanged", async () => {
+    it("Given terminal events without message identities, When Recording persists and reads them, Then their outcomes round-trip unchanged", async () => {
         const events = [
             lifecycle({
-                commandId: "completed-with-id",
+                commandId: "completed",
                 kind: "prompt.completed",
-                messageId: "native-user-1",
                 stopReason: "end_turn",
             }),
             lifecycle({
-                commandId: "failed-with-id",
+                commandId: "failed",
                 attemptId: "attempt-2",
                 kind: "prompt.failed",
-                messageId: "native-user-2",
                 code: "agent_failed",
                 message: "The prompt failed",
             }),
