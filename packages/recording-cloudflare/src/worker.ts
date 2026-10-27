@@ -1,7 +1,10 @@
 import { DurableObject } from "cloudflare:workers";
 import {
+    decodeSessionRecordingDirectoryV2,
+    decodeSessionRecordingSummaryV2,
     decodeSessionRecordingWrite,
     encodeSessionRecordingDirectory,
+    encodeSessionRecordingDirectoryV2,
     encodeSessionRecordingTurnItemDetail,
     encodeSessionRecordingTurnItemPage,
     encodeSessionRecordingTurnPage,
@@ -14,12 +17,15 @@ import {
     SESSION_RECORDING_TURN_ITEM_ID_MAX_LENGTH,
     SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT,
     SESSION_RECORDING_TURN_PAGE_MAX_LIMIT,
+    type SessionRecordingSummary,
     type SessionRecordingTurnItemCursorDirection,
     type SessionRecordingWrite,
+    sessionRecordingStatusSchema,
 } from "@moxt-ai/mobius-sdk/protocol";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { directoryUpdateSchema } from "./entity/recording-directory-update.ts";
 import { RecordingSqlMetrics } from "./infra/recording-sql-metrics.ts";
+import { readLegacyRecordingStatus } from "./service/legacy-recording-status.ts";
 import { RecordingDirectory } from "./service/recording-directory.ts";
 import { projectDirectoryUpdate } from "./service/recording-directory-update.ts";
 import { RecordingEventWaiters } from "./service/recording-event-waiters.ts";
@@ -37,7 +43,10 @@ export interface RecordingWorker {
 }
 
 type RecordingEnvironment = { readonly Bindings: RecordingWorkerBindings };
-type SessionRecordingRoutes = Pick<SessionRecordingStorage, "append" | "read" | "readPage">;
+type SessionRecordingRoutes = Pick<
+    SessionRecordingStorage,
+    "append" | "read" | "readPage" | "records" | "batchesNewestFirst"
+>;
 type TurnHistoryRoutes = Pick<SessionTurnHistory, "item" | "itemPage" | "project" | "turnPage">;
 const jsonHeaders = { "content-type": "application/json" } as const;
 
@@ -126,6 +135,21 @@ function sessionRecordingRoutes(
                 }),
             );
             return context.json({ recorded: true }, 201);
+        })
+        .get("/legacy-status", (context): Response => {
+            const target = eventTarget(context.req.raw);
+            if (target === null) {
+                return errorResponse("invalid_target", 400);
+            }
+            const read = readLegacyRecordingStatus(storage, target);
+            switch (read.kind) {
+                case "available":
+                    return context.json(read.status);
+                case "not_found":
+                    return errorResponse("not_found", 404);
+                case "unavailable":
+                    return errorResponse("recording_status_unavailable", 503);
+            }
         })
         .get("/turns", async (context): Promise<Response> => {
             const target = eventTarget(context.req.raw);
@@ -288,7 +312,7 @@ function recordingDirectoryRoutes(
                               return summary?.runtimeId === runtimeId ? [summary] : [];
                           }),
                       };
-            return context.body(encodeSessionRecordingDirectory(result), 200, jsonHeaders);
+            return context.body(encodeSessionRecordingDirectoryV2(result), 200, jsonHeaders);
         })
         .get("/summary", (context): Response => {
             const runtimeId = decodedIdentifier(context.req.query("runtimeId"));
@@ -471,6 +495,76 @@ function durableObjectFetch(namespace: DurableObjectNamespace, name: string, req
     return namespace.getByName(name).fetch(request);
 }
 
+async function recordingSummaryResponse(
+    context: Context<RecordingEnvironment>,
+    version: 1 | 2,
+    kind: "directory" | "summary",
+): Promise<Response> {
+    const target = readTarget(context);
+    if (target.projectId === null || target.runtimeId === null || (kind === "summary" && target.sessionId === null)) {
+        return errorResponse("not_found", 404);
+    }
+    const sessionIds =
+        kind === "summary" && target.sessionId !== null ? [target.sessionId] : (context.req.queries("sessionId") ?? []);
+    if (sessionIds.some((sessionId) => !isIdentifier(sessionId))) {
+        return errorResponse("invalid_target", 400);
+    }
+    const query = new URLSearchParams({ projectId: target.projectId, runtimeId: target.runtimeId });
+    for (const sessionId of sessionIds) {
+        query.append("sessionId", sessionId);
+    }
+    const signal = AbortSignal.any([context.req.raw.signal, AbortSignal.timeout(10_000)]);
+    const response = await durableObjectFetch(
+        context.env.RECORDING_DIRECTORY,
+        JSON.stringify([target.projectId, target.runtimeId]),
+        new Request(`https://directory.internal/${kind === "directory" ? "sessions" : "summary"}?${query}`, { signal }),
+    );
+    if (!response.ok) {
+        return response;
+    }
+    const encoded = await response.text();
+    const summaries =
+        kind === "directory"
+            ? decodeSessionRecordingDirectoryV2(encoded).sessions
+            : [decodeSessionRecordingSummaryV2(encoded)];
+    if (version === 2) {
+        return Response.json(kind === "directory" ? { sessions: summaries } : summaries[0]);
+    }
+
+    // V1 consumers still require `status`. Reconstruct only this legacy response from history,
+    // keeping V2 reads and directory writes independent of any execution-state projection.
+    const legacy: SessionRecordingSummary[] = [];
+    for (const summary of summaries) {
+        signal.throwIfAborted();
+        const statusQuery = new URLSearchParams({
+            projectId: target.projectId,
+            runtimeId: target.runtimeId,
+            sessionId: summary.sessionId,
+        });
+        const statusResponse = await durableObjectFetch(
+            context.env.SESSION_RECORDING,
+            JSON.stringify([target.projectId, summary.sessionId]),
+            new Request(`https://recording.internal/legacy-status?${statusQuery}`, { signal }),
+        );
+        if (!statusResponse.ok) {
+            await statusResponse.body?.cancel();
+            return errorResponse("recording_status_unavailable", 503);
+        }
+        const status = sessionRecordingStatusSchema.parse(await statusResponse.json<unknown>());
+        legacy.push({ ...summary, status });
+    }
+    return new Response(
+        kind === "directory" ? encodeSessionRecordingDirectory({ sessions: legacy }) : JSON.stringify(legacy[0]),
+        {
+            headers: {
+                ...jsonHeaders,
+                "cache-control": "no-store",
+                "Mobius-Recording-Status-Source": "recorded-events",
+            },
+        },
+    );
+}
+
 type BatchResult =
     | { readonly sessionId: string; readonly kind: "recorded" }
     | { readonly sessionId: string; readonly kind: "failed"; readonly code: "write_failed" };
@@ -644,44 +738,18 @@ export function createRecordingWorker(): RecordingWorker {
             );
             return indexed.ok ? context.json({ recorded: true }, 201) : errorResponse("storage_unavailable", 503);
         })
-        .get("/v1/projects/:projectId/runtimes/:runtimeId/sessions", async (context): Promise<Response> => {
-            const target = readTarget(context);
-            if (target.projectId === null || target.runtimeId === null) {
-                return errorResponse("not_found", 404);
-            }
-            const sessionIds = context.req.queries("sessionId") ?? [];
-            if (sessionIds.some((sessionId) => !isIdentifier(sessionId))) {
-                return errorResponse("invalid_target", 400);
-            }
-            const query = new URLSearchParams({
-                projectId: target.projectId,
-                runtimeId: target.runtimeId,
-            });
-            for (const sessionId of sessionIds) {
-                query.append("sessionId", sessionId);
-            }
-            return await durableObjectFetch(
-                context.env.RECORDING_DIRECTORY,
-                JSON.stringify([target.projectId, target.runtimeId]),
-                new Request(`https://directory.internal/sessions?${query}`, { signal: context.req.raw.signal }),
-            );
-        })
-        .get("/v1/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId", async (context): Promise<Response> => {
-            const target = readTarget(context);
-            if (target.projectId === null || target.runtimeId === null || target.sessionId === null) {
-                return errorResponse("not_found", 404);
-            }
-            const query = new URLSearchParams({
-                projectId: target.projectId,
-                runtimeId: target.runtimeId,
-                sessionId: target.sessionId,
-            });
-            return await durableObjectFetch(
-                context.env.RECORDING_DIRECTORY,
-                JSON.stringify([target.projectId, target.runtimeId]),
-                new Request(`https://directory.internal/summary?${query}`, { signal: context.req.raw.signal }),
-            );
-        })
+        .get("/v1/projects/:projectId/runtimes/:runtimeId/sessions", (context) =>
+            recordingSummaryResponse(context, 1, "directory"),
+        )
+        .get("/v1/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId", (context) =>
+            recordingSummaryResponse(context, 1, "summary"),
+        )
+        .get("/v2/projects/:projectId/runtimes/:runtimeId/sessions", (context) =>
+            recordingSummaryResponse(context, 2, "directory"),
+        )
+        .get("/v2/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId", (context) =>
+            recordingSummaryResponse(context, 2, "summary"),
+        )
         .get(
             "/v1/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/turns",
             async (context): Promise<Response> => {

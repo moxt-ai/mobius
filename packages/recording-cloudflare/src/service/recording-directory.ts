@@ -1,4 +1,4 @@
-import type { SessionRecordingSummary, SessionRecordingWrite } from "@moxt-ai/mobius-sdk/protocol";
+import type { SessionRecordingSummaryV2, SessionRecordingWrite } from "@moxt-ai/mobius-sdk/protocol";
 import type { RecordingDirectoryUpdate } from "../entity/recording-directory-update.ts";
 import type { RecordingDirectoryStorage } from "../storage/recording-directory-storage.ts";
 import { projectDirectoryUpdate } from "./recording-directory-update.ts";
@@ -12,7 +12,7 @@ export class RecordingDirectory {
     readonly apply = (write: RecordingDirectoryUpdate): void => {
         for (const { sessionId, operations } of write.updates) {
             const initial = this.#storage.find(sessionId);
-            let summary: SessionRecordingSummary | null = initial;
+            let summary: SessionRecordingSummaryV2 | null = initial;
             for (const operation of operations) {
                 const existing = summary;
                 if (operation.kind === "requested") {
@@ -20,14 +20,12 @@ export class RecordingDirectory {
                         ...operation.context,
                         sessionId,
                         runtimeId: write.runtimeId,
-                        status: "running",
                         title: existing?.title || operation.title,
                         updatedAt: operation.recordedAt,
                     };
                 } else if (existing !== null) {
                     summary = {
                         ...existing,
-                        status: operation.kind === "status" ? operation.status : existing.status,
                         title: operation.kind === "title" ? operation.title : existing.title,
                         updatedAt: operation.recordedAt,
                     };

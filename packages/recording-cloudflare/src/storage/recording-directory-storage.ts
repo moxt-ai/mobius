@@ -1,7 +1,7 @@
 import {
     isDirectoryIdentifier,
-    type SessionRecordingDirectory,
-    type SessionRecordingSummary,
+    type SessionRecordingDirectoryV2,
+    type SessionRecordingSummaryV2,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { and, desc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/durable-sqlite";
@@ -17,7 +17,7 @@ export class RecordingDirectoryStorage {
         applyDurableObjectMigrations(storage, recordingDirectoryDurableObjectMigrations);
         this.#database = drizzle(storage, { schema, logger: metrics });
     }
-    readonly find = (sessionId: string): SessionRecordingSummary | null => {
+    readonly find = (sessionId: string): SessionRecordingSummaryV2 | null => {
         const row = this.#database
             .select()
             .from(recordingSessionSummary)
@@ -25,7 +25,7 @@ export class RecordingDirectoryStorage {
             .all()[0];
         return row === undefined ? null : decodeSummary(row);
     };
-    readonly save = (summary: SessionRecordingSummary): void => {
+    readonly save = (summary: SessionRecordingSummaryV2): void => {
         const values = {
             sessionId: summary.sessionId,
             runtimeId: summary.runtimeId,
@@ -33,7 +33,6 @@ export class RecordingDirectoryStorage {
             directoryId: summary.directoryId,
             additionalDirectoryIdsJson: JSON.stringify(summary.additionalDirectoryIds),
             title: summary.title,
-            status: summary.status,
             prompted: true,
             updatedAt: Date.parse(summary.updatedAt),
         };
@@ -43,7 +42,7 @@ export class RecordingDirectoryStorage {
             .onConflictDoUpdate({ target: recordingSessionSummary.sessionId, set: values })
             .run();
     };
-    readonly read = (runtimeId: string): SessionRecordingDirectory => ({
+    readonly read = (runtimeId: string): SessionRecordingDirectoryV2 => ({
         sessions: this.#database
             .select()
             .from(recordingSessionSummary)
@@ -53,7 +52,7 @@ export class RecordingDirectoryStorage {
             .map(decodeSummary),
     });
 }
-function decodeSummary(row: typeof recordingSessionSummary.$inferSelect): SessionRecordingSummary {
+function decodeSummary(row: typeof recordingSessionSummary.$inferSelect): SessionRecordingSummaryV2 {
     const directories: unknown = JSON.parse(row.additionalDirectoryIdsJson);
     if (!Array.isArray(directories) || !directories.every(isDirectoryIdentifier)) {
         throw new Error("Invalid recorded directory identifiers");
@@ -64,7 +63,6 @@ function decodeSummary(row: typeof recordingSessionSummary.$inferSelect): Sessio
         directoryId: row.directoryId,
         runtimeId: row.runtimeId,
         sessionId: row.sessionId,
-        status: row.status,
         title: row.title,
         updatedAt: new Date(row.updatedAt).toISOString(),
     };

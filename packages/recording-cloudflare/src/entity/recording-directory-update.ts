@@ -11,12 +11,17 @@ const context = z
         additionalDirectoryIds: z.array(directoryIdentifier).max(16).readonly(),
     })
     .readonly();
-export const directoryOperationSchema = z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("requested"), context, title: z.string().max(1000), recordedAt }).readonly(),
-    z.object({ kind: z.literal("status"), status: z.enum(["running", "idle", "failed"]), recordedAt }).readonly(),
-    z.object({ kind: z.literal("title"), title: z.string().max(1000), recordedAt }).readonly(),
-    z.object({ kind: z.literal("activity"), recordedAt }).readonly(),
-]);
+export const directoryOperationSchema = z
+    .discriminatedUnion("kind", [
+        z.object({ kind: z.literal("requested"), context, title: z.string().max(1000), recordedAt }).readonly(),
+        // In-flight writes from older Workers still count as activity, without retaining their status.
+        z.object({ kind: z.literal("status"), status: z.enum(["running", "idle", "failed"]), recordedAt }).readonly(),
+        z.object({ kind: z.literal("title"), title: z.string().max(1000), recordedAt }).readonly(),
+        z.object({ kind: z.literal("activity"), recordedAt }).readonly(),
+    ])
+    .transform((operation) =>
+        operation.kind === "status" ? { kind: "activity" as const, recordedAt: operation.recordedAt } : operation,
+    );
 export const directoryUpdateSchema = z
     .object({
         projectId: identifier,
