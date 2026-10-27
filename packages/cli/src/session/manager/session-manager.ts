@@ -2,7 +2,6 @@ import {
     SESSION_CLOSE_NOTICE_KIND,
     SESSION_CLOSED_ERROR_CODE,
     type SessionCloseNoticeEvent,
-    type SessionConfigOption,
     type SessionEventPayload,
     type SessionStatus,
     type SessionStatusChangedEvent,
@@ -40,6 +39,7 @@ import {
     type PreparedSession,
     type PromptResult,
     type ResolveAgent,
+    type SessionConfigurationSnapshot,
     type SessionConfigureOptions,
     type SessionObserver,
     type SessionPrepareOptions,
@@ -441,15 +441,17 @@ export class SessionManager {
                     const configOptions =
                         model === undefined || modelIsFixed
                             ? prepared.configOptions
-                            : await runtime.configure({
-                                  ...options,
-                                  booleanValue: false,
-                                  configId: modelOption?.id ?? "model",
-                                  requestId: "agent-settings-model",
-                                  sessionId: `agent-settings-${crypto.randomUUID()}`,
-                                  value: model,
-                                  valueType: "select",
-                              });
+                            : (
+                                  await runtime.configure({
+                                      ...options,
+                                      booleanValue: false,
+                                      configId: modelOption?.id ?? "model",
+                                      requestId: "agent-settings-model",
+                                      sessionId: `agent-settings-${crypto.randomUUID()}`,
+                                      value: model,
+                                      valueType: "select",
+                                  })
+                              ).configOptions;
                     return new AgentSettingsSnapshot(
                         prepared.agentName,
                         prepared.agentVersion,
@@ -533,7 +535,7 @@ export class SessionManager {
             return (await this.#replaceExecutionPreparation(existing, options)).prepared();
         });
 
-    readonly configureSession = async (options: SessionConfigureOptions): Promise<readonly SessionConfigOption[]> =>
+    readonly configureSession = async (options: SessionConfigureOptions): Promise<SessionConfigurationSnapshot> =>
         this.#operations.run(options, async (options) => {
             return await this.#executionProcesses.use(options.sessionId, async () => {
                 const runtime = await this.ensureSession(options);

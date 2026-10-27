@@ -1145,6 +1145,7 @@ export class MobiusSessionResources {
                       | "agentId"
                       | "booleanValue"
                       | "configId"
+                      | "expectedConfigurationRevision"
                       | "directoryId"
                       | "value"
                       | "valueType"

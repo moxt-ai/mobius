@@ -62,6 +62,7 @@ const configureSessionSchema = v.strictObject({
     ...sessionIdentitySchema.entries,
     booleanValue: v.boolean(),
     configId: identifier,
+    expectedConfigurationRevision: v.optional(identifier),
     value: v.string(),
     valueType: v.picklist(["boolean", "select"]),
 });
