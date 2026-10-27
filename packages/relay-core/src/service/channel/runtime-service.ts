@@ -365,7 +365,7 @@ export class RuntimeService {
         scope: ProjectScope,
         runtimeId: string,
         socket: ChannelSocket,
-        message: string,
+        message: unknown,
         signal: AbortSignal,
     ): Promise<void> => {
         signal.throwIfAborted();
@@ -385,7 +385,12 @@ export class RuntimeService {
             ) {
                 throw new PairingDirectoryError("runtime_access_denied", "The selected Runtime is unavailable");
             }
-            await this.channel(runtimeId, scope).receiveHostMessage(socket, message, signal);
+            const channel = this.channel(runtimeId, scope);
+            if (typeof message === "string") {
+                await channel.receiveHostMessage(socket, message, signal);
+            } else {
+                channel.receiveHostChunk(socket, message);
+            }
         } finally {
             await this.detachDaemons(silent);
         }
@@ -406,6 +411,10 @@ export class RuntimeService {
             try {
                 if (identity.role === "relay") {
                     const channel = this.channel(identity.runtimeId, scope);
+                    if (typeof message !== "string") {
+                        channel.receiveHostChunk(socket, message);
+                        return;
+                    }
                     await channel.receiveHostMessage(socket, message, signal);
                     return;
                 }
@@ -418,13 +427,39 @@ export class RuntimeService {
                     return;
                 }
                 const channel = this.channel(identity.runtimeId, scope);
+                if (typeof message !== "string") {
+                    channel.receiveHostChunk(socket, message);
+                    return;
+                }
                 await channel.receiveHostMessage(socket, message, signal);
                 return;
             } finally {
                 await this.detachDaemons(silentDaemons);
             }
         }
-        if (typeof message !== "string" || message.length > 8 * 1024 * 1024) {
+        if (typeof message !== "string") {
+            try {
+                await this.#daemonMessages.run("runtime", signal, async () => {
+                    signal.throwIfAborted();
+                    if (identity.role === "replaced-daemon") {
+                        socket.close(1012, "Daemon connection replaced");
+                        return;
+                    }
+                    if (!this.#cx.services.connections.isCurrent(identity)) {
+                        socket.replaceDaemon();
+                        return;
+                    }
+                    this.channel(identity.runtimeId, scope).receiveDaemonChunk(socket, message);
+                });
+            } catch (error) {
+                socket.close(
+                    error instanceof RuntimeMessageSchedulerCapacityError ? 1013 : 1008,
+                    "Invalid content chunk",
+                );
+            }
+            return;
+        }
+        if (message.length > 8 * 1024 * 1024) {
             socket.close(1003, "Bounded text message required");
             return;
         }

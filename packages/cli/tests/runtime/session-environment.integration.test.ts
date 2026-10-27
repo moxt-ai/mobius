@@ -396,8 +396,7 @@ await import(${JSON.stringify(agentPeer)});
                     disposition: SessionPromptDisposition.Reject,
                     targetCommandId: "",
                     prompt: commandId,
-                    images: [],
-                    resources: [],
+                    attachments: [],
                 }),
             );
             await next(commandId, ["prompt.completed"]);

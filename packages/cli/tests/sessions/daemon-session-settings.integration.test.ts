@@ -711,10 +711,9 @@ describe("daemon session configuration boundary", () => {
                 commandId: runningCommandId,
                 directoryId: "default",
                 disposition: SessionPromptDisposition.Reject,
-                images: [],
+                attachments: [],
                 kind: "session.prompt",
                 prompt: "wait for steering",
-                resources: [],
                 sessionConfigurations: [
                     { booleanValue: false, configId: "removed_access_mode", value: "read-only", valueType: "select" },
                     { booleanValue: false, configId: "model", value: "test-small", valueType: "select" },

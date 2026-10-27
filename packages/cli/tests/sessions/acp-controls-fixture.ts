@@ -82,7 +82,6 @@ export async function completeAcpControls(session: Awaited<ReturnType<typeof cre
             {
                 type: "embedded",
                 mimeType: "text/plain",
-                name: "context.txt",
                 text: "supporting context",
                 uri: "mobius://upload/context.txt",
             },

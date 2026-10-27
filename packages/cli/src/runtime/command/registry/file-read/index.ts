@@ -2,7 +2,7 @@ import { FILE_FAILED_KIND, FILE_READ_KIND } from "@moxt-ai/mobius-sdk/protocol";
 import { WebSocket } from "undici";
 import { streamLocalFile } from "../../../../session/content/session-files.ts";
 import type { RuntimeCommand } from "../../definition.ts";
-import { send } from "../../transport.ts";
+import { send, sendContentChunk } from "../../transport.ts";
 
 export const fileReadCommand: RuntimeCommand = {
     kind: FILE_READ_KIND,
@@ -13,6 +13,7 @@ export const fileReadCommand: RuntimeCommand = {
         void streamLocalFile(
             message,
             (response) => send(socket, response),
+            (requestId, sequence, bytes) => sendContentChunk(socket, requestId, sequence, bytes),
             signal,
             sessions.findSessions([message.sessionId])[0]?.cwd ?? null,
             externalContent,

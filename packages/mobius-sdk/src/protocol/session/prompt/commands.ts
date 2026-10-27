@@ -33,7 +33,7 @@ export const SessionHistoryPolicy = Object.freeze({
 export type SessionHistoryPolicy = (typeof SessionHistoryPolicy)[keyof typeof SessionHistoryPolicy];
 
 const MAX_PROMPT_LENGTH = 100_000;
-export const MAX_PROMPT_ATTACHMENT_LENGTH = 6_000_000;
+export const MAX_PROMPT_ATTACHMENT_BYTES = 32 * 1024 * 1024;
 
 export interface SessionPromptCommand {
     readonly additionalDirectoryIds: readonly string[];
@@ -42,11 +42,10 @@ export interface SessionPromptCommand {
     readonly commandId: string;
     readonly directoryId: string;
     readonly disposition: string;
-    readonly images: readonly PromptImage[];
+    readonly attachments: readonly PromptAttachment[];
     readonly historyPolicy?: SessionHistoryPolicy;
     readonly kind: typeof SESSION_PROMPT_KIND;
     readonly prompt: string;
-    readonly resources: readonly PromptResource[];
     readonly sessionConfigurations?: readonly SessionConfigurationSelection[];
     readonly sessionId: string;
     readonly targetCommandId: string;
@@ -65,33 +64,23 @@ export interface SessionPromptDispositionCommand {
     readonly sessionId: string;
 }
 
-export const promptImageSchema = z
+export const promptAttachmentSchema = z
     .object({
-        data: z.string().min(1).max(4_000_000),
+        byteLength: z.number().int().positive().max(MAX_PROMPT_ATTACHMENT_BYTES),
+        contentKey: z.string().regex(/^[a-f0-9]{64}$/u),
+        kind: z.enum(["image", "resource"]),
         mimeType: z.string().min(1).max(255),
         name: z.string().min(1).max(500),
-    })
-    .readonly();
-
-export type PromptImage = z.infer<typeof promptImageSchema>;
-
-export const promptResourceSchema = z
-    .object({
-        mimeType: z.string().max(255),
-        name: z.string().min(1).max(500),
-        text: z.string().max(1_000_000),
-        type: z.enum(["embedded", "link"]),
         uri: z.string().min(1).max(4_096),
     })
     .readonly();
 
-export type PromptResource = z.infer<typeof promptResourceSchema>;
+export type PromptAttachment = z.infer<typeof promptAttachmentSchema>;
 
-export const decodePromptImagesValue = (value: unknown): readonly PromptImage[] =>
-    decodeZodValue(value, z.array(promptImageSchema).max(8).readonly());
-
-export const decodePromptResourcesValue = (value: unknown): readonly PromptResource[] =>
-    decodeZodValue(value, z.array(promptResourceSchema).max(16).readonly());
+export const decodePromptAttachment = (value: unknown): PromptAttachment =>
+    decodeZodValue(value, promptAttachmentSchema);
+export const decodePromptAttachmentsValue = (value: unknown): readonly PromptAttachment[] =>
+    decodeZodValue(value, z.array(promptAttachmentSchema).max(16).readonly());
 
 function readPromptDisposition(value: Readonly<Record<string, unknown>>): string {
     const field = value["disposition"];
@@ -113,15 +102,15 @@ export function decodeSessionPromptCommand(encoded: string): SessionPromptComman
     assertKind(value, SESSION_PROMPT_KIND);
 
     const prompt = readText(value, "prompt", MAX_PROMPT_LENGTH);
-    const images = decodePromptImagesValue(value["images"]);
-    const resources = decodePromptResourcesValue(value["resources"]);
-    const attachmentLength =
-        images.reduce((total, image) => total + image.data.length, 0) +
-        resources.reduce((total, resource) => total + resource.text.length, 0);
-    if (attachmentLength > MAX_PROMPT_ATTACHMENT_LENGTH) {
+    const attachments =
+        !Object.hasOwn(value, "attachments") && Array.isArray(value["images"]) && Array.isArray(value["resources"])
+            ? []
+            : decodePromptAttachmentsValue(value["attachments"]);
+    const attachmentBytes = attachments.reduce((total, attachment) => total + attachment.byteLength, 0);
+    if (attachmentBytes > MAX_PROMPT_ATTACHMENT_BYTES) {
         throw new ProtocolMessageError("Prompt attachments are too large");
     }
-    if (prompt.trim().length === 0 && images.length === 0 && resources.length === 0) {
+    if (prompt.trim().length === 0 && attachments.length === 0) {
         throw new ProtocolMessageError("Prompt must contain content");
     }
 
@@ -149,7 +138,7 @@ export function decodeSessionPromptCommand(encoded: string): SessionPromptComman
         commandId: readIdentifier(value, "commandId"),
         directoryId: readDirectoryIdentifier(value, "directoryId"),
         disposition,
-        images,
+        attachments,
         ...(value["historyPolicy"] === undefined
             ? {}
             : {
@@ -157,7 +146,6 @@ export function decodeSessionPromptCommand(encoded: string): SessionPromptComman
               }),
         kind: SESSION_PROMPT_KIND,
         prompt,
-        resources,
         ...(hasSessionConfigurations ? { sessionConfigurations } : {}),
         sessionId: readIdentifier(value, "sessionId"),
         targetCommandId,
@@ -198,7 +186,15 @@ export function decodeSessionPromptDispositionCommand(encoded: string): SessionP
 }
 
 export function encodeSessionPromptCommand(message: SessionPromptCommand): string {
-    return JSON.stringify(decodeSessionPromptCommand(JSON.stringify(message)));
+    const command = decodeSessionPromptCommand(JSON.stringify(message));
+    return JSON.stringify({
+        ...command,
+        // Keep text prompts compatible with the previous Runtime release while
+        // attachments move to the content-key protocol. Older Runtimes ignore
+        // `attachments` and require both legacy arrays to be present.
+        images: [],
+        resources: [],
+    });
 }
 
 export function encodeSessionCancelCommand(message: SessionCancelCommand): string {

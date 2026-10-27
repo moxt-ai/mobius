@@ -428,8 +428,7 @@ async function exercise(count) {
                     disposition: "reject",
                     targetCommandId: "",
                     prompt: `${phase}|${sessionId}`,
-                    images: [],
-                    resources: [],
+                    attachments: [],
                 }),
             );
         const wave = (phase, round, chunks, bytes) => {

@@ -49,11 +49,10 @@ it.each([
                 {
                     additionalDirectoryIds: [],
                     agentId: "claude",
+                    attachments: [],
                     content: "Remember this conversation",
                     directoryId: "default",
                     idempotencyKey: `turn-${crypto.randomUUID()}`,
-                    images: [],
-                    resources: [],
                 },
                 cancellation.signal,
             );
@@ -155,8 +154,7 @@ it("Given a deeply nested multibyte project path, When the SDK browses it and ru
                 ...identity,
                 content: "Remember the long workspace conversation",
                 idempotencyKey: `turn-${crypto.randomUUID()}`,
-                images: [],
-                resources: [],
+                attachments: [],
             },
             signal,
         );

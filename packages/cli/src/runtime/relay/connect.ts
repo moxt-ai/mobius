@@ -53,6 +53,7 @@ export function connectRelay(url: URL, signal: AbortSignal): Promise<RelayConnec
             dispatcher,
             headers,
         });
+        socket.binaryType = "arraybuffer";
         let released = false;
         const release = (reason: Error): void => {
             if (released) {

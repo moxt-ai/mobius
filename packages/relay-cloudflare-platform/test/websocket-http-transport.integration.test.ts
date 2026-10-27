@@ -1,4 +1,5 @@
 import { acceptWebSocketHttpTransport, SessionRuntimeError } from "@moxt-ai/mobius-relay-core";
+import { encodeContentChunkFrame } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, it, vi } from "vitest";
 
 class FailingDaemonBoundary {
@@ -112,6 +113,212 @@ it("Given a Unicode JSON request and response, When the relay carries them over 
         status: 200,
     });
     expect(daemon.requestBody).toBe(requestBody);
+    socket.close();
+});
+
+it("Given an invalid binary declaration, When the request ID is reused for a valid upload, Then validation happens before buffering", async () => {
+    const daemon = new TextDaemonBoundary("uploaded");
+    const response = acceptWebSocketHttpTransport(
+        new Request("https://platform.test/mobius/api/v1/transport", { headers: { Upgrade: "websocket" } }),
+        daemon.fetch,
+    );
+    const socket = response.webSocket;
+    if (socket === null) {
+        throw new Error("Expected a WebSocket transport response");
+    }
+    socket.accept();
+    const invalid = nextMessage(socket);
+    socket.send(
+        JSON.stringify({
+            body: "",
+            bodyByteLength: 1,
+            headers: [],
+            kind: "http.request",
+            method: "POST",
+            path: "/outside/mobius",
+            requestId: "reused-upload",
+        }),
+    );
+    expect(JSON.parse(await invalid)).toMatchObject({ code: "invalid_target", requestId: "reused-upload" });
+
+    const uploaded = nextMessage(socket);
+    socket.send(
+        JSON.stringify({
+            body: "",
+            bodyByteLength: 1,
+            headers: [],
+            kind: "http.request",
+            method: "POST",
+            path: "/mobius/api/v1/projects/project/sessions",
+            requestId: "reused-upload",
+        }),
+    );
+    socket.send(
+        encodeContentChunkFrame({ bytes: new TextEncoder().encode("x"), requestId: "reused-upload", sequence: 0 }),
+    );
+    expect(JSON.parse(await uploaded)).toMatchObject({
+        body: "uploaded",
+        kind: "http.response",
+        requestId: "reused-upload",
+        status: 200,
+    });
+    expect(daemon.requestBody).toBe("x");
+    socket.close();
+});
+
+it("Given a binary upload sends an invalid chunk, When it retries the same request ID, Then the failed buffer was released", async () => {
+    const daemon = new TextDaemonBoundary("uploaded");
+    const response = acceptWebSocketHttpTransport(
+        new Request("https://platform.test/mobius/api/v1/transport", { headers: { Upgrade: "websocket" } }),
+        daemon.fetch,
+    );
+    const socket = response.webSocket;
+    if (socket === null) {
+        throw new Error("Expected a WebSocket transport response");
+    }
+    socket.accept();
+    const declaration = {
+        body: "",
+        bodyByteLength: 1,
+        headers: [],
+        kind: "http.request",
+        method: "POST",
+        path: "/mobius/api/v1/projects/project/sessions",
+        requestId: "retry-upload",
+    };
+    const invalid = nextMessage(socket);
+    socket.send(JSON.stringify(declaration));
+    socket.send(
+        encodeContentChunkFrame({ bytes: new TextEncoder().encode("x"), requestId: "retry-upload", sequence: 1 }),
+    );
+    expect(JSON.parse(await invalid)).toMatchObject({ code: "invalid_message", requestId: "retry-upload" });
+
+    const uploaded = nextMessage(socket);
+    socket.send(JSON.stringify(declaration));
+    socket.send(
+        encodeContentChunkFrame({ bytes: new TextEncoder().encode("x"), requestId: "retry-upload", sequence: 0 }),
+    );
+    expect(JSON.parse(await uploaded)).toMatchObject({ kind: "http.response", requestId: "retry-upload", status: 200 });
+    socket.close();
+});
+
+it("Given an incomplete upload consumes the aggregate byte budget, When its deadline passes, Then capacity is released", async () => {
+    vi.useFakeTimers();
+    try {
+        const daemon = new TextDaemonBoundary("uploaded");
+        const response = acceptWebSocketHttpTransport(
+            new Request("https://platform.test/mobius/api/v1/transport", { headers: { Upgrade: "websocket" } }),
+            daemon.fetch,
+        );
+        const socket = response.webSocket;
+        if (socket === null) {
+            throw new Error("Expected a WebSocket transport response");
+        }
+        socket.accept();
+        socket.send(
+            JSON.stringify({
+                body: "",
+                bodyByteLength: 12_582_912,
+                headers: [],
+                kind: "http.request",
+                method: "POST",
+                path: "/mobius/api/v1/projects/project/sessions",
+                requestId: "abandoned-upload",
+            }),
+        );
+        const overloaded = nextMessage(socket);
+        socket.send(
+            JSON.stringify({
+                body: "",
+                bodyByteLength: 1,
+                headers: [],
+                kind: "http.request",
+                method: "POST",
+                path: "/mobius/api/v1/projects/project/sessions",
+                requestId: "next-upload",
+            }),
+        );
+        expect(JSON.parse(await overloaded)).toMatchObject({
+            code: "request_capacity_exceeded",
+            requestId: "next-upload",
+            status: 429,
+        });
+
+        const expired = nextMessage(socket);
+        await vi.advanceTimersByTimeAsync(30_001);
+        expect(JSON.parse(await expired)).toMatchObject({
+            code: "request_timeout",
+            requestId: "abandoned-upload",
+            status: 408,
+        });
+
+        const uploaded = nextMessage(socket);
+        socket.send(
+            JSON.stringify({
+                body: "",
+                bodyByteLength: 1,
+                headers: [],
+                kind: "http.request",
+                method: "POST",
+                path: "/mobius/api/v1/projects/project/sessions",
+                requestId: "next-upload",
+            }),
+        );
+        socket.send(
+            encodeContentChunkFrame({ bytes: new TextEncoder().encode("x"), requestId: "next-upload", sequence: 0 }),
+        );
+        expect(JSON.parse(await uploaded)).toMatchObject({
+            kind: "http.response",
+            requestId: "next-upload",
+            status: 200,
+        });
+        socket.close();
+    } finally {
+        vi.useRealTimers();
+    }
+});
+
+it("Given many incomplete binary uploads, When their count reaches the pending limit, Then another declaration is rejected", async () => {
+    const daemon = new TextDaemonBoundary("unused");
+    const response = acceptWebSocketHttpTransport(
+        new Request("https://platform.test/mobius/api/v1/transport", { headers: { Upgrade: "websocket" } }),
+        daemon.fetch,
+    );
+    const socket = response.webSocket;
+    if (socket === null) {
+        throw new Error("Expected a WebSocket transport response");
+    }
+    socket.accept();
+    for (let index = 0; index < 16; index += 1) {
+        socket.send(
+            JSON.stringify({
+                body: "",
+                bodyByteLength: 1,
+                headers: [],
+                kind: "http.request",
+                method: "POST",
+                path: "/mobius/api/v1/projects/project/sessions",
+                requestId: `pending-${index}`,
+            }),
+        );
+    }
+    const overloaded = nextMessage(socket);
+    socket.send(
+        JSON.stringify({
+            body: "",
+            bodyByteLength: 1,
+            headers: [],
+            kind: "http.request",
+            method: "POST",
+            path: "/mobius/api/v1/projects/project/sessions",
+            requestId: "pending-overflow",
+        }),
+    );
+    expect(JSON.parse(await overloaded)).toMatchObject({
+        code: "request_capacity_exceeded",
+        requestId: "pending-overflow",
+        status: 429,
+    });
     socket.close();
 });
 

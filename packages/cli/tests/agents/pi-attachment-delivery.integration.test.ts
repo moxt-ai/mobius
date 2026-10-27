@@ -9,6 +9,7 @@ import { expect, test } from "vitest";
 import { PiAgentSpecification } from "../../src/agent/specification/vendors/pi-agent.ts";
 import { PiFixture } from "../support/agents/pi.ts";
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
+import { uploadPromptContent } from "../support/agents/upload-prompt-content.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 import { fakeProviderPrompts } from "../support/llm/scenarios.ts";
 
@@ -17,6 +18,13 @@ test("Given real Pi receives an embedded text attachment, When the turn runs, Th
     await using agent = await PiFixture.create(provider);
     await withRealDaemon(new PiAgentSpecification(), agent.environment, async (peer) => {
         const commandId = randomUUID();
+        const attachment = await uploadPromptContent(peer, {
+            bytes: new TextEncoder().encode(fakeProviderPrompts.successfulTool),
+            kind: "resource",
+            mediaType: "text/markdown",
+            name: "instructions.md",
+            uri: "attachment:///instructions.md",
+        });
         peer.send(
             encodeSessionPromptCommand({
                 additionalDirectoryIds: [],
@@ -25,19 +33,10 @@ test("Given real Pi receives an embedded text attachment, When the turn runs, Th
                 commandId,
                 directoryId: "default",
                 disposition: SessionPromptDisposition.Reject,
-                images: [],
+                attachments: [attachment],
                 kind: "session.prompt",
                 // The visible prompt carries no tool trigger words; only the attachment does.
                 prompt: "Follow the attached instructions",
-                resources: [
-                    {
-                        mimeType: "text/markdown",
-                        name: "instructions.md",
-                        text: fakeProviderPrompts.successfulTool,
-                        type: "embedded",
-                        uri: "attachment:///instructions.md",
-                    },
-                ],
                 sessionId: peer.sessionId,
                 targetCommandId: "",
             }),

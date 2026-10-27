@@ -3,8 +3,7 @@ import {
     decodeTurn,
     type Identifier,
     isIdentifier,
-    type PromptImage,
-    type PromptResource,
+    type PromptAttachment,
     type SessionCapabilities,
     type SessionConfigurationSelection,
     type SessionHistoryPolicy,
@@ -236,12 +235,11 @@ export class MobiusSessionImportBinding {
 
 export interface SubmitMobiusTurnRequest {
     readonly additionalDirectoryIds: readonly string[];
+    readonly attachments: readonly PromptAttachment[];
     readonly content: string;
     readonly disposition?: string;
     readonly idempotencyKey: string;
-    readonly images: readonly PromptImage[];
     readonly historyPolicy?: SessionHistoryPolicy;
-    readonly resources: readonly PromptResource[];
     readonly sessionConfigurations?: readonly SessionConfigurationSelection[];
     readonly targetCommandId?: string;
 }

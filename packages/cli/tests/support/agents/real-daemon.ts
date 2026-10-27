@@ -36,13 +36,14 @@ import { installWorkspaceDaemonRelease } from "../installed-daemon-release.ts";
 
 export interface RealDaemonPeer {
     readonly restart: (mode?: "crash") => Promise<void>;
-    readonly send: (message: string) => void;
+    readonly send: (message: string | Uint8Array) => void;
     readonly sessionId: string;
     readonly workspace: string;
     readonly bindingId: string;
     readonly readDiagnostics: () => Promise<string>;
     readonly signal: AbortSignal;
     readonly nextEvent: () => Promise<string>;
+    readonly nextFrame: () => Promise<string | Buffer>;
     readonly nextMessage: () => Promise<string>;
 }
 
@@ -120,8 +121,8 @@ export async function withRealDaemon(
         });
     };
     let socket: WebSocket | undefined;
-    const messages: string[] = [];
-    let waiter: PromiseWithResolvers<string> | undefined;
+    const messages: Array<string | Buffer> = [];
+    let waiter: PromiseWithResolvers<string | Buffer> | undefined;
     const stopWaiting = (): void => waiter?.reject(signal.reason);
     signal.addEventListener("abort", stopWaiting, { once: true });
     try {
@@ -143,8 +144,8 @@ export async function withRealDaemon(
         signal.addEventListener("abort", abortConnection, { once: true });
         server.on("connection", (connection) => {
             socket = connection;
-            connection.on("message", (value) => {
-                const message = value.toString();
+            connection.on("message", (value, isBinary) => {
+                const message = isBinary ? Buffer.from(value as Buffer) : value.toString();
                 // Like the Relay's host, answer exactly the heartbeat text without the application.
                 if (message === RUNTIME_HEARTBEAT_MESSAGE) {
                     connection.send(RUNTIME_HEARTBEAT_ACK_MESSAGE);
@@ -203,14 +204,21 @@ export async function withRealDaemon(
         } finally {
             signal.removeEventListener("abort", abortConnection);
         }
-        const nextMessage = async (): Promise<string> => {
+        const nextFrame = async (): Promise<string | Buffer> => {
             signal.throwIfAborted();
             const message = messages.shift();
             if (message !== undefined) {
                 return message;
             }
-            waiter = Promise.withResolvers<string>();
+            waiter = Promise.withResolvers<string | Buffer>();
             return await waiter.promise;
+        };
+        const nextMessage = async (): Promise<string> => {
+            const message = await nextFrame();
+            if (typeof message !== "string") {
+                throw new Error("Expected a text daemon message");
+            }
+            return message;
         };
         const pendingEvents: string[] = [];
         const sessionId = `real_${specification.id}_${randomUUID()}`;
@@ -251,6 +259,7 @@ export async function withRealDaemon(
                 socket.send(message);
             },
             nextMessage,
+            nextFrame,
             nextEvent: async () => {
                 const pending = pendingEvents.shift();
                 if (pending !== undefined) {

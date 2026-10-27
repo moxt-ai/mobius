@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+    decodeContentChunkFrame,
     decodeFileBeginEvent,
-    decodeFileChunkEvent,
     decodeMessageKind,
     encodeFileReadCommand,
 } from "@moxt-ai/mobius-sdk/protocol";
@@ -52,12 +52,14 @@ test("Given real Pi creates a session containing an SVG file, When a remote clie
         const chunks: Buffer[] = [];
         let mediaType = "";
         for (;;) {
-            const message = await peer.nextMessage();
+            const message = await peer.nextFrame();
+            if (typeof message !== "string") {
+                chunks.push(Buffer.from(decodeContentChunkFrame(message).bytes));
+                continue;
+            }
             const kind = decodeMessageKind(message);
             if (kind === "file.begin") {
                 mediaType = decodeFileBeginEvent(message).mediaType;
-            } else if (kind === "file.chunk") {
-                chunks.push(Buffer.from(decodeFileChunkEvent(message).data, "base64"));
             } else if (kind === "file.end") {
                 break;
             } else if (kind === "session.operation.failed") {

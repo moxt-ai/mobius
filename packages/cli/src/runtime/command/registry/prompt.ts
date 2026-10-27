@@ -4,7 +4,6 @@ import {
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { executePrompt } from "../../../session/prompt/execute-prompt.ts";
-import { downloadPromptArtifact } from "../../relay/artifact-download.ts";
 import type { RuntimeCommand } from "../definition.ts";
 import { send } from "../transport.ts";
 
@@ -63,7 +62,17 @@ export const sessionPromptCommand: RuntimeCommand = {
             eventProjection: context.eventProjection,
             command: message,
             resolveAgent: context.resolveAgent,
-            downloadArtifact: (artifact, signal) => downloadPromptArtifact(context.config, artifact, signal),
+            readArtifact: async (artifact, signal) => {
+                const bytes = await context.externalContent.read(
+                    message.sessionId,
+                    `mobius-content:${artifact.kind}:${artifact.contentKey}`,
+                    signal,
+                );
+                if (bytes === null) {
+                    throw new Error("The prompt attachment is unavailable");
+                }
+                return bytes;
+            },
             reportFailure: context.diagnostics.daemonDiagnostic,
             directories: context.directories,
             sessions: context.sessions,

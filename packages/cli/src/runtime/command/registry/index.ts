@@ -1,8 +1,9 @@
-import type { ServiceToDaemonMessage } from "@moxt-ai/mobius-sdk/protocol";
+import { decodeContentChunkFrame, type ServiceToDaemonMessage } from "@moxt-ai/mobius-sdk/protocol";
 import type { CommandContext } from "../context.ts";
 import type { RuntimeCommand } from "../definition.ts";
 import { createAgentCatalogCommands } from "./agent-catalog.ts";
 import { createAgentSettingsCommands } from "./agent-settings.ts";
+import { createContentWriteCommands } from "./content-write/index.ts";
 import { fileReadCommand } from "./file-read/index.ts";
 import { previewHistoryPageLoadCommand, sessionHistoryPageLoadCommand } from "./history.ts";
 import {
@@ -26,8 +27,10 @@ import {
 
 export function createCommandRegistry(context: CommandContext): {
     readonly dispatch: (message: ServiceToDaemonMessage) => void;
+    readonly dispatchChunk: (message: unknown) => void;
     readonly settle: () => Promise<void>;
 } {
+    const contentWrites = createContentWriteCommands(context);
     const commands: readonly RuntimeCommand[] = [
         runtimeDiagnosticsCommand,
         runtimePingCommand,
@@ -36,6 +39,7 @@ export function createCommandRegistry(context: CommandContext): {
         ...createNativeSessionCommands(context),
         ...createAgentCatalogCommands(context),
         ...createAgentSettingsCommands(context),
+        ...contentWrites.commands,
         fileReadCommand,
         sessionCancelCommand,
         sessionCloseCommand,
@@ -58,8 +62,12 @@ export function createCommandRegistry(context: CommandContext): {
             }
             command.handle(context, message);
         },
+        dispatchChunk: (message): void => contentWrites.receiveChunk(decodeContentChunkFrame(message)),
         settle: async (): Promise<void> => {
-            await Promise.all(commands.flatMap((command) => (command.settle === undefined ? [] : [command.settle()])));
+            await Promise.all([
+                contentWrites.settle(),
+                ...commands.flatMap((command) => (command.settle === undefined ? [] : [command.settle()])),
+            ]);
         },
     };
 }
