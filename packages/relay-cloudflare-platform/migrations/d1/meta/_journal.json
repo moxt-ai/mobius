@@ -36,6 +36,13 @@
             "when": 1791875855303,
             "tag": "0004_square_groot",
             "breakpoints": true
+        },
+        {
+            "idx": 5,
+            "version": "6",
+            "when": 1793106725142,
+            "tag": "0005_nosy_slipstream",
+            "breakpoints": true
         }
     ]
 }
