@@ -47,6 +47,17 @@ export const sessionPromptCommand: RuntimeCommand = {
             }
             return;
         }
+        if (receipt.kind === "expired") {
+            send(context.socket, {
+                code: "command_result_expired",
+                requestId: message.commandId,
+                kind: "session.operation.failed",
+                message:
+                    "This command already started. Its execution result is no longer available; it will not run again.",
+                sessionId: message.sessionId,
+            });
+            return;
+        }
         const turn = context.sessionTurns.start(message, receipt.attemptId);
         context.eventProjection.requested(message);
         // Queue admission is acknowledged by the V2 session.queue.changed lifecycle
