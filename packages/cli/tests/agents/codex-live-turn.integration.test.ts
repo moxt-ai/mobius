@@ -190,7 +190,11 @@ test("Given real Codex streams commentary after a tool, When clients watch and r
                     if (result.requestId === "queued_snapshot") {
                         expect(result).toMatchObject({
                             queued: [
-                                { commandId: queuedCommandId, prompt: "This queued prompt should not run", images: [] },
+                                {
+                                    attachments: [],
+                                    commandId: queuedCommandId,
+                                    prompt: "This queued prompt should not run",
+                                },
                             ],
                         });
                         socket.send(
