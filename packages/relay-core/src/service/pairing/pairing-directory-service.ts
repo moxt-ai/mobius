@@ -12,7 +12,6 @@ import {
     CreatedBrowserCredential,
     CreatedRuntimePairing,
     createRandomToken,
-    ExpiredPairingStatus,
     hashSecret,
     LinkedChannelDevice,
     MAX_BROWSER_CREDENTIAL_LIFETIME_MILLISECONDS,
@@ -20,18 +19,16 @@ import {
     MIN_BROWSER_CREDENTIAL_LIFETIME_MILLISECONDS,
     normalizePairingCode,
     PAIRING_LIFETIME_MILLISECONDS,
-    PairedPairingStatus,
     PairingDirectoryError,
-    PendingPairingStatus,
     parseAgents,
-    RevokedPairingStatus,
     RevokedProjectRuntime,
     VerifiedChannelAccess,
     validateIdentifier,
     validateToken,
 } from "../../entity/pairing/pairing.ts";
 import type { PairingIdentityCredential } from "../../entity/pairing/pairing-identity.ts";
-import type { PairingChannelRow, RuntimePairingRow } from "../../entity/pairing/pairing-records.ts";
+import type { RuntimePairingRow } from "../../entity/pairing/pairing-records.ts";
+import { projectRuntimePairingStatus, runtimeRevokedAt } from "../../entity/pairing/runtime-pairing-state.ts";
 import type { ProjectAccessAuthorizer } from "../../gateway/project-access-authorizer.ts";
 import type { ProjectApplicationResolver } from "../../infra/project-application-resolver.ts";
 import type { ProjectStorageContext, ProjectStorageDirectory } from "../../infra/project-storage-directory.ts";
@@ -97,7 +94,7 @@ export class PairingDirectoryService implements PairingOperations {
             throw cause;
         }
         if (created === null) {
-            await this.readProjectRuntime(storage, scope, normalizedRuntimeId, signal);
+            await this.readProjectRuntime(storage, normalizedRuntimeId, signal);
             throw new PairingDirectoryError("runtime_unavailable", "The selected Runtime is unavailable");
         }
         return new ChannelHostCredential(created.channel_id, normalizedRuntimeId, scope.projectId, credentialId);
@@ -157,7 +154,7 @@ export class PairingDirectoryService implements PairingOperations {
         signal.throwIfAborted();
         const tokenHash = await hashSecret(validateToken(token));
         const storage = await this.identityStorage({ kind: "daemon", channelId, tokenHash }, signal);
-        const row = await storage.readDaemon(channelId, tokenHash, signal);
+        const row = await storage.runtimes.readDaemon(channelId, tokenHash, signal);
         if (row === null) {
             throw new PairingDirectoryError("unauthorized", "A valid channel token is required");
         }
@@ -169,7 +166,6 @@ export class PairingDirectoryService implements PairingOperations {
             row.runtime_id,
             row.channel_id,
             `daemon:${row.channel_id}`,
-            row.pairing_id,
         );
     };
 
@@ -206,7 +202,7 @@ export class PairingDirectoryService implements PairingOperations {
     ) => {
         const access = await this.authorizeProject(projectId, token, permission, signal);
         const storage = await this.projectStorage(access.scope, signal);
-        return await this.readProjectRuntime(storage, access.scope, runtimeId, signal);
+        return await this.readProjectRuntime(storage, runtimeId, signal);
     };
 
     readonly authorizeProjectScopeRuntime: PairingOperations["authorizeProjectScopeRuntime"] = async (
@@ -215,26 +211,26 @@ export class PairingDirectoryService implements PairingOperations {
         signal,
     ) => {
         const storage = await this.projectStorage(scope, signal);
-        return await this.readProjectRuntime(storage, scope, runtimeId, signal);
+        return await this.readProjectRuntime(storage, runtimeId, signal);
     };
 
-    private readonly readProjectRuntime = async (
-        storage: PairingStorage,
-        scope: ProjectScope,
-        runtimeId: string,
-        signal: AbortSignal,
-    ) => {
-        const row = await storage.readRuntime(scope.projectId, validateIdentifier(runtimeId, "runtime_id"), signal);
+    private readonly readProjectRuntime = async (storage: PairingStorage, runtimeId: string, signal: AbortSignal) => {
+        const row = await storage.runtimes.readRuntime(validateIdentifier(runtimeId, "runtime_id"), signal);
         if (row === null) {
             throw new PairingDirectoryError(
                 "runtime_access_denied",
                 "The project credential cannot access this Runtime",
             );
         }
-        if (row.status !== "paired") {
+        if (runtimeRevokedAt(row.revoked_at) !== null || row.registration === null) {
             throw new PairingDirectoryError("runtime_unavailable", "The selected Runtime is unavailable");
         }
-        return new VerifiedChannelAccess(row.channel_id, row.runtime_id, row.project_id, parseAgents(row.agents_json));
+        return new VerifiedChannelAccess(
+            row.channel_id,
+            row.runtime_id,
+            row.project_id,
+            parseAgents(row.registration.agents_json),
+        );
     };
 
     private readonly decodeCreatedRuntimePairing = async (
@@ -278,9 +274,7 @@ export class PairingDirectoryService implements PairingOperations {
         const normalizedKey = validateIdentifier(idempotencyKey, "idempotency_key");
         const owner = await this.authorizeProject(normalizedProjectId, token, ProjectPermission.RuntimePair, signal);
         const storage = await this.projectStorage(owner.scope, signal);
-        const now = Date.now();
-        await storage.expireProjectPairings(owner.projectId, now, `rpa_${crypto.randomUUID()}_`, signal);
-        const existing = await storage.readRuntimePairingRequest(owner.projectId, normalizedKey, signal);
+        const existing = await storage.runtimes.readRuntimePairingRequest(normalizedKey, signal);
         if (existing !== null) {
             return this.decodeCreatedRuntimePairing(existing, owner, token, normalizedKey, signal);
         }
@@ -288,50 +282,34 @@ export class PairingDirectoryService implements PairingOperations {
         const pairingId = `${owner.projectId}.${crypto.randomUUID()}`;
         const channelId = `chn_${createRandomToken(18)}`;
         const runtimeId = `rnt_${createRandomToken(18)}`;
+        const codeHash = await hashSecret(secrets.pairingCode);
+        const pollHash = await hashSecret(secrets.pollToken);
+        const now = Date.now();
         const expiresAt = now + PAIRING_LIFETIME_MILLISECONDS;
         try {
-            const results = await storage.createRuntimePairing(
+            const created = await storage.runtimes.createRuntimePairing(
                 {
                     pairingId,
-                    codeHash: await hashSecret(secrets.pairingCode),
-                    pollHash: await hashSecret(secrets.pollToken),
+                    codeHash,
+                    pollHash,
                     channelId,
                     runtimeId,
-                    projectId: owner.projectId,
                     now,
                     expiresAt,
                     idempotencyKey: normalizedKey,
                     ownerId: owner.credentialId,
                     actorKind: owner.actor.kind.value,
-                    maximumRuntimes: MAX_RUNTIMES_PER_PROJECT,
+                    actorId: owner.actor.actorId,
                     auditId: `rpa_${crypto.randomUUID()}`,
                 },
                 signal,
             );
-            if (results[0]?.meta.changes !== 1) {
-                throw new PairingDirectoryError(
-                    "runtime_quota_exceeded",
-                    `A Project can have at most ${MAX_RUNTIMES_PER_PROJECT.toString()} active Runtimes`,
-                );
-            }
-            return new CreatedRuntimePairing(
-                channelId,
-                new Date(expiresAt).toISOString(),
-                secrets.pairingCode,
-                pairingId,
-                secrets.pollToken,
-                owner.projectId,
-                runtimeId,
-            );
-        } catch (cause) {
-            signal.throwIfAborted();
-            const duplicate = await storage.readRuntimePairingRequest(owner.projectId, normalizedKey, signal);
-            if (duplicate !== null) {
-                return this.decodeCreatedRuntimePairing(duplicate, owner, token, normalizedKey, signal);
-            }
-            const quota = await storage.countActiveRuntimes(owner.projectId, signal);
-            if (quota !== null && quota.active_count >= MAX_RUNTIMES_PER_PROJECT) {
-                await storage.recordAudit(
+            if (!created) {
+                const duplicate = await storage.runtimes.readRuntimePairingRequest(normalizedKey, signal);
+                if (duplicate !== null) {
+                    return this.decodeCreatedRuntimePairing(duplicate, owner, token, normalizedKey, signal);
+                }
+                await storage.runtimes.recordAudit(
                     {
                         auditId: `rpa_${crypto.randomUUID()}`,
                         projectId: owner.projectId,
@@ -348,8 +326,22 @@ export class PairingDirectoryService implements PairingOperations {
                 throw new PairingDirectoryError(
                     "runtime_quota_exceeded",
                     `A Project can have at most ${MAX_RUNTIMES_PER_PROJECT.toString()} active Runtimes`,
-                    { cause },
                 );
+            }
+            return new CreatedRuntimePairing(
+                channelId,
+                new Date(expiresAt).toISOString(),
+                secrets.pairingCode,
+                pairingId,
+                secrets.pollToken,
+                owner.projectId,
+                runtimeId,
+            );
+        } catch (cause) {
+            signal.throwIfAborted();
+            const duplicate = await storage.runtimes.readRuntimePairingRequest(normalizedKey, signal);
+            if (duplicate !== null) {
+                return this.decodeCreatedRuntimePairing(duplicate, owner, token, normalizedKey, signal);
             }
             if (cause instanceof PairingDirectoryError) {
                 throw cause;
@@ -368,15 +360,11 @@ export class PairingDirectoryService implements PairingOperations {
     ) => {
         const owner = await this.authorizeProject(projectId, token, ProjectPermission.RuntimeRead, signal);
         const storage = await this.projectStorage(owner.scope, signal);
-        const row = await storage.readProjectPairing(
-            owner.projectId,
-            validateIdentifier(pairingId, "pairing_id"),
-            signal,
-        );
+        const row = await storage.runtimes.readProjectPairing(validateIdentifier(pairingId, "pairing_id"), signal);
         if (row === null) {
             throw new PairingDirectoryError("pairing_not_found", "The Runtime pairing request was not found");
         }
-        return this.decodePairingStatus(storage, row, signal);
+        return projectRuntimePairingStatus(row, Date.now());
     };
 
     readonly revokeProjectRuntime: PairingOperations["revokeProjectRuntime"] = async (
@@ -387,45 +375,23 @@ export class PairingDirectoryService implements PairingOperations {
     ) => {
         const owner = await this.authorizeProject(projectId, token, ProjectPermission.RuntimeRevoke, signal);
         const storage = await this.projectStorage(owner.scope, signal);
-        const row = await storage.readRevocableRuntime(
-            owner.projectId,
-            validateIdentifier(runtimeId, "runtime_id"),
+        const row = await storage.runtimes.revokeRuntime(
+            {
+                runtimeId: validateIdentifier(runtimeId, "runtime_id"),
+                ownerId: owner.credentialId,
+                now: Date.now(),
+                actorKind: owner.actor.kind.value,
+                actorId: owner.actor.actorId,
+                auditId: `rpa_${crypto.randomUUID()}`,
+            },
             signal,
         );
         if (row === null) {
             throw new PairingDirectoryError("runtime_not_found", "The Runtime was not found");
         }
-        let revokedAt = Date.now();
-        if (row.status === "revoked") {
-            if (typeof row.revoked_at !== "number" || !Number.isSafeInteger(row.revoked_at)) {
-                throw new PairingDirectoryError("invalid_directory_record", "The Runtime directory is invalid");
-            }
-            revokedAt = row.revoked_at;
-        }
-        const results = await storage.revokeRuntime(
-            {
-                pairingId: row.pairing_id,
-                channelId: row.channel_id,
-                runtimeId: row.runtime_id,
-                projectId: owner.projectId,
-                ownerId: owner.credentialId,
-                revokedAt,
-                audit: {
-                    auditId: `rpa_${crypto.randomUUID()}`,
-                    projectId: owner.projectId,
-                    pairingId: row.pairing_id,
-                    runtimeId: row.runtime_id,
-                    actorKind: owner.actor.kind.value,
-                    actorId: owner.actor.actorId,
-                    action: "runtime_pairing.revoked",
-                    details: {},
-                    recordedAt: revokedAt,
-                },
-            },
-            signal,
-        );
-        if (results[0]?.meta.changes !== 1) {
-            throw new PairingDirectoryError("runtime_not_found", "The Runtime was not found");
+        const revokedAt = runtimeRevokedAt(row.revoked_at);
+        if (revokedAt === null) {
+            throw new PairingDirectoryError("invalid_directory_record", "The Runtime revocation is invalid");
         }
         return new RevokedProjectRuntime(
             new VerifiedChannelAccess(row.channel_id, row.runtime_id, row.project_id, []),
@@ -442,35 +408,33 @@ export class PairingDirectoryService implements PairingOperations {
         signal: AbortSignal,
     ): Promise<ClaimedPairing> => {
         signal.throwIfAborted();
-        const now = Date.now();
         const codeHash = await hashSecret(normalizePairingCode(pairingCode));
         const storage = await this.identityStorage({ kind: "pairing-code", codeHash }, signal);
-        const pairing = await storage.readPairingCode(codeHash, signal);
+        const pairing = await storage.runtimes.readPairingCode(codeHash, signal);
         if (pairing === null || (expectedPairingId.length > 0 && pairing.pairing_id !== expectedPairingId)) {
             throw new PairingDirectoryError("invalid_pairing_code", "The pairing code is invalid or expired");
         }
-        if (pairing.status === "pending" && pairing.expires_at > now) {
-            const appId = await this.#cx.gateways.projectApplications.resolveApplicationId(pairing.project_id, signal);
-            const daemonToken = `${pairing.project_id}_${createRandomToken(32)}`;
-            const claimed = await storage.claim(
+        const appId = await this.#cx.gateways.projectApplications.resolveApplicationId(pairing.project_id, signal);
+        const daemonToken = `${pairing.project_id}_${createRandomToken(32)}`;
+        const daemonHash = await hashSecret(daemonToken);
+        const now = Date.now();
+        const claimed = await storage.runtimes.claim(
+            {
+                pairingId: pairing.pairing_id,
                 codeHash,
-                await hashSecret(daemonToken),
+                daemonHash,
                 now,
                 machineName,
                 workspaceName,
-                JSON.stringify(agents),
-                `rpa_${crypto.randomUUID()}`,
-                signal,
-            );
-            if (claimed[0]?.meta.changes === 1) {
-                return { appId, channelId: pairing.channel_id, daemonToken, runtimeId: pairing.runtime_id };
-            }
+                agents: JSON.stringify(agents),
+                auditId: `rpa_${crypto.randomUUID()}`,
+            },
+            signal,
+        );
+        if (claimed) {
+            return { appId, channelId: pairing.channel_id, daemonToken, runtimeId: pairing.runtime_id };
         }
-        const current = await storage.readPairingCode(codeHash, signal);
-        if (current !== null && current.status === "pending" && current.expires_at <= now) {
-            await storage.expirePairing(current.pairing_id, now, `rpa_${crypto.randomUUID()}`, signal);
-        }
-        await storage.recordAudit(
+        await storage.runtimes.recordAudit(
             {
                 auditId: `rpa_${crypto.randomUUID()}`,
                 projectId: pairing.project_id,
@@ -598,7 +562,7 @@ export class PairingDirectoryService implements PairingOperations {
     readonly listProjectRuntimes: PairingOperations["listProjectRuntimes"] = async (projectId, token, signal) => {
         const access = await this.authorizeProject(projectId, token, ProjectPermission.RuntimeRead, signal);
         const storage = await this.projectStorage(access.scope, signal);
-        const page = await storage.listRuntimes(access.projectId, signal);
+        const page = await storage.runtimes.listRuntimes(signal);
         return page.results.map(
             (row) =>
                 new ChannelDescriptor(
@@ -615,7 +579,7 @@ export class PairingDirectoryService implements PairingOperations {
     readonly readChannel: PairingOperations["readChannel"] = async (channelId, token, signal) => {
         const access = await this.readAuthorizedHost(channelId, token, signal);
         const storage = await this.projectStorage(new ProjectScope(access.project_id), signal);
-        const row = await storage.readChannel(access.channel_id, signal);
+        const row = await storage.runtimes.readChannel(access.channel_id, signal);
         if (row === null) {
             throw new PairingDirectoryError("unauthorized", "A valid channel token is required");
         }
@@ -630,40 +594,6 @@ export class PairingDirectoryService implements PairingOperations {
             row.project_id,
             row.runtime_id,
         );
-    };
-
-    private readonly decodePairingStatus = async (
-        storage: PairingStorage,
-        row: PairingChannelRow,
-        signal: AbortSignal,
-    ) => {
-        if (row.status === "paired") {
-            return new PairedPairingStatus(
-                parseAgents(row.agents_json),
-                row.channel_id,
-                row.machine_name,
-                row.workspace_name,
-                row.project_id,
-                row.runtime_id,
-            );
-        }
-        if (row.status === "revoked") {
-            if (typeof row.revoked_at !== "number" || !Number.isSafeInteger(row.revoked_at)) {
-                throw new PairingDirectoryError("invalid_directory_record", "The pairing status is invalid");
-            }
-            return new RevokedPairingStatus(new Date(row.revoked_at).toISOString());
-        }
-        const now = Date.now();
-        if (row.status === "expired" || (row.status === "pending" && row.expires_at <= now)) {
-            if (row.status === "pending") {
-                await storage.expirePairing(row.pairing_id, now, `rpa_${crypto.randomUUID()}`, signal);
-            }
-            return new ExpiredPairingStatus();
-        }
-        if (row.status !== "pending") {
-            throw new PairingDirectoryError("invalid_directory_record", "The pairing status is invalid");
-        }
-        return new PendingPairingStatus(new Date(row.expires_at).toISOString());
     };
 
     readonly redeemChannelAccessGrant: PairingOperations["redeemChannelAccessGrant"] = async (
@@ -702,7 +632,7 @@ export class PairingDirectoryService implements PairingOperations {
             }
             throw new PairingDirectoryError("directory_unavailable", "The access grant could not be redeemed");
         }
-        const channel = await storage.readChannel(normalizedChannelId, signal);
+        const channel = await storage.runtimes.readChannel(normalizedChannelId, signal);
         if (channel === null) {
             throw new PairingDirectoryError("invalid_directory_record", "The redeemed channel directory is invalid");
         }
@@ -753,7 +683,10 @@ export class PairingDirectoryService implements PairingOperations {
         signal.throwIfAborted();
         const tokenHash = await hashSecret(validateToken(token));
         const storage = await this.identityStorage({ kind: "daemon", channelId, tokenHash }, signal);
-        if ((await storage.updateAgents(channelId, tokenHash, JSON.stringify(agents), signal)).meta.changes !== 1) {
+        if (
+            (await storage.runtimes.updateAgents(channelId, tokenHash, JSON.stringify(agents), signal)).meta.changes !==
+            1
+        ) {
             throw new PairingDirectoryError("unauthorized", "A valid channel token is required");
         }
     };

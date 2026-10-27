@@ -4,24 +4,21 @@ interface PairingScopeRow {
     readonly project_id: string;
 }
 
-interface RuntimeScopeRow extends PairingScopeRow {
-    readonly status: string;
-}
-
-export interface RuntimeDirectoryRow extends RuntimeScopeRow {
-    readonly agents_json: string;
-}
-
-export interface RevocableRuntimeRow extends RuntimeScopeRow {
-    readonly pairing_id: string;
-    readonly revoked_at: unknown;
-}
-
-export interface PairingChannelRow extends RevocableRuntimeRow {
-    readonly expires_at: number;
+export interface RuntimeRegistrationRow {
+    readonly claimed_at: number;
     readonly agents_json: string;
     readonly machine_name: string;
     readonly workspace_name: string;
+}
+
+export interface RuntimeDirectoryRow extends PairingScopeRow {
+    readonly revoked_at: unknown;
+    readonly registration: RuntimeRegistrationRow | null;
+}
+
+export interface PairingChannelRow extends RuntimeDirectoryRow {
+    readonly pairing_id: string;
+    readonly expires_at: number;
 }
 
 export interface RuntimePairingRow extends PairingScopeRow {

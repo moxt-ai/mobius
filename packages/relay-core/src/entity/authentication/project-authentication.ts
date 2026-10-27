@@ -434,13 +434,11 @@ export class ExternalIdentityAuthenticatorRegistry implements ExternalIdentityAu
 
 export class RuntimeAccessContext extends VerifiedChannelAccess {
     readonly credentialId: string;
-    readonly leaseId: string;
     readonly scope: ProjectScope;
 
-    constructor(scope: ProjectScope, runtimeId: string, channelId: string, credentialId: string, leaseId: string) {
+    constructor(scope: ProjectScope, runtimeId: string, channelId: string, credentialId: string) {
         super(channelId, runtimeId, scope.projectId, []);
         this.scope = scope;
         this.credentialId = credentialId;
-        this.leaseId = leaseId;
     }
 }

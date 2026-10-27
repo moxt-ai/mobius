@@ -77,6 +77,9 @@ export interface PairingOperations {
         lifetimeMilliseconds: number,
         signal: AbortSignal,
     ) => Promise<CreatedBrowserCredential>;
+    // v1: reserve capacity atomically. The same Project/key/credential replays
+    // the original identity, secrets, and deadline, including after expiration
+    // or revocation. A failed response may follow a commit; retry the same key.
     readonly createProjectRuntimePairing: (
         projectId: string,
         token: string,
@@ -94,12 +97,17 @@ export interface PairingOperations {
         signal: AbortSignal,
     ) => Promise<readonly ChannelDescriptor[]>;
     readonly readChannel: (channelId: string, token: string, signal: AbortSignal) => Promise<ChannelDescriptor>;
+    // Read-only v1 projection: revoked, claimed, expired, or pending, in that
+    // order. Passing the deadline never expires an already registered Runtime.
     readonly readProjectRuntimePairing: (
         projectId: string,
         pairingId: string,
         token: string,
         signal: AbortSignal,
     ) => Promise<PairingStatus>;
+    // v1: one unrevoked, unexpired request can be consumed by one daemon. The
+    // registration, credential, and audit commit together. Concurrent/repeated
+    // claims fail; a lost successful response cannot replay the daemon secret.
     readonly redeemRuntimePairing: (
         pairingId: string,
         pairingCode: string,
@@ -126,6 +134,9 @@ export interface PairingOperations {
         token: string,
         signal: AbortSignal,
     ) => Promise<void>;
+    // Revoke identity and channel credentials atomically, preserving the first
+    // revocation timestamp. Retrying after a lost response or disconnect failure
+    // is safe; an unclaimed identity can also be cancelled through this command.
     readonly revokeProjectRuntime: (
         projectId: string,
         runtimeId: string,
