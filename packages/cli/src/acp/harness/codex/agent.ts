@@ -5,7 +5,6 @@ import {
     agent as createAgentApp,
     methods,
     PROTOCOL_VERSION,
-    type SessionNotification,
 } from "@agentclientprotocol/sdk";
 import { z } from "zod";
 import { captureProcessTree, type ProcessTreeIdentity, stopProcessTree } from "../../../util/process/executable.ts";
@@ -25,6 +24,7 @@ import { CodexBorrowedAcpAgent } from "./borrowed-agent.ts";
 import { replayCodexHistory } from "./history.ts";
 import { CodexOwnedAcpAgent } from "./owned-agent.ts";
 import type { CodexSessionAgent } from "./session-agent.ts";
+import type { CodexEndpointOptions, CodexSessionNotification, CodexSessionUpdate } from "./session-update.ts";
 import { CodexSettings } from "./settings.ts";
 
 const APPROVAL_TIMEOUT_MILLISECONDS = 3_600_000;
@@ -80,12 +80,12 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
     #closePromise: Promise<void> | null = null;
     #connection: AgentConnection | null = null;
     readonly #settings: CodexSettings;
-    readonly #onSessionUpdate: (notification: SessionNotification) => Promise<void>;
+    readonly #onSessionUpdate: (notification: CodexSessionNotification) => Promise<void>;
     readonly #onBackgroundActivity: InProcessAcpEndpointOptions["onBackgroundActivity"];
     #nativeSessionId = "";
     #sessionAgent: CodexSessionAgent;
 
-    constructor(options: InProcessAcpEndpointOptions) {
+    constructor(options: CodexEndpointOptions) {
         this.#onSessionUpdate = options.onSessionUpdate;
         this.#onBackgroundActivity = options.onBackgroundActivity;
         this.#appServer = new CodexAppServerClient({
@@ -361,7 +361,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
         }, 0);
     };
 
-    readonly #emit = async (update: SessionNotification["update"]): Promise<void> => {
+    readonly #emit = async (update: CodexSessionUpdate): Promise<void> => {
         const connection = this.#connection;
         if (connection === null || this.#nativeSessionId.length === 0) {
             return;

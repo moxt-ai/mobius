@@ -5,7 +5,12 @@ import type {
     InProcessAcpEndpointOptions,
 } from "../../agent/in-process-endpoint.ts";
 import { spawnClaudeWithParentLifeline } from "./parent-lifeline.ts";
+import type { ClaudeSessionNotification } from "./upstream/dist/lib.js";
 import { createClaudeAcpApp } from "./upstream/dist/lib.js";
+
+export interface ClaudeEndpointOptions extends Omit<InProcessAcpEndpointOptions, "onSessionUpdate"> {
+    readonly onSessionUpdate: (notification: ClaudeSessionNotification) => Promise<void>;
+}
 
 export class ClaudeAcpEndpoint implements InProcessAcpEndpoint {
     readonly #agent;
@@ -15,7 +20,7 @@ export class ClaudeAcpEndpoint implements InProcessAcpEndpoint {
     readonly #resolveTermination: (termination: AcpEndpointTermination) => void;
     readonly terminated: Promise<AcpEndpointTermination>;
 
-    constructor(options: InProcessAcpEndpointOptions) {
+    constructor(options: ClaudeEndpointOptions) {
         const termination = Promise.withResolvers<AcpEndpointTermination>();
         this.terminated = termination.promise;
         this.#resolveTermination = termination.resolve;

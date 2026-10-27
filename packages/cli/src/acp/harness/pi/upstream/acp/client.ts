@@ -5,8 +5,8 @@ import {
     methods,
     type RequestPermissionRequest,
     type RequestPermissionResponse,
-    type SessionNotification,
 } from "@agentclientprotocol/sdk";
+import type { PiSessionNotification } from "./session-update.js";
 
 export interface PiAcpClient {
     readonly requestElicitation: (
@@ -14,12 +14,12 @@ export interface PiAcpClient {
         signal: AbortSignal,
     ) => Promise<CreateElicitationResponse>;
     readonly requestPermission: (request: RequestPermissionRequest) => Promise<RequestPermissionResponse>;
-    readonly sessionUpdate: (notification: SessionNotification) => Promise<void>;
+    readonly sessionUpdate: (notification: PiSessionNotification) => Promise<void>;
 }
 
 export function createPiAcpClient(
     connection: AgentConnection,
-    onSessionUpdate: (notification: SessionNotification) => Promise<void>,
+    onSessionUpdate: (notification: PiSessionNotification) => Promise<void>,
 ): PiAcpClient {
     return {
         requestElicitation: async (request, signal) =>

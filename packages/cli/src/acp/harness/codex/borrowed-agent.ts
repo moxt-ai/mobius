@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout } from "node:timers/promises";
-import type { PromptResponse, SessionNotification } from "@agentclientprotocol/sdk";
+import type { PromptResponse } from "@agentclientprotocol/sdk";
 import { z } from "zod";
 import { AcpExecutionError } from "../../acp-error.ts";
 import { type AcpEndpointTermination, acpEndpointTerminationError } from "../../agent/in-process-endpoint.ts";
@@ -8,6 +8,7 @@ import type { CodexAppServerClient, CodexAppServerServerRequest } from "./app-se
 import { CODEX_HISTORY_TURN_PAGE_LIMIT, threadTurnsPageSchema } from "./app-server-protocol.ts";
 import { decodeThreadItem, reasoningText, toolCallUpdate } from "./items.ts";
 import type { CodexSessionAgent } from "./session-agent.ts";
+import type { CodexSessionUpdate } from "./session-update.ts";
 
 const REQUEST_TIMEOUT = 30_000;
 const POLL_INTERVAL = 500;
@@ -24,7 +25,7 @@ export class CodexBorrowedAcpAgent implements CodexSessionAgent {
     readonly steeringSupported = false;
     readonly #client: CodexAppServerClient;
     readonly #threadId: string;
-    readonly #emit: (update: SessionNotification["update"]) => Promise<void>;
+    readonly #emit: (update: CodexSessionUpdate) => Promise<void>;
     readonly #closed = new AbortController();
     readonly #seen = new Map<string, string>();
     #pending: { readonly clientId: string; readonly completion: PromiseWithResolvers<PromptResponse> } | null = null;
@@ -34,11 +35,7 @@ export class CodexBorrowedAcpAgent implements CodexSessionAgent {
         | { readonly kind: "failed"; readonly error: AcpExecutionError }
         | { readonly kind: "closed" } = { kind: "following" };
 
-    constructor(
-        client: CodexAppServerClient,
-        threadId: string,
-        emit: (update: SessionNotification["update"]) => Promise<void>,
-    ) {
+    constructor(client: CodexAppServerClient, threadId: string, emit: (update: CodexSessionUpdate) => Promise<void>) {
         this.#client = client;
         this.#threadId = threadId;
         this.#emit = emit;
@@ -138,7 +135,7 @@ export class CodexBorrowedAcpAgent implements CodexSessionAgent {
                         ) {
                             await this.#emit({
                                 sessionUpdate: "user_message_chunk",
-                                messageId: key,
+                                messageId: item.id,
                                 content: { type: "text", text },
                             });
                         }
@@ -159,7 +156,7 @@ export class CodexBorrowedAcpAgent implements CodexSessionAgent {
                             await this.#emit({
                                 sessionUpdate:
                                     item.type === "agentMessage" ? "agent_message_chunk" : "agent_thought_chunk",
-                                messageId: key,
+                                messageId: item.id,
                                 content: { type: "text", text },
                             });
                         }

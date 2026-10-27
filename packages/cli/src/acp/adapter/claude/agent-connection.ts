@@ -1,6 +1,7 @@
 import type { AgentConnectionLaunchOptions } from "../../connection/agent-connection.ts";
 import { EndpointAgentConnection } from "../../connection/endpoint-agent-connection.ts";
 import { ClaudeAcpEndpoint } from "../../harness/claude/endpoint.ts";
+import type { ClaudeSessionNotification } from "../../harness/claude/upstream/dist/lib.js";
 
 export class ClaudeAgentConnection extends EndpointAgentConnection {
     constructor(options: AgentConnectionLaunchOptions) {
@@ -8,7 +9,9 @@ export class ClaudeAgentConnection extends EndpointAgentConnection {
             command: options.command,
             cwd: options.cwd,
             environment: options.environment,
-            onSessionUpdate: options.client.onUpdate,
+            onSessionUpdate: async (notification: ClaudeSessionNotification) => {
+                await options.client.onUpdate(notification);
+            },
             onBackgroundActivity: (active) => options.onBackgroundActivity?.(active),
         });
         super(endpoint, options.client);

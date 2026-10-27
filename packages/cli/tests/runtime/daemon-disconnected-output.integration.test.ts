@@ -114,7 +114,7 @@ class StreamingAgent {
             .onRequest(methods.agent.session.new, () => ({ sessionId: crypto.randomUUID() }))
             .onRequest(methods.agent.session.load, async (context) => {
                 for (const text of this.#reasoning.get(context.params.sessionId) ?? []) {
-                    await context.client.notify(methods.client.session.update, {
+                    await onSessionUpdate({
                         sessionId: context.params.sessionId,
                         update: {
                             content: { type: "text", text },

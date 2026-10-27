@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, watch, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as acp from "@agentclientprotocol/sdk";
@@ -85,7 +86,11 @@ export function registerHistory(agent: ReturnType<typeof acp.agent>) {
                 }
                 await context.client.notify(acp.methods.client.session.update, {
                     sessionId: context.params.sessionId,
-                    update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
+                    update: {
+                        sessionUpdate: "agent_message_chunk",
+                        messageId: randomUUID(),
+                        content: { type: "text", text },
+                    },
                 });
             }
         }

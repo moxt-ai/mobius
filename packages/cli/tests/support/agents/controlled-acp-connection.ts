@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
-import { type ClientConnection, ndJsonStream } from "@agentclientprotocol/sdk";
+import { type ClientConnection, methods, ndJsonStream, type SessionNotification } from "@agentclientprotocol/sdk";
 import { AcpExecutionError } from "../../../src/acp/acp-error.ts";
 import type { AcpEndpointTermination } from "../../../src/acp/agent/in-process-endpoint.ts";
 import type { AgentConnection, AgentConnectionOptions } from "../../../src/acp/connection/agent-connection.ts";
 import { raceAgentOperation } from "../../../src/acp/connection/agent-operation.ts";
 import { createAcpClient } from "../../../src/acp/connection/create-client.ts";
+import type { IdentifiedSessionNotification } from "../../../src/acp/connection/session-notification.ts";
 import {
     captureProcessTree,
     executableLaunch,
@@ -22,6 +23,20 @@ interface ControlledAcpLaunch {
 
 interface ControlledAcpConnectionOptions extends AgentConnectionOptions {
     readonly maximumOutputBytes?: number;
+}
+
+// The SDK validates the ACP envelope; this subprocess peer also promises identified chunks.
+// Validate its wire contract here, not in production harness callback delivery.
+function isIdentifiedNotification(notification: SessionNotification): notification is IdentifiedSessionNotification {
+    const update = notification.update;
+    switch (update.sessionUpdate) {
+        case "user_message_chunk":
+        case "agent_message_chunk":
+        case "agent_thought_chunk":
+            return typeof update.messageId === "string" && update.messageId.length > 0;
+        default:
+            return true;
+    }
 }
 
 /** Stateful controlled ACP peer transport used only by daemon integration scenarios. */
@@ -82,25 +97,29 @@ export class ControlledAcpConnection implements AgentConnection {
         );
         let pendingUpdates = 0;
         const client = options.client;
-        this.connection = createAcpClient({
-            onElicitation: client.onElicitation,
-            onElicitationComplete: client.onElicitationComplete,
-            onPermission: client.onPermission,
-            // ACP notifications acknowledge writes, not consumption. Pause the child
-            // while updates drain so the OS pipe backpressures history replay.
-            onUpdate: async (notification) => {
+        this.connection = createAcpClient(client)
+            .onNotification(methods.client.session.update, async ({ params }) => {
+                if (!isIdentifiedNotification(params)) {
+                    throw new AcpExecutionError(
+                        "The controlled ACP peer emitted an unidentified message",
+                        {},
+                        "invalid_agent_message_id",
+                    );
+                }
+                // ACP notifications acknowledge writes, not consumption. Pause the child
+                // while updates drain so the OS pipe backpressures history replay.
                 pendingUpdates += 1;
                 stdout.pause();
                 try {
-                    await client.onUpdate(notification);
+                    await client.onUpdate(params);
                 } finally {
                     pendingUpdates -= 1;
                     if (pendingUpdates === 0) {
                         stdout.resume();
                     }
                 }
-            },
-        }).connect(stream);
+            })
+            .connect(stream);
     }
 
     readonly initialize = async (signal: AbortSignal): Promise<void> => signal.throwIfAborted();
