@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readdir, realpath, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 async function atomicWrite(path: string, bytes: Uint8Array, signal: AbortSignal): Promise<void> {
@@ -76,6 +76,13 @@ export class ScratchDirectory {
         } catch {
             return null;
         }
+    };
+
+    /** Reads a regular file owned by this scratch directory after validating its canonical path. */
+    readonly read = async (path: string, signal: AbortSignal): Promise<Uint8Array | null> => {
+        const resolved = await this.resolveFile(path);
+        signal.throwIfAborted();
+        return resolved === null ? null : new Uint8Array(await readFile(resolved, { signal }));
     };
 
     readonly removeAll = async (): Promise<void> => {

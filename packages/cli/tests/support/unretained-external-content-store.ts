@@ -12,4 +12,9 @@ export class UnretainedExternalContentStore implements ExternalContentStore {
         signal.throwIfAborted();
         return Promise.resolve(null);
     };
+
+    readonly read: ExternalContentStore["read"] = (_sessionId, _request, signal) => {
+        signal.throwIfAborted();
+        return Promise.resolve(null);
+    };
 }

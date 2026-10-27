@@ -183,7 +183,7 @@ export class CloudflareChannelSocket implements RuntimeSocket {
         const identity = this.identity();
         return identity.role === "relay" || (identity.role === "host" && identity.credentialId.startsWith("ctl_"));
     };
-    readonly send = (message: string): void => this.#socket.send(message);
+    readonly send = (message: string | ArrayBuffer): void => this.#socket.send(message);
     readonly trackAgentSettingsDiscovery = (requestId: string, agentId: string): "tracked" | "duplicate" | "busy" => {
         const attachment = this.hostAttachment();
         const existing = attachment.pendingAgentSettingsDiscoveries.find((pending) => pending.requestId === requestId);

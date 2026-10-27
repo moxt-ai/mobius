@@ -317,8 +317,7 @@ test.each([
                     additionalDirectoryIds: [],
                     disposition: SessionPromptDisposition.Reject,
                     targetCommandId: "",
-                    images: [],
-                    resources: [],
+                    attachments: [],
                     prompt: text,
                 }),
             );

@@ -1,4 +1,8 @@
-import { type DaemonToServiceMessage, encodeDaemonToServiceMessage } from "@moxt-ai/mobius-sdk/protocol";
+import {
+    type DaemonToServiceMessage,
+    encodeContentChunkFrame,
+    encodeDaemonToServiceMessage,
+} from "@moxt-ai/mobius-sdk/protocol";
 import { WebSocket } from "undici";
 
 import { operationErrorCode, operationErrorMessage } from "../../infra/operation-error.ts";
@@ -9,6 +13,13 @@ export function send(socket: WebSocket, message: DaemonToServiceMessage): void {
         throw new Error("Relay connection is not open");
     }
     socket.send(encodeDaemonToServiceMessage(message));
+}
+
+export function sendContentChunk(socket: WebSocket, requestId: string, sequence: number, bytes: Uint8Array): void {
+    if (socket.readyState !== WebSocket.OPEN) {
+        throw new Error("Relay connection is not open");
+    }
+    socket.send(encodeContentChunkFrame({ bytes, requestId, sequence }));
 }
 
 export function reportOperationFailure(

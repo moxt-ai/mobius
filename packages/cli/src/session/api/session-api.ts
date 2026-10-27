@@ -3,8 +3,6 @@ import type {
     AgentPromptResponse,
     ContentBlock,
     PromptExecutionContext,
-    PromptImage,
-    PromptResource,
     SessionCapabilities,
     SessionCloseNoticeEvent,
     SessionCommand,
@@ -20,6 +18,7 @@ import type {
     SessionStatusChangedEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { AcpAgentDefinition } from "../../acp/agent/agent-definition.ts";
+import type { PromptImageInput, PromptResourceInput } from "../../acp/client/prompt-content.ts";
 import type { Adapter } from "../../acp/native-history/preview-contract.ts";
 import type { NativeSessionOrigin } from "../../acp/protocol/native-session.ts";
 
@@ -58,7 +57,7 @@ export interface SessionConfigureOptions extends SessionPrepareOptions {
 }
 
 export interface PromptContentOptions {
-    readonly images: readonly PromptImage[];
+    readonly images: readonly PromptImageInput[];
     readonly lifecycle?: {
         readonly context?: PromptExecutionContext;
         readonly attemptId: string;
@@ -68,7 +67,7 @@ export interface PromptContentOptions {
         readonly targetCommandId?: string;
     };
     readonly prompt: string;
-    readonly resources: readonly PromptResource[];
+    readonly resources: readonly PromptResourceInput[];
 }
 
 export interface SessionTurnOptions extends SessionPrepareOptions, PromptContentOptions {

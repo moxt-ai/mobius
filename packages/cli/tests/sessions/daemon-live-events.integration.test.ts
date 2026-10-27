@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -7,16 +7,22 @@ import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import {
+    decodeContentAvailableEvent,
+    decodeContentReadyEvent,
     decodeMessageKind,
     decodeNativeSessionResult,
     decodeSessionEventEnvelope,
     decodeSessionHistoryPageLoaded,
+    encodeContentChunkFrame,
+    encodeContentCommitCommand,
+    encodeContentWriteCommand,
     encodeNativeSessionRequest,
     encodeSessionCancelCommand,
     encodeSessionHistoryPageLoad,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
     NATIVE_SESSION_RESULT_KIND,
+    type PromptAttachment,
     SESSION_EVENT_KIND,
     SESSION_HISTORY_PAGE_LOADED_KIND,
     type SessionEvent,
@@ -24,7 +30,7 @@ import {
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
-import { listen, port, sendText } from "@moxt-ai/mobius-test/websocket";
+import { listen, port, sendBinary, sendText } from "@moxt-ai/mobius-test/websocket";
 import { describe, expect, it } from "vitest";
 import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { RuntimeLocalContext } from "../../src/runtime/config.ts";
@@ -278,6 +284,49 @@ async function startControlledDaemon(options: { readonly stateDirectory?: string
 
 type Fixture = Awaited<ReturnType<typeof startControlledDaemon>>;
 const pendingLiveEvents = new WeakMap<Fixture, SessionLiveEvent[]>();
+
+async function uploadTextAttachment(fixture: Fixture, text: string): Promise<PromptAttachment> {
+    const bytes = new TextEncoder().encode(text);
+    const contentKey = createHash("sha256").update(bytes).digest("hex");
+    const requestId = randomUUID();
+    sendText(
+        fixture.socket,
+        encodeContentWriteCommand({
+            byteLength: bytes.byteLength,
+            contentKey,
+            contentKind: "resource",
+            kind: "content.write",
+            mediaType: "text/plain",
+            name: "context.txt",
+            requestId,
+            sessionId: "test-session",
+        }),
+    );
+    let ready = await fixture.frames.next();
+    while (decodeMessageKind(ready) !== "content.ready") {
+        ready = await fixture.frames.next();
+    }
+    expect(decodeContentReadyEvent(ready).requestId).toBe(requestId);
+    sendBinary(fixture.socket, encodeContentChunkFrame({ bytes, requestId, sequence: 0 }));
+    sendText(
+        fixture.socket,
+        encodeContentCommitCommand({ kind: "content.commit", requestId, sessionId: "test-session" }),
+    );
+    let available = await fixture.frames.next();
+    while (decodeMessageKind(available) !== "content.available") {
+        available = await fixture.frames.next();
+    }
+    expect(decodeContentAvailableEvent(available).contentKey).toBe(contentKey);
+    return {
+        byteLength: bytes.byteLength,
+        contentKey,
+        kind: "resource",
+        mimeType: "text/plain",
+        name: "context.txt",
+        uri: "attachment:///context.txt",
+    };
+}
+
 function prompt(fixture: Fixture, text: string): SessionPromptCommand {
     return {
         additionalDirectoryIds: [],
@@ -286,10 +335,9 @@ function prompt(fixture: Fixture, text: string): SessionPromptCommand {
         commandId: "test-turn",
         directoryId: "default",
         disposition: SessionPromptDisposition.Reject,
-        images: [],
+        attachments: [],
         kind: "session.prompt",
         prompt: text,
-        resources: [],
         sessionId: "test-session",
         targetCommandId: "",
     };
@@ -497,18 +545,8 @@ describe("daemon V2 live delivery", () => {
             try {
                 const command: SessionPromptCommand = {
                     ...prompt(fixture, "stream token burst"),
-                    resources:
-                        scenario === "text-only"
-                            ? []
-                            : [
-                                  {
-                                      mimeType: "text/plain",
-                                      name: "context.txt",
-                                      text: "attached context",
-                                      type: "embedded",
-                                      uri: "attachment:///context.txt",
-                                  },
-                              ],
+                    attachments:
+                        scenario === "text-only" ? [] : [await uploadTextAttachment(fixture, "attached context")],
                 };
                 sendText(fixture.socket, encodeSessionPromptCommand(command));
                 const live: SessionLiveEvent[] = [];
@@ -549,12 +587,11 @@ describe("daemon V2 live delivery", () => {
                     expect(userMessages[1]).toMatchObject({
                         payload: {
                             content: {
-                                resource: {
-                                    mimeType: "text/plain",
-                                    text: "attached context",
-                                    uri: "attachment:///context.txt",
-                                },
-                                type: "resource",
+                                byteLength: new TextEncoder().encode("attached context").byteLength,
+                                encoding: "text",
+                                mimeType: "text/plain",
+                                type: "external_resource",
+                                uri: "attachment:///context.txt",
                             },
                             messageId: requestedEventId,
                             sessionUpdate: "user_message_chunk",

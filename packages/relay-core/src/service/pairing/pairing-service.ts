@@ -1,4 +1,10 @@
-import type { AgentSettingsDiscoverCommand, FileReadCommand, WorkspaceListCommand } from "@moxt-ai/mobius-sdk/protocol";
+import type {
+    AgentSettingsDiscoverCommand,
+    ContentAvailableEvent,
+    ContentWriteCommand,
+    FileReadCommand,
+    WorkspaceListCommand,
+} from "@moxt-ai/mobius-sdk/protocol";
 import { decodeRuntimeDiagnosticsRequest } from "@moxt-ai/mobius-sdk/protocol";
 import { ProjectPermission } from "../../entity/authentication/project-authentication.ts";
 import type { ProjectScope } from "../../entity/do/session.ts";
@@ -12,6 +18,7 @@ import { runtimeControlPermission } from "./runtime-control-registry.ts";
 import {
     type RuntimeControlCommand,
     requestRuntimeAgentSettings,
+    requestRuntimeContentWrite,
     requestRuntimeControl,
     requestRuntimeFile,
     requestRuntimeWorkspace,
@@ -351,6 +358,34 @@ export class PairingService {
         } catch (cause) {
             await this.#pairings.closeControlHost(access, AbortSignal.timeout(15000));
             throw cause;
+        }
+    };
+
+    readonly writeProjectSessionContent = async (
+        scope: ProjectScope,
+        runtimeId: string,
+        command: ContentWriteCommand,
+        body: ReadableStream<Uint8Array>,
+        signal: AbortSignal,
+    ): Promise<ContentAvailableEvent> => {
+        if (this.#runtimeOperations !== undefined) {
+            return await this.#runtimeOperations.writeProjectSessionContent(scope, runtimeId, command, body, signal);
+        }
+        const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
+        const access = await this.#pairings.openProjectScopeControlHost(scope, runtimeId, deadline);
+        try {
+            const response = await this.#channels.acceptHost(
+                access,
+                new Request("https://runtime.internal/host", { headers: { Upgrade: "websocket" } }),
+                deadline,
+            );
+            const socket = response.webSocket;
+            if (socket === null) {
+                throw new PairingDirectoryError("runtime_unavailable", "The Runtime connection is unavailable");
+            }
+            return await requestRuntimeContentWrite(socket, command, body, deadline);
+        } finally {
+            await this.#pairings.closeControlHost(access, AbortSignal.timeout(15000));
         }
     };
 

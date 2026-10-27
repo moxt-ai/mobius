@@ -260,7 +260,16 @@ export async function runRelayConnection({
             const handleMessage = (event: MessageEvent<unknown>): void => {
                 const encoded: unknown = event.data;
                 if (typeof encoded !== "string") {
-                    failAndClose(new Error("Relay sent a non-text message"), 4003, "Text message required", "protocol");
+                    try {
+                        commands.dispatchChunk(encoded);
+                    } catch (error) {
+                        failAndClose(
+                            new Error("Relay sent an invalid content chunk", { cause: error }),
+                            4008,
+                            "Invalid content chunk",
+                            "protocol",
+                        );
+                    }
                     return;
                 }
 

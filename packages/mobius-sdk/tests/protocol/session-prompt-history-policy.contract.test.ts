@@ -13,10 +13,9 @@ const prompt = {
     commandId: "command-1",
     directoryId: "directory-1",
     disposition: SessionPromptDisposition.Reject,
-    images: [],
+    attachments: [],
     kind: "session.prompt" as const,
     prompt: "continue",
-    resources: [],
     sessionId: "session-1",
     targetCommandId: "",
 };

@@ -1,4 +1,4 @@
-import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-sdk/protocol";
+import { decodeContentChunkFrame, MOBIUS_API_PREFIX } from "@moxt-ai/mobius-sdk/protocol";
 import { type HttpError, toHttpError } from "../../entity/http-error.ts";
 import { diagnosticText, serializeDiagnosticError } from "../../infra/log-diagnostics.ts";
 import { logger } from "../../infra/logger.ts";
@@ -142,6 +142,7 @@ function requestFromMessage(
     origin: string,
     browserOrigin: string | null,
     signal: AbortSignal,
+    binaryBody?: Uint8Array,
 ): { readonly request: Request; readonly requestId: string } {
     const path = string(value, "path", 8_192);
     if (!path.startsWith(`${MOBIUS_API_PREFIX}/`) || path.startsWith(`${MOBIUS_API_PREFIX}/v1/transport`)) {
@@ -155,7 +156,7 @@ function requestFromMessage(
     if (!["DELETE", "GET", "PATCH", "POST", "PUT"].includes(method)) {
         throw transportError("invalid_method");
     }
-    const body = requestBody(value);
+    const body = binaryBody ?? requestBody(value);
     if (method === "GET" && body.length > 0) {
         throw transportError("invalid_message");
     }
@@ -165,7 +166,7 @@ function requestFromMessage(
     }
     return {
         request: new Request(endpoint, {
-            body: body.length === 0 || method === "GET" ? null : body,
+            body: body.length === 0 || method === "GET" ? null : typeof body === "string" ? body : body.slice().buffer,
             headers: requestHeaders,
             method,
             signal,
@@ -195,6 +196,16 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
         string,
         | { readonly kind: "pending"; readonly controller: AbortController }
         | { readonly kind: "open"; readonly socket: WebSocket }
+    >();
+    const binaryRequests = new Map<
+        string,
+        {
+            readonly body: Uint8Array;
+            readonly byteLength: number;
+            readonly message: Readonly<Record<string, unknown>>;
+            receivedBytes: number;
+            sequence: number;
+        }
     >();
     const browserOrigin = request.headers.get("origin");
     let subscriptionDiagnosticCount = 0;
@@ -250,6 +261,7 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                 }
             }
             subscriptions.clear();
+            binaryRequests.clear();
         },
         { once: true },
     );
@@ -269,10 +281,37 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
         void (async () => {
             let requestId = "unknown";
             try {
-                if (typeof event.data !== "string") {
-                    throw transportError("invalid_message");
+                let decoded: unknown;
+                let binaryBody: Uint8Array | undefined;
+                if (typeof event.data === "string") {
+                    decoded = JSON.parse(event.data);
+                } else {
+                    const arrayBuffer =
+                        typeof event.data === "object" && event.data !== null
+                            ? Reflect.get(event.data, "arrayBuffer")
+                            : undefined;
+                    const binary =
+                        typeof arrayBuffer === "function"
+                            ? await Reflect.apply(arrayBuffer, event.data, [])
+                            : event.data;
+                    const chunk = decodeContentChunkFrame(binary);
+                    const upload = binaryRequests.get(chunk.requestId);
+                    if (upload === undefined || chunk.sequence !== upload.sequence) {
+                        throw transportError("invalid_message");
+                    }
+                    upload.sequence += 1;
+                    upload.receivedBytes += chunk.bytes.byteLength;
+                    if (upload.receivedBytes > upload.byteLength) {
+                        throw transportError("request_too_large");
+                    }
+                    upload.body.set(chunk.bytes, upload.receivedBytes - chunk.bytes.byteLength);
+                    if (upload.receivedBytes < upload.byteLength) {
+                        return;
+                    }
+                    binaryRequests.delete(chunk.requestId);
+                    binaryBody = upload.body;
+                    decoded = upload.message;
                 }
-                const decoded: unknown = JSON.parse(event.data);
                 const message = record(decoded);
                 const kind = string(message, "kind", 32);
                 if (kind === EVENT_UNSUBSCRIBE_KIND) {
@@ -425,6 +464,28 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                     touch();
                     return;
                 }
+                const bodyByteLength = message["bodyByteLength"];
+                if (binaryBody === undefined && bodyByteLength !== undefined) {
+                    requestId = requestIdFromMessage(message);
+                    if (
+                        !Number.isSafeInteger(bodyByteLength) ||
+                        typeof bodyByteLength !== "number" ||
+                        bodyByteLength < 1 ||
+                        bodyByteLength > MAX_BODY_BYTES ||
+                        requestBody(message).length !== 0 ||
+                        binaryRequests.has(requestId)
+                    ) {
+                        throw transportError("invalid_message");
+                    }
+                    binaryRequests.set(requestId, {
+                        body: new Uint8Array(bodyByteLength),
+                        byteLength: bodyByteLength,
+                        message,
+                        receivedBytes: 0,
+                        sequence: 0,
+                    });
+                    return;
+                }
                 requestId = requestIdFromMessage(message);
                 const converted = requestFromMessage(
                     message,
@@ -432,6 +493,7 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                     new URL(request.url).origin,
                     browserOrigin,
                     controller.signal,
+                    binaryBody,
                 );
                 requestId = converted.requestId;
                 const response = await dispatch(converted.request);

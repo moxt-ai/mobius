@@ -25,8 +25,7 @@ test("Given running and queued prompts, When the daemon restarts, Then it report
                     agentId: "controlled-acp",
                     bindingId: peer.bindingId,
                     directoryId: "default",
-                    images: [],
-                    resources: [],
+                    attachments: [],
                     kind: "session.prompt" as const,
                     sessionId: peer.sessionId,
                 };

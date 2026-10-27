@@ -89,7 +89,7 @@ export class SessionTurns {
                 queued.push({
                     commandId: candidate.command.commandId,
                     prompt: candidate.command.prompt,
-                    images: candidate.command.images,
+                    attachments: candidate.command.attachments,
                 });
             }
             return { turn: turnSnapshot ?? null, queued };

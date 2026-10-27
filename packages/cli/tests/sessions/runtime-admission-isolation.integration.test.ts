@@ -252,10 +252,9 @@ function promptCommand(
         commandId,
         directoryId: "default",
         disposition,
-        images: [],
+        attachments: [],
         kind: "session.prompt",
         prompt: text,
-        resources: [],
         sessionId,
         targetCommandId,
     };

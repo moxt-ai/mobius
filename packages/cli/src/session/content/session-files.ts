@@ -1,17 +1,15 @@
 import { basename, extname, isAbsolute, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+    CONTENT_CHUNK_MAX_BYTES,
     type DaemonToServiceMessage,
     FILE_BEGIN_KIND,
-    FILE_CHUNK_KIND,
     FILE_END_KIND,
     type FileReadCommand,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { readLocalRaster } from "../../acp/content/raster.ts";
 import { canonicalPath, readFileChunks, readPathMetadata } from "../../storage/files/local-files.ts";
 import type { ExternalContentStore } from "./external-content-store.ts";
-
-const CHUNK_BYTES = 192 * 1024;
 
 type RequestedFileTarget =
     | { readonly explicitUrl: true; readonly path: string }
@@ -77,6 +75,7 @@ async function resolveFile(
 export async function streamLocalFile(
     command: FileReadCommand,
     send: (message: DaemonToServiceMessage) => void,
+    sendChunk: (requestId: string, sequence: number, bytes: Uint8Array) => void,
     signal: AbortSignal,
     workingDirectory: string | null,
     externalContent: ExternalContentStore,
@@ -105,14 +104,8 @@ export async function streamLocalFile(
         sessionId: command.sessionId,
     });
     let sequence = 0;
-    for await (const bytes of readFileChunks(target, CHUNK_BYTES, signal)) {
-        send({
-            data: Buffer.from(bytes).toString("base64"),
-            kind: FILE_CHUNK_KIND,
-            requestId: command.requestId,
-            sequence,
-            sessionId: command.sessionId,
-        });
+    for await (const bytes of readFileChunks(target, CONTENT_CHUNK_MAX_BYTES, signal)) {
+        sendChunk(command.requestId, sequence, bytes);
         sequence += 1;
     }
     const after = await readPathMetadata(target);

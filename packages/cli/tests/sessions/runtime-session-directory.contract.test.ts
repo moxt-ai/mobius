@@ -44,8 +44,7 @@ it("Given a prompted local conversation, When its Runtime Session directory is l
                 content: "Remember this conversation",
                 directoryId: "default",
                 idempotencyKey: `turn-${crypto.randomUUID()}`,
-                images: [],
-                resources: [],
+                attachments: [],
             },
             cancellation.signal,
         );
@@ -143,8 +142,7 @@ it("Given a deeply nested multibyte project path, When the SDK browses it and ru
                 ...identity,
                 content: "Remember the long workspace conversation",
                 idempotencyKey: `turn-${crypto.randomUUID()}`,
-                images: [],
-                resources: [],
+                attachments: [],
             },
             signal,
         );

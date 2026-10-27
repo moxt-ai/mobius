@@ -34,21 +34,24 @@ function promptContent(command: SessionPromptCommand): readonly ContentBlock[] {
     if (command.prompt.length > 0) {
         content.push({ text: command.prompt, type: "text" });
     }
-    for (const image of command.images) {
-        content.push({
-            data: image.data,
-            mimeType: image.mimeType,
-            type: "image",
-        });
-    }
-    for (const resource of command.resources) {
+    for (const attachment of command.attachments) {
         content.push(
-            resource.type === "embedded"
+            attachment.kind === "image"
                 ? {
-                      resource: { mimeType: resource.mimeType, text: resource.text, uri: resource.uri },
-                      type: "resource",
+                      byteLength: attachment.byteLength,
+                      imageKey: attachment.contentKey,
+                      mimeType: attachment.mimeType,
+                      type: "external_image",
+                      uri: attachment.uri,
                   }
-                : { mimeType: resource.mimeType, name: resource.name, type: "resource_link", uri: resource.uri },
+                : {
+                      byteLength: attachment.byteLength,
+                      encoding: "text",
+                      mimeType: attachment.mimeType,
+                      resourceKey: attachment.contentKey,
+                      type: "external_resource",
+                      uri: attachment.uri,
+                  },
         );
     }
     return content;

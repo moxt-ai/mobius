@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-    decodeFileChunkEvent,
+    decodeContentChunkFrame,
     decodeMessageKind,
     decodeNativeSessionResult,
     decodeSessionEventEnvelope,
@@ -104,8 +104,8 @@ test("Given saved Codex image generation, When the real daemon reopens it throug
                 payload: {
                     type: "user_message",
                     message: "Generate an image",
-                    images: [],
-                    local_images: [],
+                    attachments: [],
+                    local_attachments: [],
                     text_elements: [],
                 },
             },
@@ -206,10 +206,9 @@ test("Given saved Codex image generation, When the real daemon reopens it throug
                     commandId,
                     directoryId: "default",
                     disposition: SessionPromptDisposition.Reject,
-                    images: [],
+                    attachments: [],
                     kind: "session.prompt",
                     prompt,
-                    resources: [],
                     sessionId: managedSessionId,
                     targetCommandId: "",
                 }),
@@ -271,14 +270,16 @@ test("Given saved Codex image generation, When the real daemon reopens it throug
         );
         const chunks: Buffer[] = [];
         for (;;) {
-            const message = await peer.nextMessage();
+            const message = await peer.nextFrame();
+            if (typeof message !== "string") {
+                chunks.push(Buffer.from(decodeContentChunkFrame(message).bytes));
+                continue;
+            }
             const kind = decodeMessageKind(message);
             if (kind === "file.failed") {
                 throw new Error(message);
             }
-            if (kind === "file.chunk") {
-                chunks.push(Buffer.from(decodeFileChunkEvent(message).data, "base64"));
-            } else if (kind === "file.end") {
+            if (kind === "file.end") {
                 break;
             }
         }

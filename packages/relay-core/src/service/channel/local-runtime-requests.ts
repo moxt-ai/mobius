@@ -4,11 +4,11 @@ import type { ChannelPeers, ChannelSocket, HistoryRequestKind } from "./channel-
 
 export class LocalRuntimeRequest extends EventTarget implements RuntimeReplyConnection {
     #state: number = WebSocket.OPEN;
-    readonly #dispatch: (socket: ChannelSocket, message: string) => Promise<void>;
+    readonly #dispatch: (socket: ChannelSocket, message: unknown) => Promise<void>;
     readonly #release: () => void;
     readonly server: ChannelSocket;
 
-    constructor(dispatch: (socket: ChannelSocket, message: string) => Promise<void>, release: () => void) {
+    constructor(dispatch: (socket: ChannelSocket, message: unknown) => Promise<void>, release: () => void) {
         super();
         this.#dispatch = dispatch;
         this.#release = release;
@@ -58,7 +58,7 @@ export class LocalRuntimeRequest extends EventTarget implements RuntimeReplyConn
     }
     private readonly isOpen = () => this.#state === WebSocket.OPEN;
     readonly accept = (): void => {};
-    readonly send = (message: string): void => {
+    readonly send = (message: string | ArrayBuffer | ArrayBufferView): void => {
         if (!this.isOpen()) {
             throw new Error("The Runtime request is closed");
         }
@@ -85,7 +85,7 @@ export class LocalRuntimeRequests {
         requestId: string,
         sessionId: string,
         queueAcknowledgement: boolean,
-        dispatch: (socket: ChannelSocket, message: string) => Promise<void>,
+        dispatch: (socket: ChannelSocket, message: unknown) => Promise<void>,
     ) => {
         const connection = new LocalRuntimeRequest(dispatch, () => this.#routes.delete(route));
         const route = { socket: connection.server, requestId, sessionId, queueAcknowledgement };

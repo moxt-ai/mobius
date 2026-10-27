@@ -171,10 +171,9 @@ describe("daemon narration delivery", () => {
                 commandId: "narration_turn",
                 directoryId: "default",
                 disposition: SessionPromptDisposition.Reject,
-                images: [],
+                attachments: [],
                 kind: "session.prompt",
                 prompt: "stream verbose activity",
-                resources: [],
                 sessionId: "narration_conversation",
                 targetCommandId: "",
             };

@@ -42,6 +42,7 @@ export interface ExternalContentStore {
         request: string,
         signal: AbortSignal,
     ) => Promise<ResolvedExternalContent | null>;
+    readonly read: (sessionId: string, request: string, signal: AbortSignal) => Promise<Uint8Array | null>;
 }
 
 interface CachedContent extends ResolvedExternalContent {
@@ -152,6 +153,13 @@ export class LocalExternalContentStore implements ExternalContentStore, AsyncDis
         signal.throwIfAborted();
         return resolvedPath === null ? null : { mediaType: entry.mediaType, name: entry.name, path: resolvedPath };
     };
+
+    readonly read: ExternalContentStore["read"] = (sessionId, request, signal) =>
+        this.#track(async () => {
+            const active = AbortSignal.any([signal, this.#lifetime.signal]);
+            const resolved = await this.#resolve(sessionId, request, active);
+            return resolved === null ? null : this.#scratch.read(resolved.path, active);
+        });
 
     readonly [Symbol.asyncDispose] = async (): Promise<void> => {
         clearInterval(this.#expirationTimer);
