@@ -41,7 +41,6 @@ import type {
     TenantRow,
 } from "../entity/platform-records.ts";
 import type { PlatformControlPlaneStorage } from "../storage/platform-control-plane-storage.ts";
-import type { PlatformProjectAuthorizationStorage } from "../storage/platform-project-authorization-storage.ts";
 import type { AppCredentialAuthenticationService } from "./app-credential-authentication-service.ts";
 
 const MAXIMUM_CREDENTIAL_OVERLAP_MILLISECONDS = 60 * 60 * 1_000;
@@ -327,20 +326,17 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
     readonly #storage: PlatformControlPlaneStorage;
     readonly #placements: PlatformProjectPlacementRegistry;
     readonly #appAuthentication: AppCredentialAuthenticationService;
-    readonly #projectAuthorization: PlatformProjectAuthorizationStorage;
 
     constructor(
         storage: PlatformControlPlaneStorage,
         authentication: PlatformAuthenticationConfiguration,
         placements: PlatformProjectPlacementRegistry,
         appAuthentication: AppCredentialAuthenticationService,
-        projectAuthorization: PlatformProjectAuthorizationStorage,
     ) {
         this.#storage = storage;
         this.#authentication = authentication;
         this.#placements = placements;
         this.#appAuthentication = appAuthentication;
-        this.#projectAuthorization = projectAuthorization;
     }
 
     readonly authenticateDeveloper = async (
@@ -595,11 +591,6 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
             throw new PlatformControlPlaneError("app_access_denied", "The App is unavailable", 403);
         }
         const now = Date.now();
-        await this.#projectAuthorization.revokeApp(
-            app.app_id,
-            (await this.#storage.listProjects(app.app_id, signal)).map((project) => project.project_id),
-            signal,
-        );
         const deleted = await this.#storage.deleteApp(
             app.app_id,
             now,
@@ -812,7 +803,6 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         if (!stored.auditRecorded) {
             throw new PlatformControlPlaneError("platform_write_failed", "The Project could not be created", 503);
         }
-        await this.#projectAuthorization.create(project, signal);
         return projectResource(project);
     };
 
@@ -845,7 +835,6 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         if (!recorded) {
             throw new PlatformControlPlaneError("platform_write_failed", "The Project could not be created", 503);
         }
-        await this.#projectAuthorization.create(project, signal);
     };
 
     readonly listProjects = async (
@@ -1148,8 +1137,8 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         );
 
     readonly resolveApplicationId: ProjectApplicationResolver["resolveApplicationId"] = async (projectId, signal) => {
-        const project = await this.#projectAuthorization.read(validateIdentifier(projectId, "project_id"), signal);
-        if (project === null || project.lifecycle !== "active") {
+        const project = await this.#storage.readActiveProjectScope(validateIdentifier(projectId, "project_id"), signal);
+        if (project === null) {
             throw new ProjectAuthenticationError("project_access_denied", "The Project is unavailable");
         }
         return project.app_id;
@@ -1180,8 +1169,8 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         _actorRef: string,
         signal: AbortSignal,
     ): Promise<ProjectAccessContext> => {
-        const project = await this.#projectAuthorization.read(projectId, signal);
-        if (project === null || project.lifecycle !== "active" || project.app_id !== row.app_id) {
+        const project = await this.#storage.readActiveProjectScope(projectId, signal);
+        if (project === null || project.app_id !== row.app_id) {
             throw new ProjectAuthenticationError(
                 "project_access_denied",
                 "The AppCredential is not authorized for this Project",
@@ -1220,11 +1209,17 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
     ): Promise<CredentialRow> => await this.#appAuthentication.verify(credentialValue, signal);
 
     private readonly allowedProjects = async (row: CredentialRow, signal: AbortSignal): Promise<readonly string[]> => {
-        const projects =
-            row.all_projects === 1
-                ? await this.#storage.listActiveProjectIds(row.app_id, signal)
-                : await this.#storage.listScopedActiveProjectIds(row.credential_id, signal);
-        return Object.freeze(projects);
+        const projects = await this.#storage.listActiveProjectIds(row.app_id, signal);
+        if (row.all_projects === 1) {
+            return Object.freeze(projects);
+        }
+        const scoped: string[] = [];
+        for (const projectId of projects) {
+            if (await this.#storage.credentialHasProject(row.credential_id, projectId, signal)) {
+                scoped.push(projectId);
+            }
+        }
+        return Object.freeze(scoped);
     };
 
     private readonly createCredential = async (
