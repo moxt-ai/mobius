@@ -799,10 +799,17 @@ export class SessionTurnHistory {
                 commands.push({ attempt: turn.attempt, commandId, generationId: turn.generationId });
             }
         }
+        const active = readable.value.activeCommands;
         return {
             kind: "ready",
             value: {
-                activeCommands: readable.value.activeCommands,
+                activeCommands:
+                    active === null || active.commandIds.length === 0
+                        ? null
+                        : {
+                              commandIds: active.commandIds.slice(-activeCommandLimit),
+                              generationId: active.generationId,
+                          },
                 commands,
                 sessionId: target.sessionId,
                 tailCursor: this.#recording.tailCursor(),

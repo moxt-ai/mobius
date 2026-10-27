@@ -257,6 +257,24 @@ describe("Recording Turn history", () => {
         });
     });
 
+    it("Given more than a thousand active commands, When execution is queried, Then named outcomes remain readable with a bounded active stack", async () => {
+        await completedTurn("finished-command", "Finished prompt", "Finished answer");
+        for (let offset = 0; offset < 1_001; offset += 100) {
+            const events = Array.from({ length: Math.min(100, 1_001 - offset) }, (_, index) => {
+                const commandId = `active-${offset + index}`;
+                return [requested(commandId, "Waiting for completion"), started(commandId)];
+            }).flat();
+            await record(events);
+        }
+
+        const response = await worker.fetch(new Request(sessionPath("execution?commandId=finished-command")), env);
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({
+            commands: [{ commandId: "finished-command", attempt: { kind: "succeeded" } }],
+            activeCommands: { commandIds: Array.from({ length: 1_000 }, (_, index) => `active-${index + 1}`) },
+        });
+    });
+
     it("Given streamed answer, reasoning, and tool chunks, When a client reads the newest Turns, Then each Turn lists merged items in order", async () => {
         await record([requested("command-1", "Inspect the repository"), started("command-1")]);
         await record([thought("Looking "), thought("around."), answer("I will "), answer("read it.")]);
