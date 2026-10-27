@@ -4,6 +4,7 @@ import type { RuntimeConfig } from "../../runtime/config.ts";
 import { MobiusRuntimeEngine } from "../../runtime/engine.ts";
 import { RuntimeTurnActivity } from "../../session/turn/runtime-turn-activity.ts";
 import { acquireManagerLock } from "../../storage/daemon/manager-lock.ts";
+import type { InstallationDirectory } from "../../storage/installation/installation-files.ts";
 import { isNodeError } from "../../util/node-error.ts";
 import { sendLocalRequest } from "../control/local-client.ts";
 import { serveLocalControl } from "../control/local-server.ts";
@@ -23,7 +24,7 @@ class WorkerRuntimeError extends Error {
     }
 }
 
-export async function reloadDaemon(stateDirectory: string, signal: AbortSignal): Promise<void> {
+export async function reloadDaemon(stateDirectory: InstallationDirectory, signal: AbortSignal): Promise<void> {
     try {
         const response = await sendLocalRequest(stateDirectory, "worker", { kind: "reload" }, signal);
         if (

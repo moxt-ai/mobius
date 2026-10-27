@@ -1,8 +1,9 @@
+import type { InstallationDirectory } from "../../storage/installation/installation-files.ts";
 import { sendLocalRequest } from "./local-client.ts";
 import { type DaemonReleaseSwitchState, lifecycleResponse } from "./protocol.ts";
 
 export async function readSwitchStatus(
-    directory: string,
+    directory: InstallationDirectory,
     signal: AbortSignal,
     wait = false,
 ): Promise<DaemonReleaseSwitchState | null> {

@@ -14,6 +14,7 @@ import {
     openMobiusCliInstallation,
     openMobiusControlInstallation,
 } from "../../src/daemon/pairing/pair-local-machine.ts";
+import type { InstallationDirectory } from "../../src/storage/installation/installation-files.ts";
 import { installWorkspaceDaemonRelease } from "../support/installed-daemon-release.ts";
 
 const temporaryDirectories: string[] = [];
@@ -105,7 +106,7 @@ function waitForLogEntries(
 }
 
 function waitForReplacement(
-    stateDirectory: string,
+    stateDirectory: InstallationDirectory,
     deadline: AbortSignal,
     previousPid: number,
 ): Promise<{ kind: string; worker: { pid: number; version: string } | null }> {

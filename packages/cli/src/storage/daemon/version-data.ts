@@ -4,6 +4,7 @@ import { join, relative, sep } from "node:path";
 import { runtimeUpgradeVersionSchema } from "@moxt-ai/mobius-sdk/protocol";
 import { validateLocalPath } from "../../util/filesystem/private-path.ts";
 import { isNodeError } from "../../util/node-error.ts";
+import type { StateRoot } from "../state-directory.ts";
 import { STATE_ROOT_ENTRY_NAMES, STATE_ROOT_LAYOUT } from "../state-root-layout.ts";
 
 // Each daemon version keeps its data in `versions/<version>/` under the state root, and
@@ -14,7 +15,7 @@ export class DataInheritanceError extends Error {
 }
 
 /** The version the current data pointer names, or null when there is no pointer. */
-export async function readCurrentDataVersion(root: string, signal: AbortSignal): Promise<string | null> {
+export async function readCurrentDataVersion(root: StateRoot, signal: AbortSignal): Promise<string | null> {
     // A relative, version-only pointer remains valid if the state root is moved.
     const pointer = join(root, STATE_ROOT_LAYOUT.currentData);
     try {
@@ -32,7 +33,7 @@ export async function readCurrentDataVersion(root: string, signal: AbortSignal):
     }
 }
 
-export async function versionDataExists(root: string, version: string, signal: AbortSignal): Promise<boolean> {
+export async function versionDataExists(root: StateRoot, version: string, signal: AbortSignal): Promise<boolean> {
     try {
         await validateLocalPath(join(root, STATE_ROOT_LAYOUT.versions, version), true, true, signal);
         return true;
@@ -62,7 +63,7 @@ function nestedRootEntry(segments: readonly string[]): boolean {
  * behind. Any other symbolic link is rejected.
  */
 export async function copyVersionData(
-    root: string,
+    root: StateRoot,
     sourceVersion: string,
     targetVersion: string,
     signal: AbortSignal,
@@ -113,7 +114,7 @@ export async function copyVersionData(
  * Removes a version's data unless the current data pointer names it. The directory leaves in one rename, so a
  * concurrent first use either finds it whole or inherits the current data.
  */
-export async function discardVersionData(root: string, version: string, signal: AbortSignal): Promise<void> {
+export async function discardVersionData(root: StateRoot, version: string, signal: AbortSignal): Promise<void> {
     if ((await readCurrentDataVersion(root, signal)) === version || !(await versionDataExists(root, version, signal))) {
         return;
     }
@@ -132,7 +133,7 @@ export async function discardVersionData(root: string, version: string, signal: 
 }
 
 /** Points the current data pointer at a version whose data directory exists. */
-export async function writeCurrentDataVersion(root: string, version: string, signal: AbortSignal): Promise<void> {
+export async function writeCurrentDataVersion(root: StateRoot, version: string, signal: AbortSignal): Promise<void> {
     await validateLocalPath(root, true, true, signal);
     await validateLocalPath(join(root, STATE_ROOT_LAYOUT.versions, version), true, true, signal);
     const temporary = join(root, `.current-data-${randomUUID()}.txt`);
