@@ -326,13 +326,9 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
 
     /** Pushes the current settings so a mode change Codex applied reaches the Run settings panel. */
     readonly #emitConfigOptionsUpdate = async (): Promise<void> => {
-        const connection = this.#context.connection();
-        if (connection === null || this.#context.threadId().length === 0) {
-            return;
-        }
-        await connection.client.notify(methods.client.session.update, {
-            sessionId: this.#context.threadId(),
-            update: { configOptions: this.#settings.configOptions(), sessionUpdate: "config_option_update" },
+        await this.#context.emit({
+            configOptions: this.#settings.configOptions(),
+            sessionUpdate: "config_option_update",
         });
     };
 
