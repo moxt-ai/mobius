@@ -90,16 +90,26 @@ const browserCredentialSchema = v.strictObject({
         v.maxValue(MAX_BROWSER_CREDENTIAL_LIFETIME_MILLISECONDS / 1_000),
     ),
 });
-const submitTurnSchema = v.strictObject({
+const submitTurnIdentityEntries = {
     ...sessionIdentitySchema.entries,
-    attachments: v.array(v.unknown()),
     content: v.string(),
     disposition: v.picklist(["reject", "queue", "steer"]),
     historyPolicy: v.optional(v.picklist(["eager", "execution-only"])),
     idempotencyKey: identifier,
     sessionConfigurations: v.array(v.unknown()),
     targetCommandId: v.string(),
-});
+};
+const submitTurnSchema = v.union([
+    v.strictObject({
+        ...submitTurnIdentityEntries,
+        attachments: v.array(v.unknown()),
+    }),
+    v.strictObject({
+        ...submitTurnIdentityEntries,
+        images: v.array(v.unknown()),
+        resources: v.array(v.unknown()),
+    }),
+]);
 
 function validated<TSchema extends v.GenericSchema<unknown, object>>(
     schema: TSchema,
@@ -478,7 +488,7 @@ export function createProjectRuntimeRoutes() {
                             directoryId: body.directoryId,
                             disposition: body.disposition,
                             ...(body.historyPolicy === undefined ? {} : { historyPolicy: body.historyPolicy }),
-                            attachments: body.attachments,
+                            attachments: "attachments" in body ? body.attachments : [],
                             kind: "session.prompt",
                             prompt: body.content,
                             sessionConfigurations: body.sessionConfigurations,
