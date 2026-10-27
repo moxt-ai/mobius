@@ -46,6 +46,9 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         const threadId = request.params.threadId;
         const turn = { id: "controlled-turn-" + ++turnNumber, status: "inProgress" };
         send({ id: request.id, result: { turn } });
+        send({ method: "item/started", params: { threadId, turnId: turn.id,
+            item: { type: "userMessage", id: "controlled-user-" + turnNumber, content: request.params.input },
+        } });
         send({ method: "thread/settings/updated", params: {
             threadId, threadSettings: { collaborationMode: { mode: "plan" } },
         } });
