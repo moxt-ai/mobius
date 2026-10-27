@@ -26,7 +26,6 @@ import {
     decodeSessionConfigReadCommand,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
-    decodeSessionEventEnvelope,
     decodeSessionHistoryPageLoad,
     decodeSessionPermissionRespondCommand,
     decodeSessionPreviewHistoryPageLoad,
@@ -34,6 +33,7 @@ import {
     decodeSessionPromptDispositionCommand,
     decodeSessionQueryCommand,
     decodeSessionRenameCommand,
+    decodeSessionWireEnvelope,
     type Identifier,
     isDirectoryIdentifier,
     isIdentifier,
@@ -904,7 +904,7 @@ export function createPlatformApplication(
                         return;
                     }
                     if (kind === "session.event.v2") {
-                        const envelope = decodeSessionEventEnvelope(event.data);
+                        const envelope = decodeSessionWireEnvelope(event.data);
                         const events = envelope.events.filter(
                             (sessionEvent) => sessionEvent.sessionId === context.req.param("sessionId"),
                         );

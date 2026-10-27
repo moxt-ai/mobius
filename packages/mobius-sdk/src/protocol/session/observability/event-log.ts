@@ -456,7 +456,7 @@ const wireEventFields = {
         .readonly()
         .optional(),
 };
-export const sessionWireEventSchema = z.discriminatedUnion("type", [
+export const sessionWireEventSchema = z.union([
     z
         .object({
             ...wireEventFields,
@@ -470,6 +470,14 @@ export const sessionWireEventSchema = z.discriminatedUnion("type", [
             ...wireEventFields,
             type: z.literal("lifecycle-metadata"),
             payload: wireLifecyclePayloadSchema,
+        })
+        .passthrough()
+        .readonly(),
+    z
+        .object({
+            ...wireEventFields,
+            type: identifier.refine((type) => type !== "acp" && type !== "lifecycle-metadata"),
+            payload: z.record(z.string(), z.unknown()).readonly(),
         })
         .passthrough()
         .readonly(),

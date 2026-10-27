@@ -84,7 +84,13 @@ export class SessionLiveEventRelay {
                     return payload.commandId === route.requestId;
                 }
                 if (payload.kind === "session.permission.resolved" || payload.kind === "session.elicitation.resolved") {
-                    return payload.event?.interactionId === route.requestId;
+                    const interaction = payload["event"];
+                    return (
+                        typeof interaction === "object" &&
+                        interaction !== null &&
+                        "interactionId" in interaction &&
+                        interaction.interactionId === route.requestId
+                    );
                 }
                 return route.queueAcknowledgement && payload.kind === "session.queue.changed";
             });

@@ -228,9 +228,13 @@ beforeEach(() => {
 });
 
 describe.sequential("Mini-client Recording integration", () => {
-    it.each(["text", "future_content"])(
-        "Given a newer daemon with %s content and extension fields, When events cross the relay and Recording, Then full and paged history retain the original events",
-        async (contentType) => {
+    it.each([
+        { type: "acp", contentType: "text" },
+        { type: "acp", contentType: "future_content" },
+        { type: "future-event", contentType: "text" },
+    ])(
+        "Given a newer daemon with $type/$contentType and extension fields, When events cross the relay and Recording, Then full and paged history retain the original events",
+        async ({ type, contentType }) => {
             const { credential, environment, projectId, worker } = await createRecordingProject();
             const runtimeId = "runtime-future-recording";
             const sessionId = "future-recording-session";
@@ -241,7 +245,7 @@ describe.sequential("Mini-client Recording integration", () => {
                 recordedAt: "2026-10-12T00:00:00.000Z",
                 sessionGenerationId: "future-generation",
                 sessionId,
-                type: "acp",
+                type,
                 futureEventField: { retained: true },
                 mobiusMetadata: { futureMetadata: "retained" },
                 payload: {
