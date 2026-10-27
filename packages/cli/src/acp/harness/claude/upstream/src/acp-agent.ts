@@ -3646,14 +3646,15 @@ export class ClaudeAcpAgent {
                         break;
                     case "result": {
                         disarmResultWatchdog();
-                        // A result from an autonomous cycle — a task-notification
-                        // followup, or a peer/coordinator/observer message the model
-                        // handled on its own (see AUTONOMOUS_RESULT_ORIGINS) — is not
-                        // the user's prompt's. Autonomous results must never touch the
-                        // user-turn lifecycle (stop reason, settles, failActive,
-                        // slash-command output forwarding), though their cost is real.
+                        // An autonomous cycle can absorb a queued user prompt. Its
+                        // result keeps the autonomous origin but identifies that
+                        // prompt in user_message_uuid. Only unmatched autonomous
+                        // results must bypass the user-turn lifecycle.
                         const isAutonomousResult =
-                            message.origin != null && AUTONOMOUS_RESULT_ORIGINS.has(message.origin.kind);
+                            message.origin != null &&
+                            AUTONOMOUS_RESULT_ORIGINS.has(message.origin.kind) &&
+                            (message.user_message_uuid === undefined ||
+                                findUnsettledTurn(message.user_message_uuid) === undefined);
                         const pendingExitPlanModeInterruption = session.pendingExitPlanModeInterruption;
                         const pendingExitPlanContextReset = session.pendingExitPlanContextReset;
                         try {

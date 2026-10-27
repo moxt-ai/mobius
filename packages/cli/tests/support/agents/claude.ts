@@ -16,7 +16,7 @@ export class ClaudeFixture implements AsyncDisposable {
         this.environment = environment;
     }
 
-    static async create(provider: FakeAnthropicProvider): Promise<ClaudeFixture> {
+    static async create(provider: Pick<FakeAnthropicProvider, "origin" | "model">): Promise<ClaudeFixture> {
         return await ClaudeFixture.createWithAuthentication({
             ANTHROPIC_API_KEY: FakeAnthropicProvider.apiKey,
             ANTHROPIC_BASE_URL: provider.origin,
