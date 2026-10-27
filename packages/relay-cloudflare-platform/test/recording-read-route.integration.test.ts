@@ -28,7 +28,6 @@ function bindings(): PlatformRelayBindings {
         throw new Error("Expected the Recording provider binding");
     }
     return {
-        APP_CREDENTIAL_CACHE: env.APP_CREDENTIAL_CACHE,
         MOBIUS_SESSION_WEBHOOK_SECRET_ENCRYPTION_KEY: env.MOBIUS_SESSION_WEBHOOK_SECRET_ENCRYPTION_KEY,
         PLATFORM_DIRECTORY_DATABASE: env.PLATFORM_DIRECTORY_DATABASE,
         PROJECT_RELAY: env.PROJECT_RELAY,

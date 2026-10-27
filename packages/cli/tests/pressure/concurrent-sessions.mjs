@@ -190,7 +190,6 @@ async function exercise(count) {
                         PROJECT_RELAY: { className: "ProjectDO", useSQLite: true },
                     },
                     d1Databases: ["PLATFORM_DIRECTORY_DATABASE"],
-                    kvNamespaces: ["APP_CREDENTIAL_CACHE"],
                     r2Buckets: ["R2_BUCKET_APAC", "R2_BUCKET_WNAM"],
                     serviceBindings: { RECORDING: "recording" },
                     bindings: {

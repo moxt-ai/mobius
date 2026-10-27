@@ -586,9 +586,6 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         if (!updated) {
             throw new PlatformControlPlaneError("platform_write_failed", "The App could not be updated", 503);
         }
-        for (const credential of await this.#storage.listAppCredentials(app.app_id, signal)) {
-            await this.#appAuthentication.invalidate(credential, signal);
-        }
         return appResource(await this.readApp(app.app_id, signal));
     };
 
@@ -623,9 +620,6 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         );
         if (!deleted) {
             throw new PlatformControlPlaneError("app_not_found", "The App was not found", 404);
-        }
-        for (const credential of await this.#storage.listAppCredentials(app.app_id, signal)) {
-            await this.#appAuthentication.invalidate(credential, signal);
         }
         return { ...appResource(app), deletedAt: iso(now), lifecycle: "deleted", updatedAt: iso(now) };
     };
@@ -1051,7 +1045,6 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
                 409,
             );
         }
-        await this.#appAuthentication.invalidate(source, signal);
         return {
             ...created.resource(),
             overlapEndsAt: iso(overlapEndsAt),
@@ -1091,7 +1084,6 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         if (!revoked.credentialRevoked || !revoked.auditRecorded) {
             throw new PlatformControlPlaneError("app_credential_not_found", "The AppCredential was not found", 404);
         }
-        await this.#appAuthentication.invalidate(source, signal);
         return { credentialId: normalizedCredentialId, revokedAt: iso(now) };
     };
 
