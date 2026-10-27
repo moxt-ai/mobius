@@ -5,6 +5,7 @@ export const executionReceipt = sqliteTable("execution_receipt", {
     sessionId: text("session_id").notNull(),
     commandHash: text("command_hash").notNull(),
     attemptId: text("attempt_id").notNull(),
+    // Compatibility projection for older Runtimes; started and outcome own the facts.
     state: text("state").notNull(),
     started: integer("started", { mode: "boolean" }).notNull(),
     outcome: text("outcome"),
