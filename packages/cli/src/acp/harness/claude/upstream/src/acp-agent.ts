@@ -88,6 +88,7 @@ import {
     type SDKMessageOrigin,
     type SDKPartialAssistantMessage,
     type SDKUserMessage,
+    type SessionMessage,
     type Settings,
     type SlashCommand,
     type ThinkingConfig,
@@ -4291,10 +4292,15 @@ export class ClaudeAcpAgent {
                         // (including replays). The consolidated message carries both ids, so
                         // this is where we learn the uuid the SDK's rewind/resume APIs key on
                         // for the id we hand clients. Not read yet (see messageIdToUuid).
-                        const mappedMessageId = messageIdForGrouping(message);
-                        if (mappedMessageId && typeof message.uuid === "string" && message.uuid.length > 0) {
-                            session.messageIdToUuid.set(mappedMessageId, message.uuid);
+                        if (message.uuid === undefined) {
+                            throw RequestError.internalError({ code: "invalid_source_message" });
                         }
+                        const mappedMessageId = messageIdForGrouping({
+                            type: message.type,
+                            uuid: message.uuid,
+                            message: message.message,
+                        });
+                        session.messageIdToUuid.set(mappedMessageId, message.uuid);
 
                         // A replayed user message echoes a queued turn back in submission
                         // order. The first echo promotes that turn to active; if a different
@@ -4450,7 +4456,7 @@ export class ClaudeAcpAgent {
                                         parentToolUseId: message.parent_tool_use_id,
                                         cwd: session.cwd,
                                         taskState: session.taskState,
-                                        messageId: messageIdForGrouping(message),
+                                        messageId: mappedMessageId,
                                     },
                                 )) {
                                     await sendUpdate(notification);
@@ -4568,7 +4574,7 @@ export class ClaudeAcpAgent {
                                 cwd: session.cwd,
                                 taskState: session.taskState,
                                 emittedToolCalls: session.emittedToolCalls,
-                                messageId: messageIdForGrouping(message),
+                                messageId: mappedMessageId,
                                 toolUseResult: message.type === "user" ? message.tool_use_result : undefined,
                                 // On the wire since CLI 2.1.216 but not in SDKUserMessage's
                                 // type, hence the cast. Validated by parseToolResultMeta.
@@ -5170,7 +5176,7 @@ export class ClaudeAcpAgent {
             // yet (see Session.messageIdToUuid).
             const replayMessageId = messageIdForGrouping(message);
             const replaySession = this.sessions[sessionId];
-            if (replaySession && replayMessageId && message.uuid) {
+            if (replaySession) {
                 replaySession.messageIdToUuid.set(replayMessageId, message.uuid);
             }
 
@@ -7811,18 +7817,15 @@ export function promptToClaude(prompt: PromptRequest): SDKUserMessage {
  * are never streamed, so their (stable) SDK uuid is used instead. ACP message
  * ids are opaque strings, so no particular format is required.
  */
-export function messageIdForGrouping(message: { type?: string; uuid?: string | null; message?: unknown }): string {
+export function messageIdForGrouping(message: Readonly<Pick<SessionMessage, "type" | "uuid" | "message">>): string {
     if (message.type === "assistant") {
         const inner = message.message;
-        const apiId = inner && typeof inner === "object" && "id" in inner ? (inner as { id?: unknown }).id : undefined;
+        const apiId = inner !== null && typeof inner === "object" ? Reflect.get(inner, "id") : undefined;
         if (typeof apiId === "string" && apiId.length > 0) {
             return apiId;
         }
     }
-    if (typeof message.uuid === "string" && message.uuid.length > 0) {
-        return message.uuid;
-    }
-    throw RequestError.internalError({ code: "invalid_source_message" });
+    return message.uuid;
 }
 
 /** Built-in tools that drive the task list (headless/SDK sessions use these

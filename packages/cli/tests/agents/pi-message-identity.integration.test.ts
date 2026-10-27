@@ -1,9 +1,11 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { methods, PROTOCOL_VERSION, type SessionUpdate } from "@agentclientprotocol/sdk";
+import { methods, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import { expect, test } from "vitest";
+import { z } from "zod";
 import { createAcpClient } from "../../src/acp/connection/create-client.ts";
+import type { IdentifiedSessionUpdate } from "../../src/acp/connection/session-notification.ts";
 import { PiAcpEndpoint } from "../../src/acp/harness/pi/endpoint.ts";
 import { PiFixture } from "../support/agents/pi.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
@@ -11,14 +13,17 @@ import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 test("Given real Pi streams multiple messages, When the harness emits chunks, replays history and exports a session, Then each message has one messageId and no nativeMessageId", async () => {
     await using provider = await FakeOpenAiProvider.start("gpt-4.1", "PI_IDENTITY_REPLY");
     await using fixture = await PiFixture.create(provider);
+    await fixture.overrideSettings({ quietStartup: false });
     const cwd = await mkdtemp(join(tmpdir(), "mobius-pi-message-identity-"));
-    const updates: SessionUpdate[] = [];
+    const updates: IdentifiedSessionUpdate[] = [];
+    const observed: IdentifiedSessionUpdate[] = [];
     const endpoint = new PiAcpEndpoint({
         command: fixture.executable,
         environment: fixture.environment,
         cwd,
         onSessionUpdate: async ({ update }) => {
             updates.push(update);
+            observed.push(update);
         },
     });
     const connection = createAcpClient({
@@ -39,11 +44,13 @@ test("Given real Pi streams multiple messages, When the harness emits chunks, re
             { protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} },
             { cancellationSignal: signal },
         );
-        const { sessionId } = await connection.agent.request(
+        const { sessionId, _meta } = await connection.agent.request(
             methods.agent.session.new,
             { cwd, mcpServers: [] },
             { cancellationSignal: signal },
         );
+        const startupInfo = z.object({ piAcp: z.object({ startupInfo: z.string().nullable() }) }).parse(_meta)
+            .piAcp.startupInfo;
         const ids = new Set<string>();
         for (const prompt of [
             "Stream a short greeting, without tools",
@@ -60,7 +67,13 @@ test("Given real Pi streams multiple messages, When the harness emits chunks, re
             expect(
                 messages.flatMap((update) => (update.content.type === "text" ? [update.content.text] : [])).join(""),
             ).toContain(provider.response);
-            const messageIds = new Set(messages.map((update) => update.messageId));
+            // A scheduled harness-authored startup notice can arrive during the first prompt.
+            // Its declared text is a separate message, not part of the model response.
+            const modelMessages = messages.filter(
+                (update) => update.content.type !== "text" || update.content.text !== startupInfo,
+            );
+            expect(modelMessages.length).toBeGreaterThan(1);
+            const messageIds = new Set(modelMessages.map((update) => update.messageId));
             expect(messageIds.size).toBe(1);
             for (const update of messages) {
                 const id = update.messageId;
@@ -75,6 +88,15 @@ test("Given real Pi streams multiple messages, When the harness emits chunks, re
                     ids.add(id);
                 }
             }
+        }
+        const startupMessages = observed
+            .filter((update) => update.sessionUpdate === "agent_message_chunk")
+            .filter((update) => update.content.type === "text" && update.content.text === startupInfo);
+        expect(startupMessages).toHaveLength(1);
+        for (const update of startupMessages) {
+            expect(update.messageId).toEqual(expect.any(String));
+            expect(ids.has(update.messageId)).toBe(false);
+            expect(Object.hasOwn(update, "nativeMessageId")).toBe(false);
         }
         updates.length = 0;
         await connection.agent.request(
