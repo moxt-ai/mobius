@@ -1,6 +1,6 @@
 import type { ClientConnection, InitializeResponse } from "@agentclientprotocol/sdk";
 
-import type { InProcessAcpEndpointFactory } from "../../acp/agent/in-process-endpoint.ts";
+import type { AgentConnectionFactory } from "../../acp/connection/agent-connection.ts";
 import type { ResolvedExecutable } from "../../util/process/executable.ts";
 import type { LocalAgentDiscoveryContext } from "../discovery/agent-discovery-context.ts";
 import { normalizeVersionOutput } from "../discovery/version-output.ts";
@@ -14,6 +14,7 @@ const VERSION_PROBE_TIMEOUT_MILLISECONDS = 30_000;
 const ACP_PROBE_TIMEOUT_MILLISECONDS = 60_000;
 
 export abstract class LocalAgentSpecification {
+    abstract readonly createConnection: AgentConnectionFactory;
     abstract readonly adapterOverrideVariable: string;
     abstract readonly adapterVersion: string;
     abstract readonly agentExecutable: string;
@@ -50,31 +51,17 @@ export abstract class LocalAgentSpecification {
     ): Promise<void> => Promise.resolve();
 }
 
-export abstract class DirectAcpAgentSpecification extends LocalAgentSpecification {
-    readonly adapterOverrideVariable: string;
-    readonly agentOverrideVariable: string;
-    readonly launchArguments: readonly string[];
-
-    protected constructor(executableOverrideVariable: string, launchArguments: readonly string[]) {
-        super();
-        this.adapterOverrideVariable = executableOverrideVariable;
-        this.agentOverrideVariable = executableOverrideVariable;
-        this.launchArguments = Object.freeze([...launchArguments]);
-    }
-}
-
 /**
  * A vendor CLI that does not speak ACP, which Mobius drives through the vendor's own protocol from an
  * ACP Agent hosted inside the daemon. There is no adapter to install or version-probe: the same
  * executable is both the Agent and the thing Mobius spawns, so it shares the Agent's override
  * variable.
  *
- * `createEndpoint` is the whole vendor contract. Discovery, the readiness probe, and the session
+ * `createConnection` is the whole vendor contract. Discovery, the readiness probe, and the session
  * manager use it without naming an Agent, so adding an in-process Agent stays a registration rather
  * than an edit to generic code.
  */
 export abstract class InProcessAcpAgentSpecification extends LocalAgentSpecification {
-    abstract readonly createEndpoint: InProcessAcpEndpointFactory;
     readonly launchArguments: readonly string[] = Object.freeze([]);
     readonly adapterOverrideVariable: string;
     readonly adapterVersion = "in-process";

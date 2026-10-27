@@ -17,9 +17,10 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { listen, port, sendText } from "@moxt-ai/mobius-test/websocket";
 import { describe, expect, it } from "vitest";
-import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
+import { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { RuntimeLocalContext } from "../../src/runtime/config.ts";
 import { runRuntime } from "../../src/runtime/run.ts";
+import { ControlledAcpConnection } from "../support/agents/controlled-acp-connection.ts";
 import { createControlledRuntimeConfig as createRuntimeConfig } from "../support/controlled-runtime-config.ts";
 
 const websocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -142,11 +143,20 @@ describe("daemon narration delivery", () => {
 
         const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_beta/daemon`);
         relayUrl.searchParams.set("token", "e".repeat(43));
-        const agent = new LocalAgentDefinition(
+        const agent = new AcpAgentDefinition(
             "controlled-acp",
             "Controlled ACP",
             process.execPath,
-            [fakeAgentPath, "--agent-name", "Controlled ACP"],
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "controlled-acp",
+                        adapterPath: process.execPath,
+                        arguments: [fakeAgentPath, "--agent-name", "Controlled ACP"],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
             { MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory },
         );
         const config = createRuntimeConfig(

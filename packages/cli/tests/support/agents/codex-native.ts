@@ -2,9 +2,9 @@ import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NativeSessionCommand } from "@moxt-ai/mobius-sdk/protocol";
-import { InProcessAcpAgentDefinition } from "../../../src/acp/agent/agent-definition.ts";
+import { CodexAgentConnection } from "../../../src/acp/adapter/codex/agent-connection.ts";
+import { AcpAgentDefinition } from "../../../src/acp/agent/agent-definition.ts";
 import { AcpContentExternalizer } from "../../../src/acp/content/content-externalizer.ts";
-import { CodexAcpAgent } from "../../../src/acp/harness/codex/agent.ts";
 import type { AdapterResolver } from "../../../src/acp/native-history/preview-contract.ts";
 import { RuntimeAgentDependencies } from "../../../src/agent/runtime-agents.ts";
 import { createRuntimeConfig } from "../../../src/runtime/config.ts";
@@ -30,11 +30,11 @@ export async function codexFixture(
     await mkdir(workspace);
     const provider = await FakeOpenAiProvider.start("mobius-test-model", answer, providerOptions);
     const codex = await CodexFixture.create(provider);
-    const agent = new InProcessAcpAgentDefinition(
+    const agent = new AcpAgentDefinition(
         "codex",
         "Codex",
         codex.executable,
-        (options) => new CodexAcpAgent(options),
+        (options) => new CodexAgentConnection(options),
         codex.environment,
     );
     const store = new MemorySessionStore();

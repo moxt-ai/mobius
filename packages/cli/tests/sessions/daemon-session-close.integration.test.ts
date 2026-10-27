@@ -2,7 +2,6 @@ import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-
 import {
     type AgentApp,
     type AgentConnection,
@@ -26,8 +25,10 @@ import type {
     InProcessAcpEndpoint,
     InProcessAcpEndpointFactory,
 } from "../../src/acp/agent/in-process-endpoint.ts";
+import type { AgentConnectionFactory } from "../../src/acp/connection/agent-connection.ts";
 import { InProcessAcpAgentSpecification } from "../../src/agent/specification/agent-specification.ts";
 import { ControlledAcpAgentSpecification } from "../support/agents/controlled-acp.ts";
+import { ControlledEndpointConnection } from "../support/agents/controlled-endpoint-connection.ts";
 import { prepareNewRealSession, withControlledDaemon as withRealDaemon } from "../support/agents/real-daemon.ts";
 
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
@@ -72,6 +73,11 @@ class ControlledCloseEndpoint implements InProcessAcpEndpoint {
 }
 
 class ControlledCloseAgentSpecification extends InProcessAcpAgentSpecification {
+    readonly createConnection: AgentConnectionFactory = (options) =>
+        new ControlledEndpointConnection(
+            this.createEndpoint({ ...options, onSessionUpdate: options.client.onUpdate }),
+            options.client,
+        );
     readonly agentExecutable = "node";
     readonly id = "controlled-close";
     readonly label = "Controlled Close";

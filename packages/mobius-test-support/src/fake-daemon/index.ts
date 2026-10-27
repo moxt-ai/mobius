@@ -1,6 +1,9 @@
-import { InProcessAcpAgentDefinition } from "@moxt-ai/mobius/runtime";
+import { AcpAgentDefinition, EndpointAgentConnection } from "@moxt-ai/mobius/runtime";
 import { createFakeHarness, fakeHarnessCapabilities } from "./fake-harness/index.ts";
 import type { FakeAgentHarnessOptions } from "./fake-harness/model.ts";
+
+/** Connects controlled ACP endpoints through the shared vendor transport mechanics. */
+export class ControlledEndpointConnection extends EndpointAgentConnection {}
 
 /** Composes the production daemon's injected Agent type with a controlled ACP harness. */
 export function createFakeDaemon(options: FakeAgentHarnessOptions) {
@@ -8,11 +11,11 @@ export function createFakeDaemon(options: FakeAgentHarnessOptions) {
     return {
         agents: harness.agents.map(
             (agent) =>
-                new InProcessAcpAgentDefinition(
+                new AcpAgentDefinition(
                     agent.id,
                     agent.name,
                     process.execPath,
-                    agent.createEndpoint,
+                    (options) => new ControlledEndpointConnection(agent.createEndpoint(), options.client),
                     {},
                     "controlled-harness",
                     undefined,

@@ -19,10 +19,8 @@ import {
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { afterEach, expect, test, vi } from "vitest";
-import {
-    DirectAcpAgentSpecification,
-    InProcessAcpAgentSpecification,
-} from "../../src/agent/specification/agent-specification.ts";
+import { InProcessAcpAgentSpecification } from "../../src/agent/specification/agent-specification.ts";
+import { ControlledAcpSpecification } from "../support/agents/controlled-acp-specification.ts";
 import { ControlledSessionAgent } from "../support/agents/controlled-session-agent.ts";
 import { waitForAgentFile } from "../support/agents/observed-process.ts";
 import {
@@ -32,7 +30,7 @@ import {
 } from "../support/agents/real-daemon.ts";
 import { IdleTimeoutTimer } from "../support/idle-timeout-timer.ts";
 
-class IdleAgentSpecification extends DirectAcpAgentSpecification {
+class IdleAgentSpecification extends ControlledAcpSpecification {
     readonly adapterVersion = "1.0.0";
     readonly agentExecutable = "controlled-acp";
     readonly id = "claude";
@@ -403,7 +401,7 @@ class RetiringIdleAgentSpecification extends InProcessAcpAgentSpecification {
     override readonly minimumSupportedAgentVersion = process.versions.node;
     override readonly maximumTestedAgentVersion = process.versions.node;
     readonly sessions = new ControlledSessionAgent();
-    readonly createEndpoint = this.sessions.createEndpoint;
+    readonly createConnection = this.sessions.createConnection;
 
     constructor() {
         super("MOBIUS_TEST_RETIRING_IDLE_PATH");

@@ -372,7 +372,7 @@ function settingsRevision(
     return createHash("sha256")
         .update(
             JSON.stringify({
-                adapterVersion: agent.kind === "acp-adapter-process" ? agent.adapterVersion : agent.agentVersion,
+                adapterVersion: agent.adapterVersion,
                 agentId: agent.id,
                 agentVersion: agent.agentVersion,
                 modelEffort: revisionModelEffort,

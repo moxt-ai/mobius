@@ -12,6 +12,7 @@ export interface FakeProviderScenario {
  *  distinguishes requests by (the subagent's conversation carries only its own
  *  prompt). */
 export interface SubagentScript {
+    readonly runInBackground?: boolean;
     readonly dispatchDescription: string;
     readonly dispatchPrompt: string;
     readonly innerPrompt: string;

@@ -40,9 +40,10 @@ import {
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { expect, test } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
-import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
+import { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { RuntimeLocalContext } from "../../src/runtime/config.ts";
 import { runRuntime } from "../../src/runtime/run.ts";
+import { ControlledAcpConnection } from "../support/agents/controlled-acp-connection.ts";
 import { createControlledRuntimeConfig as createRuntimeConfig } from "../support/controlled-runtime-config.ts";
 
 class Messages {
@@ -102,11 +103,20 @@ test("Given an Agent was inspected transiently, When its first Turn materializes
     );
     relayUrl.searchParams.set("token", "r".repeat(43));
     const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
-    const agent = new LocalAgentDefinition(
+    const agent = new AcpAgentDefinition(
         "claude",
         "Claude Code",
         process.execPath,
-        [fakeAgentPath, "--agent-name", "Claude Code"],
+        (options) =>
+            new ControlledAcpConnection(
+                {
+                    id: "claude",
+                    adapterPath: process.execPath,
+                    arguments: [fakeAgentPath, "--agent-name", "Claude Code"],
+                    environment: options.environment,
+                },
+                options,
+            ),
         {
             MOBIUS_FAKE_ACP_PAUSE_AFTER_PERMISSION: "1",
             MOBIUS_FAKE_ACP_PAUSE_AFTER_ELICITATION: "1",
@@ -269,11 +279,21 @@ test("Given an Agent announced a tool call with its input, When it requests perm
     );
     relayUrl.searchParams.set("token", "r".repeat(43));
     const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
-    const agent = new LocalAgentDefinition("claude", "Claude Code", process.execPath, [
-        fakeAgentPath,
-        "--agent-name",
+    const agent = new AcpAgentDefinition(
+        "claude",
         "Claude Code",
-    ]);
+        process.execPath,
+        (options) =>
+            new ControlledAcpConnection(
+                {
+                    id: "claude",
+                    adapterPath: process.execPath,
+                    arguments: [fakeAgentPath, "--agent-name", "Claude Code"],
+                    environment: options.environment,
+                },
+                options,
+            ),
+    );
     const config = createRuntimeConfig(
         { channelId: "announced-permission", defaultWorkspace: workspace, relayUrl },
         [agent],
@@ -368,11 +388,21 @@ test("Given an Agent announced a tool call and then sent a rawInput null update,
     );
     relayUrl.searchParams.set("token", "r".repeat(43));
     const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
-    const agent = new LocalAgentDefinition("claude", "Claude Code", process.execPath, [
-        fakeAgentPath,
-        "--agent-name",
+    const agent = new AcpAgentDefinition(
+        "claude",
         "Claude Code",
-    ]);
+        process.execPath,
+        (options) =>
+            new ControlledAcpConnection(
+                {
+                    id: "claude",
+                    adapterPath: process.execPath,
+                    arguments: [fakeAgentPath, "--agent-name", "Claude Code"],
+                    environment: options.environment,
+                },
+                options,
+            ),
+    );
     const config = createRuntimeConfig(
         { channelId: "null-input-permission", defaultWorkspace: workspace, relayUrl },
         [agent],
@@ -467,11 +497,21 @@ test("Given an Agent's first recorded form of a tool call is an update, When it 
     );
     relayUrl.searchParams.set("token", "r".repeat(43));
     const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
-    const agent = new LocalAgentDefinition("claude", "Claude Code", process.execPath, [
-        fakeAgentPath,
-        "--agent-name",
+    const agent = new AcpAgentDefinition(
+        "claude",
         "Claude Code",
-    ]);
+        process.execPath,
+        (options) =>
+            new ControlledAcpConnection(
+                {
+                    id: "claude",
+                    adapterPath: process.execPath,
+                    arguments: [fakeAgentPath, "--agent-name", "Claude Code"],
+                    environment: options.environment,
+                },
+                options,
+            ),
+    );
     const config = createRuntimeConfig(
         { channelId: "orphan-update-permission", defaultWorkspace: workspace, relayUrl },
         [agent],
@@ -566,11 +606,21 @@ test("Given a real daemon prepared a Session, When Platform queries its metadata
     );
     relayUrl.searchParams.set("token", "r".repeat(43));
     const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
-    const agent = new LocalAgentDefinition("codex", "Codex", process.execPath, [
-        fakeAgentPath,
-        "--agent-name",
+    const agent = new AcpAgentDefinition(
+        "codex",
         "Codex",
-    ]);
+        process.execPath,
+        (options) =>
+            new ControlledAcpConnection(
+                {
+                    id: "codex",
+                    adapterPath: process.execPath,
+                    arguments: [fakeAgentPath, "--agent-name", "Codex"],
+                    environment: options.environment,
+                },
+                options,
+            ),
+    );
     const config = createRuntimeConfig(
         { channelId: "session-query", defaultWorkspace: workspace, relayUrl },
         [agent],
@@ -640,11 +690,20 @@ test("Given a real daemon persisted a Session, When Platform restores it by iden
     );
     relayUrl.searchParams.set("token", "r".repeat(43));
     const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
-    const agent = new LocalAgentDefinition(
+    const agent = new AcpAgentDefinition(
         "codex",
         "Codex",
         process.execPath,
-        [fakeAgentPath, "--agent-name", "Codex", "--replay-history-once"],
+        (options) =>
+            new ControlledAcpConnection(
+                {
+                    id: "codex",
+                    adapterPath: process.execPath,
+                    arguments: [fakeAgentPath, "--agent-name", "Codex", "--replay-history-once"],
+                    environment: options.environment,
+                },
+                options,
+            ),
         { MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(stateDirectory, "agent") },
     );
     const config = createRuntimeConfig(
@@ -759,7 +818,7 @@ test("Given a real daemon persisted a Session, When Platform restores it by iden
     }
 }, 30_000);
 
-test("Given a queued prompt with a different Agent identity, When an active-turn snapshot is taken for the running identity, Then the foreign queued prompt is not included", async () => {
+test("Given queued prompts from the running Agent identity and another one, When an active-turn snapshot is taken for the running identity, Then it reports its own queued prompt with that prompt's files and excludes the foreign one", async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-queued-identity-"));
     const workspace = join(stateDirectory, "workspace");
     await mkdir(workspace);
@@ -773,21 +832,39 @@ test("Given a queued prompt with a different Agent identity, When an active-turn
     );
     relayUrl.searchParams.set("token", "r".repeat(43));
     const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
-    const agent = new LocalAgentDefinition(
+    const agent = new AcpAgentDefinition(
         "claude",
         "Claude Code",
         process.execPath,
-        [fakeAgentPath, "--agent-name", "Claude Code"],
+        (options) =>
+            new ControlledAcpConnection(
+                {
+                    id: "claude",
+                    adapterPath: process.execPath,
+                    arguments: [fakeAgentPath, "--agent-name", "Claude Code"],
+                    environment: options.environment,
+                },
+                options,
+            ),
         {
             MOBIUS_FAKE_ACP_PAUSE_AFTER_PERMISSION: "1",
             MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(stateDirectory, "agent"),
         },
     );
-    const otherAgent = new LocalAgentDefinition(
+    const otherAgent = new AcpAgentDefinition(
         "codex",
         "Codex",
         process.execPath,
-        [fakeAgentPath, "--agent-name", "Codex"],
+        (options) =>
+            new ControlledAcpConnection(
+                {
+                    id: "codex",
+                    adapterPath: process.execPath,
+                    arguments: [fakeAgentPath, "--agent-name", "Codex"],
+                    environment: options.environment,
+                },
+                options,
+            ),
         {
             MOBIUS_FAKE_ACP_PAUSE_AFTER_PERMISSION: "1",
             MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(stateDirectory, "agent"),
@@ -839,6 +916,30 @@ test("Given a queued prompt with a different Agent identity, When an active-turn
                 targetCommandId: "running_turn",
             }),
         );
+        // The running identity queues a prompt with a file, which a client needs to restore it for editing.
+        const report = {
+            byteLength: 17,
+            contentKey: "a".repeat(64),
+            kind: "resource" as const,
+            mimeType: "text/plain",
+            name: "report.txt",
+            uri: "attachment:///report.txt",
+        };
+        socket.send(
+            encodeSessionPromptCommand({
+                additionalDirectoryIds: [],
+                agentId: "claude",
+                bindingId: config.bindingId,
+                commandId: "own_queued_turn",
+                directoryId: "default",
+                disposition: SessionPromptDisposition.Queue,
+                attachments: [report],
+                kind: "session.prompt",
+                prompt: "summarize the attached report",
+                sessionId,
+                targetCommandId: "running_turn",
+            }),
+        );
         // The snapshot for the Claude identity must not report the Codex queued prompt.
         socket.send(
             encodeNativeSessionRequest({
@@ -856,7 +957,13 @@ test("Given a queued prompt with a different Agent identity, When an active-turn
         const result = decodeNativeSessionResult(await messages.nextKind(NATIVE_SESSION_RESULT_KIND));
         expect(result.action).toBe("active-turn");
         if (result.action === "active-turn") {
-            expect(result.queued.every((queued) => queued.commandId !== "foreign_queued_turn")).toBe(true);
+            expect(result.queued).toEqual([
+                {
+                    commandId: "own_queued_turn",
+                    prompt: "summarize the attached report",
+                    attachments: [report],
+                },
+            ]);
             expect(result.turn?.commandId).toBe("running_turn");
         }
     } finally {

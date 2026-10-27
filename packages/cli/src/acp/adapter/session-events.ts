@@ -10,7 +10,7 @@ import {
 import { truncate } from "../../util/value-utils.ts";
 import { AcpExecutionError } from "../acp-error.ts";
 import type { AcpAgentDefinition } from "../agent/agent-definition.ts";
-import { AgentConnection } from "../connection/agent-connection.ts";
+import type { AgentConnection } from "../connection/agent-connection.ts";
 import { AgentUpdateStream } from "../connection/agent-update-stream.ts";
 import type { AcpClientHandler } from "../connection/create-client.ts";
 import type { AcpContentExternalizer } from "../content/content-externalizer.ts";
@@ -205,22 +205,24 @@ export class AdapterSessionConnection {
             onElicitation: options.interactions.onElicitation,
             onElicitationComplete: options.interactions.onElicitationComplete,
         };
-        this.#connection = new AgentConnection(options.agent, options.cwd, client, (active) => {
-            if (this.#lifetime.signal.aborted) {
-                return;
-            }
-            this.#backgroundActivity = active;
-            this.#onBackgroundActivity(active);
+        this.#connection = options.agent.createConnection({
+            cwd: options.cwd,
+            client,
+            onBackgroundActivity: (active) => {
+                if (this.#lifetime.signal.aborted) {
+                    return;
+                }
+                this.#backgroundActivity = active;
+                this.#onBackgroundActivity(active);
+            },
         });
     }
 
     get connection() {
         return this.#connection.connection;
     }
-    get inProcessAgent() {
-        return this.#connection.inProcessAgent;
-    }
-    readonly agentSettingsModelEffort = () => this.#connection.inProcessAgent?.agentSettingsModelEffort?.() ?? null;
+    readonly initialize = (signal: AbortSignal): Promise<void> => this.#connection.initialize(signal);
+    readonly agentSettingsModelEffort = () => this.#connection.agentSettingsModelEffort();
     readonly race = <T>(operation: Promise<T>, exitMessage: string, signal: AbortSignal): Promise<T> =>
         this.#connection.race(operation, exitMessage, signal);
 

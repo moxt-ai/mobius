@@ -25,7 +25,12 @@ export async function prepareVersionData(
     if (previous === null) {
         return;
     }
-    await copyVersionData(root, runtimeUpgradeVersionSchema.parse(previous), targetVersion, signal);
+    const leftBehind = await copyVersionData(root, runtimeUpgradeVersionSchema.parse(previous), targetVersion, signal);
+    for (const entry of leftBehind) {
+        process.stderr.write(
+            `Mobius did not carry ${entry} into version ${targetVersion}: an earlier Mobius ran with that installation as its state root.\n`,
+        );
+    }
 }
 
 export async function recordCurrentData(version: string, signal: AbortSignal): Promise<void> {

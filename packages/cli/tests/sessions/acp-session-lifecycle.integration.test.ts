@@ -9,8 +9,7 @@ import { fileURLToPath } from "node:url";
 import { SESSION_CLOSED_ERROR_CODE, type SessionStatusChangedEvent } from "@moxt-ai/mobius-sdk/protocol";
 import { describe, expect, it, vi } from "vitest";
 import { openPreviewEventCache } from "../../src/acp/adapter/preview-event-cache.ts";
-import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
-import { createWritableAcpStream } from "../../src/acp/connection/agent-connection.ts";
+import { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
 import { acpSessionStoreMigrations } from "../../src/generated/acp-session-store-migrations.ts";
 import { AccumulatingOperationMetrics } from "../../src/infra/operation-metrics.ts";
@@ -22,8 +21,11 @@ import { AcpSessionTable } from "../../src/storage/session/acp-session-table.ts"
 import { LiveEventPositionTable } from "../../src/storage/session/live-event-position-table.ts";
 import { SessionEventCacheTable } from "../../src/storage/session/session-event-cache-table.ts";
 import { openAcpSessionDatabase, openSessionEventCacheDatabase } from "../../src/storage/sqlite/local-databases.ts";
+import { readExecutableIdentity } from "../../src/util/process/local-executable.ts";
 import { systemTimer } from "../../src/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
+import { createWritableAcpStream } from "../support/agents/acp-stream.ts";
+import { ControlledAcpConnection } from "../support/agents/controlled-acp-connection.ts";
 import { SessionRuntimeFixture as SessionManager } from "../support/session-runtime.ts";
 import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
 import { RecordingObserver } from "./acp-feature-fixture.ts";
@@ -62,11 +64,20 @@ describe("ACP conversation sessions", () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         const store = new MemorySessionStore();
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-activity-time-"));
-        const agent = new LocalAgentDefinition(
+        const agent = new AcpAgentDefinition(
             "codex",
             "Codex",
             process.execPath,
-            [fakeAgentPath, "--agent-name", "Codex"],
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "codex",
+                        adapterPath: process.execPath,
+                        arguments: [fakeAgentPath, "--agent-name", "Codex"],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
             { MOBIUS_FAKE_ACP_STATE_DIRECTORY: temporaryDirectory },
         );
         const firstManager = new SessionManager({
@@ -601,11 +612,21 @@ describe("ACP conversation sessions", () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-session-store-"));
         const databasePath = join(temporaryDirectory, "sessions.sqlite");
         const sessionId = `chat_${"a".repeat(64)}`;
-        const agent = new LocalAgentDefinition("claude", "Claude Code", process.execPath, [
-            fakeAgentPath,
-            "--agent-name",
+        const agent = new AcpAgentDefinition(
+            "claude",
             "Claude Code",
-        ]);
+            process.execPath,
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "claude",
+                        adapterPath: process.execPath,
+                        arguments: [fakeAgentPath, "--agent-name", "Claude Code"],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
+        );
         const signal = new AbortController().signal;
         const firstStore = new SqliteSessionStore(new AcpSessionTable(openAcpSessionDatabase(databasePath)));
         const firstRuntime = new SessionManager({
@@ -723,18 +744,28 @@ child.once("exit", (code) => process.exit(code ?? 84));
                 timer: systemTimer,
                 maxProcesses: null,
             });
-            const adapterBaseline = new LocalAgentDefinition("pi", "Pi", adapterPath, []);
-            const agentBaseline = new LocalAgentDefinition("pi", "Pi", process.execPath, []);
-            const agent = new LocalAgentDefinition(
+            const adapterIdentity = readExecutableIdentity(adapterPath);
+            const agentIdentity = readExecutableIdentity(process.execPath);
+            const agent = new AcpAgentDefinition(
                 "pi",
                 "Pi",
-                adapterPath,
-                [],
+                process.execPath,
+                (options) =>
+                    new ControlledAcpConnection(
+                        {
+                            id: "pi",
+                            adapterPath: adapterIdentity.realPath,
+                            arguments: [],
+                            environment: options.environment,
+                        },
+                        options,
+                    ),
                 { MOBIUS_TEST_PI_PID_FILE: piPidPath },
-                "0.0.33",
                 "0.85.0",
-                adapterBaseline.adapterIdentity,
-                agentBaseline.agentIdentity,
+                agentIdentity,
+                undefined,
+                "0.0.33",
+                [agentIdentity, adapterIdentity],
             );
             const observer = new RecordingObserver();
             manager.setObserver(observer);
@@ -817,16 +848,36 @@ child.once("exit", (code) => process.exit(code ?? 84));
             timer: systemTimer,
             maxProcesses: null,
         });
-        const codex = new LocalAgentDefinition("codex", "Codex", process.execPath, [
-            fakeAgentPath,
-            "--agent-name",
+        const codex = new AcpAgentDefinition(
+            "codex",
             "Codex",
-        ]);
-        const claude = new LocalAgentDefinition("claude", "Claude Code", process.execPath, [
-            fakeAgentPath,
-            "--agent-name",
+            process.execPath,
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "codex",
+                        adapterPath: process.execPath,
+                        arguments: [fakeAgentPath, "--agent-name", "Codex"],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
+        );
+        const claude = new AcpAgentDefinition(
+            "claude",
             "Claude Code",
-        ]);
+            process.execPath,
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "claude",
+                        adapterPath: process.execPath,
+                        arguments: [fakeAgentPath, "--agent-name", "Claude Code"],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
+        );
 
         try {
             await manager.prepareSession({
@@ -898,11 +949,21 @@ child.once("exit", (code) => process.exit(code ?? 84));
         });
         const preparation = {
             additionalDirectories: [],
-            agent: new LocalAgentDefinition("codex", "Codex", process.execPath, [
-                fakeAgentPath,
-                "--agent-name",
+            agent: new AcpAgentDefinition(
+                "codex",
                 "Codex",
-            ]),
+                process.execPath,
+                (options) =>
+                    new ControlledAcpConnection(
+                        {
+                            id: "codex",
+                            adapterPath: process.execPath,
+                            arguments: [fakeAgentPath, "--agent-name", "Codex"],
+                            environment: options.environment,
+                        },
+                        options,
+                    ),
+            ),
             cwd: process.cwd(),
             sessionId: "closed-conversation",
             signal: new AbortController().signal,
@@ -948,11 +1009,21 @@ child.once("exit", (code) => process.exit(code ?? 84));
             timer: systemTimer,
             maxProcesses: null,
         });
-        const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
-            fakeAgentPath,
-            "--agent-name",
+        const agent = new AcpAgentDefinition(
+            "controlled-acp",
             "Controlled ACP",
-        ]);
+            process.execPath,
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "controlled-acp",
+                        adapterPath: process.execPath,
+                        arguments: [fakeAgentPath, "--agent-name", "Controlled ACP"],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
+        );
 
         try {
             await manager.runPrompt({
@@ -1027,11 +1098,20 @@ child.once("exit", (code) => process.exit(code ?? 84));
             timer: systemTimer,
             maxProcesses: 10,
         });
-        const agent = new LocalAgentDefinition(
+        const agent = new AcpAgentDefinition(
             "codex",
             "Codex",
             process.execPath,
-            [fakeAgentPath, "--agent-name", "Codex", "--exclusive-writer"],
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "codex",
+                        adapterPath: process.execPath,
+                        arguments: [fakeAgentPath, "--agent-name", "Codex", "--exclusive-writer"],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
             { MOBIUS_FAKE_ACP_STATE_DIRECTORY: temporaryDirectory },
         );
         const signal = new AbortController().signal;
@@ -1116,13 +1196,27 @@ child.once("exit", (code) => process.exit(code ?? 84));
             timer: systemTimer,
             maxProcesses: null,
         });
-        const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
-            fakeAgentPath,
-            "--agent-name",
+        const agent = new AcpAgentDefinition(
+            "controlled-acp",
             "Controlled ACP",
-            "--announce-config-while-creating",
-            "--announce-wrong-session-while-creating",
-        ]);
+            process.execPath,
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "controlled-acp",
+                        adapterPath: process.execPath,
+                        arguments: [
+                            fakeAgentPath,
+                            "--agent-name",
+                            "Controlled ACP",
+                            "--announce-config-while-creating",
+                            "--announce-wrong-session-while-creating",
+                        ],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
+        );
 
         try {
             await expect(
@@ -1159,10 +1253,21 @@ child.once("exit", (code) => process.exit(code ?? 84));
             timer: systemTimer,
             maxProcesses: null,
         });
-        const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
-            fakeAgentPath,
-            "--authentication-required",
-        ]);
+        const agent = new AcpAgentDefinition(
+            "controlled-acp",
+            "Controlled ACP",
+            process.execPath,
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "controlled-acp",
+                        adapterPath: process.execPath,
+                        arguments: [fakeAgentPath, "--authentication-required"],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
+        );
 
         try {
             await expect(
@@ -1199,11 +1304,21 @@ child.once("exit", (code) => process.exit(code ?? 84));
             timer: systemTimer,
             maxProcesses: null,
         });
-        const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
-            fakeAgentPath,
-            "--agent-name",
+        const agent = new AcpAgentDefinition(
+            "controlled-acp",
             "Controlled ACP",
-        ]);
+            process.execPath,
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "controlled-acp",
+                        adapterPath: process.execPath,
+                        arguments: [fakeAgentPath, "--agent-name", "Controlled ACP"],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
+        );
 
         try {
             await expect(
@@ -1247,11 +1362,21 @@ child.once("exit", (code) => process.exit(code ?? 84));
             timer: systemTimer,
             maxProcesses: null,
         });
-        const agent = new LocalAgentDefinition("codex", "Codex", process.execPath, [
-            fakeAgentPath,
-            "--agent-name",
+        const agent = new AcpAgentDefinition(
+            "codex",
             "Codex",
-        ]);
+            process.execPath,
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "codex",
+                        adapterPath: process.execPath,
+                        arguments: [fakeAgentPath, "--agent-name", "Codex"],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
+        );
 
         try {
             await expect(
@@ -1324,10 +1449,25 @@ agent.once("exit", (code) => process.exit(code ?? 84));
             { mode: 0o700 },
         );
         await chmod(adapterPath, 0o700);
-        const agent = new LocalAgentDefinition("codex", "Codex", process.execPath, [adapterPath], {
-            MOBIUS_FAKE_ACP_STATE_DIRECTORY: temporaryDirectory,
-            MOBIUS_TEST_CHILD_PID_FILE: childPidPath,
-        });
+        const agent = new AcpAgentDefinition(
+            "codex",
+            "Codex",
+            process.execPath,
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "codex",
+                        adapterPath: process.execPath,
+                        arguments: [adapterPath],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
+            {
+                MOBIUS_FAKE_ACP_STATE_DIRECTORY: temporaryDirectory,
+                MOBIUS_TEST_CHILD_PID_FILE: childPidPath,
+            },
+        );
         let childPid = 0;
 
         try {
@@ -1401,8 +1541,36 @@ agent.once("exit", (code) => process.exit(code ?? 84));
             timer: systemTimer,
             maxProcesses: null,
         });
-        const codex = new LocalAgentDefinition("codex", "Codex", process.execPath, [fakeAgentPath]);
-        const claude = new LocalAgentDefinition("claude", "Claude Code", process.execPath, [fakeAgentPath]);
+        const codex = new AcpAgentDefinition(
+            "codex",
+            "Codex",
+            process.execPath,
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "codex",
+                        adapterPath: process.execPath,
+                        arguments: [fakeAgentPath],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
+        );
+        const claude = new AcpAgentDefinition(
+            "claude",
+            "Claude Code",
+            process.execPath,
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "claude",
+                        adapterPath: process.execPath,
+                        arguments: [fakeAgentPath],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
+        );
 
         try {
             await manager.runPrompt({
@@ -1454,10 +1622,21 @@ agent.once("exit", (code) => process.exit(code ?? 84));
             timer: systemTimer,
             maxProcesses: null,
         });
-        const agent = new LocalAgentDefinition("codex", "Codex", process.execPath, [
-            fakeAgentPath,
-            "--exit-after-session-creation",
-        ]);
+        const agent = new AcpAgentDefinition(
+            "codex",
+            "Codex",
+            process.execPath,
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "codex",
+                        adapterPath: process.execPath,
+                        arguments: [fakeAgentPath, "--exit-after-session-creation"],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
+        );
         const signal = new AbortController().signal;
 
         await manager.prepareSession({
