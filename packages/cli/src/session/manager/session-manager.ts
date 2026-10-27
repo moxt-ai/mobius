@@ -945,27 +945,15 @@ export class SessionManager {
                 throw new AcpExecutionError("The native session is being managed", {}, "session_busy");
             }
             const linked = this.#store.findNative(options.agent.id, origin.nativeSessionId);
-            if (
-                linked.some(
-                    (entry) =>
-                        this.#executions.command(entry.sessionId) !== undefined ||
-                        this.#executionProcesses.pending(entry.sessionId) !== undefined,
-                )
-            ) {
-                throw new AcpExecutionError(
-                    "Wait for the native session's running operation to finish",
-                    {},
-                    "session_busy",
-                );
-            }
             const existing = linked[0];
             if (origin.kind === "import" && existing !== undefined) {
                 return await this.#executionProcesses.use(existing.sessionId, async () => {
-                    // Importing a Session the Runtime already tracks opens it again, even when it was closed.
+                    // Importing a Session the Runtime already tracks opens it again, even when it was closed. A running
+                    // turn does not prevent that: another device joins the same Session and sees the turn's progress.
                     this.#closedSessions.delete(existing.sessionId);
                     const target = await this.#nativeTargetOptions(options, existing.sessionId, resolveAgent);
                     const runtime = await this.ensureSession(target);
-                    if (this.#executions.command(existing.sessionId) !== undefined || this.#nativeOperations.has(key)) {
+                    if (this.#nativeOperations.has(key)) {
                         throw new AcpExecutionError(
                             "Wait for the native session's running operation to finish",
                             {},
@@ -983,6 +971,20 @@ export class SessionManager {
                         this.#processes.notifyChanged();
                     }
                 });
+            }
+            // A fork or a first import reads the native session, which a running turn may still be writing.
+            if (
+                linked.some(
+                    (entry) =>
+                        this.#executions.command(entry.sessionId) !== undefined ||
+                        this.#executionProcesses.pending(entry.sessionId) !== undefined,
+                )
+            ) {
+                throw new AcpExecutionError(
+                    "Wait for the native session's running operation to finish",
+                    {},
+                    "session_busy",
+                );
             }
             const target = await this.#nativeTargetOptions(options, options.sessionId, resolveAgent);
             if (
