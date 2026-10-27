@@ -8,7 +8,12 @@ const wranglerConfigPath = fileURLToPath(new URL("./wrangler.jsonc", import.meta
 export default defineConfig(
     async (): Promise<ViteUserConfig> => ({
         root: packageDirectory,
-        plugins: [cloudflareTest({ wrangler: { configPath: wranglerConfigPath } })],
+        plugins: [
+            cloudflareTest({
+                wrangler: { configPath: wranglerConfigPath },
+                miniflare: { bindings: { MIGRATION_TOKEN: "test-message-id-migration-token-0000000000" } },
+            }),
+        ],
         test: {
             include: ["test/**/*.integration.test.ts"],
             testTimeout: 15_000,

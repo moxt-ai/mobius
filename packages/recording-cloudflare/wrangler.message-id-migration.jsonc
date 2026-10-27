@@ -1,0 +1,48 @@
+{
+    "$schema": "../../node_modules/wrangler/config-schema.json",
+    "name": "mobius-recording-message-id-migration-local",
+    "main": "src/message-id-migration-worker.ts",
+    "compatibility_date": "2026-09-03",
+    "compatibility_flags": ["enable_request_signal"],
+    "workers_dev": true,
+    "preview_urls": false,
+    "observability": { "enabled": true },
+    "secrets": { "required": ["MIGRATION_TOKEN"] },
+    "durable_objects": {
+        "bindings": [
+            {
+                "name": "SESSION_RECORDING",
+                "class_name": "SessionRecordingDurableObject",
+                "script_name": "mobius-recording-local"
+            }
+        ]
+    },
+    "env": {
+        "staging": {
+            "name": "mobius-recording-message-id-migration-staging",
+            "secrets": { "required": ["MIGRATION_TOKEN"] },
+            "durable_objects": {
+                "bindings": [
+                    {
+                        "name": "SESSION_RECORDING",
+                        "class_name": "SessionRecordingDurableObject",
+                        "script_name": "mobius-recording-staging"
+                    }
+                ]
+            }
+        },
+        "production": {
+            "name": "mobius-recording-message-id-migration-production",
+            "secrets": { "required": ["MIGRATION_TOKEN"] },
+            "durable_objects": {
+                "bindings": [
+                    {
+                        "name": "SESSION_RECORDING",
+                        "class_name": "SessionRecordingDurableObject",
+                        "script_name": "mobius-recording-production"
+                    }
+                ]
+            }
+        }
+    }
+}
