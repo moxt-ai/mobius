@@ -3,19 +3,33 @@ import { monitorEventLoopDelay } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 
 const [state, channelId, relay, control, sourceRoot] = process.argv.slice(2);
-const { LocalAgentDefinition } = await import(
+const { AcpAgentDefinition } = await import(
     pathToFileURL(join(sourceRoot, "packages/cli/src/acp/agent/agent-definition.ts"))
 );
 const { createRuntimeConfig, MobiusRuntimeEngine, RuntimeLocalContext } = await import(
     pathToFileURL(join(sourceRoot, "packages/cli/src/runtime/engine.ts"))
 );
-const agent = new LocalAgentDefinition(
+const { ControlledAcpConnection } = await import(
+    pathToFileURL(join(sourceRoot, "packages/cli/tests/support/agents/controlled-acp-connection.ts"))
+);
+const agent = new AcpAgentDefinition(
     "pressure-agent",
     "Pressure Agent",
     process.execPath,
-    [new URL("./output-peer.mjs", import.meta.url).pathname],
+    (options) =>
+        new ControlledAcpConnection(
+            {
+                id: "pressure-agent",
+                adapterPath: process.execPath,
+                arguments: [new URL("./output-peer.mjs", import.meta.url).pathname],
+                environment: options.environment,
+            },
+            options,
+        ),
     { MOBIUS_TEST_OUTPUT_CONTROL_PATH: control },
     "1.0.0",
+    undefined,
+    undefined,
     "1.0.0",
 );
 const config = createRuntimeConfig(

@@ -73,9 +73,12 @@ export function createCatalogAgentResolver(
 }
 
 async function unchangedIdentity(agent: CatalogAgentDefinition, signal: AbortSignal): Promise<boolean> {
-    if (!(await revalidateExecutable(agent.agentIdentity))) {
-        return false;
+    for (const identity of agent.runtimeExecutables) {
+        signal.throwIfAborted();
+        if (!(await revalidateExecutable(identity))) {
+            return false;
+        }
     }
     signal.throwIfAborted();
-    return agent.kind !== "acp-adapter-process" || (await revalidateExecutable(agent.adapterIdentity));
+    return true;
 }

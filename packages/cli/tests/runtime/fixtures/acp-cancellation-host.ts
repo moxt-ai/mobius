@@ -12,11 +12,12 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { WebSocketServer } from "ws";
 import {
-    InProcessAcpAgentDefinition,
+    AcpAgentDefinition,
     type InProcessAcpEndpoint,
     MobiusRuntimeEngine,
     RuntimeLocalContext,
 } from "../../../src/runtime.ts";
+import { ControlledEndpointConnection } from "../../support/agents/controlled-endpoint-connection.ts";
 import { createControlledRuntimeConfig as createRuntimeConfig } from "../../support/controlled-runtime-config.ts";
 
 // External Agent failure modes: cancellation before its initialization promise is
@@ -112,7 +113,14 @@ const config = createRuntimeConfig(
         defaultWorkspace: join(directory, "workspace"),
         relayUrl: new URL(`ws://127.0.0.1:${address.port}/daemon?token=${"r".repeat(43)}`),
     },
-    [new InProcessAcpAgentDefinition("cancellation-peer", "Cancellation peer", process.execPath, endpoint)],
+    [
+        new AcpAgentDefinition(
+            "cancellation-peer",
+            "Cancellation peer",
+            process.execPath,
+            (options) => new ControlledEndpointConnection(endpoint(), options.client),
+        ),
+    ],
     new RuntimeLocalContext(directory, { PATH: process.env["PATH"] }),
 );
 try {

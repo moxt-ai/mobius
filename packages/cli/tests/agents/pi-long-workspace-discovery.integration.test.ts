@@ -50,8 +50,6 @@ test("Given Pi's default workspace creates an oversized native session path, Whe
             join(legacyDirectory, "terminal-session.jsonl"),
             sessionHeader("terminal-pi-session", workspace),
         );
-        const endpoint = inventory.available[0]?.agent;
-        expect(endpoint?.kind).toBe("in-process-acp");
         const { listPiSessions } = await import("../../src/acp/harness/pi/upstream/acp/pi-sessions.ts");
         const discoveryEnvironment = { ...agent.environment, MOBIUS_PI_SESSION_DIR: sessionsRoot };
         expect(listPiSessions(discoveryEnvironment)).toContainEqual(

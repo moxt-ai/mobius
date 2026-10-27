@@ -21,17 +21,17 @@ import { listen, port, sendText } from "@moxt-ai/mobius-test/websocket";
 import { expect, test } from "vitest";
 import { discoverLocalAgentInventory } from "../../src/agent/discovery/discover-local-agents.ts";
 import type { LocalAgentSpecification } from "../../src/agent/specification/agent-specification.ts";
-import { DirectAcpAgentSpecification } from "../../src/agent/specification/agent-specification.ts";
 import { publishAgentCatalog } from "../../src/runtime/catalog/publish-agent-catalog.ts";
 import { createCatalogAgentResolver } from "../../src/runtime/catalog/resolve-catalog-agent.ts";
 import { RuntimeLocalContext } from "../../src/runtime/config.ts";
 import { runRuntime } from "../../src/runtime/run.ts";
+import { ControlledAcpSpecification } from "../support/agents/controlled-acp-specification.ts";
 import { createControlledRuntimeConfig as createRuntimeConfig } from "../support/controlled-runtime-config.ts";
 
 const websocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
 
-class RefreshableAgentSpecification extends DirectAcpAgentSpecification {
+class RefreshableAgentSpecification extends ControlledAcpSpecification {
     readonly adapterVersion = "1.0.0";
     readonly agentExecutable = "controlled-acp";
     readonly id = "controlled-acp";
@@ -46,7 +46,7 @@ class RefreshableAgentSpecification extends DirectAcpAgentSpecification {
 
 // A second ready Agent whose executable never changes, so a refresh of the upgraded Agent must
 // keep exactly one catalog entry for it.
-class UnchangedPeerAgentSpecification extends DirectAcpAgentSpecification {
+class UnchangedPeerAgentSpecification extends ControlledAcpSpecification {
     readonly adapterVersion = "1.0.0";
     readonly agentExecutable = "controlled-acp-peer";
     readonly id = "controlled-acp-peer";
