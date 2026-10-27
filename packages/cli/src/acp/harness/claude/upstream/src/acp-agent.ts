@@ -817,24 +817,6 @@ export type Session = {
      *  human/autonomous results may share it. Retain the producing turn so a
      *  late boundary cannot settle or fail a newly activated turn. */
     idleBoundary: { readonly kind: "unaccounted" } | { readonly kind: "accounted"; readonly turn: Turn | null };
-    /** Maps the ACP `messageId` we expose to clients (see `messageIdForGrouping`)
-     *  to the SDK message uuid that the Agent SDK's rewind/resume APIs key on
-     *  (`Query.rewindFiles` takes a user-message uuid; `resumeSessionAt` takes an
-     *  `SDKAssistantMessage.uuid`). For assistant turns the two differ — the ACP
-     *  id is the Anthropic API message id (`msg_…`), available at `message_start`
-     *  so streamed chunks can carry it, while the uuid only arrives on the
-     *  consolidated message — so a client can only ask to rewind/fork by the id it
-     *  was given, and we need this table to translate it back.
-     *
-     *  Populated as a byproduct of the message loop (the consolidated message
-     *  carries both ids) and of `replaySessionHistory` on load, so no extra
-     *  `getSessionMessages` read is needed at rewind time. Last-write-wins
-     *  naturally yields the turn-boundary uuid when one `msg_…` spans several
-     *  content-block messages.
-     *
-     *  NOT READ YET — recorded now so the mapping exists if/when we wire up
-     *  fork/rewind. */
-    messageIdToUuid: Map<string, string>;
 };
 
 /** Result-message origin kinds that mark an AUTONOMOUS cycle — work the
@@ -4288,10 +4270,6 @@ export class ClaudeAcpAgent {
                         ) {
                             break;
                         }
-                        // Record the ACP messageId -> SDK uuid mapping for this message
-                        // (including replays). The consolidated message carries both ids, so
-                        // this is where we learn the uuid the SDK's rewind/resume APIs key on
-                        // for the id we hand clients. Not read yet (see messageIdToUuid).
                         if (message.uuid === undefined) {
                             throw RequestError.internalError({ code: "invalid_source_message" });
                         }
@@ -4300,7 +4278,6 @@ export class ClaudeAcpAgent {
                             uuid: message.uuid,
                             message: message.message,
                         });
-                        session.messageIdToUuid.set(mappedMessageId, message.uuid);
 
                         // A replayed user message echoes a queued turn back in submission
                         // order. The first echo promotes that turn to active; if a different
@@ -5170,21 +5147,11 @@ export class ClaudeAcpAgent {
                     continue;
                 }
             }
-            // Backfill the ACP messageId -> SDK uuid mapping for messages we didn't
-            // observe live (resumed/loaded sessions), so rewind/resume can translate
-            // a client-supplied id without an extra getSessionMessages read. Not read
-            // yet (see Session.messageIdToUuid).
             const replayMessageId = messageIdForGrouping(message);
-            const replaySession = this.sessions[sessionId];
-            if (replaySession) {
-                replaySession.messageIdToUuid.set(replayMessageId, message.uuid);
-            }
 
             // Subagent frames replay the same way the live loop now drops them:
             // without the nested-transcript opt-in the subagent is visible only
             // through its Agent/Task call, so none of its own messages replay.
-            // The messageIdToUuid backfill above still records them — it keys on
-            // ids the SDK may yet reference, and an unused entry is inert.
             const parentToolUseId = parentToolUseIdOf(message);
             if (parentToolUseId !== null && !forwardSubagentText) {
                 continue;
@@ -6557,7 +6524,6 @@ export class ClaudeAcpAgent {
             liveBackgroundTasks: new Map(),
             emittedAssistantText: false,
             idleBoundary: { kind: "unaccounted" },
-            messageIdToUuid: new Map(),
         };
 
         return {
