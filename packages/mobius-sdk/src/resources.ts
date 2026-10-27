@@ -115,6 +115,10 @@ function validateTimestamp(value: string, field: string): string {
     return value;
 }
 
+/**
+ * @deprecated Legacy Session payload accepted for compatibility only. Platform Recording
+ * is controlled by app/project policy; these fields do not enforce retention or limits.
+ */
 export class MobiusRecordingPolicy {
     readonly contentLimitBytes: number;
     readonly hotEventLimit: number;
@@ -206,7 +210,8 @@ export interface CreateMobiusSessionRequest {
     readonly agentId: string;
     readonly bindingId: string;
     readonly directoryId: string;
-    readonly policy: MobiusRecordingPolicy;
+    /** @deprecated Ignored by Platform; configure Recording through app/project policy. */
+    readonly policy?: MobiusRecordingPolicy;
     readonly runtimeId: string;
     readonly sessionId: string;
     readonly title: string;
