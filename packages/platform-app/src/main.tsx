@@ -13,9 +13,9 @@ import {
 import { StrictMode, useCallback } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
+import { PlatformApp } from "./application.tsx";
 import { OrganizationInviteDialog } from "./components/organization-invite-dialog.tsx";
 import { JoinOrganizationView } from "./views/join-organization-view.tsx";
-import { PlatformApp } from "./views/platform-app-view.tsx";
 
 const publishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
 const platformEndpoint = import.meta.env.VITE_MOBIUS_PLATFORM_ENDPOINT ?? window.location.origin;

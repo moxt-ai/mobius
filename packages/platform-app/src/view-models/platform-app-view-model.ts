@@ -1,12 +1,29 @@
 import type {
     MobiusPlatformApp,
+    MobiusPlatformAppCredential,
     MobiusPlatformAppCredentialMetadata,
     MobiusPlatformAppSessionStatusWebhook,
+    MobiusPlatformDeveloperClient,
     MobiusPlatformProject,
     MobiusPlatformRecordingPolicy,
 } from "@moxt-ai/mobius-sdk/platform";
-import { useState } from "react";
-import { createStore, useStore } from "zustand";
+import { createStore } from "zustand/vanilla";
+
+const APP_PERMISSIONS = Object.freeze([
+    "artifact:read",
+    "artifact:write",
+    "interaction:respond",
+    "project:event:read",
+    "project:read",
+    "runtime:pair",
+    "runtime:read",
+    "runtime:revoke",
+    "session:delete",
+    "session:read",
+    "session:write",
+]);
+
+type CredentialClient = Pick<MobiusPlatformDeveloperClient, "issueAppCredential" | "listAppCredentials">;
 
 type RenameState = { readonly kind: "idle" } | { readonly kind: "app"; readonly name: string };
 
@@ -37,6 +54,7 @@ export type WebhookState =
     | { readonly kind: "ready"; readonly webhook: MobiusPlatformAppSessionStatusWebhook };
 
 interface PlatformStore {
+    readonly issueCredential: (client: CredentialClient, signal?: AbortSignal) => Promise<void>;
     readonly appRecording: RecordingState;
     readonly appTab: "api-keys" | "recording";
     readonly apps: readonly MobiusPlatformApp[];
@@ -72,69 +90,106 @@ interface PlatformStore {
     readonly failWebhook: (appId: string) => void;
 }
 
-export function usePlatformStore() {
-    const [store] = useState(() =>
-        createStore<PlatformStore>()((set) => ({
-            appRecording: { kind: "loading" },
-            apps: [],
-            appTab: "api-keys",
-            busy: "",
-            credentials: { kind: "loading" },
-            error: "",
-            notice: null,
-            projects: { kind: "loading" },
-            rename: { kind: "idle" },
-            secret: null,
-            secretVisible: false,
-            selectedAppId: "",
-            webhook: { kind: "loading" },
-            setApps: (apps) => set({ apps }),
-            setAppRecording: (appId, policy) =>
-                set((state) => (state.selectedAppId === appId ? { appRecording: { kind: "ready", policy } } : state)),
-            failAppRecording: (appId) =>
-                set((state) => (state.selectedAppId === appId ? { appRecording: { kind: "failed" } } : state)),
-            setAppTab: (appTab) => set({ appTab }),
-            setBusy: (busy) => set({ busy }),
-            setCredentials: (appId, items) =>
-                set((state) => (state.selectedAppId === appId ? { credentials: { kind: "ready", items } } : state)),
-            failCredentials: (appId) =>
-                set((state) => (state.selectedAppId === appId ? { credentials: { kind: "failed" } } : state)),
-            setError: (error) => set({ error }),
-            setNotice: (message) => set({ notice: message.length > 0 ? { message } : null }),
-            setProjects: (appId, items) =>
-                set((state) => (state.selectedAppId === appId ? { projects: { kind: "ready", items } } : state)),
-            failProjects: (appId) =>
-                set((state) => (state.selectedAppId === appId ? { projects: { kind: "failed" } } : state)),
-            setRename: (rename) => set({ rename }),
-            setSecret: (secret) => set({ secret }),
-            setSecretVisible: (secretVisible) => set({ secretVisible }),
-            setSelectedAppId: (value) =>
-                set((state) => {
-                    const selectedAppId = typeof value === "function" ? value(state.selectedAppId) : value;
-                    return selectedAppId === state.selectedAppId
-                        ? state
-                        : {
-                              selectedAppId,
-                              appRecording: { kind: "loading" },
-                              appTab: "api-keys",
-                              credentials: { kind: "loading" },
-                              projects: { kind: "loading" },
-                              webhook: { kind: "loading" },
-                              rename: { kind: "idle" },
-                              error: "",
-                          };
-                }),
-            setWebhook: (appId, webhook) =>
-                set((state) =>
-                    state.selectedAppId === appId
-                        ? { webhook: { kind: "ready", webhook } satisfies WebhookState }
-                        : state,
-                ),
-            failWebhook: (appId) =>
-                set((state) =>
-                    state.selectedAppId === appId ? { webhook: { kind: "failed" } satisfies WebhookState } : state,
-                ),
-        })),
-    );
-    return useStore(store);
+export function createPlatformStore() {
+    return createStore<PlatformStore>()((set, get) => ({
+        issueCredential: async (client, signal = new AbortController().signal) => {
+            const { apps, busy, selectedAppId } = get();
+            if (busy.length > 0 || !apps.some((app) => app.appId === selectedAppId)) {
+                return;
+            }
+            set({ busy: "issue-key", error: "", notice: null });
+            try {
+                let created: MobiusPlatformAppCredential;
+                try {
+                    created = await client.issueAppCredential(
+                        selectedAppId,
+                        { permissions: APP_PERMISSIONS, projectIds: [] },
+                        AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
+                    );
+                } catch (cause) {
+                    signal.throwIfAborted();
+                    set({ error: cause instanceof Error ? cause.message : "The key could not be created." });
+                    return;
+                }
+                // This one-time result is already committed; a later read cannot undo or recover it.
+                set({
+                    secret: { kind: "app-credential", appId: created.appId, secret: created.credential },
+                    secretVisible: false,
+                });
+                try {
+                    const credentials = await client.listAppCredentials(
+                        selectedAppId,
+                        AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
+                    );
+                    get().setCredentials(selectedAppId, credentials);
+                } catch {
+                    signal.throwIfAborted();
+                    set((state) =>
+                        state.selectedAppId === selectedAppId
+                            ? { error: "The key was created, but the key list could not be refreshed." }
+                            : state,
+                    );
+                }
+            } finally {
+                set({ busy: "" });
+            }
+        },
+        appRecording: { kind: "loading" },
+        apps: [],
+        appTab: "api-keys",
+        busy: "",
+        credentials: { kind: "loading" },
+        error: "",
+        notice: null,
+        projects: { kind: "loading" },
+        rename: { kind: "idle" },
+        secret: null,
+        secretVisible: false,
+        selectedAppId: "",
+        webhook: { kind: "loading" },
+        setApps: (apps) => set({ apps }),
+        setAppRecording: (appId, policy) =>
+            set((state) => (state.selectedAppId === appId ? { appRecording: { kind: "ready", policy } } : state)),
+        failAppRecording: (appId) =>
+            set((state) => (state.selectedAppId === appId ? { appRecording: { kind: "failed" } } : state)),
+        setAppTab: (appTab) => set({ appTab }),
+        setBusy: (busy) => set({ busy }),
+        setCredentials: (appId, items) =>
+            set((state) => (state.selectedAppId === appId ? { credentials: { kind: "ready", items } } : state)),
+        failCredentials: (appId) =>
+            set((state) => (state.selectedAppId === appId ? { credentials: { kind: "failed" } } : state)),
+        setError: (error) => set({ error }),
+        setNotice: (message) => set({ notice: message.length > 0 ? { message } : null }),
+        setProjects: (appId, items) =>
+            set((state) => (state.selectedAppId === appId ? { projects: { kind: "ready", items } } : state)),
+        failProjects: (appId) =>
+            set((state) => (state.selectedAppId === appId ? { projects: { kind: "failed" } } : state)),
+        setRename: (rename) => set({ rename }),
+        setSecret: (secret) => set({ secret }),
+        setSecretVisible: (secretVisible) => set({ secretVisible }),
+        setSelectedAppId: (value) =>
+            set((state) => {
+                const selectedAppId = typeof value === "function" ? value(state.selectedAppId) : value;
+                return selectedAppId === state.selectedAppId
+                    ? state
+                    : {
+                          selectedAppId,
+                          appRecording: { kind: "loading" },
+                          appTab: "api-keys",
+                          credentials: { kind: "loading" },
+                          projects: { kind: "loading" },
+                          webhook: { kind: "loading" },
+                          rename: { kind: "idle" },
+                          error: "",
+                      };
+            }),
+        setWebhook: (appId, webhook) =>
+            set((state) =>
+                state.selectedAppId === appId ? { webhook: { kind: "ready", webhook } satisfies WebhookState } : state,
+            ),
+        failWebhook: (appId) =>
+            set((state) =>
+                state.selectedAppId === appId ? { webhook: { kind: "failed" } satisfies WebhookState } : state,
+            ),
+    }));
 }
