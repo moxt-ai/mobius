@@ -82,7 +82,7 @@ function sessionConfigurationPriority(
     return 3;
 }
 
-export function assertAppliedSessionConfiguration(
+function assertAppliedSessionConfiguration(
     options: readonly SessionConfigOption[],
     selections: readonly SessionConfigurationSelection[],
 ): void {

@@ -10,11 +10,7 @@ import type { SessionManager } from "../manager/session-manager.ts";
 import type { ExecutionReceipts } from "../turn/execution-receipts.ts";
 import { resolveSessionDirectories } from "../workspace/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
-import {
-    agentForSessionConfiguration,
-    applyCompleteSessionConfiguration,
-    assertAppliedSessionConfiguration,
-} from "./apply-session-configuration.ts";
+import { agentForSessionConfiguration, applyCompleteSessionConfiguration } from "./apply-session-configuration.ts";
 import { type DownloadArtifact, resolvePromptArtifacts } from "./prompt-artifacts.ts";
 import type { PromptLifecycle } from "./prompt-lifecycle.ts";
 
@@ -97,28 +93,27 @@ export async function executePrompt({
             recovery,
         };
         let prepared = await sessions.prepareExecutionSession(preparation);
-        if (command.sessionConfigurations !== undefined) {
-            if (availability.disposition === SessionPromptDisposition.Steer) {
-                // Steering cannot reconfigure a running Agent, so the Turn snapshot
-                // only has to agree with the settings this live Session exposes. The
-                // snapshot comes from Agent settings discovery, so it may name options
-                // that the running Session does not expose at all.
-                assertAppliedSessionConfiguration(prepared.configOptions, sessionConfigurations ?? []);
-            } else {
-                await applyCompleteSessionConfiguration(
-                    sessions,
-                    prepared.configOptions,
-                    sessionConfigurations ?? [],
-                    executionAgent,
-                    adapter,
-                    resolved.cwd,
-                    resolved.additionalDirectories,
-                    command.commandId,
-                    command.sessionId,
-                    signal,
-                );
-                prepared = await sessions.prepareExecutionSession(preparation);
-            }
+        // Steering cannot reconfigure a running Agent, so a steered Turn's snapshot is never
+        // applied and must not gate the prompt. A member who changes a setting while a Turn runs
+        // sends their follow-up with the newer snapshot, and steering folds that follow-up into
+        // the Turn still running on the older settings; rejecting it loses the member's message.
+        if (
+            command.sessionConfigurations !== undefined &&
+            availability.disposition !== SessionPromptDisposition.Steer
+        ) {
+            await applyCompleteSessionConfiguration(
+                sessions,
+                prepared.configOptions,
+                sessionConfigurations ?? [],
+                executionAgent,
+                adapter,
+                resolved.cwd,
+                resolved.additionalDirectories,
+                command.commandId,
+                command.sessionId,
+                signal,
+            );
+            prepared = await sessions.prepareExecutionSession(preparation);
         }
         operations.transitionExecution(command.commandId, "running");
         if (availability.disposition === SessionPromptDisposition.Steer) {
