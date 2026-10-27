@@ -16,7 +16,14 @@ export class ControlledCodexFixture implements AsyncDisposable {
         });
     }
 
-    static async create(options: { readonly holdTurn?: boolean } = {}): Promise<ControlledCodexFixture> {
+    static async create(
+        options: {
+            readonly holdTurn?: boolean;
+            readonly consumeSteeringAfterFirstTurn?: boolean;
+            readonly endFirstTurnOnSteering?: "completed" | "failed";
+            readonly latePreviousUser?: boolean;
+        } = {},
+    ): Promise<ControlledCodexFixture> {
         const directory = await mkdtemp(join(tmpdir(), "mobius-controlled-codex-"));
         const executable = join(directory, "codex.mjs");
         await writeFile(
@@ -48,6 +55,12 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         const turn = { id: "controlled-turn-" + ++turnNumber, status: "inProgress" };
         active = { threadId, turn };
         send({ id: request.id, result: { turn } });
+        send({ method: "turn/started", params: { threadId, turn } });
+        if (${options.latePreviousUser === true} && turnNumber > 1) {
+            send({ method: "item/started", params: { threadId, turnId: "controlled-turn-1",
+                item: { type: "userMessage", id: "late-cancelled-user", content: [{ type: "text", text: "Late old input" }] },
+            } });
+        }
         send({ method: "item/started", params: { threadId, turnId: turn.id,
             item: { type: "userMessage", id: "controlled-user-" + turnNumber, content: request.params.input },
         } });
@@ -61,6 +74,14 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     }
     if (request.method === "turn/steer") {
         send({ id: request.id, result: { turnId: active.turn.id } });
+        if (${JSON.stringify(options.endFirstTurnOnSteering ?? null)} !== null && turnNumber === 1) {
+            send({ method: "turn/completed", params: { threadId: active.threadId, turn: { ...active.turn, status: ${JSON.stringify(options.endFirstTurnOnSteering ?? "completed")} } } });
+        }
+        if (${options.consumeSteeringAfterFirstTurn === true} && turnNumber > 1) {
+            send({ method: "item/started", params: { threadId: active.threadId, turnId: active.turn.id,
+                item: { type: "userMessage", id: "controlled-steering-user-" + turnNumber, content: request.params.input },
+            } });
+        }
         return;
     }
     if (request.method === "turn/interrupt") {
