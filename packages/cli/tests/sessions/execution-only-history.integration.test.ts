@@ -112,7 +112,7 @@ test("execution-only prompt propagation keeps the run path out of eager recovery
     };
 
     await executePrompt({
-        operations: { transitionExecution: () => undefined },
+        operations: { markExecutionStarted: () => undefined },
         eventProjection: {
             completed: async () => undefined,
             failed: async () => undefined,

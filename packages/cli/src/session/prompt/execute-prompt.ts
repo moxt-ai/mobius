@@ -120,7 +120,7 @@ export async function executePrompt({
                 prepared = await sessions.prepareExecutionSession(preparation);
             }
         }
-        operations.transitionExecution(command.commandId, "running");
+        operations.markExecutionStarted(command.commandId);
         if (availability.disposition === SessionPromptDisposition.Steer) {
             if (!recordSteeringPrompt()) {
                 throw new AcpExecutionError(
@@ -177,11 +177,9 @@ export async function executePrompt({
         }
 
         await eventProjection.completed(command.sessionId, command.commandId, stopReason);
-        operations.transitionExecution(command.commandId, stopReason === "cancelled" ? "cancelled" : "succeeded");
     } catch (error) {
         if (signal.aborted && cancellationRequested()) {
             await eventProjection.completed(command.sessionId, command.commandId, "cancelled");
-            operations.transitionExecution(command.commandId, "cancelled");
             return;
         }
         const code = operationErrorCode(error);
@@ -191,7 +189,6 @@ export async function executePrompt({
                 ? "The local agent could not complete the request"
                 : operationErrorMessage(error);
         await eventProjection.failed(command.sessionId, command.commandId, failureCode, failureMessage);
-        operations.transitionExecution(command.commandId, "failed");
         // The daemon runs detached with its stdio ignored, so a failure recorded
         // only here would leave no trace for a later bug report. The local log is
         // the durable copy; the in-band failure event above stays the live signal.

@@ -20,6 +20,7 @@ type Settlement = { readonly kind: "completed" } | { readonly kind: "failed"; re
 async function observe(peer: RealDaemonPeer, commandIds: readonly string[]) {
     const pending = new Set(commandIds);
     const outcomes = new Map<string, Settlement>();
+    const completedCommandIds: string[] = [];
     let output = "";
     while (pending.size > 0) {
         const message = await peer.nextMessage();
@@ -41,8 +42,11 @@ async function observe(peer: RealDaemonPeer, commandIds: readonly string[]) {
                     continue;
                 }
                 const payload = event.payload;
-                if (payload.kind === "prompt.completed" && pending.delete(payload.commandId)) {
-                    outcomes.set(payload.commandId, { kind: "completed" });
+                if (payload.kind === "prompt.completed") {
+                    completedCommandIds.push(payload.commandId);
+                    if (pending.delete(payload.commandId)) {
+                        outcomes.set(payload.commandId, { kind: "completed" });
+                    }
                 } else if (
                     (payload.kind === "prompt.failed" || payload.kind === "prompt.failed-before-start") &&
                     pending.delete(payload.commandId)
@@ -52,7 +56,7 @@ async function observe(peer: RealDaemonPeer, commandIds: readonly string[]) {
             }
         }
     }
-    return { outcomes, output };
+    return { outcomes, output, completedCommandIds };
 }
 
 test("Given an executed command, When its receipt is evicted and the daemon restarts, Then retries never execute it again", async () => {
@@ -86,9 +90,9 @@ test("Given an executed command, When its receipt is evicted and the daemon rest
                 send(original);
                 const control = { ...original, commandId: randomUUID(), prompt: "Before eviction" };
                 send(control);
-                expect((await observe(peer, [control.commandId])).output).toContain(
-                    "Controlled ACP turn 2: Before eviction",
-                );
+                const beforeEviction = await observe(peer, [control.commandId]);
+                expect(beforeEviction.output).toContain("Controlled ACP turn 2: Before eviction");
+                expect(beforeEviction.completedCommandIds).toEqual([control.commandId]);
 
                 const rejected = Array.from({ length: 1_026 }, () => randomUUID());
                 for (const commandId of rejected) {
