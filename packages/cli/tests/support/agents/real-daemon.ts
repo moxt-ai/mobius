@@ -14,6 +14,7 @@ import {
     RUNTIME_HEARTBEAT_ACK_MESSAGE,
     RUNTIME_HEARTBEAT_MESSAGE,
     RUNTIME_LIVENESS_READY_KIND,
+    RUNTIME_WORKSPACE_BINDING_ID,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { type WebSocket, WebSocketServer } from "ws";
@@ -127,17 +128,6 @@ export async function withRealDaemon(
     signal.addEventListener("abort", stopWaiting, { once: true });
     try {
         await mkdir(workspace, { recursive: true });
-        const inventory = await discoverLocalAgentInventory({
-            dataDirectory: directory,
-            defaultWorkspace: workspace,
-            environment: { ...process.env, ...environment, MOBIUS_STATE_DIRECTORY: directory },
-            signal,
-            specifications: [specification],
-        });
-        const agent = inventory.readyAgents().find((entry) => entry.id === specification.id);
-        if (agent === undefined) {
-            throw new Error(`Real ${specification.label} unavailable: ${JSON.stringify(inventory.unavailable)}`);
-        }
         await listen(relay);
         let connected = Promise.withResolvers<void>();
         const abortConnection = (): void => connected.reject(signal.reason);
@@ -165,11 +155,31 @@ export async function withRealDaemon(
         });
         const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/real-agent/daemon`);
         relayUrl.searchParams.set("token", "r".repeat(43));
-        const config = createRuntimeConfig(
-            { channelId: "real-agent", defaultWorkspace: workspace, relayUrl },
-            new RuntimeAgentDependencies([agent], adapters),
-            new RuntimeLocalContext(directory, { ...process.env, ...environment }),
-        );
+        // Managed launches perform discovery in the production CLI; only an embedded
+        // runtime needs a catalog prepared by the fixture.
+        const config =
+            launch === "embedded"
+                ? await (async () => {
+                      const inventory = await discoverLocalAgentInventory({
+                          dataDirectory: directory,
+                          defaultWorkspace: workspace,
+                          environment: cliEnvironment,
+                          signal,
+                          specifications: [specification],
+                      });
+                      const agent = inventory.readyAgents().find((entry) => entry.id === specification.id);
+                      if (agent === undefined) {
+                          throw new Error(
+                              `Real ${specification.label} unavailable: ${JSON.stringify(inventory.unavailable)}`,
+                          );
+                      }
+                      return createRuntimeConfig(
+                          { channelId: "real-agent", defaultWorkspace: workspace, relayUrl },
+                          new RuntimeAgentDependencies([agent], adapters),
+                          new RuntimeLocalContext(directory, { ...process.env, ...environment }),
+                      );
+                  })()
+                : null;
         if (launch === "managed") {
             await installWorkspaceDaemonRelease(directory);
             const installation = await openMobiusCliInstallation(signal, cliEnvironment);
@@ -187,7 +197,7 @@ export async function withRealDaemon(
             );
         }
         const start = async (): Promise<void> => {
-            if (launch === "managed") {
+            if (config === null) {
                 await cli(["start"]);
             } else {
                 execution = new AbortController();
@@ -247,7 +257,7 @@ export async function withRealDaemon(
                 await start();
                 await connected.promise;
             },
-            bindingId: config.bindingId,
+            bindingId: RUNTIME_WORKSPACE_BINDING_ID,
             readDiagnostics: async () => await readFile(join(directory, "logs", "daemon.log"), "utf8"),
             signal,
             sessionId,
