@@ -2237,8 +2237,7 @@ async function connectRuntimeDaemon(slug: string, options: { readonly anchorCloc
                             content: "Direct execution",
                             directoryId: "root",
                             idempotencyKey,
-                            images: [],
-                            resources: [],
+                            attachments: [],
                         }),
                     },
                 ),
@@ -2252,8 +2251,7 @@ async function connectRuntimeDaemon(slug: string, options: { readonly anchorCloc
                         content: `Run ${idempotencyKey}`,
                         directoryId: "root",
                         idempotencyKey,
-                        images: [],
-                        resources: [],
+                        attachments: [],
                     }),
                     headers: credentialHeaders(text(sessionAccess, "credential")),
                     method: "POST",
@@ -2900,7 +2898,7 @@ describe.sequential("Platform Turn submission", () => {
                 ),
                 201,
             );
-            const submitTurn = (idempotencyKey: string, content: string, images: readonly unknown[]) =>
+            const submitTurn = (idempotencyKey: string, content: string, attachments: readonly unknown[]) =>
                 worker.fetch(
                     new Request(
                         `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns`,
@@ -2911,8 +2909,7 @@ describe.sequential("Platform Turn submission", () => {
                                 content,
                                 directoryId: "root",
                                 idempotencyKey,
-                                images,
-                                resources: [],
+                                attachments,
                             }),
                             headers: credentialHeaders(text(sessionAccess, "credential")),
                             method: "POST",
@@ -3028,8 +3025,7 @@ describe.sequential("Platform Turn submission", () => {
                         directoryId: "root",
                         disposition: "queue",
                         idempotencyKey: "queued-follow-up",
-                        images: [],
-                        resources: [],
+                        attachments: [],
                         targetCommandId: "long-first-turn",
                     }),
                     headers: credentialHeaders(text(sessionAccess, "credential")),
@@ -3072,8 +3068,7 @@ describe.sequential("Platform Turn submission", () => {
                         directoryId: "root",
                         disposition: "queue",
                         idempotencyKey: "cross-session-queued",
-                        images: [],
-                        resources: [],
+                        attachments: [],
                         targetCommandId: "long-first-turn",
                     }),
                     headers: credentialHeaders(text(sessionAccess, "credential")),
@@ -3125,7 +3120,7 @@ describe.sequential("Platform Turn submission", () => {
             });
 
             expect(
-                await responseJson(await submitTurn("invalid-image-turn", "describe this", [{ type: "image" }]), 400),
+                await responseJson(await submitTurn("invalid-image-turn", "describe this", [{ kind: "image" }]), 400),
             ).toMatchObject({ error: { code: "invalid_request" } });
             expect(await responseJson(await submitTurn("oversized-turn", "x".repeat(100_001), []), 400)).toMatchObject({
                 error: { code: "invalid_request" },
@@ -3143,8 +3138,7 @@ describe.sequential("Platform Turn submission", () => {
                                     directoryId: "root",
                                     disposition: "reject",
                                     idempotencyKey: "invalid-runtime-turn",
-                                    images: [{ type: "image" }],
-                                    resources: [],
+                                    attachments: [{ kind: "image" }],
                                     sessionConfigurations: [],
                                     targetCommandId: "",
                                 }),
