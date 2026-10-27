@@ -976,10 +976,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
                 lastUsedAt: iso(row.last_used_at),
                 overlapEndsAt: typeof row.overlap_ends_at === "number" ? iso(row.overlap_ends_at) : "",
                 permissions: permissionValues(permissions(row.permissions_json)),
-                projectIds:
-                    row.all_projects === 1
-                        ? []
-                        : await this.#storage.listCredentialProjectIds(row.credential_id, signal),
+                projectIds: await this.#storage.credentialProjectIds(row, signal),
                 publicCredentialId: row.public_credential_id,
                 replacedByCredentialId: row.replaced_by_credential_id ?? "",
                 revision: row.revision,
@@ -1011,6 +1008,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         const rotated = await this.#storage.rotateAppCredential(
             created.storageRecord(source.all_projects === 1),
             source.credential_id,
+            await this.#storage.credentialProjectIds(source, signal),
             overlapEndsAt,
             this.auditRecord(
                 app.tenant_id,
@@ -1177,7 +1175,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
             );
         }
         if (row.all_projects !== 1) {
-            const hasProject = await this.#storage.credentialHasProject(row.credential_id, projectId, signal);
+            const hasProject = (await this.#storage.credentialProjectIds(row, signal)).includes(projectId);
             if (!hasProject) {
                 throw new ProjectAuthenticationError(
                     "project_access_denied",
@@ -1213,13 +1211,8 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         if (row.all_projects === 1) {
             return Object.freeze(projects);
         }
-        const scoped: string[] = [];
-        for (const projectId of projects) {
-            if (await this.#storage.credentialHasProject(row.credential_id, projectId, signal)) {
-                scoped.push(projectId);
-            }
-        }
-        return Object.freeze(scoped);
+        const scope = new Set(await this.#storage.credentialProjectIds(row, signal));
+        return Object.freeze(projects.filter((projectId) => scope.has(projectId)));
     };
 
     private readonly createCredential = async (

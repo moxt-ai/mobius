@@ -154,6 +154,18 @@ async function application() {
             ),
         listApps: async () => await dashboard(`platform/tenants/${tenant.tenantId}/apps`),
         listProjects: async () => await dashboard(`apps/${appId}/projects`),
+        createProject: async (idempotencyKey: string) =>
+            v.parse(
+                v.object({ projectId: v.string() }),
+                await responseJson(
+                    await dashboard(`apps/${appId}/projects`, {
+                        displayName: idempotencyKey,
+                        idempotencyKey,
+                        locationHint: "apac",
+                    }),
+                    201,
+                ),
+            ),
         issueScopedCredential: async () =>
             v.parse(
                 credentialResource,
@@ -193,6 +205,10 @@ async function application() {
             await env.APP_CREDENTIAL_CACHE.put(`app-public:v1:${keys.public_credential_id}`, legacyCacheRecord);
         },
     };
+}
+
+function expectedScope(credentialId: string, projectIds: readonly string[]) {
+    return expect.objectContaining({ allProjects: false, credentialId, projectIds });
 }
 
 async function expectRejected(response: Response, code: string, status = 401): Promise<void> {
@@ -249,6 +265,47 @@ it("Given an active AppCredential, When two rotations compete, Then only the ret
         { action: "app-credential.rotated", subjectId: source.credentialId },
     ]);
     expect((await app.authenticateApp(replacement.credential)).status).toBe(201);
+});
+
+it("Given a scoped AppCredential whose scope only Project storage holds, When it is used, listed and rotated, Then it keeps exactly that scope, D1 answers for it, and Project storage keeps what a rolled-back Worker reads", async () => {
+    const app = await application();
+    await app.createProject("credential-authority-other-project");
+    const legacy = await app.issueScopedCredential();
+    // Workers before D1 owned AppCredential scope wrote it only to Project storage.
+    await env.PLATFORM_DIRECTORY_DATABASE.prepare("DELETE FROM platform_app_credential_scopes WHERE credential_id = ?")
+        .bind(legacy.credentialId)
+        .run();
+
+    expect((await app.authenticateApp(legacy.credential)).status).toBe(201);
+    expect(await app.listCredentials()).toMatchObject({
+        credentials: expect.arrayContaining([expectedScope(legacy.credentialId, [app.projectId])]),
+    });
+    const replacement = v.parse(
+        credentialResource,
+        await responseJson(await app.requestRotation(legacy.credentialId), 201),
+    );
+    expect((await app.authenticateApp(replacement.credential)).status).toBe(201);
+    expect(await app.listCredentials()).toMatchObject({
+        credentials: expect.arrayContaining([expectedScope(replacement.credentialId, [app.projectId])]),
+    });
+
+    // D1 alone answers for credentials issued now; the Project storage copy only serves a rollback.
+    const current = await app.issueScopedCredential();
+    await runInDurableObject(env.PROJECT_RELAY.getByName(app.projectId), (_instance, state) =>
+        state.storage.sql.exec(
+            "DELETE FROM platform_app_credential_projects WHERE credential_id = ?",
+            current.credentialId,
+        ),
+    );
+    expect((await app.authenticateApp(current.credential)).status).toBe(201);
+
+    const rollbackScope = await runInDurableObject(env.PROJECT_RELAY.getByName(app.projectId), (_instance, state) =>
+        state.storage.sql
+            .exec("SELECT credential_id FROM platform_app_credential_projects ORDER BY credential_id")
+            .toArray()
+            .map((row) => row["credential_id"]),
+    );
+    expect(rollbackScope).toEqual([legacy.credentialId, replacement.credentialId].sort());
 });
 
 it("Given an active AppCredential, When rotation storage fails, Then the credential and audit changes roll back and a retry succeeds", async () => {
