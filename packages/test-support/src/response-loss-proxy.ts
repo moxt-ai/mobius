@@ -4,6 +4,7 @@ import { listen, port } from "./websocket.ts";
 
 /** A real network proxy: forwards requests unchanged, then loses one turn admission response. */
 export async function createResponseLossProxy(upstream: string) {
+    let forkResponse: ((status: number) => void) | null = null;
     const server = createServer((incoming, outgoing) => {
         const forwarded = request(
             new URL(incoming.url ?? "/", upstream),
@@ -12,6 +13,20 @@ export async function createResponseLossProxy(upstream: string) {
                 headers: { ...incoming.headers, host: new URL(upstream).host },
             },
             (response) => {
+                if (
+                    forkResponse !== null &&
+                    incoming.method === "POST" &&
+                    incoming.url?.includes("/native-session-forks/")
+                ) {
+                    const lost = forkResponse;
+                    forkResponse = null;
+                    response.resume();
+                    response.on("end", () => {
+                        lost(response.statusCode ?? 502);
+                        outgoing.destroy();
+                    });
+                    return;
+                }
                 outgoing.writeHead(response.statusCode ?? 502, response.headers);
                 response.pipe(outgoing);
             },
@@ -124,6 +139,10 @@ export async function createResponseLossProxy(upstream: string) {
     return {
         origin: `http://127.0.0.1:${port(server)}`,
         submissions,
+        interruptNextFork: () =>
+            new Promise<number>((resolve) => {
+                forkResponse = resolve;
+            }),
         interruptNextTurn: (delivery: "before-acceptance" | "after-acceptance") => {
             armed = delivery;
         },

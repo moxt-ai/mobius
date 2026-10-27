@@ -1,3 +1,4 @@
+import type { ForkMobiusNativeSessionRequest } from "@moxt-ai/mobius-sdk";
 import type {
     AgentSettingsDiscoverCommand,
     ContentAvailableEvent,
@@ -93,7 +94,26 @@ export class PairingService {
                 new VerifiedChannelAccess(channel.channelId, channel.runtimeId, channel.projectId, []),
                 signal,
             ),
+            this.#runtimeOperations !== undefined,
         );
+    };
+
+    readonly forkNativeSession = async (
+        projectId: string,
+        runtimeId: string,
+        token: string,
+        operationId: string,
+        input: ForkMobiusNativeSessionRequest,
+        signal: AbortSignal,
+    ) => {
+        const access = await this.#pairings.authorizeProject(projectId, token, ProjectPermission.SessionWrite, signal);
+        if (this.#runtimeOperations === undefined) {
+            throw new PairingDirectoryError(
+                "native_fork_recovery_unsupported",
+                "This Relay does not support Fork recovery",
+            );
+        }
+        return await this.#runtimeOperations.forkNativeSession(access.scope, runtimeId, operationId, input, signal);
     };
 
     readonly requestControl = async (

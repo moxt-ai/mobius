@@ -9,6 +9,7 @@ export class RuntimeStatus {
 }
 
 export class RuntimeDescriptor {
+    readonly nativeForkRecovery: boolean;
     readonly agents: ChannelDescriptor["agents"];
     readonly channelId: string;
     readonly machineName: string;
@@ -17,7 +18,8 @@ export class RuntimeDescriptor {
     readonly runtimeId: string;
     readonly workspaceName: string;
 
-    constructor(channel: ChannelDescriptor, status: RuntimeStatus) {
+    constructor(channel: ChannelDescriptor, status: RuntimeStatus, nativeForkRecovery = false) {
+        this.nativeForkRecovery = nativeForkRecovery;
         this.agents = channel.agents;
         this.channelId = channel.channelId;
         this.machineName = channel.machineName;
