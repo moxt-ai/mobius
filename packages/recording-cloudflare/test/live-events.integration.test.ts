@@ -1,3 +1,4 @@
+import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
     decodeSessionRecordingDirectory,
@@ -5,7 +6,9 @@ import {
     decodeSessionRecordingHistoryPage,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createRecordingWorker } from "../src/worker.ts";
+import { recordingDirectoryDurableObjectMigrations } from "../src/generated/recording-directory-do-migrations.ts";
+import { applyDurableObjectMigrations } from "../src/storage/durable-object-migrations.ts";
+import { createRecordingWorker, RecordingDirectoryDurableObject } from "../src/worker.ts";
 
 let testNumber = 0;
 let projectId = "";
@@ -263,6 +266,93 @@ it("Given a prompt that later completes, When the Runtime loads its recorded dir
     expect(decodeSessionRecordingDirectory(await recovered.text())).toMatchObject({
         sessions: [{ sessionId: event.sessionId, status: "idle" }],
     });
+});
+it("Given a recording with no completion event, When a caller reads V2 summaries, Then metadata is available without claiming a current execution status", async () => {
+    const context = { agentId: "codex", directoryId: "default", additionalDirectoryIds: [] };
+    const requested = {
+        ...event,
+        eventId: "requested-without-completion",
+        type: "lifecycle-metadata",
+        payload: {
+            kind: "prompt.requested",
+            commandId: "command",
+            content: [{ type: "text", text: "Recorded prompt" }],
+            context,
+        },
+    };
+    expect(
+        (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: [requested] }), env)).status,
+    ).toBe(201);
+    const path = `https://recording.internal/v2/projects/${projectId}/runtimes/runtime-live/sessions`;
+    const summary = {
+        ...context,
+        runtimeId: "runtime-live",
+        sessionId: event.sessionId,
+        title: "Recorded prompt",
+        updatedAt: event.recordedAt,
+    };
+    for (const query of ["", `?sessionId=${event.sessionId}`]) {
+        const response = await worker.fetch(new Request(`${path}${query}`), env);
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ sessions: [summary] });
+    }
+    const single = await worker.fetch(new Request(`${path}/${event.sessionId}`), env);
+    expect(single.status).toBe(200);
+    expect(await single.json()).toEqual(summary);
+
+    // Old callers can still decode the historical observation, without a second stored status.
+    const legacy = await worker.fetch(new Request(path.replace("/v2/", "/v1/")), env);
+    expect(legacy.status).toBe(200);
+    expect(decodeSessionRecordingDirectory(await legacy.text())).toEqual({
+        sessions: [{ ...summary, status: "running" }],
+    });
+});
+it("Given a directory with a stale persisted status, When it upgrades, Then V2 preserves its metadata without inventing a missing lifecycle outcome", async () => {
+    const stub = env.RECORDING_DIRECTORY.getByName(JSON.stringify([projectId, "runtime-live"]));
+    const response = await runInDurableObject(stub, async (_instance, state) => {
+        // Restore the deployed pre-removal schema with its original, immutable migrations.
+        state.storage.sql.exec("DROP TABLE recording_session_summaries");
+        state.storage.sql.exec("DELETE FROM recording_schema_migrations");
+        applyDurableObjectMigrations(state.storage, recordingDirectoryDurableObjectMigrations.slice(0, 3));
+        state.storage.sql.exec(
+            `INSERT INTO recording_session_summaries
+             (session_id, runtime_id, agent_id, directory_id, additional_directory_ids_json, title, prompted, status, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            event.sessionId,
+            "runtime-live",
+            "codex",
+            "default",
+            "[]",
+            "Existing recording",
+            1,
+            "running",
+            Date.parse(event.recordedAt),
+        );
+        const upgraded = new RecordingDirectoryDurableObject(state, env);
+        return await upgraded.fetch(new Request("https://directory.internal/sessions?runtimeId=runtime-live"));
+    });
+    expect(response.status).toBe(200);
+    const expected = {
+        sessions: [
+            {
+                sessionId: event.sessionId,
+                runtimeId: "runtime-live",
+                agentId: "codex",
+                directoryId: "default",
+                additionalDirectoryIds: [],
+                title: "Existing recording",
+                updatedAt: event.recordedAt,
+            },
+        ],
+    };
+    expect(await response.json()).toEqual(expected);
+    const path = `https://recording.internal/v2/projects/${projectId}/runtimes/runtime-live/sessions`;
+    const summaries = await worker.fetch(new Request(path), env);
+    expect(summaries.status).toBe(200);
+    expect(await summaries.json()).toEqual(expected);
+    const legacy = await worker.fetch(new Request(path.replace("/v2/", "/v1/")), env);
+    expect(legacy.status).toBe(503);
+    expect(await legacy.json()).toMatchObject({ error: { code: "recording_status_unavailable" } });
 });
 it("Given recorded prompt lifecycles, When a caller reads selected Session status, Then one and many status reads return summaries without loading the full Runtime directory", async () => {
     const context = { agentId: "codex", directoryId: "default", additionalDirectoryIds: [] };

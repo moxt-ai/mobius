@@ -243,6 +243,34 @@ export class SessionRecordingStorage {
     /** Yields the batches appended after `ordinal`, in append order and bounded decoding chunks. */
     readonly batchesAfter = (ordinal: number): Generator<RecordedBatch> => this.#batchesFrom(ordinal + 1);
 
+    /** Reads the tail first so legacy status reads stop at the newest recorded lifecycle event. */
+    readonly batchesNewestFirst = (): Generator<RecordedBatch> => this.#batchesNewestFirst();
+
+    *#batchesNewestFirst(): Generator<RecordedBatch> {
+        let beforeOrdinal = this.latestOrdinal() + 1;
+        for (;;) {
+            const rows = this.#database
+                .select({
+                    envelopeJson: recordedSessionEvent.envelopeJson,
+                    ordinal: recordedSessionEvent.ordinal,
+                    sessionGenerationId: recordedSessionEvent.sessionGenerationId,
+                })
+                .from(recordedSessionEvent)
+                .where(lt(recordedSessionEvent.ordinal, beforeOrdinal))
+                .orderBy(desc(recordedSessionEvent.ordinal))
+                .limit(batchReadChunk)
+                .all();
+            for (const row of rows) {
+                yield this.#batch(row);
+            }
+            const last = rows.at(-1);
+            if (last === undefined || rows.length < batchReadChunk) {
+                return;
+            }
+            beforeOrdinal = last.ordinal;
+        }
+    }
+
     /** True when a batch was appended after `afterOrdinal` and before `beforeOrdinal`. */
     readonly hasBatchBetween = (afterOrdinal: number, beforeOrdinal: number): boolean =>
         this.#database

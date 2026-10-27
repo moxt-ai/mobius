@@ -55,7 +55,11 @@ import {
 import { routeRuntimeSessionRequest } from "./gateway/runtime-session-routing.ts";
 import { createPlatformControlApplication } from "./http/platform-routes.ts";
 import { createProjectApplication } from "./http/project-routes.ts";
-import { recordingReadRoutes, recordingSessionStatusRoutes } from "./http/recording-read-routes.ts";
+import {
+    recordingReadRoutes,
+    recordingSessionStatusRoutes,
+    recordingSummaryV2Routes,
+} from "./http/recording-read-routes.ts";
 import { ClerkOrganizationGateway } from "./infra/clerk-organization-gateway.ts";
 import type { OrganizationMembershipGateway } from "./infra/organization-membership-gateway.ts";
 import { PlatformProjectStorageDirectory } from "./infra/platform-project-storage-directory.ts";
@@ -947,6 +951,7 @@ export function createPlatformApplication(
             await next();
         })
         .route(MOBIUS_API_PREFIX, new Hono<DispatchEnvironment>().route("/v1", versionedRoutes))
+        .route(`${MOBIUS_API_PREFIX}/v2/projects/:projectId/recording`, recordingSummaryV2Routes)
         .all("*", (context) => projectApplication.fetch(context.req.raw, context.var.relay));
     const platformApplication: Hono<{ Bindings: PlatformApplicationBindings }> = new Hono<{
         Bindings: PlatformApplicationBindings;

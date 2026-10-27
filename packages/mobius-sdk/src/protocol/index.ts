@@ -54,22 +54,28 @@ export * from "./session/observability/event-log.ts";
 export * from "./session/observability/history.ts";
 export * from "./session/prompt/commands.ts";
 export * from "./session/prompt/usage.ts";
+export * from "./session/recording/recorded-lifecycle-status.ts";
 // Session recordings.
 export {
     decodeSessionRecordingDirectory,
+    decodeSessionRecordingDirectoryV2,
     decodeSessionRecordingHistory,
     decodeSessionRecordingHistoryPage,
+    decodeSessionRecordingSummaryV2,
     decodeSessionRecordingWrite,
     encodeSessionRecordingDirectory,
+    encodeSessionRecordingDirectoryV2,
     encodeSessionRecordingHistory,
     encodeSessionRecordingHistoryPage,
     encodeSessionRecordingWrite,
     parseSessionRecordingWaitMilliseconds,
     type SessionRecordingDirectory,
+    type SessionRecordingDirectoryV2,
     type SessionRecordingHistory,
     type SessionRecordingHistoryPage,
     type SessionRecordingStatus,
     type SessionRecordingSummary,
+    type SessionRecordingSummaryV2,
     type SessionRecordingWrite,
     sessionRecordingStatusSchema,
 } from "./session/recording/recording.ts";

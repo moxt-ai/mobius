@@ -32,30 +32,20 @@ function conversationTitleFromText(text: string): string {
 
 function operation(event: SessionLiveEvent): DirectoryOperation {
     const recordedAt = event.recordedAt;
-    if (event.type === "lifecycle-metadata") {
+    if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.requested") {
         const payload = event.payload;
-        switch (payload.kind) {
-            case "prompt.requested":
-                return payload.context === undefined
-                    ? { kind: "status", status: "running", recordedAt }
-                    : {
-                          kind: "requested",
-                          context: payload.context,
-                          title: conversationTitleFromText(
-                              payload.content
-                                  .filter((block) => block.type === "text")
-                                  .map((block) => block.text)
-                                  .join(""),
-                          ),
-                          recordedAt,
-                      };
-            case "prompt.started":
-                return { kind: "status", status: "running", recordedAt };
-            case "prompt.completed":
-                return { kind: "status", status: "idle", recordedAt };
-            case "prompt.failed":
-            case "prompt.failed-before-start":
-                return { kind: "status", status: "failed", recordedAt };
+        if (payload.context !== undefined) {
+            return {
+                kind: "requested",
+                context: payload.context,
+                title: conversationTitleFromText(
+                    payload.content
+                        .filter((block) => block.type === "text")
+                        .map((block) => block.text)
+                        .join(""),
+                ),
+                recordedAt,
+            };
         }
     }
     if (event.type === "acp" && event.payload.sessionUpdate === "session_info_update" && event.payload.title != null) {
@@ -64,7 +54,7 @@ function operation(event: SessionLiveEvent): DirectoryOperation {
     return { kind: "activity", recordedAt };
 }
 
-/** Keeps ordered creation/title/status changes while replacing output bodies with activity times. */
+/** Keeps ordered creation/title changes while replacing other events with activity times. */
 export function projectDirectoryUpdate(write: SessionRecordingWrite): RecordingDirectoryUpdate {
     const sessions = new Map<string, DirectoryOperation[]>();
     for (const event of write.envelope.events) {

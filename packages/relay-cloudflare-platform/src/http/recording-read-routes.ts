@@ -259,6 +259,41 @@ export const recordingReadRoutes = new Hono<PlatformApplicationEnvironment>()
         );
     });
 
+async function readRecordingSummaryV2(context: Context<PlatformApplicationEnvironment>): Promise<Response> {
+    const projectId = decodedIdentifier(context.req.param("projectId"));
+    const runtimeId = context.req.query("runtimeId");
+    const requestedSessionId = context.req.param("sessionId");
+    const sessionId = decodedIdentifier(requestedSessionId);
+    const sessionIds = context.req.queries("sessionId") ?? [];
+    if (
+        projectId === null ||
+        runtimeId === undefined ||
+        !isIdentifier(runtimeId) ||
+        (requestedSessionId !== undefined && sessionId === null) ||
+        sessionIds.some((id) => !isIdentifier(id))
+    ) {
+        return errorResponse("invalid_request", "The Recording summary target is invalid", 400);
+    }
+    const path = `/v2/projects/${encodeURIComponent(projectId)}/runtimes/${encodeURIComponent(runtimeId)}/sessions`;
+    const query = new URLSearchParams();
+    if (sessionId === null) {
+        for (const id of sessionIds) {
+            query.append("sessionId", id);
+        }
+    }
+    return await readRecording(
+        context,
+        projectId,
+        sessionId === null ? path : `${path}/${encodeURIComponent(sessionId)}`,
+        query,
+    );
+}
+
+/** Recording metadata only. Live execution state remains available from the daemon. */
+export const recordingSummaryV2Routes = new Hono<PlatformApplicationEnvironment>()
+    .get("/sessions", readRecordingSummaryV2)
+    .get("/sessions/:sessionId", readRecordingSummaryV2);
+
 export const recordingSessionStatusRoutes = new Hono<PlatformApplicationEnvironment>()
     .get("/sessions", async (context, next) => {
         const projectId = decodedIdentifier(context.req.param("projectId"));
