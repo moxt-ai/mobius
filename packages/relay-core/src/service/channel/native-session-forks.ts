@@ -50,7 +50,10 @@ async function waitForFork<T>(completion: Promise<T>, signal: AbortSignal): Prom
 export class NativeSessionForks {
     readonly #storage: NativeSessionForkStorage;
     readonly #waitUntil: (operation: Promise<void>) => void;
-    readonly #running = new Map<string, Promise<ReturnType<typeof forkReceipt>>>();
+    readonly #running = new Map<
+        string,
+        { readonly requestHash: string; readonly completion: Promise<ReturnType<typeof forkReceipt>> }
+    >();
 
     constructor(storage: NativeSessionForkStorage, waitUntil: (operation: Promise<void>) => void) {
         this.#storage = storage;
@@ -70,94 +73,98 @@ export class NativeSessionForks {
         );
         signal.throwIfAborted();
         const key = JSON.stringify([scope.projectId, operationId]);
-        const replay = () => {
-            const receipt = this.#storage.read(scope.projectId, operationId);
-            if (receipt === undefined) {
-                return null;
-            }
-            if (receipt.requestHash !== requestHash) {
-                throw new PairingDirectoryError("idempotency_conflict", "This Fork operation has different inputs");
-            }
-            if (receipt.resultJson !== null) {
-                return Promise.resolve(forkReceipt(receipt.resultJson));
-            }
-            const running = this.#running.get(key);
-            if (running === undefined) {
-                // A restart or ambiguous Runtime failure must never turn a prior attempt into another Fork.
-                throw unknownOutcome();
-            }
-            return waitForFork(running, signal);
-        };
-        const prior = replay();
-        if (prior !== null) {
-            return await prior;
-        }
-        // Resolve and authorize the native identity before recording any possible side effect.
-        const found = await request(
-            scope,
-            runtimeId,
-            decodeNativeSessionRequest(
-                JSON.stringify({
-                    ...input,
-                    action: "find",
-                    kind: "native.session.request",
-                    bindingId: RUNTIME_WORKSPACE_BINDING_ID,
-                    requestId: crypto.randomUUID(),
-                    sessionId: crypto.randomUUID(),
-                }),
-            ),
-            signal,
-        );
+        const prior = this.#storage.read(scope.projectId, operationId);
+        const running = this.#running.get(key);
         if (
-            found.kind !== "native.session.result" ||
-            found.action !== "find" ||
-            found.entry.nativeSessionId !== input.nativeSessionId
+            (prior !== undefined && prior.requestHash !== requestHash) ||
+            (running !== undefined && running.requestHash !== requestHash)
         ) {
-            throw new PairingDirectoryError("invalid_native_session_response", "The native session could not be found");
+            throw new PairingDirectoryError("idempotency_conflict", "This Fork operation has different inputs");
         }
-        signal.throwIfAborted();
-        const concurrent = replay();
-        if (concurrent !== null) {
-            return await concurrent;
+        if (prior !== undefined && prior.resultJson !== null) {
+            return forkReceipt(prior.resultJson);
         }
-        const command = decodeNativeSessionRequest(
-            JSON.stringify({
-                kind: "native.session.request",
-                action: "fork",
-                agentId: input.agentId,
-                bindingId: RUNTIME_WORKSPACE_BINDING_ID,
-                directoryId: found.entry.directoryId,
-                additionalDirectoryIds: found.entry.additionalDirectories.map((directory) => directory.directoryId),
-                requestId: crypto.randomUUID(),
-                sessionId: found.sessionId,
-                entryId: found.entry.entryId,
-                targetSessionId: crypto.randomUUID(),
-            }),
-        );
-        if (command.action !== "fork") {
-            throw new PairingDirectoryError("invalid_request", "The Fork request is invalid");
+        if (running !== undefined) {
+            return await waitForFork(running.completion, signal);
         }
-        this.#storage.start(scope.projectId, operationId, requestHash);
-        // The receipt owns the bounded execution; disconnecting one HTTP waiter only cancels its wait.
+        if (prior !== undefined) {
+            // A restart or ambiguous Runtime failure must never turn a prior attempt into another Fork.
+            throw unknownOutcome();
+        }
+        // Share the whole bounded operation, including lookup. Disconnecting one HTTP waiter only cancels its wait.
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(new DOMException("Fork timed out", "TimeoutError")), 120_000);
         const completion = Promise.resolve().then(async () => {
             try {
-                const result = forkResult(JSON.stringify(await request(scope, runtimeId, command, controller.signal)));
-                if (result.targetSessionId !== command.targetSessionId || result.ready.agentId !== input.agentId) {
-                    throw new PairingDirectoryError("invalid_native_session_response", "The Fork target is invalid");
+                // Resolve and authorize the native identity before recording any possible side effect.
+                const found = await request(
+                    scope,
+                    runtimeId,
+                    decodeNativeSessionRequest(
+                        JSON.stringify({
+                            ...input,
+                            action: "find",
+                            kind: "native.session.request",
+                            bindingId: RUNTIME_WORKSPACE_BINDING_ID,
+                            requestId: crypto.randomUUID(),
+                            sessionId: crypto.randomUUID(),
+                        }),
+                    ),
+                    controller.signal,
+                );
+                if (
+                    found.kind !== "native.session.result" ||
+                    found.action !== "find" ||
+                    found.entry.nativeSessionId !== input.nativeSessionId
+                ) {
+                    throw new PairingDirectoryError(
+                        "invalid_native_session_response",
+                        "The native session could not be found",
+                    );
                 }
-                const receipt = { source: found, result };
-                this.#storage.complete(scope.projectId, operationId, JSON.stringify(receipt));
-                return receipt;
-            } catch (cause) {
-                throw unknownOutcome(cause);
+                controller.signal.throwIfAborted();
+                const command = decodeNativeSessionRequest(
+                    JSON.stringify({
+                        kind: "native.session.request",
+                        action: "fork",
+                        agentId: input.agentId,
+                        bindingId: RUNTIME_WORKSPACE_BINDING_ID,
+                        directoryId: found.entry.directoryId,
+                        additionalDirectoryIds: found.entry.additionalDirectories.map(
+                            (directory) => directory.directoryId,
+                        ),
+                        requestId: crypto.randomUUID(),
+                        sessionId: found.sessionId,
+                        entryId: found.entry.entryId,
+                        targetSessionId: crypto.randomUUID(),
+                    }),
+                );
+                if (command.action !== "fork") {
+                    throw new PairingDirectoryError("invalid_request", "The Fork request is invalid");
+                }
+                this.#storage.start(scope.projectId, operationId, requestHash);
+                try {
+                    const result = forkResult(
+                        JSON.stringify(await request(scope, runtimeId, command, controller.signal)),
+                    );
+                    if (result.targetSessionId !== command.targetSessionId || result.ready.agentId !== input.agentId) {
+                        throw new PairingDirectoryError(
+                            "invalid_native_session_response",
+                            "The Fork target is invalid",
+                        );
+                    }
+                    const receipt = { source: found, result };
+                    this.#storage.complete(scope.projectId, operationId, JSON.stringify(receipt));
+                    return receipt;
+                } catch (cause) {
+                    throw unknownOutcome(cause);
+                }
             } finally {
                 clearTimeout(timer);
                 this.#running.delete(key);
             }
         });
-        this.#running.set(key, completion);
+        this.#running.set(key, { requestHash, completion });
         this.#waitUntil(
             completion.then(
                 () => undefined,

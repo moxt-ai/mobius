@@ -32,7 +32,7 @@ export function createRuntimeRoutes(runtime: RuntimeService) {
         }
         if (request.method === "GET" && url.pathname.endsWith("/runtime-status")) {
             await runtime.expireSilentDaemons();
-            return Response.json({ online: runtime.isOnline(runtimeId) });
+            return Response.json({ online: runtime.isOnline(runtimeId), nativeForkRecovery: true });
         }
         const revoked = () =>
             Response.json(

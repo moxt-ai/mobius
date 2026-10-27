@@ -94,7 +94,6 @@ export class PairingService {
                 new VerifiedChannelAccess(channel.channelId, channel.runtimeId, channel.projectId, []),
                 signal,
             ),
-            this.#runtimeOperations !== undefined,
         );
     };
 

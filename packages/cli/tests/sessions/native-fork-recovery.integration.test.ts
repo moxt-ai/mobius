@@ -72,8 +72,17 @@ test("Given a Fork succeeds but its response is lost, When the same operation is
                 body,
                 signal,
             });
-        await expect(send()).rejects.toThrow();
+        const initial = await Promise.allSettled([send(), send()]);
+        expect(initial.filter((attempt) => attempt.status === "rejected")).toHaveLength(1);
+        const delivered = initial.find((attempt) => attempt.status === "fulfilled");
+        if (delivered?.status !== "fulfilled") {
+            throw new Error("The concurrent Fork response did not arrive");
+        }
+        expect(delivered.value.status).toBe(200);
         expect(lostStatus).toBe(200);
+        expect(await runtime.client.runtimes.list(signal)).toContainEqual(
+            expect.objectContaining({ runtimeId: runtime.runtimeId, nativeForkRecovery: true }),
+        );
         const retried = await send();
         expect(retried.status).toBe(200);
         const result: unknown = await retried.json();
