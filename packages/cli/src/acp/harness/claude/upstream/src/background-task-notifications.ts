@@ -1,4 +1,5 @@
-import type { SessionNotification, ToolCallStatus } from "@agentclientprotocol/sdk";
+import type { ToolCallStatus } from "@agentclientprotocol/sdk";
+import type { ClaudeSessionNotification as SessionNotification } from "./session-update.js";
 
 export type BackgroundTaskStatus = "running" | "completed" | "failed" | "stopped" | "unknown";
 export interface BackgroundTaskNotification {

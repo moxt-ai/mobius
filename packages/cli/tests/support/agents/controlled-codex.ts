@@ -32,9 +32,26 @@ if (process.argv[2] !== "app-server") {
     process.exit(1);
 }
 
+let threadNumber = 0;
+let turnNumber = 0;
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
 createInterface({ input: process.stdin }).on("line", (line) => {
     const request = JSON.parse(line);
     if (request.id === undefined) return;
+    if (request.method === "thread/start") {
+        send({ id: request.id, result: { thread: { id: "controlled-thread-" + ++threadNumber } } });
+        return;
+    }
+    if (request.method === "turn/start") {
+        const threadId = request.params.threadId;
+        const turn = { id: "controlled-turn-" + ++turnNumber, status: "inProgress" };
+        send({ id: request.id, result: { turn } });
+        send({ method: "thread/settings/updated", params: {
+            threadId, threadSettings: { collaborationMode: { mode: "plan" } },
+        } });
+        send({ method: "turn/completed", params: { threadId, turn: { ...turn, status: "completed" } } });
+        return;
+    }
     const result = request.method === "model/list" ? { data: [], nextCursor: null } : {};
     process.stdout.write(JSON.stringify({ id: request.id, result }) + "\\n");
 });

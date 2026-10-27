@@ -1,14 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { isAbsolute, resolve as resolvePath } from "node:path";
-import type {
-    ContentBlock,
-    McpServer,
-    SessionUpdate,
-    ToolCallContent,
-    ToolCallLocation,
-    ToolKind,
-} from "@agentclientprotocol/sdk";
+import type { ContentBlock, McpServer, ToolCallContent, ToolCallLocation, ToolKind } from "@agentclientprotocol/sdk";
 import { RequestError } from "@agentclientprotocol/sdk";
 import {
     type PiRpcEvent,
@@ -23,6 +16,7 @@ import { maybeAuthRequiredError } from "./auth-required.js";
 import type { PiAcpClient } from "./client.js";
 import { PiExtensionQuestions } from "./extension-questions.js";
 import { SessionStore } from "./session-store.js";
+import type { PiSessionUpdate } from "./session-update.js";
 import { expandSlashCommand, type FileSlashCommand } from "./slash-commands.js";
 import { bashCommand, bashResultText, isBashTool } from "./translate/bash.js";
 import { toolResultToText } from "./translate/pi-tools.js";
@@ -59,7 +53,7 @@ type PiSteerOutcome = { readonly kind: "idle" } | { readonly kind: "injected" };
  * reports no trustworthy token count (e.g. `tokens: null` right after compaction) or
  * the values are not usable integers.
  */
-function toUsageUpdate(stats: PiSessionStats | null | undefined): SessionUpdate | null {
+function toUsageUpdate(stats: PiSessionStats | null | undefined): PiSessionUpdate | null {
     const used = stats?.contextUsage?.tokens;
     const size = stats?.contextUsage?.contextWindow;
 
@@ -385,7 +379,11 @@ export class PiAcpSession {
         this.fileCommands = opts.fileCommands ?? [];
 
         this.extensionQuestions = new PiExtensionQuestions(this.sessionId, this.conn, this.proc, async (text) => {
-            this.emit({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
+            this.emit({
+                sessionUpdate: "agent_message_chunk",
+                messageId: randomUUID(),
+                content: { type: "text", text },
+            });
             await this.flushEmits();
         });
         this.proc.signal.addEventListener(
@@ -443,6 +441,7 @@ export class PiAcpSession {
 
         this.emit({
             sessionUpdate: "agent_message_chunk",
+            messageId: randomUUID(),
             content: { type: "text", text: this.startupInfo },
         });
     }
@@ -462,6 +461,7 @@ export class PiAcpSession {
                 // This doesn't work in Zed yet, needs to be revisited
                 this.emit({
                     sessionUpdate: "agent_message_chunk",
+                    messageId: randomUUID(),
                     content: {
                         type: "text",
                         text: `Queued message (position ${this.turnQueue.length}).`,
@@ -543,6 +543,7 @@ export class PiAcpSession {
 
             this.emit({
                 sessionUpdate: "agent_message_chunk",
+                messageId: randomUUID(),
                 content: { type: "text", text: "Cleared queued prompts." },
             });
             this.emit({
@@ -566,7 +567,7 @@ export class PiAcpSession {
         return this.cancelRequested;
     }
 
-    private emit(update: SessionUpdate): void {
+    private emit(update: PiSessionUpdate): void {
         // Serialize update delivery.
         this.lastEmit = this.lastEmit
             .then(() =>
@@ -644,6 +645,7 @@ export class PiAcpSession {
         if (next) {
             this.emit({
                 sessionUpdate: "agent_message_chunk",
+                messageId: randomUUID(),
                 content: { type: "text", text: `Starting queued message. (${this.turnQueue.length} remaining)` },
             });
             this.startTurn(next);
@@ -743,10 +745,20 @@ export class PiAcpSession {
         });
     }
 
+    private streamedMessage: { readonly kind: "idle" } | { readonly kind: "active"; readonly messageId: string } = {
+        kind: "idle",
+    };
+
     private handlePiEvent(ev: PiRpcEvent) {
         const type = String((ev as any).type ?? "");
 
         switch (type) {
+            case "message_start":
+                this.streamedMessage = { kind: "active", messageId: randomUUID() };
+                break;
+            case "message_end":
+                this.streamedMessage = { kind: "idle" };
+                break;
             case "message_update": {
                 const ame = (ev as any).assistantMessageEvent;
 
@@ -767,16 +779,24 @@ export class PiAcpSession {
 
                 // Stream assistant text.
                 if (ame?.type === "text_delta" && typeof ame.delta === "string") {
+                    if (this.streamedMessage.kind !== "active") {
+                        throw RequestError.internalError({ code: "invalid_message_boundary" });
+                    }
                     this.emit({
                         sessionUpdate: "agent_message_chunk",
+                        messageId: this.streamedMessage.messageId,
                         content: { type: "text", text: ame.delta } satisfies ContentBlock,
                     });
                     break;
                 }
 
                 if (ame?.type === "thinking_delta" && typeof ame.delta === "string") {
+                    if (this.streamedMessage.kind !== "active") {
+                        throw RequestError.internalError({ code: "invalid_message_boundary" });
+                    }
                     this.emit({
                         sessionUpdate: "agent_thought_chunk",
+                        messageId: this.streamedMessage.messageId,
                         content: { type: "text", text: ame.delta } satisfies ContentBlock,
                     });
                     break;
@@ -1024,6 +1044,7 @@ export class PiAcpSession {
                 if (ev.method === "notify") {
                     this.emit({
                         sessionUpdate: "agent_message_chunk",
+                        messageId: randomUUID(),
                         content: { type: "text", text: stringProp(ev, "message") ?? "Pi notification" },
                         _meta: { piAcp: { notify: { level: stringProp(ev, "notifyType") ?? "info" } } },
                     });

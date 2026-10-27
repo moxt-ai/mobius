@@ -621,6 +621,7 @@ export class PiAcpAgent {
                     sessionId: session.sessionId,
                     update: {
                         sessionUpdate: "agent_message_chunk",
+                        messageId: randomUUID(),
                         content: { type: "text", text },
                     },
                 });
@@ -635,6 +636,7 @@ export class PiAcpAgent {
                         sessionId: session.sessionId,
                         update: {
                             sessionUpdate: "agent_message_chunk",
+                            messageId: randomUUID(),
                             content: { type: "text", text: "Usage: /name <name>" },
                         },
                     });
@@ -653,6 +655,7 @@ export class PiAcpAgent {
                         sessionId: session.sessionId,
                         update: {
                             sessionUpdate: "agent_message_chunk",
+                            messageId: randomUUID(),
                             content: { type: "text", text: `Failed to set session name: ${msg}${hint}` },
                         },
                     });
@@ -672,6 +675,7 @@ export class PiAcpAgent {
                     sessionId: session.sessionId,
                     update: {
                         sessionUpdate: "agent_message_chunk",
+                        messageId: randomUUID(),
                         content: { type: "text", text: `Session name set: ${name}` },
                     },
                 });
@@ -690,6 +694,7 @@ export class PiAcpAgent {
                         sessionId: session.sessionId,
                         update: {
                             sessionUpdate: "agent_message_chunk",
+                            messageId: randomUUID(),
                             content: {
                                 type: "text",
                                 text: `Steering mode: ${current || "unknown"}`,
@@ -704,6 +709,7 @@ export class PiAcpAgent {
                         sessionId: session.sessionId,
                         update: {
                             sessionUpdate: "agent_message_chunk",
+                            messageId: randomUUID(),
                             content: {
                                 type: "text",
                                 text: "Usage: /steering all | /steering one-at-a-time",
@@ -719,6 +725,7 @@ export class PiAcpAgent {
                     sessionId: session.sessionId,
                     update: {
                         sessionUpdate: "agent_message_chunk",
+                        messageId: randomUUID(),
                         content: { type: "text", text: `Steering mode set to: ${modeRaw}` },
                     },
                 });
@@ -737,6 +744,7 @@ export class PiAcpAgent {
                         sessionId: session.sessionId,
                         update: {
                             sessionUpdate: "agent_message_chunk",
+                            messageId: randomUUID(),
                             content: {
                                 type: "text",
                                 text: `Follow-up mode: ${current || "unknown"}`,
@@ -751,6 +759,7 @@ export class PiAcpAgent {
                         sessionId: session.sessionId,
                         update: {
                             sessionUpdate: "agent_message_chunk",
+                            messageId: randomUUID(),
                             content: {
                                 type: "text",
                                 text: "Usage: /follow-up all | /follow-up one-at-a-time",
@@ -766,6 +775,7 @@ export class PiAcpAgent {
                     sessionId: session.sessionId,
                     update: {
                         sessionUpdate: "agent_message_chunk",
+                        messageId: randomUUID(),
                         content: { type: "text", text: `Follow-up mode set to: ${modeRaw}` },
                     },
                 });
@@ -820,6 +830,7 @@ export class PiAcpAgent {
                         sessionId: session.sessionId,
                         update: {
                             sessionUpdate: "agent_message_chunk",
+                            messageId: randomUUID(),
                             content: { type: "text", text: "Changelog not found (couldn't locate pi installation)." },
                         },
                     });
@@ -834,6 +845,7 @@ export class PiAcpAgent {
                         sessionId: session.sessionId,
                         update: {
                             sessionUpdate: "agent_message_chunk",
+                            messageId: randomUUID(),
                             content: { type: "text", text: `Failed to read changelog: ${String(e?.message ?? e)}` },
                         },
                     });
@@ -850,6 +862,7 @@ export class PiAcpAgent {
                     sessionId: session.sessionId,
                     update: {
                         sessionUpdate: "agent_message_chunk",
+                        messageId: randomUUID(),
                         content: { type: "text", text },
                     },
                 });
@@ -871,6 +884,7 @@ export class PiAcpAgent {
                         sessionId: session.sessionId,
                         update: {
                             sessionUpdate: "agent_message_chunk",
+                            messageId: randomUUID(),
                             content: {
                                 type: "text",
                                 text: "Nothing to export yet (no session messages). Send a prompt first.",
@@ -887,6 +901,7 @@ export class PiAcpAgent {
                             sessionId: session.sessionId,
                             update: {
                                 sessionUpdate: "agent_message_chunk",
+                                messageId: randomUUID(),
                                 content: {
                                     type: "text",
                                     text: "Nothing to export yet (empty session file). Send a prompt first.",
@@ -900,6 +915,7 @@ export class PiAcpAgent {
                         sessionId: session.sessionId,
                         update: {
                             sessionUpdate: "agent_message_chunk",
+                            messageId: randomUUID(),
                             content: {
                                 type: "text",
                                 text: "Couldn't read session file for export. Try sending a prompt first.",
@@ -921,6 +937,7 @@ export class PiAcpAgent {
                         sessionId: session.sessionId,
                         update: {
                             sessionUpdate: "agent_message_chunk",
+                            messageId: randomUUID(),
                             content: {
                                 type: "text",
                                 text: `Export failed: ${String(e?.message ?? e)}`,
@@ -935,6 +952,7 @@ export class PiAcpAgent {
                         sessionId: session.sessionId,
                         update: {
                             sessionUpdate: "agent_message_chunk",
+                            messageId: randomUUID(),
                             content: {
                                 type: "text",
                                 text: "Export failed: no output path returned by pi.",
@@ -945,6 +963,7 @@ export class PiAcpAgent {
                 }
 
                 const uri = `file://${resultPath}`;
+                const messageId = randomUUID();
 
                 // Emit a short prefix + a resource link. Many clients concatenate chunks into a single
                 // assistant message, so this avoids the "link + duplicate plain text" look.
@@ -952,6 +971,7 @@ export class PiAcpAgent {
                     sessionId: session.sessionId,
                     update: {
                         sessionUpdate: "agent_message_chunk",
+                        messageId,
                         content: {
                             type: "text",
                             text: "Session exported: ",
@@ -963,6 +983,7 @@ export class PiAcpAgent {
                     sessionId: session.sessionId,
                     update: {
                         sessionUpdate: "agent_message_chunk",
+                        messageId,
                         content: {
                             type: "resource_link",
                             name: `pi-session-${safeSessionId}.html`,
@@ -998,6 +1019,7 @@ export class PiAcpAgent {
                     sessionId: session.sessionId,
                     update: {
                         sessionUpdate: "agent_message_chunk",
+                        messageId: randomUUID(),
                         content: {
                             type: "text",
                             text: `Auto-compaction ${enabled ? "enabled" : "disabled"}.`,
@@ -1290,6 +1312,7 @@ export class PiAcpAgent {
                         sessionId: session.sessionId,
                         update: {
                             sessionUpdate: "user_message_chunk",
+                            messageId: randomUUID(),
                             content: { type: "text", text },
                         },
                     });
@@ -1303,6 +1326,7 @@ export class PiAcpAgent {
                         sessionId: session.sessionId,
                         update: {
                             sessionUpdate: "agent_message_chunk",
+                            messageId: randomUUID(),
                             content: { type: "text", text },
                         },
                     });

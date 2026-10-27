@@ -1,4 +1,3 @@
-import type { SessionNotification } from "@agentclientprotocol/sdk";
 import type { SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
     type ClearContextCoordinatorHost,
@@ -7,6 +6,7 @@ import {
     type ClearContextTurn,
     continuePlanInFreshContext,
 } from "./clear-context-coordinator.js";
+import type { ClaudeSessionNotification as SessionNotification } from "./session-update.js";
 import { parseToolResultMeta } from "./tool-result-meta.js";
 
 export function acceptedPlanToolResult(
