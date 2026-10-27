@@ -433,7 +433,11 @@ class ControlledAgentEndpoint implements FakeHarnessEndpoint {
     readonly terminated = this.#closed.promise;
     #isClosed = false;
 
-    constructor(state: ControlledAgentState, agentName: string) {
+    constructor(
+        state: ControlledAgentState,
+        agentName: string,
+        onSessionUpdate: (notification: acp.SessionNotification) => Promise<void>,
+    ) {
         this.#state = state;
         this.#app = acp
             .agent({ name: "morty-controlled-agent" })
@@ -458,11 +462,7 @@ class ControlledAgentEndpoint implements FakeHarnessEndpoint {
             .onRequest(acp.methods.agent.session.load, async (context) => {
                 this.#sessionIds.add(context.params.sessionId);
                 this.#state.rememberSession(context.params.sessionId, this.#state.turnCount(context.params.sessionId));
-                await this.#state.replay(
-                    context.params.sessionId,
-                    async (notification) =>
-                        await context.client.notify(acp.methods.client.session.update, notification),
-                );
+                await this.#state.replay(context.params.sessionId, onSessionUpdate);
                 return { configOptions: this.#state.configuration(context.params.sessionId) };
             })
             .onRequest(acp.methods.agent.session.resume, (context) => {
@@ -512,8 +512,7 @@ class ControlledAgentEndpoint implements FakeHarnessEndpoint {
                 return await this.#state.start(
                     context.params.sessionId,
                     promptText(context.params.prompt),
-                    async (notification) =>
-                        await context.client.notify(acp.methods.client.session.update, notification),
+                    onSessionUpdate,
                     context.signal,
                 );
             })
@@ -568,7 +567,9 @@ export function createFakeHarness(options: FakeAgentHarnessOptions) {
     ];
     return {
         agents: agents.map((agent) => ({
-            createEndpoint: (): FakeHarnessEndpoint => new ControlledAgentEndpoint(state, agent.name),
+            createEndpoint: (
+                onSessionUpdate: (notification: acp.SessionNotification) => Promise<void>,
+            ): FakeHarnessEndpoint => new ControlledAgentEndpoint(state, agent.name, onSessionUpdate),
             id: agent.id,
             name: agent.name,
         })),

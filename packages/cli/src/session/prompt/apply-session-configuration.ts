@@ -175,19 +175,21 @@ async function applySessionConfigurationSelection(
     if (sessionConfigurationMatches(option, selection)) {
         return options;
     }
-    return await sessions.configureSession({
-        adapter,
-        additionalDirectories,
-        agent,
-        booleanValue: selection.booleanValue,
-        configId: selection.configId,
-        cwd,
-        requestId: `cfg_${randomUUID()}`,
-        sessionId,
-        signal,
-        value: selection.value,
-        valueType: selection.valueType,
-    });
+    return (
+        await sessions.configureSession({
+            adapter,
+            additionalDirectories,
+            agent,
+            booleanValue: selection.booleanValue,
+            configId: selection.configId,
+            cwd,
+            requestId: `cfg_${randomUUID()}`,
+            sessionId,
+            signal,
+            value: selection.value,
+            valueType: selection.valueType,
+        })
+    ).configOptions;
 }
 
 export async function applyCompleteSessionConfiguration(

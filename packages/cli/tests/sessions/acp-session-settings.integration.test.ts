@@ -86,7 +86,7 @@ describe("Agent setting capabilities", () => {
                 value: "high",
                 valueType: "select",
             });
-            expect(configured).toEqual(
+            expect(configured.configOptions).toEqual(
                 expect.arrayContaining([
                     expect.objectContaining({ currentValue: "high", id: "reasoning_effort", type: "select" }),
                 ]),
@@ -317,7 +317,7 @@ it("Given ACP exposes select and boolean settings, When a user configures the co
             valueType: "select",
             requestId: `configure-${configId}`,
         });
-        expect(configured).toEqual(
+        expect(configured.configOptions).toEqual(
             expect.arrayContaining([expect.objectContaining({ id: configId, currentValue: value })]),
         );
     }

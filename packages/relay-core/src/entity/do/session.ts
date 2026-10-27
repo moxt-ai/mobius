@@ -18,6 +18,7 @@ function sessionRuntimeErrorStatus(code: string): number {
         code === SESSION_CLOSED_ERROR_CODE ||
         code === "session_conflict" ||
         code === "idempotency_conflict" ||
+        code === "session_configuration_conflict" ||
         code === "steering_target_unavailable" ||
         code === "steering_unsupported"
     ) {

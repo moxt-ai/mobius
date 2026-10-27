@@ -265,6 +265,7 @@ function pairingDirectoryErrorStatus(code: string): number {
         case "agent_settings_discovery_unsupported":
         case "session_turn_configuration_unsupported":
         case "idempotency_conflict":
+        case "session_configuration_conflict":
             return 409;
         case "pairing_timeout":
         case "directory_timeout":

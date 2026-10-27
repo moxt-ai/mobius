@@ -169,6 +169,7 @@ export const sessionReadyEventSchema = z
         capabilities: sessionCapabilitiesSchema,
         commands: z.array(sessionCommandSchema).max(500).readonly(),
         configOptions: sessionConfigOptionsSchema,
+        configurationRevision: IDENTIFIER.optional(),
         directoryId: DIRECTORY_IDENTIFIER,
         directoryLabel: z.string().min(1).max(MAX_WORKSPACE_PATH_LENGTH),
         kind: z.literal(SESSION_READY_KIND),

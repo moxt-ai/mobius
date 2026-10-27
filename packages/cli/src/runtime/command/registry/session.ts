@@ -68,9 +68,9 @@ async function prepareSession(
                   ? await sessions.restoreSession(preparation, metrics, closed)
                   : await sessions.prepareSession(preparation, metrics, closed);
         const configuration = command.configuration;
-        const configOptions =
+        const snapshot =
             configuration === undefined
-                ? prepared.configOptions
+                ? prepared
                 : await metrics.measure(
                       "configuration",
                       async () =>
@@ -90,7 +90,8 @@ async function prepareSession(
             agentVersion: prepared.agentVersion,
             capabilities: prepared.capabilities,
             commands: prepared.commands,
-            configOptions,
+            configOptions: snapshot.configOptions,
+            configurationRevision: snapshot.configurationRevision,
             directoryId: command.directoryId,
             directoryLabel: resolved.directoryLabel,
             kind: "session.ready",
@@ -265,11 +266,14 @@ export async function executeSessionConfigure(
             command.additionalDirectoryIds,
             signal,
         );
-        const configOptions = await sessions.configureSession({
+        const snapshot = await sessions.configureSession({
             additionalDirectories: resolved.additionalDirectories,
             ...(await resolveAgent(command.agentId, signal, command.sessionId)),
             booleanValue: command.booleanValue,
             configId: command.configId,
+            ...(command.expectedConfigurationRevision === undefined
+                ? {}
+                : { expectedConfigurationRevision: command.expectedConfigurationRevision }),
             cwd: resolved.cwd,
             requestId: command.requestId,
             sessionId: command.sessionId,
@@ -278,7 +282,7 @@ export async function executeSessionConfigure(
             valueType: command.valueType,
         });
         send(socket, {
-            configOptions,
+            ...snapshot,
             kind: "session.config.updated",
             requestId: command.requestId,
             sessionId: command.sessionId,
@@ -414,6 +418,7 @@ export async function executeSessionConfigRead(
         );
         send(socket, {
             configOptions: ready.configOptions,
+            configurationRevision: ready.configurationRevision,
             kind: SESSION_CONFIG_READ_RESULT_KIND,
             requestId: command.requestId,
             sessionId: command.sessionId,

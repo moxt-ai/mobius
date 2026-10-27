@@ -1,6 +1,28 @@
-import { AcpAgentDefinition, EndpointAgentConnection } from "@moxt-ai/mobius/runtime";
+import type { SessionNotification } from "@agentclientprotocol/sdk";
+import { AcpAgentDefinition, type AgentConnectionOptions, EndpointAgentConnection } from "@moxt-ai/mobius/runtime";
 import { createFakeHarness, fakeHarnessCapabilities } from "./fake-harness/index.ts";
 import type { FakeAgentHarnessOptions } from "./fake-harness/model.ts";
+
+export type ControlledSessionUpdate = (notification: SessionNotification) => Promise<void>;
+
+/** Adapts the controlled ACP peer to the same awaited update port used by native Agents. */
+export const controlledSessionUpdates =
+    (client: AgentConnectionOptions["client"]): ControlledSessionUpdate =>
+    async (notification) => {
+        const update = notification.update;
+        switch (update.sessionUpdate) {
+            case "user_message_chunk":
+            case "agent_message_chunk":
+            case "agent_thought_chunk":
+                if (typeof update.messageId !== "string" || update.messageId.length === 0) {
+                    throw new Error("The controlled ACP peer must identify message chunks");
+                }
+                await client.onUpdate({ ...notification, update: { ...update, messageId: update.messageId } });
+                break;
+            default:
+                await client.onUpdate({ ...notification, update });
+        }
+    };
 
 /** Connects controlled ACP endpoints through the shared vendor transport mechanics. */
 export class ControlledEndpointConnection extends EndpointAgentConnection {}
@@ -15,7 +37,11 @@ export function createFakeDaemon(options: FakeAgentHarnessOptions) {
                     agent.id,
                     agent.name,
                     process.execPath,
-                    (options) => new ControlledEndpointConnection(agent.createEndpoint(), options.client),
+                    (options) =>
+                        new ControlledEndpointConnection(
+                            agent.createEndpoint(controlledSessionUpdates(options.client)),
+                            options.client,
+                        ),
                     {},
                     "controlled-harness",
                     undefined,
