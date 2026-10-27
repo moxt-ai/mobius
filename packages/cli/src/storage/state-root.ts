@@ -2,6 +2,7 @@ import { readFile, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { installationPointerPath } from "./installation/installation-files.ts";
 import { readStateDirectory } from "./state-directory.ts";
+import { STATE_ROOT_LAYOUT } from "./state-root-layout.ts";
 
 /** The configured state directory holds another root's installation data, so Mobius must not create a root there. */
 export class StateRootError extends Error {
@@ -32,7 +33,7 @@ async function exists(path: string): Promise<boolean> {
 async function owningRoot(directory: string): Promise<string | null> {
     const application = dirname(directory);
     const installations = dirname(application);
-    if (basename(installations) !== "installations") {
+    if (basename(installations) !== STATE_ROOT_LAYOUT.installations) {
         return null;
     }
     let pointer: unknown;
@@ -50,7 +51,7 @@ async function owningRoot(directory: string): Promise<string | null> {
         return null;
     }
     const container = dirname(installations);
-    return basename(dirname(container)) === "versions" ? dirname(dirname(container)) : container;
+    return basename(dirname(container)) === STATE_ROOT_LAYOUT.versions ? dirname(dirname(container)) : container;
 }
 
 /**
@@ -59,7 +60,10 @@ async function owningRoot(directory: string): Promise<string | null> {
  */
 export async function validateStateRoot(environment: Readonly<NodeJS.ProcessEnv>): Promise<void> {
     const directory = readStateDirectory(environment);
-    if ((await exists(join(directory, "current-data.txt"))) || (await exists(join(directory, "versions")))) {
+    if (
+        (await exists(join(directory, STATE_ROOT_LAYOUT.currentData))) ||
+        (await exists(join(directory, STATE_ROOT_LAYOUT.versions)))
+    ) {
         return;
     }
     const root = await owningRoot(directory);

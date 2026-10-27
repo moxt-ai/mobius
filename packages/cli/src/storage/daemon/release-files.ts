@@ -1,10 +1,11 @@
 import { readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { readStateDirectory } from "../state-directory.ts";
+import { STATE_ROOT_LAYOUT } from "../state-root-layout.ts";
 
 /** npm installs each daemon release into its own prefix, so an upgrade never overwrites the running release. */
 export function releasePrefix(version: string): string {
-    return join(readStateDirectory(), "npm", version);
+    return join(readStateDirectory(), STATE_ROOT_LAYOUT.releases, version);
 }
 
 export interface InstalledRelease {
