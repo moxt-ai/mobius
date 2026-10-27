@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -7,16 +7,22 @@ import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import {
+    decodeContentAvailableEvent,
+    decodeContentReadyEvent,
     decodeMessageKind,
     decodeNativeSessionResult,
     decodeSessionEventEnvelope,
     decodeSessionHistoryPageLoaded,
+    encodeContentChunkFrame,
+    encodeContentCommitCommand,
+    encodeContentWriteCommand,
     encodeNativeSessionRequest,
     encodeSessionCancelCommand,
     encodeSessionHistoryPageLoad,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
     NATIVE_SESSION_RESULT_KIND,
+    type PromptAttachment,
     SESSION_EVENT_KIND,
     SESSION_HISTORY_PAGE_LOADED_KIND,
     type SessionEvent,
@@ -24,7 +30,7 @@ import {
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
-import { listen, port, sendText } from "@moxt-ai/mobius-test/websocket";
+import { listen, port, sendBinary, sendText } from "@moxt-ai/mobius-test/websocket";
 import { describe, expect, it } from "vitest";
 import { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { RuntimeLocalContext } from "../../src/runtime/config.ts";
@@ -288,6 +294,49 @@ async function startControlledDaemon(options: { readonly stateDirectory?: string
 
 type Fixture = Awaited<ReturnType<typeof startControlledDaemon>>;
 const pendingLiveEvents = new WeakMap<Fixture, SessionLiveEvent[]>();
+
+async function uploadTextAttachment(fixture: Fixture, text: string): Promise<PromptAttachment> {
+    const bytes = new TextEncoder().encode(text);
+    const contentKey = createHash("sha256").update(bytes).digest("hex");
+    const requestId = randomUUID();
+    sendText(
+        fixture.socket,
+        encodeContentWriteCommand({
+            byteLength: bytes.byteLength,
+            contentKey,
+            contentKind: "resource",
+            kind: "content.write",
+            mediaType: "text/plain",
+            name: "context.txt",
+            requestId,
+            sessionId: "test-session",
+        }),
+    );
+    let ready = await fixture.frames.next();
+    while (decodeMessageKind(ready) !== "content.ready") {
+        ready = await fixture.frames.next();
+    }
+    expect(decodeContentReadyEvent(ready).requestId).toBe(requestId);
+    sendBinary(fixture.socket, encodeContentChunkFrame({ bytes, requestId, sequence: 0 }));
+    sendText(
+        fixture.socket,
+        encodeContentCommitCommand({ kind: "content.commit", requestId, sessionId: "test-session" }),
+    );
+    let available = await fixture.frames.next();
+    while (decodeMessageKind(available) !== "content.available") {
+        available = await fixture.frames.next();
+    }
+    expect(decodeContentAvailableEvent(available).contentKey).toBe(contentKey);
+    return {
+        byteLength: bytes.byteLength,
+        contentKey,
+        kind: "resource",
+        mimeType: "text/plain",
+        name: "context.txt",
+        uri: "attachment:///context.txt",
+    };
+}
+
 function prompt(fixture: Fixture, text: string): SessionPromptCommand {
     return {
         additionalDirectoryIds: [],
@@ -296,15 +345,14 @@ function prompt(fixture: Fixture, text: string): SessionPromptCommand {
         commandId: "test-turn",
         directoryId: "default",
         disposition: SessionPromptDisposition.Reject,
-        images: [],
+        attachments: [],
         kind: "session.prompt",
         prompt: text,
-        resources: [],
         sessionId: "test-session",
         targetCommandId: "",
     };
 }
-async function nextLive(fixture: Fixture): Promise<SessionLiveEvent> {
+async function nextLive(fixture: Fixture, allowPromptFailure = false): Promise<SessionLiveEvent> {
     const pending = pendingLiveEvents.get(fixture) ?? [];
     const buffered = pending.shift();
     if (buffered !== undefined) {
@@ -342,7 +390,7 @@ async function nextLive(fixture: Fixture): Promise<SessionLiveEvent> {
                 event.type === "lifecycle-metadata" &&
                 (event.payload.kind === "prompt.failed" || event.payload.kind === "prompt.failed-before-start"),
         );
-        if (failure !== undefined) {
+        if (failure !== undefined && !allowPromptFailure) {
             throw new Error(frame);
         }
         const event = events.shift();
@@ -423,16 +471,40 @@ async function activeTurn(fixture: Fixture, command: SessionPromptCommand) {
     }
 }
 describe("daemon V2 live delivery", () => {
+    it("Given a harness identifies a user message and fails its prompt, When the daemon publishes the failure, Then only the user chunk carries its identity", async () => {
+        const fixture = await startControlledDaemon();
+        try {
+            sendText(fixture.socket, encodeSessionPromptCommand(prompt(fixture, "fail with model unavailable")));
+            const events: SessionLiveEvent[] = [];
+            for (;;) {
+                const event = await nextLive(fixture, true);
+                events.push(event);
+                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
+                    expect(event.payload).not.toHaveProperty("messageId");
+                    break;
+                }
+            }
+            expect(events).toContainEqual(
+                expect.objectContaining({
+                    type: "acp",
+                    payload: expect.objectContaining({ sessionUpdate: "user_message_chunk", messageId: "user-1" }),
+                }),
+            );
+        } finally {
+            await fixture.close();
+        }
+    });
+
     it("Given a running turn with a queued follow-up, When another prompt steers the turn, Then history retains executed user messages once and omits queue lifecycle metadata", async () => {
         const fixture = await startControlledDaemon();
         try {
             const running = prompt(fixture, "wait for steering");
-            const requestedEventIds = new Map<string, string>();
+            const userMessageIds: string[] = [];
             sendText(fixture.socket, encodeSessionPromptCommand(running));
             for (;;) {
                 const event = await nextLive(fixture);
-                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.requested") {
-                    requestedEventIds.set(event.payload.commandId, event.eventId);
+                if (event.type === "acp" && event.payload.sessionUpdate === "user_message_chunk") {
+                    userMessageIds.push(event.payload.messageId ?? "");
                 }
                 if (event.type === "acp" && event.payload.sessionUpdate === "agent_message_chunk") {
                     break;
@@ -460,7 +532,7 @@ describe("daemon V2 live delivery", () => {
                         ? [event.payload.messageId]
                         : [],
                 ),
-            ).toEqual([requestedEventIds.get(running.commandId)]);
+            ).toEqual([userMessageIds[0]]);
 
             const steering: SessionPromptCommand = {
                 ...running,
@@ -473,8 +545,8 @@ describe("daemon V2 live delivery", () => {
             const completed = new Set<string>();
             while (completed.size < 3) {
                 const event = await nextLive(fixture);
-                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.requested") {
-                    requestedEventIds.set(event.payload.commandId, event.eventId);
+                if (event.type === "acp" && event.payload.sessionUpdate === "user_message_chunk") {
+                    userMessageIds.push(event.payload.messageId ?? "");
                 }
                 if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
                     completed.add(event.payload.commandId);
@@ -488,9 +560,9 @@ describe("daemon V2 live delivery", () => {
                     event.type === "acp" && event.payload.sessionUpdate === "user_message_chunk" ? [event.payload] : [],
                 ),
             ).toEqual(
-                [running, steering, queued].map((command) => ({
+                [running, steering, queued].map((command, index) => ({
                     content: { text: command.prompt, type: "text" },
-                    messageId: requestedEventIds.get(command.commandId),
+                    messageId: userMessageIds[index],
                     sessionUpdate: "user_message_chunk",
                 })),
             );
@@ -507,18 +579,8 @@ describe("daemon V2 live delivery", () => {
             try {
                 const command: SessionPromptCommand = {
                     ...prompt(fixture, "stream token burst"),
-                    resources:
-                        scenario === "text-only"
-                            ? []
-                            : [
-                                  {
-                                      mimeType: "text/plain",
-                                      name: "context.txt",
-                                      text: "attached context",
-                                      type: "embedded",
-                                      uri: "attachment:///context.txt",
-                                  },
-                              ],
+                    attachments:
+                        scenario === "text-only" ? [] : [await uploadTextAttachment(fixture, "attached context")],
                 };
                 sendText(fixture.socket, encodeSessionPromptCommand(command));
                 const live: SessionLiveEvent[] = [];
@@ -535,6 +597,10 @@ describe("daemon V2 live delivery", () => {
                 expect(lifecycleKinds).toEqual(
                     expect.arrayContaining(["prompt.requested", "prompt.started", "prompt.completed"]),
                 );
+                const completed = live.find(
+                    (event) => event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed",
+                );
+                expect(completed?.payload).not.toHaveProperty("messageId");
 
                 const page = await history(fixture, command);
                 expect(page.events.length).toBeGreaterThan(0);
@@ -546,12 +612,24 @@ describe("daemon V2 live delivery", () => {
                     (event) => event.type === "lifecycle-metadata" && event.payload.kind === "prompt.requested",
                 )?.eventId;
                 expect(requestedEventId).toBeDefined();
+                const liveUserMessages = live.filter(
+                    (event) => event.type === "acp" && event.payload.sessionUpdate === "user_message_chunk",
+                );
+                expect(liveUserMessages.map((event) => event.payload)).toEqual(
+                    userMessages.map((event) => event.payload),
+                );
+                const requestedIndex = live.findIndex((event) => event.eventId === requestedEventId);
+                const firstChunkIndex = live.findIndex((event) => event.eventId === liveUserMessages[0]?.eventId);
+                expect(firstChunkIndex).toBeGreaterThan(requestedIndex);
+                expect(live.slice(firstChunkIndex, firstChunkIndex + liveUserMessages.length)).toEqual(
+                    liveUserMessages,
+                );
                 expect(userMessages).toHaveLength(scenario === "text-only" ? 1 : 2);
                 expect(userMessages[0]).toMatchObject({
-                    eventId: requestedEventId,
+                    eventId: liveUserMessages[0]?.eventId,
                     payload: {
                         content: { text: command.prompt, type: "text" },
-                        messageId: requestedEventId,
+                        messageId: "user-1",
                         sessionUpdate: "user_message_chunk",
                     },
                 });
@@ -559,14 +637,13 @@ describe("daemon V2 live delivery", () => {
                     expect(userMessages[1]).toMatchObject({
                         payload: {
                             content: {
-                                resource: {
-                                    mimeType: "text/plain",
-                                    text: "attached context",
-                                    uri: "attachment:///context.txt",
-                                },
-                                type: "resource",
+                                byteLength: new TextEncoder().encode("attached context").byteLength,
+                                encoding: "text",
+                                mimeType: "text/plain",
+                                type: "external_resource",
+                                uri: "attachment:///context.txt",
                             },
-                            messageId: requestedEventId,
+                            messageId: "user-1",
                             sessionUpdate: "user_message_chunk",
                         },
                     });

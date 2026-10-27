@@ -8,7 +8,7 @@ metadata:
 
 # Engineering Rules
 
-These rules apply to the entire repository. You must read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request; it defines contribution and implementation requirements. See [TESTING.md](TESTING.md) for delivery and testing guidance.
+These rules apply to the entire repository. You must read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request; it defines contribution and implementation requirements. See [TESTING.md](TESTING.md) for delivery and testing guidance. Every code review must also follow [CODE_REVIEW.md](CODE_REVIEW.md).
 
 ## Trust Boundary
 
@@ -33,6 +33,46 @@ Make illegal states unrepresentable.
 
 - Use `readonly` properties for protocol messages, domain values, and port interfaces.
 - Declare callbacks and port operations as function properties, such as `readonly send: (message: Message) => Promise<void>`, so `strictFunctionTypes` checks their parameter variance.
+
+## Compatibility is mandatory by default
+
+Morty Web, SDK clients, deployed services, local Mobius Runtimes, and stored data
+upgrade independently. Preserve existing external contracts and behavior in both
+directions: new clients with old servers/Runtimes, and old clients with new
+servers/Runtimes. A successful all-new deployment does not establish compatibility.
+
+- Only an explicit instruction from the human user or maintainer to make a
+  particular breaking change authorizes incompatibility. A request to refactor,
+  simplify, upgrade, bump a major version, or remove apparently unused code does
+  not authorize it. AI agents must not invent an end-of-support decision.
+- When a breaking change is explicitly required, limit it to the authorized
+  contract and record the instruction, affected peers/data, rollout, and recovery
+  consequences in the PR. Preserve every unaffected contract. Do not request the
+  same authorization again when it is already explicit.
+- Preserve accepted request formats, response meanings, defaults, error codes,
+  and retry/idempotency guarantees. New fields, enum values, or message kinds are
+  not automatically compatible: check the actual released readers and callers.
+  Silently ignoring an unknown operation is not successful execution.
+- Enable a new operation or representation only after establishing support for
+  that contract at the relevant protocol boundary. Define the behavior of peers
+  that omit the new capability; they must retain the existing supported behavior.
+  Agent/ACP capabilities do not establish Runtime/relay protocol support.
+- Deploy compatible receivers before enabling new senders. Keep the old path
+  usable during independent upgrades and supported rollback. Do not require a
+  browser refresh, Runtime upgrade, or synchronized deployment to preserve an
+  existing supported operation.
+- Keep compatibility decisions in the owning protocol adapter, not scattered
+  across views or callers. Prefer negotiated protocol support to application
+  release-number special cases. Reuse authoritative connection information;
+  do not add duplicate persistent capability state.
+- Do not switch protocol representations or generate a new operation identity
+  after an ambiguous failure to guess whether a peer supports an operation.
+  Preserve the request's meaning, identity, and existing recovery guarantees.
+- For a changed contract, provide focused integration/contract evidence for both
+  mixed-version directions using released peers or independently retained old
+  contracts. Do not replace the old baseline with the new implementation or
+  weaken validation, authorization, or size limits to make compatibility pass.
+  Follow [CODE_REVIEW.md](CODE_REVIEW.md) before declaring the change ready.
 
 ## Async Operations
 

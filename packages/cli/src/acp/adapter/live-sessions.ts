@@ -6,7 +6,7 @@ import { arraysEqual, isRecord, truncate } from "../../util/value-utils.ts";
 import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "../acp-error.ts";
 import { buildPromptContent, type PromptContent } from "../client/prompt-content.ts";
 import type { AcpContentExternalizer } from "../content/content-externalizer.ts";
-import type { AdapterSessionTarget } from "../native-history/preview-contract.ts";
+import type { AdapterPromptResult, AdapterSessionTarget } from "../native-history/preview-contract.ts";
 import { nativeSessionIdSchema } from "../protocol/native-session.ts";
 import {
     SessionConfigProtocolError,
@@ -127,22 +127,37 @@ export class AcpLiveSessions {
         signal.throwIfAborted();
     };
 
-    readonly prompt = async (target: AdapterSessionTarget, content: PromptContent, signal: AbortSignal) => {
+    readonly prompt = async (
+        target: AdapterSessionTarget,
+        content: PromptContent,
+        signal: AbortSignal,
+    ): Promise<AdapterPromptResult> => {
         signal.throwIfAborted();
         const { connection, scope } = this.#resolve(target);
         const prompt = buildPromptContent(content, scope.capabilities());
-        const response: unknown = await connection.race(
-            connection.connection.agent.request(
-                methods.agent.session.prompt,
-                { prompt, sessionId: target.nativeSessionId },
-                { cancellationSignal: signal },
-            ),
-            "ACP agent exited during a prompt",
-            signal,
-        );
+        const response: unknown = await connection
+            .race(
+                connection.connection.agent.request(
+                    methods.agent.session.prompt,
+                    { prompt, sessionId: target.nativeSessionId },
+                    { cancellationSignal: signal },
+                ),
+                "ACP agent exited during a prompt",
+                signal,
+            )
+            .catch(async (cause: unknown) => {
+                signal.throwIfAborted();
+                await connection.events.drained();
+                throw cause;
+            });
         await connection.events.drained();
         try {
-            return decodeAgentPromptResponse(response);
+            const decoded = decodeAgentPromptResponse(response);
+            return {
+                stopReason: decoded.stopReason,
+                ...(decoded.usage === undefined ? {} : { usage: decoded.usage }),
+                ...(decoded._meta === undefined ? {} : { _meta: decoded._meta }),
+            };
         } catch (cause) {
             throw new AcpExecutionError(
                 "ACP agent returned an invalid prompt response",
@@ -156,7 +171,7 @@ export class AcpLiveSessions {
         target: AdapterSessionTarget,
         content: PromptContent,
         signal: AbortSignal,
-    ): Promise<"injected" | "startedNewTurn"> => {
+    ): Promise<{ readonly outcome: "injected" } | { readonly outcome: "startedNewTurn" }> => {
         signal.throwIfAborted();
         const { connection, scope } = this.#resolve(target);
         if (!scope.capabilities().steering) {
@@ -182,7 +197,7 @@ export class AcpLiveSessions {
         if (isRecord(response)) {
             const outcome = response["outcome"];
             if (outcome === "injected" || outcome === "startedNewTurn") {
-                return outcome;
+                return { outcome };
             }
             if (outcome === "promptRequired") {
                 throw new AcpExecutionError(

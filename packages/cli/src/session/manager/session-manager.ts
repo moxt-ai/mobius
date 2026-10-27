@@ -2,7 +2,6 @@ import {
     SESSION_CLOSE_NOTICE_KIND,
     SESSION_CLOSED_ERROR_CODE,
     type SessionCloseNoticeEvent,
-    type SessionConfigOption,
     type SessionEventPayload,
     type SessionStatus,
     type SessionStatusChangedEvent,
@@ -20,7 +19,6 @@ import {
     MemorySessionStore,
     MissingStoredSession,
     type SessionStore,
-    StoredSession,
 } from "../record/session-store.ts";
 import { ActiveExecutions } from "../turn/active-executions.ts";
 import { RuntimeOperations, waitForSharedOperation } from "./operation-drain.ts";
@@ -40,6 +38,7 @@ import {
     type PreparedSession,
     type PromptResult,
     type ResolveAgent,
+    type SessionConfigurationSnapshot,
     type SessionConfigureOptions,
     type SessionObserver,
     type SessionPrepareOptions,
@@ -441,15 +440,17 @@ export class SessionManager {
                     const configOptions =
                         model === undefined || modelIsFixed
                             ? prepared.configOptions
-                            : await runtime.configure({
-                                  ...options,
-                                  booleanValue: false,
-                                  configId: modelOption?.id ?? "model",
-                                  requestId: "agent-settings-model",
-                                  sessionId: `agent-settings-${crypto.randomUUID()}`,
-                                  value: model,
-                                  valueType: "select",
-                              });
+                            : (
+                                  await runtime.configure({
+                                      ...options,
+                                      booleanValue: false,
+                                      configId: modelOption?.id ?? "model",
+                                      requestId: "agent-settings-model",
+                                      sessionId: `agent-settings-${crypto.randomUUID()}`,
+                                      value: model,
+                                      valueType: "select",
+                                  })
+                              ).configOptions;
                     return new AgentSettingsSnapshot(
                         prepared.agentName,
                         prepared.agentVersion,
@@ -533,7 +534,7 @@ export class SessionManager {
             return (await this.#replaceExecutionPreparation(existing, options)).prepared();
         });
 
-    readonly configureSession = async (options: SessionConfigureOptions): Promise<readonly SessionConfigOption[]> =>
+    readonly configureSession = async (options: SessionConfigureOptions): Promise<SessionConfigurationSnapshot> =>
         this.#operations.run(options, async (options) => {
             return await this.#executionProcesses.use(options.sessionId, async () => {
                 const runtime = await this.ensureSession(options);
@@ -542,37 +543,22 @@ export class SessionManager {
         });
 
     readonly renameSession = async (
-        sessionId: string,
+        options: SessionPrepareOptions,
         title: string,
-        signal: AbortSignal,
     ): Promise<{ readonly title: string; readonly updatedAt: string }> =>
-        await this.#executionProcesses.use(sessionId, async () =>
-            this.#operations.run({ sessionId, signal }, async (options) => {
+        await this.#executionProcesses.use(options.sessionId, async () =>
+            this.#operations.run(options, async (options) => {
                 this.#assertOpen(options.sessionId);
+                // Process reclamation must not turn a native rename into a metadata-only write.
+                // Keep the same process borrowed through recovery and the acknowledged rename.
+                if (this.#executionProcesses.get(options.sessionId) === undefined) {
+                    await this.#prepareSession(options, { kind: "interactive-only" }, "keep-closed");
+                }
                 const runtime = this.#executionProcesses.get(options.sessionId);
-                if (runtime !== undefined) {
-                    return await runtime.renameSession(title, options.signal);
+                if (runtime === undefined) {
+                    throw new AcpExecutionError("ACP session did not start");
                 }
-                const stored = this.#store.read(options.sessionId);
-                if (!(stored instanceof FoundStoredSession)) {
-                    throw new AcpExecutionError("The Session was not found", {}, "session_not_found");
-                }
-                const normalized = title.slice(0, 500);
-                const updatedAt = new Date().toISOString();
-                this.#store.write(
-                    new StoredSession(
-                        stored.session.sessionId,
-                        stored.session.agentId,
-                        stored.session.nativeSessionId,
-                        stored.session.cwd,
-                        stored.session.additionalDirectories,
-                        stored.session.prompted,
-                        normalized,
-                        updatedAt,
-                        stored.session.configurations,
-                    ),
-                );
-                return { title: normalized, updatedAt };
+                return await runtime.renameSession(title, options.signal);
             }),
         );
 

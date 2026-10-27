@@ -2,12 +2,17 @@ import { abortAllDurableObjects, evictDurableObject, runInDurableObject } from "
 import { env } from "cloudflare:workers";
 import { DurableObjectSqlDatabase, RuntimeRelay, type SessionRecording } from "@moxt-ai/mobius-relay-core";
 import {
+    decodeContentChunkFrame,
     decodeDaemonToServiceMessage,
     decodeServiceToDaemonMessage,
     decodeSessionAccessCredential,
     decodeSessionEventEnvelope,
     decodeSessionPromptCommand,
     decodeSessionRecordingHistory,
+    encodeContentAvailableEvent,
+    encodeContentChunkFrame,
+    encodeContentReadyEvent,
+    encodeFileBeginEvent,
     encodeNativeSessionRequest,
     encodeNativeSessionResult,
     encodeSessionClosedEvent,
@@ -173,14 +178,11 @@ class UnavailableProjectNamespace implements DurableObjectNamespace {
 }
 
 class SocketMessages {
-    readonly #messages: string[] = [];
-    readonly #resolvers: Array<(message: string) => void> = [];
+    readonly #messages: unknown[] = [];
+    readonly #resolvers: Array<(message: unknown) => void> = [];
 
     constructor(socket: WebSocket) {
         socket.addEventListener("message", (event) => {
-            if (typeof event.data !== "string") {
-                throw new Error("Expected a text WebSocket message");
-            }
             const resolve = this.#resolvers.shift();
             if (resolve === undefined) {
                 this.#messages.push(event.data);
@@ -190,11 +192,19 @@ class SocketMessages {
         });
     }
 
-    readonly next = (): Promise<string> => {
+    readonly nextFrame = (): Promise<unknown> => {
         const message = this.#messages.shift();
         return message === undefined
             ? new Promise((resolve) => this.#resolvers.push(resolve))
             : Promise.resolve(message);
+    };
+
+    readonly next = async (): Promise<string> => {
+        const message = await this.nextFrame();
+        if (typeof message !== "string") {
+            throw new Error("Expected a text WebSocket message");
+        }
+        return message;
     };
 }
 
@@ -1012,10 +1022,9 @@ describe.sequential("Platform Session-only boundary", () => {
                     commandId: "local-codex-command",
                     directoryId: "root",
                     disposition: "reject",
-                    images: [],
+                    attachments: [],
                     kind: "session.prompt",
                     prompt: "show the local answer",
-                    resources: [],
                     sessionId,
                     targetCommandId: "",
                 }),
@@ -1972,6 +1981,33 @@ async function connectRuntimeDaemon(slug: string, options: { readonly anchorCloc
                 ),
                 environment,
             ),
+        uploadContent: async (
+            contentKey: string,
+            bytes: Uint8Array,
+            metadata: {
+                readonly kind: "image" | "resource";
+                readonly mediaType: string;
+                readonly name: string;
+                readonly uri: string;
+            },
+        ) =>
+            await worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/content/${contentKey}?${new URLSearchParams({ uri: metadata.uri }).toString()}`,
+                    {
+                        body: bytes,
+                        headers: {
+                            authorization: `Bearer ${text(sessionAccess, "credential")}`,
+                            "content-type": metadata.mediaType,
+                            "x-mobius-byte-length": String(bytes.byteLength),
+                            "x-mobius-content-kind": metadata.kind,
+                            "x-mobius-file-name": encodeURIComponent(metadata.name),
+                        },
+                        method: "PUT",
+                    },
+                ),
+                environment,
+            ),
         issueAppCredential: async (permissions: readonly string[]) =>
             text(
                 await responseJson(
@@ -2091,6 +2127,14 @@ async function connectRuntimeDaemon(slug: string, options: { readonly anchorCloc
                 ),
                 environment,
             ),
+        readFile: async (path: string) =>
+            await worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/files/content?${new URLSearchParams({ maxBytes: "1024", path }).toString()}`,
+                    { headers: credentialHeaders(text(sessionAccess, "credential")) },
+                ),
+                environment,
+            ),
         submitRuntimeTurn: (
             idempotencyKey: string,
             credentialTransform: (credential: string) => string = (credential) => credential,
@@ -2109,8 +2153,7 @@ async function connectRuntimeDaemon(slug: string, options: { readonly anchorCloc
                             content: "Direct execution",
                             directoryId: "root",
                             idempotencyKey,
-                            images: [],
-                            resources: [],
+                            attachments: [],
                         }),
                     },
                 ),
@@ -2124,8 +2167,7 @@ async function connectRuntimeDaemon(slug: string, options: { readonly anchorCloc
                         content: `Run ${idempotencyKey}`,
                         directoryId: "root",
                         idempotencyKey,
-                        images: [],
-                        resources: [],
+                        attachments: [],
                     }),
                     headers: credentialHeaders(text(sessionAccess, "credential")),
                     method: "POST",
@@ -2146,6 +2188,15 @@ describe.sequential("Platform Turn submission", () => {
             command: { commandId: "app-command", kind: "session.cancel" },
             payload: { commandId: "app-command", kind: "prompt.completed", stopReason: "cancelled" },
             expected: { turnId: "app-command", idempotencyKey: "cancel-app-command", state: { kind: "cancelled" } },
+        },
+        {
+            label: "cancels the selected message only before it starts",
+            path: "/turns/app-command/cancel-before-start",
+            method: "POST",
+            body: { idempotencyKey: "cancel-app-command" },
+            command: { commandId: "app-command", kind: "session.cancel-before-start" },
+            payload: { commandId: "app-command", kind: "prompt.completed", stopReason: "cancelled" },
+            expected: { turnId: "app-command", idempotencyKey: "cancel-app-command" },
         },
         {
             label: "steers the selected queued message",
@@ -2412,17 +2463,82 @@ describe.sequential("Platform Turn submission", () => {
         }
     });
 
-    // @no-uc: Technical regression; the App Runtime Turn route carries base64 prompt images inline,
-    // so it must be parsed against the protocol attachment budget, not the default 256KB body cap.
-    it("App access delivers a Turn whose inline image exceeds the legacy 256KB body cap", async () => {
-        const runtime = await connectRuntimeDaemon("app-large-image");
+    it("App access uploads raw attachment chunks before submitting a reference-only Turn", async () => {
+        const runtime = await connectRuntimeDaemon("app-binary-attachment");
         try {
-            // A base64 payload well past the historical 256KB body cap, still within the 6MB
-            // prompt-attachment budget. "A" repeated is valid base64 and decodes cleanly.
-            const largeImageData = "A".repeat(400 * 1024);
-            expect(largeImageData.length).toBeGreaterThan(256 * 1024);
-            const submittedImage = { data: largeImageData, mimeType: "image/png", name: "screenshot.png" };
-            const idempotencyKey = "large-image-turn";
+            const bytes = new Uint8Array(400 * 1024).map((_value, index) => index % 251);
+            const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+            const contentKey = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+            const metadata = {
+                kind: "image" as const,
+                mediaType: "image/png",
+                name: "screenshot.png",
+                uri: "attachment:///screenshot.png",
+            };
+            const upload = runtime.uploadContent(contentKey, bytes, metadata);
+            const write = decodeServiceToDaemonMessage(await runtime.daemonMessages.next());
+            expect(write).toMatchObject({
+                byteLength: bytes.byteLength,
+                contentKey,
+                contentKind: "image",
+                kind: "content.write",
+                sessionId: runtime.sessionId,
+            });
+            if (write.kind !== "content.write") {
+                throw new Error("Expected a content write command");
+            }
+            runtime.daemon.send(
+                encodeContentReadyEvent({
+                    kind: "content.ready",
+                    requestId: write.requestId,
+                    sessionId: runtime.sessionId,
+                }),
+            );
+            const chunks: Uint8Array[] = [];
+            for (;;) {
+                const frame = await runtime.daemonMessages.nextFrame();
+                if (typeof frame === "string") {
+                    const command = decodeServiceToDaemonMessage(frame);
+                    if (command.kind === "content.commit" && command.requestId === write.requestId) {
+                        break;
+                    }
+                    continue;
+                }
+                const arrayBuffer =
+                    typeof frame === "object" && frame !== null ? Reflect.get(frame, "arrayBuffer") : undefined;
+                const binary = typeof arrayBuffer === "function" ? await Reflect.apply(arrayBuffer, frame, []) : frame;
+                const chunk = decodeContentChunkFrame(binary);
+                expect(chunk.requestId).toBe(write.requestId);
+                expect(chunk.sequence).toBe(chunks.length);
+                chunks.push(chunk.bytes);
+            }
+            const uploadedBytes = new Uint8Array(chunks.reduce((length, chunk) => length + chunk.byteLength, 0));
+            let offset = 0;
+            for (const chunk of chunks) {
+                uploadedBytes.set(chunk, offset);
+                offset += chunk.byteLength;
+            }
+            expect(uploadedBytes).toEqual(bytes);
+            expect(chunks.length).toBeGreaterThan(1);
+            runtime.daemon.send(
+                encodeContentAvailableEvent({
+                    byteLength: bytes.byteLength,
+                    contentKey,
+                    kind: "content.available",
+                    requestId: write.requestId,
+                    sessionId: runtime.sessionId,
+                }),
+            );
+            const attachment = await responseJson(await upload, 200);
+            const attachmentMetadata = {
+                kind: metadata.kind,
+                mimeType: metadata.mediaType,
+                name: metadata.name,
+                uri: metadata.uri,
+            };
+            expect(attachment).toEqual({ byteLength: bytes.byteLength, contentKey, ...attachmentMetadata });
+
+            const idempotencyKey = "binary-attachment-turn";
             const response = runtime.appSessionRequest("/turns", {
                 method: "POST",
                 body: {
@@ -2432,8 +2548,7 @@ describe.sequential("Platform Turn submission", () => {
                     directoryId: "root",
                     disposition: "reject",
                     idempotencyKey,
-                    images: [submittedImage],
-                    resources: [],
+                    attachments: [attachment],
                     sessionConfigurations: [],
                     targetCommandId: "",
                 },
@@ -2443,13 +2558,69 @@ describe.sequential("Platform Turn submission", () => {
                 response.then((result) => ({ kind: "response", message: String(result.status) })),
             ]);
             expect(first).toMatchObject({ kind: "command" });
-            expect(decodeServiceToDaemonMessage(first.message)).toMatchObject({
+            const encodedPrompt = first.message;
+            expect(encodedPrompt).not.toContain("base64");
+            expect(encodedPrompt).not.toContain(String(bytes.slice(0, 32)));
+            expect(decodeServiceToDaemonMessage(encodedPrompt)).toMatchObject({
+                attachments: [{ byteLength: bytes.byteLength, contentKey, ...attachmentMetadata }],
                 kind: "session.prompt",
                 commandId: idempotencyKey,
-                images: [submittedImage],
             });
             runtime.startTurn(idempotencyKey, "1");
             expect(await responseJson(await response, 200)).toMatchObject({ turnId: idempotencyKey });
+        } finally {
+            runtime.daemon.close(1000, "Test complete");
+        }
+    });
+
+    it("Given a cancelled file response, When a late chunk arrives, Then the shared daemon remains available", async () => {
+        const runtime = await connectRuntimeDaemon("cancelled-file-chunk");
+        try {
+            const pending = runtime.readFile("/workspace/image.png");
+            const read = decodeServiceToDaemonMessage(await runtime.daemonMessages.next());
+            if (read.kind !== "file.read") {
+                throw new Error("Expected a file read command");
+            }
+            runtime.daemon.send(
+                encodeFileBeginEvent({
+                    byteLength: 2,
+                    kind: "file.begin",
+                    mediaType: "image/png",
+                    modifiedAt: "2026-09-18T00:00:00.000Z",
+                    name: "image.png",
+                    requestId: read.requestId,
+                    sessionId: runtime.sessionId,
+                }),
+            );
+            const response = await pending;
+            await response.body?.cancel();
+
+            runtime.daemon.send(
+                encodeContentChunkFrame({
+                    bytes: new Uint8Array([1, 2]),
+                    requestId: read.requestId,
+                    sequence: 0,
+                }),
+            );
+
+            const query = runtime.queryActiveTurn(new AbortController().signal);
+            const command = decodeServiceToDaemonMessage(await runtime.daemonMessages.next());
+            if (command.kind !== "native.session.request") {
+                throw new Error("Expected an unrelated native query to reach the daemon");
+            }
+            runtime.daemon.send(
+                encodeNativeSessionResult({
+                    action: "active-turn",
+                    kind: "native.session.result",
+                    queued: [],
+                    requestId: command.requestId,
+                    sessionId: runtime.sessionId,
+                    targetSessionId: runtime.sessionId,
+                    turn: null,
+                }),
+            );
+            expect(await responseJson(await query, 200)).toMatchObject({ action: "active-turn", turn: null });
+            expect(runtime.daemon.readyState).toBe(WebSocket.OPEN);
         } finally {
             runtime.daemon.close(1000, "Test complete");
         }
@@ -2705,7 +2876,7 @@ describe.sequential("Platform Turn submission", () => {
                 ),
                 201,
             );
-            const submitTurn = (idempotencyKey: string, content: string, images: readonly unknown[]) =>
+            const submitTurn = (idempotencyKey: string, content: string, attachments: readonly unknown[]) =>
                 worker.fetch(
                     new Request(
                         `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns`,
@@ -2716,8 +2887,7 @@ describe.sequential("Platform Turn submission", () => {
                                 content,
                                 directoryId: "root",
                                 idempotencyKey,
-                                images,
-                                resources: [],
+                                attachments,
                             }),
                             headers: credentialHeaders(text(sessionAccess, "credential")),
                             method: "POST",
@@ -2833,8 +3003,7 @@ describe.sequential("Platform Turn submission", () => {
                         directoryId: "root",
                         disposition: "queue",
                         idempotencyKey: "queued-follow-up",
-                        images: [],
-                        resources: [],
+                        attachments: [],
                         targetCommandId: "long-first-turn",
                     }),
                     headers: credentialHeaders(text(sessionAccess, "credential")),
@@ -2877,8 +3046,7 @@ describe.sequential("Platform Turn submission", () => {
                         directoryId: "root",
                         disposition: "queue",
                         idempotencyKey: "cross-session-queued",
-                        images: [],
-                        resources: [],
+                        attachments: [],
                         targetCommandId: "long-first-turn",
                     }),
                     headers: credentialHeaders(text(sessionAccess, "credential")),
@@ -2930,7 +3098,7 @@ describe.sequential("Platform Turn submission", () => {
             });
 
             expect(
-                await responseJson(await submitTurn("invalid-image-turn", "describe this", [{ type: "image" }]), 400),
+                await responseJson(await submitTurn("invalid-image-turn", "describe this", [{ kind: "image" }]), 400),
             ).toMatchObject({ error: { code: "invalid_request" } });
             expect(await responseJson(await submitTurn("oversized-turn", "x".repeat(100_001), []), 400)).toMatchObject({
                 error: { code: "invalid_request" },
@@ -2948,8 +3116,7 @@ describe.sequential("Platform Turn submission", () => {
                                     directoryId: "root",
                                     disposition: "reject",
                                     idempotencyKey: "invalid-runtime-turn",
-                                    images: [{ type: "image" }],
-                                    resources: [],
+                                    attachments: [{ kind: "image" }],
                                     sessionConfigurations: [],
                                     targetCommandId: "",
                                 }),

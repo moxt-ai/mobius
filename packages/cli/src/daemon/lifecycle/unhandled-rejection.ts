@@ -1,3 +1,4 @@
+import type { InstallationDirectory } from "../../storage/installation/installation-files.ts";
 import { BoundedLineLog } from "../../storage/logs/bounded-log.ts";
 import { logDirectory, unhandledRejectionLogFilename } from "../../storage/logs/log-files.ts";
 
@@ -29,7 +30,7 @@ function describeRejection(reason: unknown): string {
 export interface UnhandledRejectionGuard {
     // Rejections can fire before the daemon knows its control directory, so
     // entries are buffered until the first bind; stderr always carries them.
-    readonly bindStateDirectory: (stateDirectory: string) => void;
+    readonly bindStateDirectory: (stateDirectory: InstallationDirectory) => void;
     readonly release: () => void;
 }
 
@@ -69,7 +70,7 @@ export function surviveUnhandledRejections(role: DaemonProcessRole): UnhandledRe
     };
     process.on("unhandledRejection", record);
     return {
-        bindStateDirectory: (stateDirectory: string): void => {
+        bindStateDirectory: (stateDirectory: InstallationDirectory): void => {
             if (log !== null) {
                 return;
             }

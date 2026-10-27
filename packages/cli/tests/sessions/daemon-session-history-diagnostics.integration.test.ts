@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+    decodeContentChunkFrame,
     decodeFileBeginEvent,
-    decodeFileChunkEvent,
     decodeFileEndEvent,
     decodeMessageKind,
     decodeSessionEvent,
@@ -83,10 +83,9 @@ if (process.argv.includes("--version")) {
                         commandId: "external-image-seed-turn",
                         directoryId: "default",
                         disposition: SessionPromptDisposition.Reject,
-                        images: [],
+                        attachments: [],
                         kind: "session.prompt",
                         prompt: "Seed native history",
-                        resources: [],
                         sessionId: peer.sessionId,
                         targetCommandId: "",
                     }),
@@ -153,12 +152,14 @@ if (process.argv.includes("--version")) {
                     );
                     const chunks: Buffer[] = [];
                     for (;;) {
-                        const message = await peer.nextMessage();
+                        const message = await peer.nextFrame();
+                        if (typeof message !== "string") {
+                            chunks.push(Buffer.from(decodeContentChunkFrame(message).bytes));
+                            continue;
+                        }
                         const messageKind = decodeMessageKind(message);
                         if (messageKind === "file.begin") {
                             expect(decodeFileBeginEvent(message).mediaType).toBe(mediaType);
-                        } else if (messageKind === "file.chunk") {
-                            chunks.push(Buffer.from(decodeFileChunkEvent(message).data, "base64"));
                         } else if (messageKind === "file.end") {
                             decodeFileEndEvent(message);
                             break;

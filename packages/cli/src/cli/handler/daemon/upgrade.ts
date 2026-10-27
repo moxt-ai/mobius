@@ -15,11 +15,9 @@ export function registerUpgradeCommand(program: Command, context: CliContext): v
             const signal = context.shutdownSignal;
             const control = await openMobiusControlInstallation(signal, process.env);
             // Keep an already-running daemon, even when it is newer than this CLI.
-            const running = await readWorkingProcessVersion(control.stateDirectory, signal);
-            const current = running ?? context.version;
-            if (running === null) {
-                await ensureWorkingProcess(control.stateDirectory, context.version, signal);
-            }
+            const current =
+                (await readWorkingProcessVersion(control.stateDirectory, signal)) ??
+                (await ensureWorkingProcess(control.stateDirectory, context.version, signal));
             await reloadDaemon(control.stateDirectory, signal);
             const attempt = await requestDaemonReleaseUpgrade(control.stateDirectory, current, signal);
             if (attempt.kind === "current") {

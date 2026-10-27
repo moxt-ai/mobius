@@ -16,6 +16,8 @@ import {
 } from "@moxt-ai/mobius-relay-core";
 import type { SqlDatabase } from "@moxt-ai/mobius-relay-core/database";
 import {
+    CONTENT_WRITE_MAX_BYTES,
+    decodeContentWriteCommand,
     decodeFileReadCommand,
     decodeMessageKind,
     decodeNativeSessionRequest,
@@ -82,7 +84,6 @@ import {
     type PlatformStorageBindings,
     PlatformStorageRegistry,
 } from "./storage/platform-database-resolver.ts";
-import { PlatformProjectAuthorizationStorage } from "./storage/platform-project-authorization-storage.ts";
 import { RecordingPolicyStorage } from "./storage/recording-policy-storage.ts";
 
 export interface PlatformRelayBindings extends PlatformStorageBindings, ProjectWorkerRoutingBindings {
@@ -127,12 +128,11 @@ const sessionIdentifier = v.custom<Identifier>(isIdentifier);
 const sessionPromptBody = v.strictObject({
     additionalDirectoryIds: v.pipe(v.array(v.string()), v.maxLength(16)),
     agentId: v.optional(sessionIdentifier),
+    attachments: v.pipe(v.array(v.unknown()), v.maxLength(16)),
     content: v.pipe(v.string(), v.maxLength(100000)),
     disposition: v.optional(v.picklist(["reject", "queue", "steer"]), "reject"),
     directoryId: v.optional(v.custom<string>(isDirectoryIdentifier)),
     idempotencyKey: sessionIdentifier,
-    images: v.pipe(v.array(v.unknown()), v.maxLength(8)),
-    resources: v.pipe(v.array(v.unknown()), v.maxLength(32)),
     sessionConfigurations: v.optional(v.pipe(v.array(v.unknown()), v.maxLength(100)), []),
     targetCommandId: v.optional(v.string(), ""),
 });
@@ -142,6 +142,7 @@ const sessionConfigurationBody = v.strictObject({
     agentId: sessionIdentifier,
     booleanValue: v.boolean(),
     configId: sessionIdentifier,
+    expectedConfigurationRevision: v.optional(sessionIdentifier),
     directoryId: v.custom<string>(isDirectoryIdentifier),
     value: v.pipe(v.string(), v.maxLength(500)),
     valueType: v.picklist(["select", "boolean"]),
@@ -261,7 +262,14 @@ export function createPlatformApplication(
             "*",
             createBrowserCors(
                 ["GET", "POST", "PUT"],
-                ["authorization", "content-type", "x-mobius-oidc-provider"],
+                [
+                    "authorization",
+                    "content-type",
+                    "x-mobius-byte-length",
+                    "x-mobius-content-kind",
+                    "x-mobius-file-name",
+                    "x-mobius-oidc-provider",
+                ],
                 authentication.allowedOrigins,
             ),
         )
@@ -480,10 +488,9 @@ export function createPlatformApplication(
                         commandId: body.idempotencyKey,
                         directoryId: identity.directoryId,
                         disposition: body.disposition,
-                        images: body.images,
+                        attachments: body.attachments,
                         kind: "session.prompt",
                         prompt: body.content,
-                        resources: body.resources,
                         sessionConfigurations: body.sessionConfigurations,
                         sessionId,
                         targetCommandId: body.targetCommandId,
@@ -587,6 +594,75 @@ export function createPlatformApplication(
                 ),
                 context.req.raw.signal,
             );
+        })
+        .put("/:sessionId/content/:contentKey", sessionAccessTargetMiddleware, async (context) => {
+            const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];
+            if (credential === undefined) {
+                return context.json(
+                    { error: { code: "session_access_required", message: "A Session credential is required" } },
+                    401,
+                );
+            }
+            const access = await context.var.sessionAccess.authorizeSession(
+                context.var.sessionAccessTarget,
+                credential,
+                ProjectPermission.SessionWrite,
+                context.req.raw.signal,
+            );
+            const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
+            const contentKey = v.parse(v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/u)), context.req.param("contentKey"));
+            const byteLength = v.parse(
+                v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(CONTENT_WRITE_MAX_BYTES)),
+                Number(context.req.header("x-mobius-byte-length") ?? ""),
+            );
+            const contentKind = v.parse(v.picklist(["image", "resource"]), context.req.header("x-mobius-content-kind"));
+            const mediaType = v.parse(
+                v.pipe(v.string(), v.minLength(1), v.maxLength(255)),
+                context.req.header("content-type"),
+            );
+            const encodedName = v.parse(
+                v.pipe(v.string(), v.minLength(1), v.maxLength(1_500)),
+                context.req.header("x-mobius-file-name"),
+            );
+            const uri = v.parse(v.pipe(v.string(), v.minLength(1), v.maxLength(4_096)), context.req.query("uri"));
+            const body = context.req.raw.body;
+            if (body === null) {
+                throw new PairingDirectoryError("invalid_request", "The content body is required");
+            }
+            let name: string;
+            try {
+                name = decodeURIComponent(encodedName);
+            } catch (cause) {
+                throw new PairingDirectoryError("invalid_request", "The content name is invalid", { cause });
+            }
+            name = v.parse(v.pipe(v.string(), v.minLength(1), v.maxLength(500)), name);
+            const available = await sessionOperations(context).writeProjectSessionContent(
+                new ProjectScope(access.projectId),
+                access.runtimeId,
+                decodeContentWriteCommand(
+                    JSON.stringify({
+                        byteLength,
+                        contentKey,
+                        contentKind,
+                        kind: "content.write",
+                        mediaType,
+                        name,
+                        requestId: crypto.randomUUID(),
+                        sessionId,
+                    }),
+                ),
+                body,
+                context.req.raw.signal,
+            );
+            context.header("Cache-Control", "no-store");
+            return context.json({
+                byteLength,
+                contentKey: available.contentKey,
+                kind: contentKind,
+                mimeType: mediaType,
+                name,
+                uri,
+            });
         })
         .post("/:sessionId/configuration", sessionAccessTargetMiddleware, async (context) => {
             const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];
@@ -906,7 +982,6 @@ export function createPlatformApplication(
                 authentication,
                 storageRegistry,
                 appAuthentication,
-                new PlatformProjectAuthorizationStorage(databases),
             );
             context.set("control", control);
             context.set("appAuthentication", appAuthentication);

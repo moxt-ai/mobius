@@ -647,35 +647,6 @@ export class PlatformControlPlaneStorage {
         return projects.map((project) => project.project_id);
     };
 
-    readonly listScopedActiveProjectIds = async (
-        credentialId: string,
-        signal: AbortSignal,
-    ): Promise<readonly string[]> => {
-        const projectIds = await this.listCredentialProjectIds(credentialId, signal);
-        const rows = await waitForD1(
-            () =>
-                Promise.all(
-                    projectIds.map((projectId) =>
-                        projectDatabase(this.#databases, projectId)
-                            .prepare(
-                                `SELECT projects.project_id
-                           FROM platform_app_credential_projects AS scopes
-                           JOIN platform_project_authorizations AS projects ON projects.project_id = scopes.project_id
-                          WHERE scopes.credential_id = ? AND projects.project_id = ? AND projects.lifecycle = 'active'
-                            AND NOT EXISTS (SELECT 1 FROM platform_project_app_revocations WHERE app_id = projects.app_id)`,
-                            )
-                            .bind(credentialId, projectId)
-                            .all(),
-                    ),
-                ),
-            signal,
-        );
-        const projects: readonly ProjectIdRow[] = rows.flatMap((result) =>
-            decodeStorageRecords(ProjectIdRowSchema, result.results),
-        );
-        return projects.map((project) => project.project_id);
-    };
-
     readonly nextCredentialRevision = async (appId: string, signal: AbortSignal): Promise<number | null> => {
         const row: CredentialRevisionRow | null = decodeOptionalStorageRecord(
             CredentialRevisionRowSchema,

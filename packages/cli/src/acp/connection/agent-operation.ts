@@ -1,7 +1,10 @@
 import { RequestError } from "@agentclientprotocol/sdk";
+import { z } from "zod";
 import { isRecord, truncate } from "../../util/value-utils.ts";
-import { AcpExecutionError } from "../acp-error.ts";
+import { AcpExecutionError, AcpPromptExecutionError } from "../acp-error.ts";
 import { type AcpEndpointTermination, acpEndpointTerminationError } from "../agent/in-process-endpoint.ts";
+
+const promptFailureIdentitySchema = z.object({ messageId: z.string().min(1).max(2_048) });
 
 function requestErrorMessage(error: RequestError): string {
     const fallback = truncate(error.message, 500);
@@ -48,15 +51,14 @@ export async function raceAgentOperation<T>(
         ]);
     } catch (error) {
         signal.throwIfAborted();
-        if (error instanceof RequestError && error.code === -32_000) {
-            throw new AcpExecutionError(
-                "Agent authentication is required",
-                { cause: error },
-                "authentication_required",
-            );
-        }
         if (error instanceof RequestError) {
-            throw new AcpExecutionError(requestErrorMessage(error), { cause: error }, "acp_agent_error");
+            const code = error.code === -32_000 ? "authentication_required" : "acp_agent_error";
+            const message = error.code === -32_000 ? "Agent authentication is required" : requestErrorMessage(error);
+            const identity = promptFailureIdentitySchema.safeParse(error.data);
+            if (identity.success) {
+                throw new AcpPromptExecutionError(identity.data.messageId, message, { cause: error }, code);
+            }
+            throw new AcpExecutionError(message, { cause: error }, code);
         }
         throw error;
     } finally {

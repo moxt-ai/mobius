@@ -57,6 +57,13 @@
             "when": 1792727685912,
             "tag": "0007_busy_excalibur",
             "breakpoints": true
+        },
+        {
+            "idx": 8,
+            "version": "6",
+            "when": 1793096151435,
+            "tag": "0008_execution_identity",
+            "breakpoints": true
         }
     ]
 }

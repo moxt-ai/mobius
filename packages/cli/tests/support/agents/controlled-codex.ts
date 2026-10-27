@@ -16,7 +16,15 @@ export class ControlledCodexFixture implements AsyncDisposable {
         });
     }
 
-    static async create(): Promise<ControlledCodexFixture> {
+    static async create(
+        options: {
+            readonly holdTurn?: boolean;
+            readonly consumeSteeringAfterFirstTurn?: boolean;
+            readonly endFirstTurnOnSteering?: "completed" | "failed";
+            readonly latePreviousUser?: boolean;
+            readonly skipSecondSteering?: boolean;
+        } = {},
+    ): Promise<ControlledCodexFixture> {
         const directory = await mkdtemp(join(tmpdir(), "mobius-controlled-codex-"));
         const executable = join(directory, "codex.mjs");
         await writeFile(
@@ -34,6 +42,8 @@ if (process.argv[2] !== "app-server") {
 
 let threadNumber = 0;
 let turnNumber = 0;
+let steeringNumber = 0;
+let active;
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
 createInterface({ input: process.stdin }).on("line", (line) => {
     const request = JSON.parse(line);
@@ -45,11 +55,42 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     if (request.method === "turn/start") {
         const threadId = request.params.threadId;
         const turn = { id: "controlled-turn-" + ++turnNumber, status: "inProgress" };
+        active = { threadId, turn };
         send({ id: request.id, result: { turn } });
+        send({ method: "turn/started", params: { threadId, turn } });
+        if (${options.latePreviousUser === true} && turnNumber > 1) {
+            send({ method: "item/started", params: { threadId, turnId: "controlled-turn-1",
+                item: { type: "userMessage", id: "late-cancelled-user", content: [{ type: "text", text: "Late old input" }] },
+            } });
+        }
+        send({ method: "item/started", params: { threadId, turnId: turn.id,
+            item: { type: "userMessage", id: "controlled-user-" + turnNumber, clientId: request.params.clientUserMessageId, content: request.params.input },
+        } });
         send({ method: "thread/settings/updated", params: {
             threadId, threadSettings: { collaborationMode: { mode: "plan" } },
         } });
-        send({ method: "turn/completed", params: { threadId, turn: { ...turn, status: "completed" } } });
+        if (!${options.holdTurn === true}) {
+            send({ method: "turn/completed", params: { threadId, turn: { ...turn, status: "completed" } } });
+        }
+        return;
+    }
+    if (request.method === "turn/steer") {
+        steeringNumber++;
+        send({ id: request.id, result: { turnId: active.turn.id } });
+        if (${options.skipSecondSteering === true} && steeringNumber === 2) return;
+        if (${JSON.stringify(options.endFirstTurnOnSteering ?? null)} !== null && turnNumber === 1) {
+            send({ method: "turn/completed", params: { threadId: active.threadId, turn: { ...active.turn, status: ${JSON.stringify(options.endFirstTurnOnSteering ?? "completed")} } } });
+        }
+        if (${options.consumeSteeringAfterFirstTurn === true} && turnNumber > 1) {
+            send({ method: "item/started", params: { threadId: active.threadId, turnId: active.turn.id,
+                item: { type: "userMessage", id: "controlled-steering-user-" + turnNumber, clientId: request.params.clientUserMessageId, content: request.params.input },
+            } });
+        }
+        return;
+    }
+    if (request.method === "turn/interrupt") {
+        send({ id: request.id, result: {} });
+        send({ method: "turn/completed", params: { threadId: active.threadId, turn: { ...active.turn, status: "interrupted" } } });
         return;
     }
     const result = request.method === "model/list" ? { data: [], nextCursor: null } : {};

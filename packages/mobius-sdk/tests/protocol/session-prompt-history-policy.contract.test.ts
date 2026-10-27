@@ -13,10 +13,9 @@ const prompt = {
     commandId: "command-1",
     directoryId: "directory-1",
     disposition: SessionPromptDisposition.Reject,
-    images: [],
+    attachments: [],
     kind: "session.prompt" as const,
     prompt: "continue",
-    resources: [],
     sessionId: "session-1",
     targetCommandId: "",
 };
@@ -31,6 +30,7 @@ describe("Session prompt history policy", () => {
         expect(decodeSessionPromptCommand(encoded)).toMatchObject({
             historyPolicy: SessionHistoryPolicy.ExecutionOnly,
         });
+        expect(JSON.parse(encoded)).toMatchObject({ images: [], resources: [] });
     });
 
     it("keeps older prompt commands on the eager policy default", () => {

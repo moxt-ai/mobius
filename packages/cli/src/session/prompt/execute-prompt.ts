@@ -11,7 +11,7 @@ import type { ExecutionReceipts } from "../turn/execution-receipts.ts";
 import { resolveSessionDirectories } from "../workspace/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
 import { agentForSessionConfiguration, applyCompleteSessionConfiguration } from "./apply-session-configuration.ts";
-import { type DownloadArtifact, resolvePromptArtifacts } from "./prompt-artifacts.ts";
+import { type ReadPromptArtifact, resolvePromptArtifacts } from "./prompt-artifacts.ts";
 import type { PromptLifecycle } from "./prompt-lifecycle.ts";
 
 export interface ExecutePromptOptions {
@@ -19,7 +19,7 @@ export interface ExecutePromptOptions {
     readonly eventProjection: PromptLifecycle;
     readonly command: SessionPromptCommand;
     readonly resolveAgent: ResolveAgent;
-    readonly downloadArtifact: DownloadArtifact;
+    readonly readArtifact: ReadPromptArtifact;
     readonly reportFailure: ReportFailure;
     readonly directories: WorkspaceDirectoryService;
     readonly sessions: SessionManager;
@@ -42,7 +42,7 @@ export async function executePrompt({
     eventProjection,
     command,
     resolveAgent,
-    downloadArtifact,
+    readArtifact,
     reportFailure,
     directories,
     sessions,
@@ -133,7 +133,7 @@ export async function executePrompt({
             stream.epoch,
             availability.disposition,
         );
-        const attachments = await resolvePromptArtifacts(downloadArtifact, command, signal);
+        const attachments = await resolvePromptArtifacts(readArtifact, command.attachments, signal);
         let stopReason: string;
         if (availability.disposition === SessionPromptDisposition.Steer) {
             await sessions.steerPrompt({

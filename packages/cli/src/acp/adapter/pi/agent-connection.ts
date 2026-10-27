@@ -4,13 +4,46 @@ import { PiAcpEndpoint } from "../../harness/pi/endpoint.ts";
 
 export class PiAgentConnection extends EndpointAgentConnection {
     constructor(options: AgentConnectionLaunchOptions) {
+        let message:
+            | { readonly kind: "none" }
+            | {
+                  readonly kind: "user_message_chunk" | "agent_message_chunk" | "agent_thought_chunk";
+                  readonly messageId: string;
+              } = { kind: "none" };
         const endpoint = new PiAcpEndpoint({
             command: options.command,
             cwd: options.cwd,
             environment: options.environment,
-            onSessionUpdate: options.client.onUpdate,
+            // Raw Pi owns submission boundaries, while synthetic identity stays here.
+            // Adjacent blocks within one submission still share the allocated ID.
+            onUserMessageStart: () => {
+                message = { kind: "none" };
+            },
+            onSessionUpdate: async (notification) => {
+                const update: SessionUpdate = notification.update;
+                switch (update.sessionUpdate) {
+                    case "user_message_chunk":
+                    case "agent_message_chunk":
+                    case "agent_thought_chunk": {
+                        if (message.kind !== update.sessionUpdate) {
+                            message = { kind: update.sessionUpdate, messageId: randomUUID() };
+                        }
+                        await options.client.onUpdate({
+                            ...notification,
+                            update: { ...update, messageId: message.messageId },
+                        });
+                        return;
+                    }
+                    default:
+                        message = { kind: "none" };
+                        await options.client.onUpdate({ ...notification, update });
+                }
+            },
             onBackgroundActivity: (active) => options.onBackgroundActivity?.(active),
         });
         super(endpoint, options.client);
     }
 }
+
+import { randomUUID } from "node:crypto";
+import type { SessionUpdate } from "@agentclientprotocol/sdk";

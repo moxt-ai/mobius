@@ -44,8 +44,7 @@ test("Given a real claude native Session, When the active prompt is cancelled wi
                         bindingId: peer.bindingId,
                         directoryId: "default",
                         additionalDirectoryIds: [],
-                        images: [],
-                        resources: [],
+                        attachments: [],
                         prompt: "Reply with a short greeting, without using tools",
                         disposition:
                             targetCommandId.length > 0
@@ -137,10 +136,9 @@ test("Given a completed real Claude Session, When it is forked, Then its history
                     commandId,
                     directoryId: "default",
                     disposition: SessionPromptDisposition.Reject,
-                    images: [],
+                    attachments: [],
                     kind: "session.prompt",
                     prompt: "Reply with a short greeting, without using tools",
-                    resources: [],
                     sessionId,
                     targetCommandId: "",
                 }),

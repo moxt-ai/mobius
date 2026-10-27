@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout } from "node:timers/promises";
-import type { PromptResponse } from "@agentclientprotocol/sdk";
+import type { ContentBlock, PromptResponse } from "@agentclientprotocol/sdk";
 import { z } from "zod";
 import { AcpExecutionError } from "../../acp-error.ts";
 import { type AcpEndpointTermination, acpEndpointTerminationError } from "../../agent/in-process-endpoint.ts";
@@ -9,6 +9,8 @@ import { CODEX_HISTORY_TURN_PAGE_LIMIT, threadTurnsPageSchema } from "./app-serv
 import { decodeThreadItem, reasoningText, toolCallUpdate } from "./items.ts";
 import type { CodexSessionAgent } from "./session-agent.ts";
 import type { CodexSessionUpdate } from "./session-update.ts";
+import { promptResultWithMessageId } from "./session-update.ts";
+import { userMessageUpdates } from "./user-message.ts";
 
 const REQUEST_TIMEOUT = 30_000;
 const POLL_INTERVAL = 500;
@@ -20,6 +22,13 @@ const queuePageSchema = z.object({
     nextCursor: z.string().nullish(),
 });
 
+interface PendingPrompt {
+    readonly content: readonly ContentBlock[];
+    readonly clientId: string;
+    readonly completion: PromiseWithResolvers<PromptResponse>;
+    input: { readonly kind: "awaiting" } | { readonly kind: "identified"; readonly messageId: string };
+}
+
 /** A locked thread remains owned by Codex. This connection only reads it and appends queued input. */
 export class CodexBorrowedAcpAgent implements CodexSessionAgent {
     readonly steeringSupported = false;
@@ -28,7 +37,7 @@ export class CodexBorrowedAcpAgent implements CodexSessionAgent {
     readonly #emit: (update: CodexSessionUpdate) => Promise<void>;
     readonly #closed = new AbortController();
     readonly #seen = new Map<string, string>();
-    #pending: { readonly clientId: string; readonly completion: PromiseWithResolvers<PromptResponse> } | null = null;
+    #pending: PendingPrompt | null = null;
     #watch: Promise<void> | null = null;
     #lifecycle:
         | { readonly kind: "following" }
@@ -116,7 +125,10 @@ export class CodexBorrowedAcpAgent implements CodexSessionAgent {
                         const clientId: unknown =
                             typeof raw === "object" && raw !== null ? Reflect.get(raw, "clientId") : undefined;
                         matches ||= clientId === this.#pending?.clientId;
-                        // The daemon already echoes its own prompt. External local input is history.
+                        if (this.#pending !== null && clientId === this.#pending.clientId) {
+                            this.#pending.input = { kind: "identified", messageId: item.id };
+                        }
+                        // Native user items, including this client's queued input, own their identities.
                         const text = item.content
                             .flatMap((block) =>
                                 typeof block === "object" &&
@@ -127,17 +139,15 @@ export class CodexBorrowedAcpAgent implements CodexSessionAgent {
                                     : [],
                             )
                             .join("");
-                        if (
-                            !baseline &&
-                            !this.#seen.has(key) &&
-                            clientId !== this.#pending?.clientId &&
-                            text.length > 0
-                        ) {
-                            await this.#emit({
-                                sessionUpdate: "user_message_chunk",
-                                messageId: item.id,
-                                content: { type: "text", text },
-                            });
+                        if (!baseline && !this.#seen.has(key)) {
+                            for (const update of userMessageUpdates(
+                                item,
+                                this.#pending !== null && clientId === this.#pending.clientId
+                                    ? this.#pending.content
+                                    : undefined,
+                            )) {
+                                await this.#emit(update);
+                            }
                         }
                         this.#seen.set(key, text);
                         continue;
@@ -186,7 +196,11 @@ export class CodexBorrowedAcpAgent implements CodexSessionAgent {
         }
     };
 
-    readonly prompt = async (input: readonly unknown[], signal: AbortSignal): Promise<PromptResponse> => {
+    readonly prompt = async (
+        input: readonly unknown[],
+        signal: AbortSignal,
+        content: readonly ContentBlock[],
+    ): Promise<PromptResponse> => {
         signal.throwIfAborted();
         if (this.#lifecycle.kind === "failed") {
             throw this.#lifecycle.error;
@@ -197,7 +211,12 @@ export class CodexBorrowedAcpAgent implements CodexSessionAgent {
         if (this.#pending !== null) {
             throw new AcpExecutionError("Another prompt is already running", {}, "session_busy");
         }
-        const pending = { clientId: randomUUID(), completion: Promise.withResolvers<PromptResponse>() };
+        const pending: PendingPrompt = {
+            content,
+            clientId: randomUUID(),
+            completion: Promise.withResolvers<PromptResponse>(),
+            input: { kind: "awaiting" },
+        };
         this.#pending = pending;
         void pending.completion.promise.catch(() => {});
         const abort = (): void => pending.completion.reject(signal.reason);
@@ -224,7 +243,14 @@ export class CodexBorrowedAcpAgent implements CodexSessionAgent {
             }
             const result = await pending.completion.promise;
             outcome = result.stopReason === "cancelled" ? "cancelled" : "completed";
-            return result;
+            return pending.input.kind === "identified"
+                ? await promptResultWithMessageId(Promise.resolve(result), pending.input.messageId)
+                : result;
+        } catch (cause) {
+            if (pending.input.kind === "identified" && !signal.aborted) {
+                return await promptResultWithMessageId(Promise.reject(cause), pending.input.messageId);
+            }
+            throw cause;
         } finally {
             signal.removeEventListener("abort", abort);
             this.#pending = null;

@@ -40,14 +40,14 @@ const textContentSchema = z.object({ ...contentFields, text: boundedString, type
 const imageContentSchema = z
     .object({
         ...contentFields,
-        data: boundedString,
+        data: z.string(),
         mimeType: shortString,
         type: z.literal("image"),
         uri: boundedString.nullable().optional(),
     })
     .readonly();
 const audioContentSchema = z
-    .object({ ...contentFields, data: boundedString, mimeType: shortString, type: z.literal("audio") })
+    .object({ ...contentFields, data: z.string(), mimeType: shortString, type: z.literal("audio") })
     .readonly();
 const externalImageContentSchema = z
     .object({
@@ -100,7 +100,7 @@ const textResourceSchema = z
     .readonly();
 const blobResourceSchema = z
     .object({
-        blob: boundedString,
+        blob: z.string(),
         mimeType: shortString.nullable().optional(),
         uri: boundedString,
     })
@@ -371,7 +371,13 @@ export const lifecycleMetadataSchema = z.discriminatedUnion("kind", [
     z
         .object({ ...lifecycleBase, attemptId: identifier, epoch: identifier, kind: z.literal("prompt.started") })
         .readonly(),
-    z.object({ ...lifecycleBase, kind: z.literal("prompt.completed"), stopReason: shortString }).readonly(),
+    z
+        .object({
+            ...lifecycleBase,
+            kind: z.literal("prompt.completed"),
+            stopReason: shortString,
+        })
+        .readonly(),
     z
         .object({
             ...lifecycleBase,

@@ -1,9 +1,11 @@
 import {
     type AgentSettingsDiscoveredEvent,
+    CONTENT_WRITE_MAX_BYTES,
     decodeAgentSettingsDiscoveredEvent,
     decodeMobiusSessionExport,
     decodeNativeSessionEvents,
     decodeNativeSessionResult,
+    decodePromptAttachment,
     decodeRuntimeDiagnosticsResult,
     decodeSessionClosedEvent,
     decodeSessionConfigReadResult,
@@ -26,6 +28,7 @@ import {
     type NativeSessionEvents,
     type NativeSessionRequest,
     type NativeSessionResult,
+    type PromptAttachment,
     type RuntimeDiagnosticsResult,
     type SessionConfigureCommand,
     type SessionEventLogPage,
@@ -477,6 +480,44 @@ export class MobiusRequestExecutor {
             throw new MobiusValidationError("The Mobius request body is invalid");
         }
         return await this.request(path, "PUT", encoded, true, signal);
+    };
+
+    readonly putContent = async (
+        path: string,
+        bytes: Uint8Array,
+        metadata: { readonly contentKind: "image" | "resource"; readonly mediaType: string; readonly name: string },
+        signal: AbortSignal,
+    ): Promise<unknown> => {
+        const deadline = new RequestDeadline(signal, this.#operationTimeoutMilliseconds);
+        try {
+            const credential = validateCredential(await this.#credentialProvider.credential(deadline.signal));
+            const headers = this.authenticationHeaders(credential, "application/json");
+            headers.set("content-type", metadata.mediaType);
+            headers.set("x-mobius-byte-length", bytes.byteLength.toString());
+            headers.set("x-mobius-content-kind", metadata.contentKind);
+            headers.set("x-mobius-file-name", encodeURIComponent(metadata.name));
+            const body = bytes.slice().buffer;
+            const response = await this.#transport.fetch(
+                new Request(requestUrl(this.#endpoint, path), {
+                    body,
+                    headers,
+                    method: "PUT",
+                    signal: deadline.signal,
+                }),
+            );
+            this.#observeResponse?.({
+                serverTiming: response.headers.get("server-timing"),
+                status: response.status,
+            });
+            if (!response.ok) {
+                await throwApiError(response);
+            }
+            return await responseValue(response);
+        } catch (cause) {
+            return deadline.translate(cause);
+        } finally {
+            deadline.finish();
+        }
     };
 
     readonly delete = async (path: string, signal: AbortSignal): Promise<unknown> =>
@@ -1104,6 +1145,7 @@ export class MobiusSessionResources {
                       | "agentId"
                       | "booleanValue"
                       | "configId"
+                      | "expectedConfigurationRevision"
                       | "directoryId"
                       | "value"
                       | "valueType"
@@ -1201,6 +1243,35 @@ export class MobiusSessionResources {
         decodeMobiusSession(
             await this.#executor.post(sessionPath(this.#projectId, sessionId, "forks-v2"), request, signal),
         );
+
+    readonly uploadContent = async (
+        sessionId: string,
+        input: {
+            readonly bytes: Uint8Array;
+            readonly contentKey: string;
+            readonly kind: "image" | "resource";
+            readonly mediaType: string;
+            readonly name: string;
+            readonly uri: string;
+        },
+        signal: AbortSignal,
+    ): Promise<PromptAttachment> => {
+        if (!/^[a-f0-9]{64}$/u.test(input.contentKey)) {
+            throw new MobiusValidationError("The content key is invalid");
+        }
+        if (input.bytes.byteLength < 1 || input.bytes.byteLength > CONTENT_WRITE_MAX_BYTES) {
+            throw new MobiusValidationError("The content size is invalid");
+        }
+        const query = new URLSearchParams({ uri: input.uri });
+        return decodePromptAttachment(
+            await this.#executor.putContent(
+                `${sessionPath(this.#projectId, sessionId, `content/${input.contentKey}`)}?${query.toString()}`,
+                input.bytes,
+                { contentKind: input.kind, mediaType: input.mediaType, name: input.name },
+                signal,
+            ),
+        );
+    };
 
     readonly readFile = async (
         sessionId: string,

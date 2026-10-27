@@ -12,6 +12,7 @@ import { PairingDirectoryError } from "../../entity/pairing/pairing.ts";
 import type { SessionRuntimeOperations } from "../../gateway/session-runtime-operations.ts";
 import {
     requestRuntimeAgentSettings,
+    requestRuntimeContentWrite,
     requestRuntimeControl,
     requestRuntimeFile,
     requestRuntimeWorkspace,
@@ -74,6 +75,9 @@ export function createLocalSessionOperations(
                 return;
             }
             // The caller has left, but native query cancellation must still reach the daemon.
+            if (typeof message !== "string") {
+                throw signal.reason;
+            }
             const cancellation = decodeNativeSessionCancel(message);
             if (cancellation.requestId !== requestId) {
                 throw signal.reason;
@@ -154,6 +158,16 @@ export function createLocalSessionOperations(
                 return stream.response;
             } catch (cause) {
                 socket.close(1000, "File request ended");
+                throw cause;
+            }
+        },
+        writeProjectSessionContent: async (scope, requestedRuntime, command, body, signal) => {
+            checkTarget(scope.projectId, requestedRuntime);
+            const socket = await connect(command.requestId, command.sessionId, false, signal);
+            try {
+                return await requestRuntimeContentWrite(socket, command, body, signal);
+            } catch (cause) {
+                socket.close(1000, "Content upload ended");
                 throw cause;
             }
         },

@@ -1,4 +1,4 @@
-import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-sdk/protocol";
+import { CONTENT_CHUNK_MAX_BYTES, encodeContentChunkFrame, MOBIUS_API_PREFIX } from "@moxt-ai/mobius-sdk/protocol";
 import { MobiusApiError, MobiusConnectionError, MobiusProtocolError, MobiusValidationError } from "../errors.ts";
 import type { MobiusHttpTransport, MobiusTransportSessionEvent } from "./http-transport.ts";
 
@@ -180,7 +180,9 @@ export class WsTransport implements MobiusHttpTransport {
         request.signal.throwIfAborted();
         request.signal.throwIfAborted();
         const requestId = crypto.randomUUID();
-        const body = await request.text();
+        const binaryRequest = request.headers.has("x-mobius-byte-length");
+        const binaryBody = binaryRequest ? new Uint8Array(await request.arrayBuffer()) : null;
+        const body = binaryRequest ? "" : await request.text();
         request.signal.throwIfAborted();
         const response = new Promise<Response>((resolve, reject) => {
             const abort = (): void => {
@@ -208,8 +210,21 @@ export class WsTransport implements MobiusHttpTransport {
                     method: request.method,
                     path: `${requestUrl.pathname}${requestUrl.search}`,
                     requestId,
+                    ...(binaryBody === null ? {} : { bodyByteLength: binaryBody.byteLength }),
                 }),
             );
+            if (binaryBody !== null) {
+                let sequence = 0;
+                for (let offset = 0; offset < binaryBody.byteLength; offset += CONTENT_CHUNK_MAX_BYTES) {
+                    const chunk = encodeContentChunkFrame({
+                        bytes: binaryBody.subarray(offset, offset + CONTENT_CHUNK_MAX_BYTES),
+                        requestId,
+                        sequence,
+                    });
+                    socket.send(chunk.slice().buffer);
+                    sequence += 1;
+                }
+            }
             this.#touch(socket);
         } catch (cause) {
             const pending = this.#pending.get(requestId);

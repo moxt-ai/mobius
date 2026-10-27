@@ -3,8 +3,6 @@ import type {
     AgentPromptResponse,
     ContentBlock,
     PromptExecutionContext,
-    PromptImage,
-    PromptResource,
     SessionCapabilities,
     SessionCloseNoticeEvent,
     SessionCommand,
@@ -20,6 +18,7 @@ import type {
     SessionStatusChangedEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { AcpAgentDefinition } from "../../acp/agent/agent-definition.ts";
+import type { PromptImageInput, PromptResourceInput } from "../../acp/client/prompt-content.ts";
 import type { Adapter } from "../../acp/native-history/preview-contract.ts";
 import type { NativeSessionOrigin } from "../../acp/protocol/native-session.ts";
 
@@ -52,13 +51,14 @@ export interface AgentSettingsInspectionOptions {
 export interface SessionConfigureOptions extends SessionPrepareOptions {
     readonly booleanValue: boolean;
     readonly configId: string;
+    readonly expectedConfigurationRevision?: string;
     readonly requestId: string;
     readonly value: string;
     readonly valueType: SessionConfigOption["type"];
 }
 
 export interface PromptContentOptions {
-    readonly images: readonly PromptImage[];
+    readonly images: readonly PromptImageInput[];
     readonly lifecycle?: {
         readonly context?: PromptExecutionContext;
         readonly attemptId: string;
@@ -68,7 +68,7 @@ export interface PromptContentOptions {
         readonly targetCommandId?: string;
     };
     readonly prompt: string;
-    readonly resources: readonly PromptResource[];
+    readonly resources: readonly PromptResourceInput[];
 }
 
 export interface SessionTurnOptions extends SessionPrepareOptions, PromptContentOptions {
@@ -123,6 +123,11 @@ export class NullSessionObserver implements SessionObserver {
     readonly onPermissionResolved = (): Promise<void> => Promise.resolve();
 }
 
+export interface SessionConfigurationSnapshot {
+    readonly configOptions: readonly SessionConfigOption[];
+    readonly configurationRevision: string;
+}
+
 export class PreparedSession {
     readonly agentName: string;
     readonly agentVersion: string;
@@ -131,6 +136,7 @@ export class PreparedSession {
     readonly configOptions: readonly SessionConfigOption[];
     readonly prompted: boolean;
     readonly restored: boolean;
+    readonly configurationRevision: string;
 
     constructor(
         agentName: string,
@@ -140,6 +146,7 @@ export class PreparedSession {
         configOptions: readonly SessionConfigOption[],
         prompted: boolean,
         restored: boolean,
+        configurationRevision: string,
     ) {
         this.agentName = agentName;
         this.agentVersion = agentVersion;
@@ -148,6 +155,7 @@ export class PreparedSession {
         this.configOptions = configOptions;
         this.prompted = prompted;
         this.restored = restored;
+        this.configurationRevision = configurationRevision;
     }
 }
 

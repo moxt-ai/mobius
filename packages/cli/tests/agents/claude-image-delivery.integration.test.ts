@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-    decodeFileChunkEvent,
+    decodeContentChunkFrame,
     decodeMessageKind,
     decodeSessionEventEnvelope,
     decodeSessionHistoryPageLoaded,
@@ -55,10 +55,9 @@ test("Given real Claude reads an image, When its reply streams and native histor
                     commandId,
                     directoryId: "default",
                     disposition: SessionPromptDisposition.Reject,
-                    images: [],
+                    attachments: [],
                     kind: "session.prompt",
                     prompt,
-                    resources: [],
                     sessionId: peer.sessionId,
                     targetCommandId: "",
                 }),
@@ -148,14 +147,16 @@ test("Given real Claude reads an image, When its reply streams and native histor
         );
         const chunks: Buffer[] = [];
         for (;;) {
-            const message = await peer.nextMessage();
+            const message = await peer.nextFrame();
+            if (typeof message !== "string") {
+                chunks.push(Buffer.from(decodeContentChunkFrame(message).bytes));
+                continue;
+            }
             const kind = decodeMessageKind(message);
             if (kind === "file.failed") {
                 throw new Error(message);
             }
-            if (kind === "file.chunk") {
-                chunks.push(Buffer.from(decodeFileChunkEvent(message).data, "base64"));
-            } else if (kind === "file.end") {
+            if (kind === "file.end") {
                 break;
             }
         }

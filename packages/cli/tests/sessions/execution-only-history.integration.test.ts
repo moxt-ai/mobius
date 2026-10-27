@@ -104,10 +104,9 @@ test("execution-only prompt propagation keeps the run path out of eager recovery
         directoryId: "default",
         disposition: "reject",
         historyPolicy: SessionHistoryPolicy.ExecutionOnly,
-        images: [],
+        attachments: [],
         kind: "session.prompt" as const,
         prompt: "continue",
-        resources: [],
         sessionId: "session-1",
         targetCommandId: "",
     };

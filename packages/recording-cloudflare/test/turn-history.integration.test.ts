@@ -77,9 +77,9 @@ const permissionResolved = (interactionId: string) =>
         kind: "session.permission.resolved",
     });
 
-async function record(events: readonly unknown[]): Promise<void> {
+async function record(events: readonly unknown[], endpoint = "session-events"): Promise<void> {
     const response = await worker.fetch(
-        new Request("https://recording.internal/v1/session-events", {
+        new Request(`https://recording.internal/v1/${endpoint}`, {
             body: JSON.stringify({ envelope: { events, kind: "session.event.v2" }, projectId, runtimeId }),
             headers: { "content-type": "application/json" },
             method: "POST",
@@ -111,6 +111,170 @@ function promptText(page: SessionRecordingTurnPage): readonly string[] {
 }
 
 describe("Recording Turn history", () => {
+    it.each(["session-events", "session-event-batches"])(
+        "Given duplicate event frames through %s, When Turns are updated and rebuilt, Then each logical event contributes once while raw frames remain intact",
+        async (endpoint) => {
+            const begin = [requested("command-1", "Say hello"), started("command-1")];
+            const output = answer("Hello");
+            await record([...begin, output, output], endpoint);
+            await record([output], endpoint);
+            expect((await turnPage()).turns[0]).toMatchObject({
+                answerLength: 5,
+                items: [{ kind: "answer", text: "Hello" }],
+            });
+
+            const rest = [answer("Hello"), completed("command-1")];
+            await record(rest, endpoint);
+            await record([output], endpoint);
+            const projected = await turnPage();
+            expect(projected.turns[0]).toMatchObject({
+                answerLength: 10,
+                attempt: { kind: "succeeded" },
+                items: [{ kind: "answer", text: "HelloHello" }],
+            });
+            const frames = [...begin, output, output, output, ...rest, output];
+            const raw = await worker.fetch(new Request(sessionPath("events")), env);
+            expect(await raw.json()).toMatchObject({ events: frames });
+
+            const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]));
+            await runInDurableObject(stub, (_instance, state) => {
+                // A deployed projection predates duplicate suppression and may already contain repeated text.
+                state.storage.sql.exec(
+                    "UPDATE recording_projection SET state_json = json_remove(state_json, '$.version')",
+                );
+                state.storage.sql.exec("UPDATE recorded_turn_items SET text = text || 'Hello'");
+                state.storage.sql.exec(
+                    "UPDATE recorded_turns SET turn_json = json_set(turn_json, '$.answerLength', 15)",
+                );
+            });
+            const building = await worker.fetch(new Request(sessionPath("turns")), env);
+            expect(building.status).toBe(503);
+            expect(await building.json()).toMatchObject({ error: { code: "projection_building" } });
+            while (await runDurableObjectAlarm(stub)) {
+                // Rebuild through the same bounded production path as an existing Recording.
+            }
+            expect(await turnPage()).toEqual(projected);
+            const rebuiltRaw = await worker.fetch(new Request(sessionPath("events")), env);
+            expect(await rebuiltRaw.json()).toMatchObject({ events: frames });
+        },
+    );
+    it("Given terminal events without message identities, When Recording persists and reads them, Then their outcomes round-trip unchanged", async () => {
+        const events = [
+            lifecycle({
+                commandId: "completed",
+                kind: "prompt.completed",
+                stopReason: "end_turn",
+            }),
+            lifecycle({
+                commandId: "failed",
+                attemptId: "attempt-2",
+                kind: "prompt.failed",
+                code: "agent_failed",
+                message: "The prompt failed",
+            }),
+            completed("completed-without-id"),
+            lifecycle({
+                commandId: "failed-without-id",
+                attemptId: "attempt-4",
+                kind: "prompt.failed",
+                code: "agent_failed",
+                message: "The prompt failed",
+            }),
+        ];
+        await record(events);
+        const response = await worker.fetch(new Request(sessionPath("events?limit=100")), env);
+        expect(response.status).toBe(200);
+        const page = decodeSessionRecordingHistoryPage(await response.text());
+        expect(page.events).toEqual(events);
+    });
+
+    it("Given a prompt request followed by live user chunks, When a client reads recorded Turns, Then the request remains the single prompt", async () => {
+        const request = requested("command-1", "Inspect the repository");
+        const chunk = () =>
+            acp({
+                content: { text: "Inspect the repository", type: "text" },
+                messageId: request.eventId,
+                sessionUpdate: "user_message_chunk",
+            });
+        await record([request, chunk(), started("command-1"), chunk(), answer("Done"), completed("command-1")]);
+        const page = await turnPage();
+        expect(promptText(page)).toEqual(["Inspect the repository"]);
+        expect(page.turns).toHaveLength(1);
+        expect(page.turns[0]?.itemCount).toBe(1);
+    });
+
+    // @no-uc: Compatibility; named execution reads return metadata without Runtime access or transcript content.
+    it("Given recorded outcomes and waiting work, When execution is queried by command, Then it returns only named execution facts", async () => {
+        await completedTurn("old-command", "A private old prompt", "A private old answer");
+        await completedTurn("newer-command", "A newer prompt", "A newer answer");
+        await record([
+            requested("running-command", "Keep working"),
+            started("running-command"),
+            lifecycle({
+                commandId: "queued-command",
+                content: [{ type: "text", text: "A private queued prompt" }],
+                disposition: "queue",
+                targetCommandId: "running-command",
+                kind: "prompt.requested",
+            }),
+        ]);
+        const query = new URLSearchParams();
+        for (const commandId of ["old-command", "queued-command", "unrecorded-command"]) {
+            query.append("commandId", commandId);
+        }
+        const response = await worker.fetch(new Request(sessionPath(`execution?${query}`)), env);
+        expect(response.status).toBe(200);
+        const snapshot = await response.json();
+        expect(snapshot).toMatchObject({
+            version: 1,
+            sessionId,
+            activeCommands: { commandIds: ["running-command"], generationId: generation },
+            commands: [
+                { commandId: "old-command", attempt: { kind: "succeeded" } },
+                { commandId: "queued-command", attempt: { kind: "none" } },
+            ],
+        });
+        const encoded = JSON.stringify(snapshot);
+        expect(encoded).not.toContain("private");
+        expect(encoded).not.toContain("unrecorded-command");
+    });
+
+    // @no-uc: Technical regression; generation interruption remains an explicit recorded fact.
+    it("Given an interrupted recorded attempt, When a later generation is recorded, Then an execution read preserves the explicit unknown outcome", async () => {
+        await record([requested("interrupted-command", "Inspect"), started("interrupted-command")]);
+        generation = "generation-2";
+        await record([requested("current-command", "Continue"), started("current-command")]);
+        const response = await worker.fetch(new Request(sessionPath("execution?commandId=interrupted-command")), env);
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({
+            activeCommands: { commandIds: ["current-command"], generationId: generation },
+            commands: [
+                {
+                    commandId: "interrupted-command",
+                    attempt: { kind: "indeterminate", reason: "session_generation_changed" },
+                },
+            ],
+        });
+    });
+
+    it("Given more than a thousand active commands, When execution is queried, Then named outcomes remain readable with a bounded active stack", async () => {
+        await completedTurn("finished-command", "Finished prompt", "Finished answer");
+        for (let offset = 0; offset < 1_001; offset += 100) {
+            const events = Array.from({ length: Math.min(100, 1_001 - offset) }, (_, index) => {
+                const commandId = `active-${offset + index}`;
+                return [requested(commandId, "Waiting for completion"), started(commandId)];
+            }).flat();
+            await record(events);
+        }
+
+        const response = await worker.fetch(new Request(sessionPath("execution?commandId=finished-command")), env);
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({
+            commands: [{ commandId: "finished-command", attempt: { kind: "succeeded" } }],
+            activeCommands: { commandIds: Array.from({ length: 1_000 }, (_, index) => `active-${index + 1}`) },
+        });
+    });
+
     it("Given streamed answer, reasoning, and tool chunks, When a client reads the newest Turns, Then each Turn lists merged items in order", async () => {
         await record([requested("command-1", "Inspect the repository"), started("command-1")]);
         await record([thought("Looking "), thought("around."), answer("I will "), answer("read it.")]);
@@ -214,6 +378,7 @@ describe("Recording Turn history", () => {
         ]);
 
         generation = "generation-2";
+        position = 0;
         await record([requested("command-2", "Try again")]);
         const restarted = await turnPage();
         expect(restarted.interactions).toEqual([]);
@@ -390,6 +555,7 @@ describe("Recording Turn history", () => {
         await runInDurableObject(stub, (_instance, state) => {
             for (const table of [
                 "recording_projection",
+                "projected_session_events",
                 "recorded_turns",
                 "recorded_turn_items",
                 "recorded_interactions",

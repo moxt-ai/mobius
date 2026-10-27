@@ -34,8 +34,7 @@ async function promptRealSession(peer: RealDaemonPeer, sessionId: string, text: 
             prompt: text,
             disposition: SessionPromptDisposition.Reject,
             targetCommandId: "",
-            images: [],
-            resources: [],
+            attachments: [],
         }),
     );
     let output = "";

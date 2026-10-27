@@ -1,10 +1,17 @@
 import {
     type AgentSettingsDiscoverCommand,
     type AgentSettingsDiscoveredEvent,
+    CONTENT_AVAILABLE_KIND,
+    CONTENT_CHUNK_MAX_BYTES,
+    CONTENT_READY_KIND,
+    type ContentAvailableEvent,
+    type ContentWriteCommand,
     decodeAgentSettingsDiscoveredEvent,
     decodeAgentSettingsDiscoveryFailedEvent,
+    decodeContentAvailableEvent,
+    decodeContentChunkFrame,
+    decodeContentReadyEvent,
     decodeFileBeginEvent,
-    decodeFileChunkEvent,
     decodeFileEndEvent,
     decodeFileFailedEvent,
     decodeMessageKind,
@@ -12,10 +19,10 @@ import {
     decodeSessionEventEnvelope,
     decodeSessionOperationFailedEvent,
     decodeWorkspaceEntriesEvent,
+    encodeContentChunkFrame,
     encodeNativeSessionRequest,
     encodeServiceToDaemonMessage,
     FILE_BEGIN_KIND,
-    FILE_CHUNK_KIND,
     FILE_END_KIND,
     FILE_FAILED_KIND,
     type FileReadCommand,
@@ -27,6 +34,7 @@ import {
     type RuntimePingCommand,
     type RuntimePongEvent,
     SESSION_EVENT_KIND,
+    type SessionCancelBeforeStartCommand,
     type SessionCancelCommand,
     type SessionCloseCommand,
     type SessionClosedEvent,
@@ -63,7 +71,7 @@ import { runtimeControlRegistry } from "./runtime-control-registry.ts";
 export interface RuntimeReplyConnection {
     readonly readyState: number;
     readonly accept: () => void;
-    readonly send: (message: string) => void;
+    readonly send: (message: string | ArrayBuffer | ArrayBufferView) => void;
     readonly close: (code?: number, reason?: string) => void;
     readonly addEventListener: EventTarget["addEventListener"];
     readonly removeEventListener: EventTarget["removeEventListener"];
@@ -78,6 +86,7 @@ export type RuntimeControlCommand =
     | SessionConfigReadCommand
     | SessionRenameCommand
     | SessionCloseCommand
+    | SessionCancelBeforeStartCommand
     | SessionCancelCommand
     | SessionPromptDispositionCommand
     | SessionPromptCommand
@@ -231,6 +240,137 @@ export interface RuntimeFileStream {
     readonly response: Response;
 }
 
+export async function requestRuntimeContentWrite(
+    socket: RuntimeReplyConnection,
+    command: ContentWriteCommand,
+    body: ReadableStream<Uint8Array>,
+    signal: AbortSignal,
+): Promise<ContentAvailableEvent> {
+    const timeout = new AbortController();
+    const timer = setTimeout(
+        () => timeout.abort(new DOMException("Runtime content upload timed out", "TimeoutError")),
+        120_000,
+    );
+    const deadline = AbortSignal.any([signal, timeout.signal]);
+    let cleanup = () => {};
+    let uploadStarted = false;
+    let upload: Promise<void> = Promise.resolve();
+    try {
+        return await new Promise<ContentAvailableEvent>((resolve, reject) => {
+            const fail = (cause: unknown): void => reject(cause);
+            const onClose = (): void =>
+                fail(new SessionRuntimeError("runtime_offline", "The Runtime connection closed"));
+            const onAbort = (): void => fail(deadline.reason);
+            const sendBody = async (): Promise<void> => {
+                const reader = body.getReader();
+                let sequence = 0;
+                let sentBytes = 0;
+                try {
+                    while (true) {
+                        deadline.throwIfAborted();
+                        const chunk = await reader.read();
+                        if (chunk.done) {
+                            break;
+                        }
+                        for (let offset = 0; offset < chunk.value.byteLength; offset += CONTENT_CHUNK_MAX_BYTES) {
+                            const bytes = chunk.value.subarray(offset, offset + CONTENT_CHUNK_MAX_BYTES);
+                            sentBytes += bytes.byteLength;
+                            if (sentBytes > command.byteLength) {
+                                throw new SessionRuntimeError(
+                                    "invalid_request",
+                                    "The content body exceeds its declared size",
+                                );
+                            }
+                            socket.send(encodeContentChunkFrame({ bytes, requestId: command.requestId, sequence }));
+                            sequence += 1;
+                        }
+                    }
+                    if (sentBytes !== command.byteLength) {
+                        throw new SessionRuntimeError("invalid_request", "The content body has an unexpected size");
+                    }
+                    socket.send(
+                        encodeServiceToDaemonMessage({
+                            kind: "content.commit",
+                            requestId: command.requestId,
+                            sessionId: command.sessionId,
+                        }),
+                    );
+                } finally {
+                    reader.releaseLock();
+                }
+            };
+            const onMessage = (event: Event): void => {
+                if (!(event instanceof MessageEvent) || typeof event.data !== "string") {
+                    return;
+                }
+                try {
+                    const kind = decodeMessageKind(event.data);
+                    if (kind === "runtime.status") {
+                        if (!decodeRuntimeStatusEvent(event.data).online) {
+                            onClose();
+                        }
+                        return;
+                    }
+                    if (kind === FILE_FAILED_KIND) {
+                        const failure = decodeFileFailedEvent(event.data);
+                        if (failure.requestId === command.requestId) {
+                            fail(new SessionRuntimeError(failure.code, failure.message));
+                        }
+                        return;
+                    }
+                    if (kind === CONTENT_READY_KIND) {
+                        const ready = decodeContentReadyEvent(event.data);
+                        if (ready.requestId !== command.requestId || uploadStarted) {
+                            return;
+                        }
+                        uploadStarted = true;
+                        upload = sendBody().catch(fail);
+                        return;
+                    }
+                    if (kind === CONTENT_AVAILABLE_KIND) {
+                        const available = decodeContentAvailableEvent(event.data);
+                        if (
+                            available.requestId !== command.requestId ||
+                            available.contentKey !== command.contentKey ||
+                            available.byteLength !== command.byteLength
+                        ) {
+                            throw new SessionRuntimeError(
+                                "invalid_request",
+                                "The Runtime returned invalid content metadata",
+                            );
+                        }
+                        resolve(available);
+                    }
+                } catch (cause) {
+                    fail(cause);
+                }
+            };
+            cleanup = () => {
+                deadline.removeEventListener("abort", onAbort);
+                socket.removeEventListener("message", onMessage);
+                socket.removeEventListener("close", onClose);
+                socket.removeEventListener("error", onClose);
+            };
+            socket.addEventListener("message", onMessage);
+            socket.addEventListener("close", onClose);
+            socket.addEventListener("error", onClose);
+            deadline.addEventListener("abort", onAbort, { once: true });
+            try {
+                deadline.throwIfAborted();
+                socket.accept();
+                socket.send(encodeServiceToDaemonMessage(command));
+            } catch (cause) {
+                fail(cause);
+            }
+        });
+    } finally {
+        clearTimeout(timer);
+        cleanup();
+        await upload.catch(() => undefined);
+        socket.close(1000, "Operation finished");
+    }
+}
+
 export async function requestRuntimeFile(
     socket: RuntimeReplyConnection,
     command: FileReadCommand,
@@ -283,6 +423,19 @@ export async function requestRuntimeFile(
             }
             try {
                 if (typeof event.data !== "string") {
+                    const chunk = decodeContentChunkFrame(event.data);
+                    if (chunk.requestId !== command.requestId) {
+                        return;
+                    }
+                    if (!responseSettled || chunk.sequence !== nextSequence) {
+                        throw new SessionRuntimeError("invalid_request", "The Runtime returned invalid file chunks");
+                    }
+                    receivedBytes += chunk.bytes.byteLength;
+                    if (receivedBytes > command.maxBytes) {
+                        throw new SessionRuntimeError("invalid_request", "The Runtime exceeded the file size limit");
+                    }
+                    nextSequence += 1;
+                    stream?.enqueue(chunk.bytes);
                     return;
                 }
                 const kind = decodeMessageKind(event.data);
@@ -329,24 +482,6 @@ export async function requestRuntimeFile(
                             },
                         }),
                     );
-                    return;
-                }
-                if (kind === FILE_CHUNK_KIND) {
-                    const chunk = decodeFileChunkEvent(event.data);
-                    if (chunk.requestId !== command.requestId) {
-                        return;
-                    }
-                    if (!responseSettled || chunk.sequence !== nextSequence) {
-                        throw new SessionRuntimeError("invalid_request", "The Runtime returned invalid file chunks");
-                    }
-                    const binary = atob(chunk.data);
-                    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-                    receivedBytes += bytes.byteLength;
-                    if (receivedBytes > command.maxBytes) {
-                        throw new SessionRuntimeError("invalid_request", "The Runtime exceeded the file size limit");
-                    }
-                    nextSequence += 1;
-                    stream?.enqueue(bytes);
                     return;
                 }
                 if (kind === FILE_END_KIND) {
@@ -480,7 +615,8 @@ export async function requestRuntimeControl(
     const requestId =
         command.kind === "session.prompt" ||
         command.kind === "session.prompt.disposition" ||
-        command.kind === "session.cancel"
+        command.kind === "session.cancel" ||
+        command.kind === "session.cancel-before-start"
             ? command.commandId
             : command.kind === "session.permission.respond" || command.kind === "session.elicitation.respond"
               ? command.interactionId

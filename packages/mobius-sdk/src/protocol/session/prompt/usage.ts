@@ -62,6 +62,7 @@ const quotaTokenCountSchema = z.preprocess(
 // Claude model rows can include subagents, so they need not sum to token_count.
 export const promptMetadataSchema = z
     .object({
+        messageId: z.string().min(1).max(2_048).optional(),
         quota: z
             .object({
                 model_usage: z

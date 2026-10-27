@@ -1,5 +1,6 @@
 import { setTimeout } from "node:timers/promises";
 import { acquireManagerLock } from "../../storage/daemon/manager-lock.ts";
+import type { InstallationDirectory } from "../../storage/installation/installation-files.ts";
 import { serveLocalControl } from "../control/local-server.ts";
 import {
     type DaemonReleaseSwitchState,
@@ -12,7 +13,7 @@ import { surviveUnhandledRejections } from "./unhandled-rejection.ts";
 import { WorkerLifecycleLog } from "./worker-lifecycle-log.ts";
 import { decodeWorkerLaunch, WorkerProcess, WorkerStartupError } from "./worker-process.ts";
 
-export async function runManager(stateDirectory: string, signal: AbortSignal): Promise<void> {
+export async function runManager(stateDirectory: InstallationDirectory, signal: AbortSignal): Promise<void> {
     const release = await acquireManagerLock(stateDirectory);
     if (release === null) {
         return;

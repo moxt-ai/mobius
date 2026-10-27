@@ -29,7 +29,6 @@ import {
     validateIdentifier,
 } from "../../entity/pairing/pairing.ts";
 import { assertRequiredKeys, bearerToken, readString } from "../../infra/relay-http.ts";
-import { MAX_TURN_REQUEST_BODY_LENGTH } from "../../infra/request-limits.ts";
 import { bodyParser } from "../middleware/body-parser.ts";
 import { errorMiddleware, rethrowHonoError } from "../middleware/error-middleware.ts";
 import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
@@ -63,6 +62,7 @@ const configureSessionSchema = v.strictObject({
     ...sessionIdentitySchema.entries,
     booleanValue: v.boolean(),
     configId: identifier,
+    expectedConfigurationRevision: v.optional(identifier),
     value: v.string(),
     valueType: v.picklist(["boolean", "select"]),
 });
@@ -91,17 +91,26 @@ const browserCredentialSchema = v.strictObject({
         v.maxValue(MAX_BROWSER_CREDENTIAL_LIFETIME_MILLISECONDS / 1_000),
     ),
 });
-const submitTurnSchema = v.strictObject({
+const submitTurnIdentityEntries = {
     ...sessionIdentitySchema.entries,
     content: v.string(),
     disposition: v.picklist(["reject", "queue", "steer"]),
     historyPolicy: v.optional(v.picklist(["eager", "execution-only"])),
     idempotencyKey: identifier,
-    images: v.array(v.unknown()),
-    resources: v.array(v.unknown()),
     sessionConfigurations: v.array(v.unknown()),
     targetCommandId: v.string(),
-});
+};
+const submitTurnSchema = v.union([
+    v.strictObject({
+        ...submitTurnIdentityEntries,
+        attachments: v.array(v.unknown()),
+    }),
+    v.strictObject({
+        ...submitTurnIdentityEntries,
+        images: v.array(v.unknown()),
+        resources: v.array(v.unknown()),
+    }),
+]);
 
 function validated<TSchema extends v.GenericSchema<unknown, object>>(
     schema: TSchema,
@@ -466,11 +475,7 @@ export function createProjectRuntimeRoutes() {
         )
         .post(
             "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/turns",
-            // A Turn carries prompt images and embedded resources inline as base64, unlike the
-            // small metadata bodies of every other runtime route. Parse it against the protocol
-            // attachment budget instead of the default body cap, or a pasted screenshot is
-            // rejected before the Runtime ever sees the prompt.
-            bodyParser<RelayHttpEnvironment>(undefined, MAX_TURN_REQUEST_BODY_LENGTH),
+            bodyParser<RelayHttpEnvironment>(),
             async (context) => {
                 const body = validated(submitTurnSchema, context.req.valid("json"));
                 let command: SessionPromptCommand;
@@ -484,10 +489,9 @@ export function createProjectRuntimeRoutes() {
                             directoryId: body.directoryId,
                             disposition: body.disposition,
                             ...(body.historyPolicy === undefined ? {} : { historyPolicy: body.historyPolicy }),
-                            images: body.images,
+                            attachments: "attachments" in body ? body.attachments : [],
                             kind: "session.prompt",
                             prompt: body.content,
-                            resources: body.resources,
                             sessionConfigurations: body.sessionConfigurations,
                             sessionId: validateIdentifier(context.req.param("sessionId"), "session_id"),
                             targetCommandId: body.targetCommandId,

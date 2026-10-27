@@ -41,8 +41,7 @@ it("Given a prompted local conversation, When the Session is renamed, Then the d
                 content: "Remember this conversation",
                 directoryId: "default",
                 idempotencyKey: `turn-${crypto.randomUUID()}`,
-                images: [],
-                resources: [],
+                attachments: [],
             },
             cancellation.signal,
         );

@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
+    decodeContentChunkFrame,
     decodeFileBeginEvent,
-    decodeFileChunkEvent,
     decodeFileFailedEvent,
     decodeMessageKind,
     encodeFileReadCommand,
@@ -45,7 +45,11 @@ async function readSessionFile(
     );
     const chunks: Buffer[] = [];
     for (;;) {
-        const message = await peer.nextMessage();
+        const message = await peer.nextFrame();
+        if (typeof message !== "string") {
+            chunks.push(Buffer.from(decodeContentChunkFrame(message).bytes));
+            continue;
+        }
         const kind = decodeMessageKind(message);
         if (kind === "file.failed") {
             return {
@@ -57,8 +61,6 @@ async function readSessionFile(
         }
         if (kind === "file.begin") {
             expect(decodeFileBeginEvent(message).sessionId).toBe(sessionId);
-        } else if (kind === "file.chunk") {
-            chunks.push(Buffer.from(decodeFileChunkEvent(message).data, "base64"));
         } else if (kind === "file.end") {
             return { bytes: Buffer.concat(chunks), kind: "streamed", mediaType: "", message: "" };
         }

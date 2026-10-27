@@ -84,8 +84,7 @@ test("Given a real Codex native Session, When the active prompt is cancelled wit
                         bindingId: peer.bindingId,
                         directoryId: "default",
                         additionalDirectoryIds: [],
-                        images: [],
-                        resources: [],
+                        attachments: [],
                         prompt: "Reply with a short greeting, without using tools",
                         disposition:
                             targetCommandId.length > 0

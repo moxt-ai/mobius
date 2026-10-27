@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+    encodeSessionCancelBeforeStartCommand,
     type SessionEventPayload,
     type SessionLiveEvent,
     sessionEventPayloadSchema,
@@ -25,7 +26,8 @@ export type RuntimeExecutionReceipt =
           state: RuntimeExecutionState;
           outcome: SessionEventPayload | undefined;
       }>
-    | { readonly kind: "conflict" };
+    | { readonly kind: "conflict" }
+    | { readonly kind: "expired" };
 
 type TerminalExecutionState = "succeeded" | "failed" | "cancelled";
 type StoredExecution = Readonly<{
@@ -48,14 +50,14 @@ export class ExecutionReceipts {
     readonly #recoveredCommands = new Set<string>();
     readonly #terminalCountBySession = new Map<string, number>();
 
-    readonly #table: ExecutionReceiptTable | undefined;
+    readonly #table: ExecutionReceiptTable;
     #closing = false;
     #activeCount = 0;
     readonly #onCount: (count: number) => void;
-    constructor(table?: ExecutionReceiptTable, onCount: (count: number) => void = () => undefined) {
+    constructor(table: ExecutionReceiptTable, onCount: (count: number) => void = () => undefined) {
         this.#onCount = onCount;
         this.#table = table;
-        for (const row of table?.list() ?? []) {
+        for (const row of table.list()) {
             this.#executions.set(row.commandId, row);
             this.#recoveredCommands.add(row.commandId);
             if (!isTerminal(row.state)) {
@@ -71,7 +73,7 @@ export class ExecutionReceipts {
     }
     readonly #save = (commandId: string, receipt: StoredExecution): void => {
         if (!this.#closing) {
-            this.#table?.save({ ...receipt, commandId, updatedAt: new Date().toISOString() });
+            this.#table.save({ ...receipt, commandId, updatedAt: new Date().toISOString() });
         }
         const previous = this.#executions.get(commandId);
         const wasActive = previous !== undefined && !isTerminal(previous.state);
@@ -97,6 +99,39 @@ export class ExecutionReceipts {
         return receipt?.outcome === null || receipt === undefined
             ? undefined
             : sessionEventPayloadSchema.parse(JSON.parse(receipt.outcome));
+    };
+    /** Reserves an unseen command for cancellation before a delayed prompt can claim its identity. */
+    readonly recordCancellationBeforeAdmission = (
+        commandId: string,
+        sessionId: string,
+    ): SessionEventPayload | undefined => {
+        const existing = this.#executions.get(commandId);
+        if (existing !== undefined) {
+            return existing.sessionId === sessionId && isTerminal(existing.state) ? this.outcome(commandId) : undefined;
+        }
+        const outcome: SessionEventPayload = {
+            type: "lifecycle-metadata",
+            payload: { kind: "prompt.completed", commandId, stopReason: "cancelled" },
+        };
+        // The identifier belongs to the cancellation, so a later prompt conflicts rather than executing.
+        const commandHash = createHash("sha256")
+            .update(
+                encodeSessionCancelBeforeStartCommand({
+                    commandId,
+                    kind: "session.cancel-before-start",
+                    sessionId,
+                }),
+            )
+            .digest("hex");
+        this.#save(commandId, {
+            attemptId: randomUUID(),
+            commandHash,
+            sessionId,
+            state: "cancelled",
+            started: false,
+            outcome: JSON.stringify({ ...outcome, recordedAt: new Date().toISOString() }),
+        });
+        return outcome;
     };
     readonly recordOutcome = (event: SessionLiveEvent): void => {
         if (event.type !== "lifecycle-metadata") {
@@ -185,9 +220,9 @@ export class ExecutionReceipts {
             previous.payload.kind === "prompt.failed-before-start" &&
             previous.payload.code === "runtime_restarted"
         ) {
+            this.#table.remove(commandId);
             this.#executions.delete(commandId);
             this.#recoveredCommands.delete(commandId);
-            this.#table?.remove(commandId);
             this.#terminalCountBySession.set(
                 sessionId,
                 Math.max(0, (this.#terminalCountBySession.get(sessionId) ?? 1) - 1),
@@ -205,6 +240,12 @@ export class ExecutionReceipts {
                 state: existing.state,
                 outcome: this.#recoveredCommands.has(commandId) ? this.outcome(commandId) : undefined,
             };
+        }
+        const identity = this.#table.identity(commandId);
+        if (identity !== undefined) {
+            return identity.sessionId === sessionId && identity.commandHash === commandHash
+                ? { kind: "expired" }
+                : { kind: "conflict" };
         }
         const attemptId = randomUUID();
         this.#save(commandId, {
@@ -263,9 +304,9 @@ export class ExecutionReceipts {
         }
         for (const [commandId, receipt] of this.#executions) {
             if (receipt.sessionId === sessionId && isTerminal(receipt.state)) {
+                this.#table.remove(commandId);
                 this.#executions.delete(commandId);
                 this.#recoveredCommands.delete(commandId);
-                this.#table?.remove(commandId);
                 const remaining = (this.#terminalCountBySession.get(sessionId) ?? 1) - 1;
                 if (remaining > 0) {
                     this.#terminalCountBySession.set(sessionId, remaining);

@@ -14,6 +14,7 @@ import {
     RUNTIME_HEARTBEAT_ACK_MESSAGE,
     RUNTIME_HEARTBEAT_MESSAGE,
     RUNTIME_LIVENESS_READY_KIND,
+    RUNTIME_WORKSPACE_BINDING_ID,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { type WebSocket, WebSocketServer } from "ws";
@@ -36,13 +37,14 @@ import { installWorkspaceDaemonRelease } from "../installed-daemon-release.ts";
 
 export interface RealDaemonPeer {
     readonly restart: (mode?: "crash") => Promise<void>;
-    readonly send: (message: string) => void;
+    readonly send: (message: string | Uint8Array) => void;
     readonly sessionId: string;
     readonly workspace: string;
     readonly bindingId: string;
     readonly readDiagnostics: () => Promise<string>;
     readonly signal: AbortSignal;
     readonly nextEvent: () => Promise<string>;
+    readonly nextFrame: () => Promise<string | Buffer>;
     readonly nextMessage: () => Promise<string>;
 }
 
@@ -120,31 +122,20 @@ export async function withRealDaemon(
         });
     };
     let socket: WebSocket | undefined;
-    const messages: string[] = [];
-    let waiter: PromiseWithResolvers<string> | undefined;
+    const messages: Array<string | Buffer> = [];
+    let waiter: PromiseWithResolvers<string | Buffer> | undefined;
     const stopWaiting = (): void => waiter?.reject(signal.reason);
     signal.addEventListener("abort", stopWaiting, { once: true });
     try {
         await mkdir(workspace, { recursive: true });
-        const inventory = await discoverLocalAgentInventory({
-            dataDirectory: directory,
-            defaultWorkspace: workspace,
-            environment: { ...process.env, ...environment, MOBIUS_STATE_DIRECTORY: directory },
-            signal,
-            specifications: [specification],
-        });
-        const agent = inventory.readyAgents().find((entry) => entry.id === specification.id);
-        if (agent === undefined) {
-            throw new Error(`Real ${specification.label} unavailable: ${JSON.stringify(inventory.unavailable)}`);
-        }
         await listen(relay);
         let connected = Promise.withResolvers<void>();
         const abortConnection = (): void => connected.reject(signal.reason);
         signal.addEventListener("abort", abortConnection, { once: true });
         server.on("connection", (connection) => {
             socket = connection;
-            connection.on("message", (value) => {
-                const message = value.toString();
+            connection.on("message", (value, isBinary) => {
+                const message = isBinary ? Buffer.from(value as Buffer) : value.toString();
                 // Like the Relay's host, answer exactly the heartbeat text without the application.
                 if (message === RUNTIME_HEARTBEAT_MESSAGE) {
                     connection.send(RUNTIME_HEARTBEAT_ACK_MESSAGE);
@@ -164,11 +155,31 @@ export async function withRealDaemon(
         });
         const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/real-agent/daemon`);
         relayUrl.searchParams.set("token", "r".repeat(43));
-        const config = createRuntimeConfig(
-            { channelId: "real-agent", defaultWorkspace: workspace, relayUrl },
-            new RuntimeAgentDependencies([agent], adapters),
-            new RuntimeLocalContext(directory, { ...process.env, ...environment }),
-        );
+        // Managed launches perform discovery in the production CLI; only an embedded
+        // runtime needs a catalog prepared by the fixture.
+        const config =
+            launch === "embedded"
+                ? await (async () => {
+                      const inventory = await discoverLocalAgentInventory({
+                          dataDirectory: directory,
+                          defaultWorkspace: workspace,
+                          environment: cliEnvironment,
+                          signal,
+                          specifications: [specification],
+                      });
+                      const agent = inventory.readyAgents().find((entry) => entry.id === specification.id);
+                      if (agent === undefined) {
+                          throw new Error(
+                              `Real ${specification.label} unavailable: ${JSON.stringify(inventory.unavailable)}`,
+                          );
+                      }
+                      return createRuntimeConfig(
+                          { channelId: "real-agent", defaultWorkspace: workspace, relayUrl },
+                          new RuntimeAgentDependencies([agent], adapters),
+                          new RuntimeLocalContext(directory, { ...process.env, ...environment }),
+                      );
+                  })()
+                : null;
         if (launch === "managed") {
             await installWorkspaceDaemonRelease(directory);
             const installation = await openMobiusCliInstallation(signal, cliEnvironment);
@@ -186,7 +197,7 @@ export async function withRealDaemon(
             );
         }
         const start = async (): Promise<void> => {
-            if (launch === "managed") {
+            if (config === null) {
                 await cli(["start"]);
             } else {
                 execution = new AbortController();
@@ -203,14 +214,21 @@ export async function withRealDaemon(
         } finally {
             signal.removeEventListener("abort", abortConnection);
         }
-        const nextMessage = async (): Promise<string> => {
+        const nextFrame = async (): Promise<string | Buffer> => {
             signal.throwIfAborted();
             const message = messages.shift();
             if (message !== undefined) {
                 return message;
             }
-            waiter = Promise.withResolvers<string>();
+            waiter = Promise.withResolvers<string | Buffer>();
             return await waiter.promise;
+        };
+        const nextMessage = async (): Promise<string> => {
+            const message = await nextFrame();
+            if (typeof message !== "string") {
+                throw new Error("Expected a text daemon message");
+            }
+            return message;
         };
         const pendingEvents: string[] = [];
         const sessionId = `real_${specification.id}_${randomUUID()}`;
@@ -239,7 +257,7 @@ export async function withRealDaemon(
                 await start();
                 await connected.promise;
             },
-            bindingId: config.bindingId,
+            bindingId: RUNTIME_WORKSPACE_BINDING_ID,
             readDiagnostics: async () => await readFile(join(directory, "logs", "daemon.log"), "utf8"),
             signal,
             sessionId,
@@ -251,6 +269,7 @@ export async function withRealDaemon(
                 socket.send(message);
             },
             nextMessage,
+            nextFrame,
             nextEvent: async () => {
                 const pending = pendingEvents.shift();
                 if (pending !== undefined) {

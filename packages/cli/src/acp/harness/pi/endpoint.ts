@@ -1,4 +1,10 @@
-import { type AgentApp, type AgentConnection, agent as createAgentApp, methods } from "@agentclientprotocol/sdk";
+import {
+    type AgentApp,
+    type AgentConnection,
+    agent as createAgentApp,
+    methods,
+    type SessionNotification,
+} from "@agentclientprotocol/sdk";
 import type {
     AcpEndpointTermination,
     InProcessAcpEndpoint,
@@ -15,7 +21,12 @@ export class PiAcpEndpoint implements InProcessAcpEndpoint {
     readonly #resolveTermination: (termination: AcpEndpointTermination) => void;
     readonly terminated: Promise<AcpEndpointTermination>;
 
-    constructor(options: InProcessAcpEndpointOptions) {
+    constructor(
+        options: Omit<InProcessAcpEndpointOptions, "onSessionUpdate"> & {
+            readonly onSessionUpdate: (notification: SessionNotification) => Promise<void>;
+            readonly onUserMessageStart?: () => void;
+        },
+    ) {
         const termination = Promise.withResolvers<AcpEndpointTermination>();
         this.terminated = termination.promise;
         this.#resolveTermination = termination.resolve;
@@ -28,7 +39,10 @@ export class PiAcpEndpoint implements InProcessAcpEndpoint {
         this.#app = createAgentApp({ name: "mobius-pi" })
             .onConnect((connection) => {
                 this.#connection = connection;
-                piAgent = new PiAcpAgent(createPiAcpClient(connection, options.onSessionUpdate), { environment });
+                piAgent = new PiAcpAgent(
+                    createPiAcpClient(connection, options.onSessionUpdate, options.onUserMessageStart),
+                    { environment },
+                );
                 this.#agent = piAgent;
             })
             .onRequest(

@@ -4,12 +4,13 @@ import type { RuntimeConfig } from "../../runtime/config.ts";
 import { MobiusRuntimeEngine } from "../../runtime/engine.ts";
 import { RuntimeTurnActivity } from "../../session/turn/runtime-turn-activity.ts";
 import { acquireManagerLock } from "../../storage/daemon/manager-lock.ts";
+import type { InstallationDirectory } from "../../storage/installation/installation-files.ts";
 import { isNodeError } from "../../util/node-error.ts";
 import { sendLocalRequest } from "../control/local-client.ts";
 import { serveLocalControl } from "../control/local-server.ts";
 import {
-    openMobiusCliInstallation,
     openMobiusControlInstallation,
+    openMobiusVersionInstallation,
     resumeMobiusRuntime,
 } from "../pairing/pair-local-machine.ts";
 import { prepareUpgradeData, recordCurrentData } from "../upgrades/data.ts";
@@ -23,7 +24,7 @@ class WorkerRuntimeError extends Error {
     }
 }
 
-export async function reloadDaemon(stateDirectory: string, signal: AbortSignal): Promise<void> {
+export async function reloadDaemon(stateDirectory: InstallationDirectory, signal: AbortSignal): Promise<void> {
     try {
         const response = await sendLocalRequest(stateDirectory, "worker", { kind: "reload" }, signal);
         if (
@@ -72,7 +73,7 @@ async function runWorkerRuntime(
 ): Promise<void> {
     const control = await openMobiusControlInstallation(combined, process.env);
     await prepareUpgradeData(control.stateDirectory, version, combined);
-    const installation = await openMobiusCliInstallation(combined, process.env);
+    const installation = await openMobiusVersionInstallation(version, combined, process.env);
     const deadline = AbortSignal.any([combined, AbortSignal.timeout(15_000)]);
     let release: (() => Promise<void>) | null = null;
     while (release === null) {

@@ -78,6 +78,7 @@ export {
     type SessionRecordingScope,
     type SessionRecordingTarget,
 } from "./infra/session-recording.ts";
+export type { SessionStatusNotifications } from "./infra/session-status-notifications.ts";
 export * from "./service/authentication/oidc-authentication.ts";
 export { RuntimeDescriptor, RuntimeStatus } from "./service/channel/channel.ts";
 export type {

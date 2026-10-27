@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
-    decodeFileChunkEvent,
+    decodeContentChunkFrame,
     decodeMessageKind,
     decodeNativeSessionResult,
     decodeSessionEventEnvelope,
@@ -18,7 +18,6 @@ import {
     encodeSessionCancelCommand,
     encodeSessionHistoryPageLoad,
     encodeSessionPromptCommand,
-    FILE_CHUNK_KIND,
     FILE_END_KIND,
     FILE_FAILED_KIND,
     MOBIUS_API_PREFIX,
@@ -45,14 +44,14 @@ import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 
 class Messages {
     readonly #closed = Promise.withResolvers<never>();
-    readonly #buffered: string[] = [];
-    readonly #waiting: Array<(message: string) => void> = [];
+    readonly #buffered: Array<string | Buffer> = [];
+    readonly #waiting: Array<(message: string | Buffer) => void> = [];
 
     constructor(socket: WebSocket) {
         void this.#closed.promise.catch(() => {});
         socket.once("close", () => this.#closed.reject(new Error("The daemon disconnected during the request")));
-        socket.on("message", (value) => {
-            const message = value.toString();
+        socket.on("message", (value, isBinary) => {
+            const message = isBinary ? Buffer.from(value as Buffer) : value.toString();
             // Like the Relay's host, answer exactly the heartbeat text without the application.
             if (message === RUNTIME_HEARTBEAT_MESSAGE) {
                 socket.send(RUNTIME_HEARTBEAT_ACK_MESSAGE);
@@ -68,14 +67,22 @@ class Messages {
         socket.send(encodeRuntimeLivenessReadyEvent({ kind: RUNTIME_LIVENESS_READY_KIND }));
     }
 
-    readonly next = (): Promise<string> => {
+    readonly nextFrame = (): Promise<string | Buffer> => {
         const buffered = this.#buffered.shift();
         return Promise.race([
             this.#closed.promise,
             buffered === undefined
-                ? new Promise<string>((resolve) => this.#waiting.push(resolve))
+                ? new Promise<string | Buffer>((resolve) => this.#waiting.push(resolve))
                 : Promise.resolve(buffered),
         ]);
+    };
+
+    readonly next = async (): Promise<string> => {
+        const message = await this.nextFrame();
+        if (typeof message !== "string") {
+            throw new Error("Expected a text daemon message");
+        }
+        return message;
     };
 }
 
@@ -131,10 +138,9 @@ test("Given real Codex streams commentary after a tool, When clients watch and r
                 commandId,
                 directoryId: "default",
                 disposition: SessionPromptDisposition.Reject,
-                images: [],
+                attachments: [],
                 kind: "session.prompt",
                 prompt: "Use a shell tool successfully, then reply using the configured model",
-                resources: [],
                 sessionId,
                 targetCommandId: "",
             });
@@ -184,7 +190,11 @@ test("Given real Codex streams commentary after a tool, When clients watch and r
                     if (result.requestId === "queued_snapshot") {
                         expect(result).toMatchObject({
                             queued: [
-                                { commandId: queuedCommandId, prompt: "This queued prompt should not run", images: [] },
+                                {
+                                    attachments: [],
+                                    commandId: queuedCommandId,
+                                    prompt: "This queued prompt should not run",
+                                },
                             ],
                         });
                         socket.send(
@@ -256,10 +266,9 @@ test("Given real Codex streams commentary after a tool, When clients watch and r
                                 commandId: queuedCommandId,
                                 directoryId: "default",
                                 disposition: SessionPromptDisposition.Queue,
-                                images: [],
+                                attachments: [],
                                 kind: "session.prompt",
                                 prompt: "This queued prompt should not run",
-                                resources: [],
                                 sessionId,
                                 targetCommandId: commandId,
                             }),
@@ -401,12 +410,13 @@ test("Given real Codex streams commentary after a tool, When clients watch and r
         );
         const chunks: Buffer[] = [];
         for (;;) {
-            const message = await messages.next();
+            const message = await messages.nextFrame();
+            if (typeof message !== "string") {
+                chunks.push(Buffer.from(decodeContentChunkFrame(message).bytes));
+                continue;
+            }
             const kind = decodeMessageKind(message);
             expect(kind).not.toBe(FILE_FAILED_KIND);
-            if (kind === FILE_CHUNK_KIND) {
-                chunks.push(Buffer.from(decodeFileChunkEvent(message).data, "base64"));
-            }
             if (kind === FILE_END_KIND) {
                 break;
             }

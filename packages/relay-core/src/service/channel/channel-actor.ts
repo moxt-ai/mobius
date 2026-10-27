@@ -5,9 +5,16 @@ import {
     AGENT_SETTINGS_DISCOVER_KIND,
     AGENT_SETTINGS_DISCOVERED_KIND,
     AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
+    CONTENT_AVAILABLE_KIND,
+    CONTENT_COMMIT_KIND,
+    CONTENT_READY_KIND,
+    CONTENT_WRITE_KIND,
     type DaemonToServiceMessage,
     decodeAgentCatalogDiscoverCommand,
     decodeAgentSettingsDiscoverCommand,
+    decodeContentChunkFrame,
+    decodeContentCommitCommand,
+    decodeContentWriteCommand,
     decodeFileReadCommand,
     decodeMessageKind,
     decodeNativeSessionCancel,
@@ -15,6 +22,7 @@ import {
     decodeNativeSessionRequest,
     decodeRuntimeDiagnosticsRequest,
     decodeRuntimePingCommand,
+    decodeSessionCancelBeforeStartCommand,
     decodeSessionCancelCommand,
     decodeSessionCloseCommand,
     decodeSessionConfigReadCommand,
@@ -37,7 +45,6 @@ import {
     encodeServiceToDaemonMessage,
     encodeSessionOperationFailedEvent,
     FILE_BEGIN_KIND,
-    FILE_CHUNK_KIND,
     FILE_END_KIND,
     FILE_FAILED_KIND,
     FILE_READ_KIND,
@@ -49,6 +56,7 @@ import {
     RUNTIME_PING_KIND,
     RUNTIME_PONG_KIND,
     RUNTIME_STATUS_KIND,
+    SESSION_CANCEL_BEFORE_START_KIND,
     SESSION_CANCEL_KIND,
     SESSION_CLOSE_KIND,
     SESSION_CLOSE_NOTICE_KIND,
@@ -86,6 +94,7 @@ import {
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { SessionRuntimeError } from "../../entity/do/session.ts";
+import type { SessionStatusNotifications } from "../../infra/session-status-notifications.ts";
 import type { BestEffortRecording } from "./best-effort-recording.ts";
 import { SessionLiveEventRelay } from "./session-live-event-relay.ts";
 
@@ -94,6 +103,16 @@ function sessionErrorCloseCode(error: SessionRuntimeError): 1008 | 1013 {
         return 1013;
     }
     return 1008;
+}
+
+function copyBinaryFrame(value: unknown): ArrayBuffer {
+    if (value instanceof ArrayBuffer) {
+        return value.slice(0);
+    }
+    if (ArrayBuffer.isView(value)) {
+        return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength) as ArrayBuffer;
+    }
+    throw new ProtocolMessageError("Content chunk must be binary");
 }
 
 export type HistoryRequestKind = "live" | "preview";
@@ -109,7 +128,7 @@ export interface ChannelSocket {
     readonly isOpen: () => boolean;
     readonly isSame: (socket: ChannelSocket) => boolean;
     readonly permitsSessionHistory: () => boolean;
-    readonly send: (message: string) => void;
+    readonly send: (message: string | ArrayBuffer) => void;
     readonly trackAgentSettingsDiscovery: (requestId: string, agentId: string) => "tracked" | "duplicate" | "busy";
 }
 
@@ -143,14 +162,15 @@ export class ChannelActor {
         readonly gateways: {
             readonly peers: ChannelPeers;
             readonly recording: BestEffortRecording;
+            readonly notifications?: SessionStatusNotifications;
         };
     }) {
         const { projectId, runtimeId } = cx.config;
-        const { peers, recording } = cx.gateways;
+        const { peers, recording, notifications } = cx.gateways;
         this.#peers = peers;
         this.#projectId = projectId;
         this.#runtimeId = runtimeId;
-        this.#liveEvents = new SessionLiveEventRelay(projectId, runtimeId, peers, recording);
+        this.#liveEvents = new SessionLiveEventRelay(projectId, runtimeId, peers, recording, notifications);
     }
 
     readonly attachDaemon = async (replacedExistingConnection: boolean, _signal: AbortSignal): Promise<void> => {
@@ -278,6 +298,36 @@ export class ChannelActor {
         }
     };
 
+    readonly receiveDaemonChunk = (_socket: ChannelSocket, message: unknown): void => {
+        const chunk = decodeContentChunkFrame(message);
+        const recipient = this.#peers
+            .operations()
+            .find((route) => route.requestId === chunk.requestId && route.socket.isOpen())?.socket;
+        if (recipient === undefined) {
+            // The HTTP caller can cancel after the daemon has already queued its next
+            // chunk. The operation route is gone by the time that frame arrives, but
+            // this is not a daemon protocol violation and must not interrupt unrelated
+            // Sessions sharing the Runtime connection.
+            return;
+        }
+        recipient.send(copyBinaryFrame(message));
+    };
+
+    readonly receiveHostChunk = (socket: ChannelSocket, message: unknown): void => {
+        const chunk = decodeContentChunkFrame(message);
+        const ownsOperation = this.#peers
+            .operations()
+            .some((route) => route.requestId === chunk.requestId && route.socket.isSame(socket));
+        if (!ownsOperation) {
+            throw new ProtocolMessageError("Content chunk does not belong to this operation");
+        }
+        const daemon = this.#peers.daemons().find((candidate) => candidate.isOpen());
+        if (daemon === undefined) {
+            throw new SessionRuntimeError("runtime_offline", "The local runtime is offline");
+        }
+        daemon.send(copyBinaryFrame(message));
+    };
+
     readonly receiveHostMessage = async (
         socket: ChannelSocket,
         message: unknown,
@@ -368,11 +418,13 @@ export class ChannelActor {
                 return;
             case FILE_BEGIN_KIND:
                 return;
-            case FILE_CHUNK_KIND:
-                return;
             case FILE_END_KIND:
                 return;
             case FILE_FAILED_KIND:
+                return;
+            case CONTENT_READY_KIND:
+                return;
+            case CONTENT_AVAILABLE_KIND:
                 return;
             case SESSION_QUERIED_KIND:
                 return;
@@ -426,6 +478,10 @@ export class ChannelActor {
             case NATIVE_SESSION_CANCEL_KIND: {
                 const command = decodeNativeSessionCancel(message);
                 return { message: command, requestId: command.requestId, sessionId: command.sessionId };
+            }
+            case SESSION_CANCEL_BEFORE_START_KIND: {
+                const command = decodeSessionCancelBeforeStartCommand(message);
+                return { message: command, requestId: command.commandId, sessionId: command.sessionId };
             }
             case SESSION_CANCEL_KIND: {
                 const command = decodeSessionCancelCommand(message);
@@ -489,6 +545,14 @@ export class ChannelActor {
             }
             case FILE_READ_KIND: {
                 const command = decodeFileReadCommand(message);
+                return { message: command, requestId: command.requestId, sessionId: command.sessionId };
+            }
+            case CONTENT_WRITE_KIND: {
+                const command = decodeContentWriteCommand(message);
+                return { message: command, requestId: command.requestId, sessionId: command.sessionId };
+            }
+            case CONTENT_COMMIT_KIND: {
+                const command = decodeContentCommitCommand(message);
                 return { message: command, requestId: command.requestId, sessionId: command.sessionId };
             }
             case "runtime.diagnostics.read": {

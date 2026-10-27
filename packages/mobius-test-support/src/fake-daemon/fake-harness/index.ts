@@ -45,6 +45,7 @@ function configOptions(model: string): acp.SessionConfigOption[] {
 }
 
 interface ActiveReply {
+    readonly userMessageId: string;
     readonly prompt: string;
     readonly sessionId: string;
     readonly turnNumber: number;
@@ -116,23 +117,23 @@ class ControlledAgentState {
 
     readonly start = async (
         sessionId: string,
-        prompt: string,
+        contents: readonly acp.ContentBlock[],
         send: (notification: acp.SessionNotification) => Promise<void>,
         signal: AbortSignal,
     ): Promise<acp.PromptResponse> => {
         const turnNumber = this.turnCount(sessionId) + 1;
+        const prompt = promptText(contents);
+        const messageId = `user-${turnNumber.toString()}`;
         this.rememberSession(sessionId, turnNumber);
-        const userUpdate = {
-            sessionId,
-            update: {
-                content: { text: prompt, type: "text" },
-                messageId: `user-${turnNumber.toString()}`,
-                sessionUpdate: "user_message_chunk",
-            },
-        } as const;
         if (this.#options.echoUserMessage !== false) {
-            this.#record(userUpdate);
-            await send(userUpdate);
+            for (const content of contents) {
+                const userUpdate = {
+                    sessionId,
+                    update: { content, messageId, sessionUpdate: "user_message_chunk" },
+                } as const;
+                this.#record(userUpdate);
+                await send(userUpdate);
+            }
         }
         const completion = Promise.withResolvers<acp.PromptResponse>();
         const active: ActiveReply = {
@@ -143,6 +144,7 @@ class ControlledAgentState {
             sessionId,
             signal,
             turnNumber,
+            userMessageId: messageId,
         };
         this.#activeByPrompt.set(prompt, active);
         this.#activeBySession.set(sessionId, active);
@@ -182,7 +184,7 @@ class ControlledAgentState {
             await active.send(userUpdate);
         }
         await this.#apply(active, this.#options.reply(prompt, active.turnNumber, "steer"));
-        return { outcome: "injected" };
+        return { outcome: "injected", messageId: userUpdate.update.messageId };
     };
 
     readonly cancel = (sessionId: string): void => {
@@ -412,7 +414,7 @@ class ControlledAgentState {
 
     #finish(active: ActiveReply, stopReason: acp.StopReason): void {
         this.#forget(active);
-        active.completion.resolve({ stopReason });
+        active.completion.resolve({ stopReason, _meta: { messageId: active.userMessageId } });
     }
 
     #forget(active: ActiveReply): void {
@@ -433,7 +435,11 @@ class ControlledAgentEndpoint implements FakeHarnessEndpoint {
     readonly terminated = this.#closed.promise;
     #isClosed = false;
 
-    constructor(state: ControlledAgentState, agentName: string) {
+    constructor(
+        state: ControlledAgentState,
+        agentName: string,
+        onSessionUpdate: (notification: acp.SessionNotification) => Promise<void>,
+    ) {
         this.#state = state;
         this.#app = acp
             .agent({ name: "morty-controlled-agent" })
@@ -458,11 +464,7 @@ class ControlledAgentEndpoint implements FakeHarnessEndpoint {
             .onRequest(acp.methods.agent.session.load, async (context) => {
                 this.#sessionIds.add(context.params.sessionId);
                 this.#state.rememberSession(context.params.sessionId, this.#state.turnCount(context.params.sessionId));
-                await this.#state.replay(
-                    context.params.sessionId,
-                    async (notification) =>
-                        await context.client.notify(acp.methods.client.session.update, notification),
-                );
+                await this.#state.replay(context.params.sessionId, onSessionUpdate);
                 return { configOptions: this.#state.configuration(context.params.sessionId) };
             })
             .onRequest(acp.methods.agent.session.resume, (context) => {
@@ -511,9 +513,8 @@ class ControlledAgentEndpoint implements FakeHarnessEndpoint {
             .onRequest(acp.methods.agent.session.prompt, async (context) => {
                 return await this.#state.start(
                     context.params.sessionId,
-                    promptText(context.params.prompt),
-                    async (notification) =>
-                        await context.client.notify(acp.methods.client.session.update, notification),
+                    context.params.prompt,
+                    onSessionUpdate,
                     context.signal,
                 );
             })
@@ -568,7 +569,9 @@ export function createFakeHarness(options: FakeAgentHarnessOptions) {
     ];
     return {
         agents: agents.map((agent) => ({
-            createEndpoint: (): FakeHarnessEndpoint => new ControlledAgentEndpoint(state, agent.name),
+            createEndpoint: (
+                onSessionUpdate: (notification: acp.SessionNotification) => Promise<void>,
+            ): FakeHarnessEndpoint => new ControlledAgentEndpoint(state, agent.name, onSessionUpdate),
             id: agent.id,
             name: agent.name,
         })),

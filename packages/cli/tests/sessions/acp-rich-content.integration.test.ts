@@ -4,7 +4,10 @@ import { completeAcpControls, createControlledSession } from "./acp-controls-fix
 it("Given image and embedded context input, When ACP returns structured tool content and an inline image, Then prompt blocks and output types survive the boundary", async () => {
     await using session = await createControlledSession();
     const result = await completeAcpControls(session);
-    expect(result.completed).toEqual({ stopReason: "end_turn" });
+    expect(result.completed).toEqual({
+        stopReason: "end_turn",
+        _meta: { messageId: "user-1" },
+    });
     expect(result.text).toContain("1 image, 1 resource");
     expect(
         session.observer

@@ -44,10 +44,9 @@ test.each(["allow_once", "reject_once"] as const)(
                     commandId: randomUUID(),
                     directoryId: "default",
                     disposition: SessionPromptDisposition.Reject,
-                    images: [],
+                    attachments: [],
                     kind: "session.prompt",
                     prompt,
-                    resources: [],
                     sessionId: peer.sessionId,
                     targetCommandId: "",
                     sessionConfigurations: [
@@ -166,10 +165,9 @@ test.each(["allow_once", "reject_once"] as const)(
                         commandId: randomUUID(),
                         directoryId: "default",
                         disposition: SessionPromptDisposition.Reject,
-                        images: [],
+                        attachments: [],
                         kind: "session.prompt",
                         prompt: "Use a tool to read the external verification file",
-                        resources: [],
                         sessionId: peer.sessionId,
                         targetCommandId: "",
                         sessionConfigurations: [

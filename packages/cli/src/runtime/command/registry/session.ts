@@ -68,9 +68,9 @@ async function prepareSession(
                   ? await sessions.restoreSession(preparation, metrics, closed)
                   : await sessions.prepareSession(preparation, metrics, closed);
         const configuration = command.configuration;
-        const configOptions =
+        const snapshot =
             configuration === undefined
-                ? prepared.configOptions
+                ? prepared
                 : await metrics.measure(
                       "configuration",
                       async () =>
@@ -90,7 +90,8 @@ async function prepareSession(
             agentVersion: prepared.agentVersion,
             capabilities: prepared.capabilities,
             commands: prepared.commands,
-            configOptions,
+            configOptions: snapshot.configOptions,
+            configurationRevision: snapshot.configurationRevision,
             directoryId: command.directoryId,
             directoryLabel: resolved.directoryLabel,
             kind: "session.ready",
@@ -228,11 +229,35 @@ export async function executeSessionRestore(
 export async function executeSessionRename(
     socket: WebSocket,
     command: SessionRenameCommand,
+    config: RuntimeConfig,
+    resolveAgent: ResolveAgent,
+    directories: WorkspaceDirectoryService,
     sessions: SessionManager,
+    nativeSessions: NativeSessionService,
     signal: AbortSignal,
 ): Promise<void> {
     try {
-        const renamed = await sessions.renameSession(command.sessionId, command.title, signal);
+        const [entry] = await nativeSessions.querySessions([command.sessionId], signal);
+        if (entry === undefined) {
+            throw new SessionError("session_not_found", "The Session was not found");
+        }
+        const resolved = await resolveSessionDirectories(
+            directories,
+            config.bindingId,
+            entry.directoryId,
+            entry.additionalDirectories.map((directory) => directory.directoryId),
+            signal,
+        );
+        const renamed = await sessions.renameSession(
+            {
+                additionalDirectories: resolved.additionalDirectories,
+                ...(await resolveAgent(entry.agentId, signal, command.sessionId)),
+                cwd: resolved.cwd,
+                sessionId: command.sessionId,
+                signal,
+            },
+            command.title,
+        );
         send(socket, {
             kind: "session.renamed",
             requestId: command.requestId,
@@ -265,11 +290,14 @@ export async function executeSessionConfigure(
             command.additionalDirectoryIds,
             signal,
         );
-        const configOptions = await sessions.configureSession({
+        const snapshot = await sessions.configureSession({
             additionalDirectories: resolved.additionalDirectories,
             ...(await resolveAgent(command.agentId, signal, command.sessionId)),
             booleanValue: command.booleanValue,
             configId: command.configId,
+            ...(command.expectedConfigurationRevision === undefined
+                ? {}
+                : { expectedConfigurationRevision: command.expectedConfigurationRevision }),
             cwd: resolved.cwd,
             requestId: command.requestId,
             sessionId: command.sessionId,
@@ -278,7 +306,7 @@ export async function executeSessionConfigure(
             valueType: command.valueType,
         });
         send(socket, {
-            configOptions,
+            ...snapshot,
             kind: "session.config.updated",
             requestId: command.requestId,
             sessionId: command.sessionId,
@@ -364,7 +392,16 @@ export const sessionRenameCommand: RuntimeCommand = {
         if (message.kind !== SESSION_RENAME_KIND) {
             throw new Error("Command kind mismatch");
         }
-        void executeSessionRename(context.socket, message, context.sessions, context.signal);
+        void executeSessionRename(
+            context.socket,
+            message,
+            context.config,
+            context.resolveAgent,
+            context.directories,
+            context.sessions,
+            context.nativeSessions,
+            context.signal,
+        );
     },
 };
 
@@ -414,6 +451,7 @@ export async function executeSessionConfigRead(
         );
         send(socket, {
             configOptions: ready.configOptions,
+            configurationRevision: ready.configurationRevision,
             kind: SESSION_CONFIG_READ_RESULT_KIND,
             requestId: command.requestId,
             sessionId: command.sessionId,

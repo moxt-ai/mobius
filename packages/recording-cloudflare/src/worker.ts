@@ -1,10 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
 import {
+    decodeSessionRecordingDirectory,
     decodeSessionRecordingDirectoryV2,
     decodeSessionRecordingSummaryV2,
     decodeSessionRecordingWrite,
     encodeSessionRecordingDirectory,
     encodeSessionRecordingDirectoryV2,
+    encodeSessionRecordingExecution,
     encodeSessionRecordingTurnItemDetail,
     encodeSessionRecordingTurnItemPage,
     encodeSessionRecordingTurnPage,
@@ -14,27 +16,38 @@ import {
     parseSessionRecordingTurnCursor,
     parseSessionRecordingTurnItemCursor,
     parseSessionRecordingWaitMilliseconds,
+    SESSION_RECORDING_EXECUTION_COMMAND_MAX_LIMIT,
     SESSION_RECORDING_TURN_ITEM_ID_MAX_LENGTH,
     SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT,
     SESSION_RECORDING_TURN_PAGE_MAX_LIMIT,
     type SessionRecordingSummary,
+    type SessionRecordingSummaryV2,
     type SessionRecordingTurnItemCursorDirection,
     type SessionRecordingWrite,
     sessionRecordingStatusSchema,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { type Context, Hono } from "hono";
+import {
+    MessageIdMigrationError,
+    type MessageIdMigrationProgress,
+    messageIdMigrationRequestSchema,
+} from "./entity/message-id-migration.ts";
 import { directoryUpdateSchema } from "./entity/recording-directory-update.ts";
+import { authorizeMessageIdMigration } from "./infra/authorize-message-id-migration.ts";
 import { RecordingSqlMetrics } from "./infra/recording-sql-metrics.ts";
 import { readLegacyRecordingStatus } from "./service/legacy-recording-status.ts";
+import { MessageIdMigration } from "./service/message-id-migration.ts";
 import { RecordingDirectory } from "./service/recording-directory.ts";
 import { projectDirectoryUpdate } from "./service/recording-directory-update.ts";
 import { RecordingEventWaiters } from "./service/recording-event-waiters.ts";
 import { SessionTurnHistory, type TurnHistoryRead } from "./service/session-turn-history.ts";
+import { MessageIdMigrationStorage } from "./storage/message-id-migration-storage.ts";
 import { RecordingDirectoryStorage } from "./storage/recording-directory-storage.ts";
 import { SessionRecordingStorage } from "./storage/session-recording-storage.ts";
 import { SessionTurnHistoryStorage } from "./storage/session-turn-history-storage.ts";
 
 export interface RecordingWorkerBindings {
+    readonly MIGRATION_TOKEN?: string;
     readonly RECORDING_DIRECTORY: DurableObjectNamespace<RecordingDirectoryDurableObject>;
     readonly SESSION_RECORDING: DurableObjectNamespace<SessionRecordingDurableObject>;
 }
@@ -47,8 +60,24 @@ type SessionRecordingRoutes = Pick<
     SessionRecordingStorage,
     "append" | "read" | "readPage" | "records" | "batchesNewestFirst"
 >;
-type TurnHistoryRoutes = Pick<SessionTurnHistory, "item" | "itemPage" | "project" | "turnPage">;
+type TurnHistoryRoutes = Pick<SessionTurnHistory, "execution" | "item" | "itemPage" | "project" | "turnPage">;
 const jsonHeaders = { "content-type": "application/json" } as const;
+// Each invocation stays below the Durable Object subrequest budget. A full 100k-entry
+// legacy directory needs fewer than 800 batch requests from the outer Worker.
+const legacySummaryBatchSize = 128;
+const legacySummaryHeaders = {
+    ...jsonHeaders,
+    "cache-control": "no-store",
+    "Mobius-Recording-Status-Source": "recorded-events",
+};
+
+class LegacyRecordingStatusUnavailableError extends Error {
+    readonly code = "recording_status_unavailable";
+    constructor() {
+        super("Recorded lifecycle status is unavailable");
+        this.name = "LegacyRecordingStatusUnavailableError";
+    }
+}
 
 function errorResponse(code: string, status: number): Response {
     return Response.json({ error: { code, message: "The Recording request could not be completed" } }, { status });
@@ -150,6 +179,22 @@ function sessionRecordingRoutes(
                 case "unavailable":
                     return errorResponse("recording_status_unavailable", 503);
             }
+        })
+        .get("/execution", async (context): Promise<Response> => {
+            const target = eventTarget(context.req.raw);
+            const commandIds = context.req.queries("commandId") ?? [];
+            if (
+                target === null ||
+                commandIds.length > SESSION_RECORDING_EXECUTION_COMMAND_MAX_LIMIT ||
+                commandIds.some((id) => !isIdentifier(id))
+            ) {
+                return errorResponse("invalid_target", 400);
+            }
+            return await turnHistoryResponse(
+                history.execution(target, commandIds),
+                encodeSessionRecordingExecution,
+                scheduleBackfill,
+            );
         })
         .get("/turns", async (context): Promise<Response> => {
             const target = eventTarget(context.req.raw);
@@ -325,7 +370,73 @@ function recordingDirectoryRoutes(
                 ? errorResponse("not_found", 404)
                 : context.json(summary);
         })
+        .post("/legacy-sessions", async (context): Promise<Response> => {
+            const projectId = decodedIdentifier(context.req.query("projectId"));
+            const runtimeId = decodedIdentifier(context.req.query("runtimeId"));
+            const sessionIds = await context.req.json<unknown>();
+            if (
+                projectId === null ||
+                runtimeId === null ||
+                !Array.isArray(sessionIds) ||
+                sessionIds.length > legacySummaryBatchSize ||
+                !sessionIds.every(isIdentifier)
+            ) {
+                return errorResponse("invalid_target", 400);
+            }
+            const summaries: SessionRecordingSummaryV2[] = [];
+            for (const sessionId of sessionIds) {
+                const summary = storage.find(sessionId);
+                if (summary === null || summary.runtimeId !== runtimeId) {
+                    return errorResponse("recording_status_unavailable", 503);
+                }
+                summaries.push(summary);
+            }
+            return await legacySummaryBatch(context, projectId, runtimeId, summaries);
+        })
         .all("*", (): Response => errorResponse("not_found", 404));
+}
+
+async function legacySummaryBatch(
+    context: Context<RecordingEnvironment>,
+    projectId: string,
+    runtimeId: string,
+    summaries: readonly SessionRecordingSummaryV2[],
+): Promise<Response> {
+    const cancellation = new AbortController();
+    const timer = setTimeout(() => cancellation.abort(new DOMException("Read timed out", "TimeoutError")), 10_000);
+    const signal = AbortSignal.any([context.req.raw.signal, cancellation.signal]);
+    const legacy: SessionRecordingSummary[] = [];
+    try {
+        for (let offset = 0; offset < summaries.length; offset += 4) {
+            signal.throwIfAborted();
+            const batch = await Promise.all(
+                summaries.slice(offset, offset + 4).map(async (summary) => {
+                    const query = new URLSearchParams({ projectId, runtimeId, sessionId: summary.sessionId });
+                    const response = await durableObjectFetch(
+                        context.env.SESSION_RECORDING,
+                        JSON.stringify([projectId, summary.sessionId]),
+                        new Request(`https://recording.internal/legacy-status?${query}`, { signal }),
+                    );
+                    if (!response.ok) {
+                        await response.body?.cancel();
+                        return null;
+                    }
+                    const status = sessionRecordingStatusSchema.parse(await response.json<unknown>());
+                    return { ...summary, status };
+                }),
+            );
+            for (const summary of batch) {
+                if (summary === null) {
+                    return errorResponse("recording_status_unavailable", 503);
+                }
+                legacy.push(summary);
+            }
+        }
+        return new Response(encodeSessionRecordingDirectory({ sessions: legacy }), { headers: jsonHeaders });
+    } finally {
+        clearTimeout(timer);
+        cancellation.abort();
+    }
 }
 
 async function decode(request: Request): Promise<SessionRecordingWrite> {
@@ -531,38 +642,80 @@ async function recordingSummaryResponse(
         return Response.json(kind === "directory" ? { sessions: summaries } : summaries[0]);
     }
 
-    // V1 consumers still require `status`. Reconstruct only this legacy response from history,
-    // keeping V2 reads and directory writes independent of any execution-state projection.
-    const legacy: SessionRecordingSummary[] = [];
-    for (const summary of summaries) {
-        signal.throwIfAborted();
-        const statusQuery = new URLSearchParams({
-            projectId: target.projectId,
-            runtimeId: target.runtimeId,
-            sessionId: summary.sessionId,
-        });
-        const statusResponse = await durableObjectFetch(
-            context.env.SESSION_RECORDING,
-            JSON.stringify([target.projectId, summary.sessionId]),
-            new Request(`https://recording.internal/legacy-status?${statusQuery}`, { signal }),
-        );
-        if (!statusResponse.ok) {
-            await statusResponse.body?.cancel();
-            return errorResponse("recording_status_unavailable", 503);
+    // V1 still returns its entire JSON collection. Batch through separate DO invocations
+    // so neither invocation needs a per-Session subrequest for the whole directory.
+    const cancellation = new AbortController();
+    const streamSignal = AbortSignal.any([context.req.raw.signal, cancellation.signal]);
+    const batchQuery = new URLSearchParams({ projectId: target.projectId, runtimeId: target.runtimeId });
+    const readBatch = async (offset: number): Promise<readonly SessionRecordingSummary[] | null> => {
+        streamSignal.throwIfAborted();
+        const deadline = new AbortController();
+        const timer = setTimeout(() => deadline.abort(new DOMException("Read timed out", "TimeoutError")), 10_000);
+        try {
+            const batchResponse = await durableObjectFetch(
+                context.env.RECORDING_DIRECTORY,
+                JSON.stringify([target.projectId, target.runtimeId]),
+                new Request(`https://directory.internal/legacy-sessions?${batchQuery}`, {
+                    method: "POST",
+                    body: JSON.stringify(
+                        summaries.slice(offset, offset + legacySummaryBatchSize).map((s) => s.sessionId),
+                    ),
+                    signal: AbortSignal.any([streamSignal, deadline.signal]),
+                }),
+            );
+            if (!batchResponse.ok) {
+                await batchResponse.body?.cancel();
+                return null;
+            }
+            return decodeSessionRecordingDirectory(await batchResponse.text()).sessions;
+        } finally {
+            clearTimeout(timer);
         }
-        const status = sessionRecordingStatusSchema.parse(await statusResponse.json<unknown>());
-        legacy.push({ ...summary, status });
+    };
+    // Before sending headers, preserve the typed failure for single/small legacy reads.
+    const first = await readBatch(0);
+    if (first === null) {
+        return errorResponse("recording_status_unavailable", 503);
     }
-    return new Response(
-        kind === "directory" ? encodeSessionRecordingDirectory({ sessions: legacy }) : JSON.stringify(legacy[0]),
+    if (kind === "summary" || summaries.length <= legacySummaryBatchSize) {
+        return new Response(
+            kind === "summary" ? JSON.stringify(first[0]) : encodeSessionRecordingDirectory({ sessions: first }),
+            { headers: legacySummaryHeaders },
+        );
+    }
+    let offset = legacySummaryBatchSize;
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>(
         {
-            headers: {
-                ...jsonHeaders,
-                "cache-control": "no-store",
-                "Mobius-Recording-Status-Source": "recorded-events",
+            start(controller) {
+                controller.enqueue(encoder.encode(`{"sessions":[${first.map((s) => JSON.stringify(s)).join(",")}`));
+            },
+            async pull(controller) {
+                try {
+                    const batch = await readBatch(offset);
+                    if (batch === null) {
+                        // Headers have already been sent. An errored body cannot be decoded as
+                        // a successful partial directory by an existing V1 client.
+                        throw new LegacyRecordingStatusUnavailableError();
+                    }
+                    controller.enqueue(encoder.encode(`,${batch.map((s) => JSON.stringify(s)).join(",")}`));
+                    offset += legacySummaryBatchSize;
+                    if (offset >= summaries.length) {
+                        controller.enqueue(encoder.encode("]}"));
+                        controller.close();
+                    }
+                } catch (cause) {
+                    cancellation.abort(cause);
+                    controller.error(cause);
+                }
+            },
+            cancel(reason) {
+                cancellation.abort(reason);
             },
         },
+        { highWaterMark: 0 },
     );
+    return new Response(body, { headers: legacySummaryHeaders });
 }
 
 type BatchResult =
@@ -751,6 +904,19 @@ export function createRecordingWorker(): RecordingWorker {
             recordingSummaryResponse(context, 2, "summary"),
         )
         .get(
+            "/v1/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/execution",
+            async (context): Promise<Response> => {
+                const query = sessionQuery(context);
+                if (query === null) {
+                    return errorResponse("not_found", 404);
+                }
+                for (const commandId of context.req.queries("commandId") ?? []) {
+                    query.append("commandId", commandId);
+                }
+                return await sessionRecordingFetch(context, query, "execution");
+            },
+        )
+        .get(
             "/v1/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/turns",
             async (context): Promise<Response> => {
                 const query = sessionQuery(context);
@@ -817,14 +983,32 @@ export function createRecordingWorker(): RecordingWorker {
 
 export class SessionRecordingDurableObject extends DurableObject<RecordingWorkerBindings> {
     readonly #history: SessionTurnHistory;
+    readonly #migration: MessageIdMigration;
     readonly #routes: Hono<RecordingEnvironment>;
     constructor(state: DurableObjectState, _environment: RecordingWorkerBindings) {
         super(state, _environment);
         const metrics = new RecordingSqlMetrics();
         const recording = new SessionRecordingStorage(state.storage, metrics);
-        this.#history = new SessionTurnHistory(recording, new SessionTurnHistoryStorage(state.storage, metrics));
-        this.#routes = sessionRecordingRoutes(
+        const historyStorage = new SessionTurnHistoryStorage(state.storage, metrics);
+        this.#history = new SessionTurnHistory(recording, historyStorage);
+        this.#migration = new MessageIdMigration(
+            new MessageIdMigrationStorage(state.storage),
             recording,
+            historyStorage,
+        );
+        this.#routes = sessionRecordingRoutes(
+            {
+                append: (write, project) =>
+                    this.#migration.append(write, (ordinal, events) => {
+                        if (!this.#migration.running()) {
+                            project?.(ordinal, events);
+                        }
+                    }),
+                read: recording.read,
+                readPage: recording.readPage,
+                records: recording.records,
+                batchesNewestFirst: recording.batchesNewestFirst,
+            },
             this.#history,
             this.#scheduleBackfill,
             metrics,
@@ -832,10 +1016,70 @@ export class SessionRecordingDurableObject extends DurableObject<RecordingWorker
         );
     }
     override async fetch(request: Request): Promise<Response> {
+        const path = new URL(request.url).pathname;
+        if (path === "/migrations/message-ids") {
+            const denied = await authorizeMessageIdMigration(request, this.env.MIGRATION_TOKEN);
+            if (denied !== null) {
+                return denied;
+            }
+            if (request.method !== "POST") {
+                return errorResponse("invalid_migration_request", 400);
+            }
+            let input: unknown;
+            try {
+                input = await request.json();
+            } catch {
+                return errorResponse("invalid_migration_request", 400);
+            }
+            const parsed = messageIdMigrationRequestSchema.safeParse(input);
+            if (!parsed.success) {
+                return errorResponse("invalid_migration_request", 400);
+            }
+            if (!this.#migration.storage.hasRecording()) {
+                return errorResponse("not_found", 404);
+            }
+            request.signal.throwIfAborted();
+            try {
+                if (parsed.data.mode === "dry-run") {
+                    return Response.json(this.#migration.preview(parsed.data.afterOrdinal));
+                }
+                const progress = this.#migration.advance();
+                await this.#scheduleBackfill();
+                const { group: _group, ...result } = progress;
+                console.info(JSON.stringify({ event: "recording_message_id_migration", ...result }));
+                return Response.json(result);
+            } catch (cause) {
+                request.signal.throwIfAborted();
+                return errorResponse(
+                    cause instanceof MessageIdMigrationError ? cause.code : "migration_unavailable",
+                    503,
+                );
+            }
+        }
+        if (this.#migration.running() && ["/turns", "/turn-items", "/turn-item"].includes(path)) {
+            return errorResponse("projection_building", 503);
+        }
         return await this.#routes.fetch(request);
     }
     /** Folds one bounded step of unprojected Recording batches and keeps stepping until caught up. */
     override async alarm(): Promise<void> {
+        if (this.#migration.running()) {
+            // A failed data migration does not spin forever: the operator must retry explicitly.
+            let progress: MessageIdMigrationProgress;
+            try {
+                progress = this.#migration.advance();
+            } catch (cause) {
+                if (!(cause instanceof MessageIdMigrationError)) {
+                    throw cause;
+                }
+                console.error(JSON.stringify({ event: "recording_message_id_migration_failed", code: cause.code }));
+                return;
+            }
+            if (progress.kind === "running") {
+                await this.ctx.storage.setAlarm(Date.now());
+                return;
+            }
+        }
         const outcome = this.#history.backfill(new Date());
         switch (outcome.kind) {
             case "caught_up":
@@ -865,7 +1109,7 @@ export class RecordingDirectoryDurableObject extends DurableObject<RecordingWork
         this.#routes = recordingDirectoryRoutes(storage, new RecordingDirectory(storage), metrics);
     }
     override async fetch(request: Request): Promise<Response> {
-        return await this.#routes.fetch(request);
+        return await this.#routes.fetch(request, this.env);
     }
 }
 

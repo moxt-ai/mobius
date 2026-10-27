@@ -40,10 +40,9 @@ test("Given real Codex has accepted a steering prompt, When V2 recovery reloads 
                     commandId: activeCommandId,
                     directoryId: "default",
                     disposition: SessionPromptDisposition.Reject,
-                    images: [],
+                    attachments: [],
                     kind: "session.prompt",
                     prompt: "Use two shell tools successfully, then reply STEERED_REPLY",
-                    resources: [],
                     sessionId: peer.sessionId,
                     targetCommandId: "",
                 }),
@@ -57,10 +56,9 @@ test("Given real Codex has accepted a steering prompt, When V2 recovery reloads 
                     commandId: steeringCommandId,
                     directoryId: "default",
                     disposition: SessionPromptDisposition.Queue,
-                    images: [],
+                    attachments: [],
                     kind: "session.prompt",
                     prompt: steeringPrompt,
-                    resources: [],
                     sessionId: peer.sessionId,
                     targetCommandId: activeCommandId,
                 }),
@@ -85,7 +83,26 @@ test("Given real Codex has accepted a steering prompt, When V2 recovery reloads 
                     sessionId: peer.sessionId,
                 }),
             );
+            for (;;) {
+                const message = await peer.nextMessage();
+                if (decodeMessageKind(message) !== "session.event.v2") {
+                    continue;
+                }
+                if (
+                    decodeSessionEventEnvelope(message).events.some(
+                        (event) =>
+                            event.type === "lifecycle-metadata" &&
+                            event.payload.kind === "prompt.completed" &&
+                            event.payload.commandId === steeringCommandId,
+                    )
+                ) {
+                    break;
+                }
+            }
+            // Native acceptance must arrive while consumption is still held at the model boundary.
+            releaseActive.resolve();
             let steeringEventId: string | undefined;
+            let steeringMessageId: string | undefined;
             for (;;) {
                 const message = await peer.nextMessage();
                 if (decodeMessageKind(message) !== "session.event.v2") {
@@ -93,14 +110,16 @@ test("Given real Codex has accepted a steering prompt, When V2 recovery reloads 
                 }
                 const requested = decodeSessionEventEnvelope(message).events.find(
                     (event) =>
-                        event.type === "lifecycle-metadata" &&
-                        event.payload.kind === "prompt.requested" &&
-                        event.payload.content.some(
-                            (content) => content.type === "text" && content.text === steeringPrompt,
-                        ),
+                        event.type === "acp" &&
+                        event.payload.sessionUpdate === "user_message_chunk" &&
+                        event.payload.content.type === "text" &&
+                        event.payload.content.text === steeringPrompt,
                 );
                 if (requested !== undefined) {
                     steeringEventId = requested.eventId;
+                    if (requested.type === "acp" && requested.payload.sessionUpdate === "user_message_chunk") {
+                        steeringMessageId = requested.payload.messageId ?? undefined;
+                    }
                     break;
                 }
             }
@@ -131,7 +150,7 @@ test("Given real Codex has accepted a steering prompt, When V2 recovery reloads 
                             event.payload.content.type === "text" &&
                             event.payload.content.text === steeringPrompt &&
                             event.eventId === steeringEventId &&
-                            event.payload.messageId === steeringEventId,
+                            event.payload.messageId === steeringMessageId,
                     ),
                 ).toBe(true);
                 expect(recovered.events.events.events.every((event) => event.type === "acp")).toBe(true);
@@ -181,10 +200,9 @@ test("Given real Codex advances between repeated prompts, When V2 recovery pagin
                         commandId,
                         directoryId: "default",
                         disposition,
-                        images: [],
+                        attachments: [],
                         kind: "session.prompt",
                         prompt: text,
-                        resources: [],
                         sessionId: peer.sessionId,
                         targetCommandId,
                     }),
@@ -267,7 +285,10 @@ test("Given real Codex advances between repeated prompts, When V2 recovery pagin
                 expect(userMessages).toHaveLength(2);
                 expect(new Set(userMessages.map((event) => event.eventId)).size).toBe(2);
                 for (const event of userMessages) {
-                    expect(event).toMatchObject({ payload: { messageId: event.eventId } });
+                    expect(event).toMatchObject({ payload: { messageId: expect.any(String) } });
+                    expect(event.type === "acp" && "messageId" in event.payload && event.payload.messageId).not.toBe(
+                        event.eventId,
+                    );
                 }
                 expect(historyEvents.every((event) => event.type === "acp")).toBe(true);
                 expect(historyEvents.map((event) => event.eventId)).toEqual(
@@ -323,8 +344,7 @@ test("Given real Codex with an active turn, When three follow-ups are accepted a
                         bindingId: peer.bindingId,
                         directoryId: "default",
                         additionalDirectoryIds: [],
-                        images: [],
-                        resources: [],
+                        attachments: [],
                         prompt: `Reply to ${commandId}`,
                         disposition: queued ? SessionPromptDisposition.Queue : SessionPromptDisposition.Reject,
                         targetCommandId: queued ? target : "",

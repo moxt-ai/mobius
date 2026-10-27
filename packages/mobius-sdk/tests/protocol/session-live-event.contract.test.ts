@@ -1,6 +1,7 @@
 import {
     decodeSessionEvent,
     decodeSessionLiveEvent,
+    encodeSessionEvent,
     type SessionEvent,
     type SessionLiveEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
@@ -21,6 +22,19 @@ const eventWithoutProvenance = {
 const sharedEvent = eventWithoutProvenance;
 
 describe("Session Event V2 contracts", () => {
+    it("Given a large legacy inline image, When its recorded event crosses the protocol boundary, Then it is accepted", () => {
+        const event = {
+            ...sharedEvent,
+            payload: {
+                content: { data: "a".repeat(1_000_001), mimeType: "image/png", type: "image" as const },
+                sessionUpdate: "agent_message_chunk" as const,
+            },
+        };
+
+        expect(decodeSessionEvent(event)).toEqual(event);
+        expect(JSON.parse(encodeSessionEvent(event))).toEqual(event);
+    });
+
     it.each(["running", "completed", "failed", "stopped", "unknown"])(
         "Given a %s background task, When a tool update crosses the recorded event boundary, Then its explicit task status survives",
         (status) => {

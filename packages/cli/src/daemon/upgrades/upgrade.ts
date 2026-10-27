@@ -4,6 +4,7 @@ import { decodeIdentifier, type RuntimeUpgradeResult } from "@moxt-ai/mobius-sdk
 import packageMetadata from "../../../package.json" with { type: "json" };
 import { RuntimeDiagnosticLog } from "../../runtime/observability/diagnostic-log.ts";
 import type { RuntimeTurnActivity } from "../../session/turn/runtime-turn-activity.ts";
+import type { InstallationDirectory } from "../../storage/installation/installation-files.ts";
 import { isNodeError } from "../../util/node-error.ts";
 import { sendLocalRequest } from "../control/local-client.ts";
 import { type DaemonReleaseSwitchState, lifecycleResponse, type WorkerLaunch } from "../control/protocol.ts";
@@ -82,7 +83,7 @@ export type DaemonReleaseSwitchOutcome =
 // version, install it, and ask the manager to switch. Callers observe the
 // result through awaitDaemonReleaseSwitch.
 export async function requestDaemonReleaseUpgrade(
-    stateDirectory: string,
+    stateDirectory: InstallationDirectory,
     currentVersion: string,
     signal: AbortSignal,
 ): Promise<DaemonReleaseUpgradeAttempt> {
@@ -95,7 +96,7 @@ export async function requestDaemonReleaseUpgrade(
 }
 
 async function requestInstalledDaemonReleaseSwitch(
-    stateDirectory: string,
+    stateDirectory: InstallationDirectory,
     launch: WorkerLaunch,
     signal: AbortSignal,
 ): Promise<Extract<DaemonReleaseUpgradeAttempt, { kind: "requested" }>> {
@@ -116,7 +117,7 @@ async function requestInstalledDaemonReleaseSwitch(
 // manager serializes switch work, so a bounded poll observes the terminal state
 // without holding a control connection for the whole switch.
 export async function awaitDaemonReleaseSwitch(
-    stateDirectory: string,
+    stateDirectory: InstallationDirectory,
     id: string,
     signal: AbortSignal,
 ): Promise<DaemonReleaseSwitchOutcome> {

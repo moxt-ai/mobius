@@ -2,13 +2,14 @@ import { randomBytes } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isNodeError } from "../../util/node-error.ts";
+import type { InstallationDirectory } from "../installation/installation-files.ts";
 
-function controlTokenPath(stateDirectory: string): string {
+function controlTokenPath(stateDirectory: InstallationDirectory): string {
     return join(stateDirectory, "manager.token");
 }
 
 /** The secret local control clients present to the daemon, created on first use with owner-only permissions. */
-export async function readOrCreateControlToken(stateDirectory: string): Promise<string> {
+export async function readOrCreateControlToken(stateDirectory: InstallationDirectory): Promise<string> {
     const path = controlTokenPath(stateDirectory);
     try {
         return (await readFile(path, "utf8")).trim();

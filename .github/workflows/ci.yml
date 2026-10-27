@@ -118,11 +118,15 @@ jobs:
       - run: ${{ matrix.command }}
 
   real-agents:
-    name: Real Agent compatibility
+    name: Real Agent compatibility (${{ matrix.shard }}/4)
     needs: changes
     if: needs.changes.outputs.docs-only == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -142,7 +146,9 @@ jobs:
           @anthropic-ai/claude-code@2.1.273
           @earendil-works/pi-coding-agent@1.1.0
           pi-acp@0.0.34
-      - run: pnpm test:agent-daemon:real
+      - run: pnpm test:agent-daemon:real --shard="$TEST_SHARD"
+        env:
+          TEST_SHARD: ${{ matrix.shard }}/4
 
   package-versions:
     # Pull requests that raise a package to the same version merge without a conflict,

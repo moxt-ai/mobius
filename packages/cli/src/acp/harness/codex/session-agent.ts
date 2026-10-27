@@ -1,15 +1,19 @@
-import type { PromptResponse } from "@agentclientprotocol/sdk";
+import type { ContentBlock, PromptResponse } from "@agentclientprotocol/sdk";
 import type { AcpEndpointTermination } from "../../agent/in-process-endpoint.ts";
 import type { CodexAppServerServerRequest } from "./app-server-client.ts";
 
 /** Session behavior selected after opening; transport ownership stays with the ACP endpoint. */
 export interface CodexSessionAgent {
     readonly steeringSupported: boolean;
-    readonly prompt: (input: readonly unknown[], signal: AbortSignal) => Promise<PromptResponse>;
+    readonly prompt: (
+        input: readonly unknown[],
+        signal: AbortSignal,
+        content: readonly ContentBlock[],
+    ) => Promise<PromptResponse>;
     readonly steer: (
         params: unknown,
         signal: AbortSignal,
-    ) => Promise<{ readonly outcome: "injected" | "promptRequired"; readonly reason?: string }>;
+    ) => Promise<{ readonly outcome: "injected" } | { readonly outcome: "promptRequired"; readonly reason: string }>;
     readonly cancel: () => Promise<void>;
     readonly close: () => Promise<void>;
     readonly nativeTurnId: () => string | null;
