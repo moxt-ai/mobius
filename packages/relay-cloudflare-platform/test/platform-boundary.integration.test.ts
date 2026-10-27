@@ -15,7 +15,9 @@ import {
     decodeSessionPromptCommand,
     decodeSessionRecordingHistory,
     encodeContentAvailableEvent,
+    encodeContentChunkFrame,
     encodeContentReadyEvent,
+    encodeFileBeginEvent,
     encodeNativeSessionRequest,
     encodeNativeSessionResult,
     encodeSessionClosedEvent,
@@ -2219,6 +2221,14 @@ async function connectRuntimeDaemon(slug: string, options: { readonly anchorCloc
                 ),
                 environment,
             ),
+        readFile: async (path: string) =>
+            await worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/files/content?${new URLSearchParams({ maxBytes: "1024", path }).toString()}`,
+                    { headers: credentialHeaders(text(sessionAccess, "credential")) },
+                ),
+                environment,
+            ),
         submitRuntimeTurn: (
             idempotencyKey: string,
             credentialTransform: (credential: string) => string = (credential) => credential,
@@ -2643,6 +2653,59 @@ describe.sequential("Platform Turn submission", () => {
             });
             runtime.startTurn(idempotencyKey, "1");
             expect(await responseJson(await response, 200)).toMatchObject({ turnId: idempotencyKey });
+        } finally {
+            runtime.daemon.close(1000, "Test complete");
+        }
+    });
+
+    it("Given a cancelled file response, When a late chunk arrives, Then the shared daemon remains available", async () => {
+        const runtime = await connectRuntimeDaemon("cancelled-file-chunk");
+        try {
+            const pending = runtime.readFile("/workspace/image.png");
+            const read = decodeServiceToDaemonMessage(await runtime.daemonMessages.next());
+            if (read.kind !== "file.read") {
+                throw new Error("Expected a file read command");
+            }
+            runtime.daemon.send(
+                encodeFileBeginEvent({
+                    byteLength: 2,
+                    kind: "file.begin",
+                    mediaType: "image/png",
+                    modifiedAt: "2026-09-18T00:00:00.000Z",
+                    name: "image.png",
+                    requestId: read.requestId,
+                    sessionId: runtime.sessionId,
+                }),
+            );
+            const response = await pending;
+            await response.body?.cancel();
+
+            runtime.daemon.send(
+                encodeContentChunkFrame({
+                    bytes: new Uint8Array([1, 2]),
+                    requestId: read.requestId,
+                    sequence: 0,
+                }),
+            );
+
+            const query = runtime.queryActiveTurn(new AbortController().signal);
+            const command = decodeServiceToDaemonMessage(await runtime.daemonMessages.next());
+            if (command.kind !== "native.session.request") {
+                throw new Error("Expected an unrelated native query to reach the daemon");
+            }
+            runtime.daemon.send(
+                encodeNativeSessionResult({
+                    action: "active-turn",
+                    kind: "native.session.result",
+                    queued: [],
+                    requestId: command.requestId,
+                    sessionId: runtime.sessionId,
+                    targetSessionId: runtime.sessionId,
+                    turn: null,
+                }),
+            );
+            expect(await responseJson(await query, 200)).toMatchObject({ action: "active-turn", turn: null });
+            expect(runtime.daemon.readyState).toBe(WebSocket.OPEN);
         } finally {
             runtime.daemon.close(1000, "Test complete");
         }

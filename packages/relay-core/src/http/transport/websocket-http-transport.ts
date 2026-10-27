@@ -9,6 +9,9 @@ const ERROR_KIND = "http.error";
 const EVENT_SUBSCRIBE_KIND = "session.events.subscribe";
 const EVENT_UNSUBSCRIBE_KIND = "session.events.unsubscribe";
 const MAX_BODY_BYTES = 12_582_912;
+const MAX_PENDING_BINARY_BYTES = MAX_BODY_BYTES;
+const MAX_PENDING_BINARY_REQUESTS = 16;
+const BINARY_REQUEST_TIMEOUT_MILLISECONDS = 30_000;
 const IDLE_TIMEOUT_MILLISECONDS = 60_000;
 const LIVE_EVENT_HEARTBEAT_MILLISECONDS = 20_000;
 const MAX_SUBSCRIPTION_DIAGNOSTICS = 8;
@@ -31,6 +34,8 @@ type WebSocketTransportErrorCode =
     | "invalid_message"
     | "invalid_method"
     | "invalid_target"
+    | "request_capacity_exceeded"
+    | "request_timeout"
     | "request_too_large"
     | "response_too_large"
     | "streaming_response_unsupported";
@@ -42,6 +47,8 @@ const TRANSPORT_ERRORS: Readonly<
     invalid_message: { message: "The WebSocket transport message is invalid", status: 400 },
     invalid_method: { message: "The WebSocket transport method is invalid", status: 400 },
     invalid_target: { message: "The WebSocket transport target is invalid", status: 400 },
+    request_capacity_exceeded: { message: "The WebSocket transport has too many pending uploads", status: 429 },
+    request_timeout: { message: "The WebSocket transport upload timed out", status: 408 },
     request_too_large: { message: "The WebSocket transport request is too large", status: 413 },
     response_too_large: { message: "The WebSocket transport response is too large", status: 502 },
     streaming_response_unsupported: {
@@ -200,13 +207,15 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
     const binaryRequests = new Map<
         string,
         {
-            readonly body: Uint8Array;
             readonly byteLength: number;
+            readonly chunks: Uint8Array[];
             readonly message: Readonly<Record<string, unknown>>;
+            readonly timeout: ReturnType<typeof setTimeout>;
             receivedBytes: number;
             sequence: number;
         }
     >();
+    let pendingDeclaredBinaryBytes = 0;
     const browserOrigin = request.headers.get("origin");
     let subscriptionDiagnosticCount = 0;
     let idleTimeout = setTimeout(() => {
@@ -220,6 +229,21 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
             controller.abort(new Error("WebSocket transport became inactive"));
             server.close(1001, "WebSocket transport idle timeout");
         }, IDLE_TIMEOUT_MILLISECONDS);
+    };
+    const releaseBinaryRequest = (requestId: string) => {
+        const upload = binaryRequests.get(requestId);
+        if (upload === undefined) {
+            return undefined;
+        }
+        binaryRequests.delete(requestId);
+        clearTimeout(upload.timeout);
+        pendingDeclaredBinaryBytes -= upload.byteLength;
+        return upload;
+    };
+    const releaseAllBinaryRequests = (): void => {
+        for (const requestId of binaryRequests.keys()) {
+            releaseBinaryRequest(requestId);
+        }
     };
     const scheduleHeartbeat = (): void => {
         if (heartbeatTimeout !== null) {
@@ -261,7 +285,7 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                 }
             }
             subscriptions.clear();
-            binaryRequests.clear();
+            releaseAllBinaryRequests();
         },
         { once: true },
     );
@@ -273,6 +297,7 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                 clearTimeout(heartbeatTimeout);
                 heartbeatTimeout = null;
             }
+            releaseAllBinaryRequests();
         },
         { once: true },
     );
@@ -295,22 +320,33 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                             ? await Reflect.apply(arrayBuffer, event.data, [])
                             : event.data;
                     const chunk = decodeContentChunkFrame(binary);
+                    requestId = chunk.requestId;
                     const upload = binaryRequests.get(chunk.requestId);
                     if (upload === undefined || chunk.sequence !== upload.sequence) {
+                        releaseBinaryRequest(chunk.requestId);
                         throw transportError("invalid_message");
                     }
                     upload.sequence += 1;
                     upload.receivedBytes += chunk.bytes.byteLength;
                     if (upload.receivedBytes > upload.byteLength) {
+                        releaseBinaryRequest(chunk.requestId);
                         throw transportError("request_too_large");
                     }
-                    upload.body.set(chunk.bytes, upload.receivedBytes - chunk.bytes.byteLength);
+                    upload.chunks.push(chunk.bytes);
                     if (upload.receivedBytes < upload.byteLength) {
                         return;
                     }
-                    binaryRequests.delete(chunk.requestId);
-                    binaryBody = upload.body;
-                    decoded = upload.message;
+                    const completed = releaseBinaryRequest(chunk.requestId);
+                    if (completed === undefined) {
+                        throw transportError("invalid_message");
+                    }
+                    binaryBody = new Uint8Array(completed.byteLength);
+                    let offset = 0;
+                    for (const bytes of completed.chunks) {
+                        binaryBody.set(bytes, offset);
+                        offset += bytes.byteLength;
+                    }
+                    decoded = completed.message;
                 }
                 const message = record(decoded);
                 const kind = string(message, "kind", 32);
@@ -477,13 +513,47 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                     ) {
                         throw transportError("invalid_message");
                     }
+                    const declaration = requestFromMessage(
+                        message,
+                        requestId,
+                        new URL(request.url).origin,
+                        browserOrigin,
+                        controller.signal,
+                        new Uint8Array(0),
+                    );
+                    if (declaration.request.method === "GET") {
+                        throw transportError("invalid_message");
+                    }
+                    if (
+                        binaryRequests.size >= MAX_PENDING_BINARY_REQUESTS ||
+                        pendingDeclaredBinaryBytes + bodyByteLength > MAX_PENDING_BINARY_BYTES
+                    ) {
+                        throw transportError("request_capacity_exceeded");
+                    }
+                    const timeout = setTimeout(() => {
+                        if (releaseBinaryRequest(requestId) === undefined || server.readyState !== WebSocket.OPEN) {
+                            return;
+                        }
+                        const error = transportError("request_timeout").toHttpJson();
+                        server.send(
+                            JSON.stringify({
+                                code: error.body.error.code,
+                                kind: ERROR_KIND,
+                                message: error.body.error.message,
+                                requestId,
+                                status: error.status,
+                            }),
+                        );
+                    }, BINARY_REQUEST_TIMEOUT_MILLISECONDS);
                     binaryRequests.set(requestId, {
-                        body: new Uint8Array(bodyByteLength),
                         byteLength: bodyByteLength,
+                        chunks: [],
                         message,
                         receivedBytes: 0,
                         sequence: 0,
+                        timeout,
                     });
+                    pendingDeclaredBinaryBytes += bodyByteLength;
                     return;
                 }
                 requestId = requestIdFromMessage(message);

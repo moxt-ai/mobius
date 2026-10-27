@@ -300,7 +300,11 @@ export class ChannelActor {
             .operations()
             .find((route) => route.requestId === chunk.requestId && route.socket.isOpen())?.socket;
         if (recipient === undefined) {
-            throw new ProtocolMessageError("Content chunk has no pending operation");
+            // The HTTP caller can cancel after the daemon has already queued its next
+            // chunk. The operation route is gone by the time that frame arrives, but
+            // this is not a daemon protocol violation and must not interrupt unrelated
+            // Sessions sharing the Runtime connection.
+            return;
         }
         recipient.send(copyBinaryFrame(message));
     };
