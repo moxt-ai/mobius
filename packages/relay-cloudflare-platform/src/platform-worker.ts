@@ -84,7 +84,6 @@ import {
     type PlatformStorageBindings,
     PlatformStorageRegistry,
 } from "./storage/platform-database-resolver.ts";
-import { PlatformProjectAuthorizationStorage } from "./storage/platform-project-authorization-storage.ts";
 import { RecordingPolicyStorage } from "./storage/recording-policy-storage.ts";
 
 export interface PlatformRelayBindings extends PlatformStorageBindings, ProjectWorkerRoutingBindings {
@@ -982,7 +981,6 @@ export function createPlatformApplication(
                 authentication,
                 storageRegistry,
                 appAuthentication,
-                new PlatformProjectAuthorizationStorage(databases),
             );
             context.set("control", control);
             context.set("appAuthentication", appAuthentication);

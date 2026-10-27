@@ -123,7 +123,30 @@ async function application() {
     });
 
     return {
+        appId,
+        projectId,
         authenticateApp,
+        deleteApp: async () =>
+            await worker.fetch(
+                new Request(`${origin}/dashboard/v1/apps/${appId}`, {
+                    headers: developerHeaders,
+                    method: "DELETE",
+                }),
+                env,
+            ),
+        listApps: async () => await dashboard(`platform/tenants/${tenant.tenantId}/apps`),
+        listProjects: async () => await dashboard(`apps/${appId}/projects`),
+        issueScopedCredential: async () =>
+            v.parse(
+                credentialResource,
+                await responseJson(
+                    await dashboard(`apps/${appId}/credentials`, {
+                        permissions: ["session:read", "session:write"],
+                        projectIds: [projectId],
+                    }),
+                    201,
+                ),
+            ),
         authenticateSession: async (directory = env.PLATFORM_DIRECTORY_DATABASE) =>
             await runInDurableObject(env.RUNTIME_RELAY.getByName(runtimeId), async (_instance, state) => {
                 const relay = new RuntimeRelay(state, {
@@ -201,4 +224,50 @@ it("Given previously valid App and Session credentials, When directory storage i
         503,
     );
     await expectRejected(await app.authenticateSession(env.TEST_UNINITIALIZED_SHARD), "database_unavailable", 503);
+});
+
+it("Given an active App and Project, When deletion rolls back and is retried, Then access remains until deletion commits and the App disappears from the active list", async () => {
+    const app = await application();
+    await env.PLATFORM_DIRECTORY_DATABASE.prepare(
+        `CREATE TRIGGER reject_project_deletion BEFORE UPDATE OF lifecycle ON platform_projects
+         WHEN NEW.lifecycle = 'deleted'
+         BEGIN SELECT RAISE(ABORT, 'Controlled deletion failure'); END`,
+    ).run();
+    try {
+        await expectRejected(await app.deleteApp(), "internal_error", 500);
+        expect(await responseJson(await app.listProjects(), 200)).toMatchObject({
+            projects: [{ projectId: app.projectId, lifecycle: "active" }],
+        });
+        expect((await app.authenticateApp()).status).toBe(201);
+        expect((await app.authenticateSession()).status).toBe(200);
+    } finally {
+        await env.PLATFORM_DIRECTORY_DATABASE.prepare("DROP TRIGGER reject_project_deletion").run();
+    }
+
+    expect(await responseJson(await app.deleteApp(), 200)).toMatchObject({ lifecycle: "deleted" });
+    const { apps } = v.parse(
+        v.object({ apps: v.array(v.object({ appId: v.string() })) }),
+        await responseJson(await app.listApps(), 200),
+    );
+    expect(apps.map((item) => item.appId)).not.toContain(app.appId);
+    await expectRejected(await app.authenticateApp(), "credential_revoked");
+    await expectRejected(await app.authenticateSession(), "credential_revoked");
+});
+
+it("Given an active Project with App and Session credentials, When its directory lifecycle is suspended, Then listing and every credential observe the suspension", async () => {
+    const app = await application();
+    const scoped = await app.issueScopedCredential();
+    expect((await app.authenticateApp(scoped.credential)).status).toBe(201);
+    await env.PLATFORM_DIRECTORY_DATABASE.prepare(
+        "UPDATE platform_projects SET lifecycle = 'suspended', suspended_at = ? WHERE project_id = ?",
+    )
+        .bind(Date.now(), app.projectId)
+        .run();
+
+    expect(await responseJson(await app.listProjects(), 200)).toMatchObject({
+        projects: [{ projectId: app.projectId, lifecycle: "suspended" }],
+    });
+    await expectRejected(await app.authenticateApp(), "project_access_denied", 403);
+    await expectRejected(await app.authenticateApp(scoped.credential), "project_access_denied", 403);
+    await expectRejected(await app.authenticateSession(), "project_access_denied", 403);
 });
