@@ -1,7 +1,7 @@
 import { and, eq, isNull } from "drizzle-orm";
 import { relayDrizzle } from "../infra/drizzle-database.ts";
 import type { SqlDatabase } from "../infra/sql-database.ts";
-import { channelHostCredential, pairingChannel } from "../schema/d1/index.ts";
+import { channelHostCredential, pairingChannel } from "../schema/project-do/index.ts";
 
 export interface ChannelCredentialIdentity {
     readonly channelId: string;

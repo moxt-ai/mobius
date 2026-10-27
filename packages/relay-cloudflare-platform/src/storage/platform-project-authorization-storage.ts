@@ -1,5 +1,8 @@
 import { DatabaseError, relayDrizzle } from "@moxt-ai/mobius-relay-core/database";
-import { platformProjectAppRevocation, platformProjectAuthorization } from "@moxt-ai/mobius-relay-core/schema";
+import {
+    platformProjectAppRevocation,
+    platformProjectAuthorization,
+} from "@moxt-ai/mobius-relay-core/schema/project-do";
 import { eq } from "drizzle-orm";
 import {
     type PlatformProjectAuthorizationRow,
