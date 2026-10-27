@@ -1,5 +1,6 @@
 import { Command, CommanderError } from "commander";
 import packageMetadata from "../../package.json" with { type: "json" };
+import { StateRootError, validateStateRoot } from "../storage/state-root.ts";
 
 import type { CliContext } from "./context.ts";
 import { registerAgentsHandler } from "./handler/agents/index.ts";
@@ -39,10 +40,15 @@ export async function runCLI(): Promise<void> {
         version: packageMetadata.version,
     };
     try {
+        await validateStateRoot(process.env);
         await createProgram(context).parseAsync(process.argv);
     } catch (error) {
         if (error instanceof CommanderError) {
             process.exitCode = error.exitCode;
+        } else if (error instanceof StateRootError) {
+            process.stderr.write(`${error.message}\n`);
+            // EX_CONFIG from sysexits(3): the configuration, not the command, must change.
+            process.exitCode = 78;
         } else if (!shutdown.signal.aborted) {
             const message = error instanceof Error ? error.message : "Unknown failure";
             process.stderr.write(`Mobius daemon failed: ${message}\n`);
