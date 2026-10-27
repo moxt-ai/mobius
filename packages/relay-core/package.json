@@ -9,7 +9,7 @@
         "./gateway": "./src/gateway/index.ts",
         "./database": "./src/infra/sql-database.ts",
         "./logging": "./src/infra/logger.ts",
-        "./schema": "./src/schema/d1/index.ts"
+        "./schema/project-do": "./src/schema/project-do/index.ts"
     },
     "scripts": {
         "prebuild": "pnpm --dir ../.. db:codegen",
