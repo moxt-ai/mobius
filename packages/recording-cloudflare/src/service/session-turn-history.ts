@@ -13,7 +13,9 @@ import { sessionRecordingTurnItemCursor } from "@moxt-ai/mobius-sdk/protocol";
 import {
     emptyProjection,
     type ItemTextChange,
+    type ProjectedEventIdentity,
     type ProjectionWrites,
+    projectedEventKey,
     type StoredInteraction,
     type StoredInteractionRecord,
     type StoredProjection,
@@ -144,6 +146,7 @@ class ProjectionFold {
     readonly #dirtyTurns = new Set<string>();
     readonly #dirtyItems = new Set<string>();
     readonly #dirtyInteractions = new Set<string>();
+    readonly #events = new Map<string, ProjectedEventIdentity>();
     #state: StoredProjectionState;
     #turnCount: number;
 
@@ -154,11 +157,20 @@ class ProjectionFold {
     }
 
     readonly fold = (events: readonly SessionLiveEvent[]): void => {
+        const identities = events.map((event) => ({ eventId: event.eventId, generationId: event.sessionGenerationId }));
+        const storedEvents = new Set(this.#storage.projectedEvents(identities).map(projectedEventKey));
         for (const event of events) {
             if (this.#state.retiredGenerationIds.includes(event.sessionGenerationId)) {
                 // A late batch of a replaced process; folding it would interrupt the current generation.
                 continue;
             }
+            const identity = { eventId: event.eventId, generationId: event.sessionGenerationId };
+            const key = projectedEventKey(identity);
+            if (storedEvents.has(key) || this.#events.has(key)) {
+                // Raw Recording retains received frames, but an event contributes to the fold only once.
+                continue;
+            }
+            this.#events.set(key, identity);
             const previous = this.#state.generationId;
             if (previous !== null && previous !== event.sessionGenerationId) {
                 // A new generation is a restarted local Agent process: nothing of the old one stays active.
@@ -204,6 +216,7 @@ class ProjectionFold {
             return record === undefined ? [] : [record];
         });
         return {
+            events: [...this.#events.values()],
             interactions,
             items,
             projection: { failure: null, foldedThroughOrdinal, state: this.#state, turnCount: this.#turnCount },
@@ -695,6 +708,17 @@ export class SessionTurnHistory {
         this.#history = history;
     }
 
+    #projection(): StoredProjection | null {
+        const projection = this.#history.projection();
+        if (projection !== null && projection.state.version === 1) {
+            // A pre-deduplication projection may already contain repeated text. Rebuild only its
+            // derived tables from the unchanged raw Recording, using the existing bounded backfill.
+            this.#history.resetProjection();
+            return null;
+        }
+        return projection;
+    }
+
     /**
      * Folds a batch that was just appended, inside the transaction that records it. Returns false when
      * the batch is left for backfill: earlier batches are unfolded, an earlier fold failed, or this
@@ -703,7 +727,7 @@ export class SessionTurnHistory {
     readonly project = (ordinal: number, events: readonly SessionLiveEvent[]): boolean => {
         try {
             return this.#history.transaction(() => {
-                const projection = this.#history.projection() ?? emptyProjection;
+                const projection = this.#projection() ?? emptyProjection;
                 if (
                     projection.failure !== null ||
                     this.#recording.hasBatchBetween(projection.foldedThroughOrdinal, ordinal)
@@ -728,7 +752,7 @@ export class SessionTurnHistory {
     readonly backfill = (now: Date, eventBudget = backfillEventsPerStep): BackfillOutcome => {
         try {
             return this.#history.transaction((): BackfillOutcome => {
-                const projection = this.#history.projection() ?? emptyProjection;
+                const projection = this.#projection() ?? emptyProjection;
                 const fold = new ProjectionFold(this.#history, projection);
                 let foldedThrough = projection.foldedThroughOrdinal;
                 let folded = 0;
@@ -958,6 +982,13 @@ export class SessionTurnHistory {
         if (!this.#recording.records(target.projectId, target.runtimeId, target.sessionId)) {
             return { kind: "not_found" };
         }
+        let projection: StoredProjection | null = null;
+        try {
+            projection = this.#projection();
+        } catch (cause) {
+            // An undecodable state is left to backfill, which records the failure that reads then report.
+            console.error("Recording Turn history projection could not be read", cause);
+        }
         const failure = this.#history.failure();
         if (failure !== null) {
             const delay = Date.parse(failure.retryAt) - Date.now();
@@ -966,14 +997,6 @@ export class SessionTurnHistory {
                 retryAt: new Date(Date.parse(failure.retryAt)),
                 retryAfterSeconds: Math.max(1, Math.ceil(delay / 1_000)),
             };
-        }
-        let projection: StoredProjection | null;
-        try {
-            projection = this.#history.projection();
-        } catch (cause) {
-            // An undecodable state is left to backfill, which records the failure that reads then report.
-            console.error("Recording Turn history projection could not be read", cause);
-            return { kind: "building" };
         }
         if (projection !== null && projection.foldedThroughOrdinal >= this.#recording.latestOrdinal()) {
             return { kind: "ready", value: projection.state };

@@ -1,7 +1,8 @@
-import { and, asc, desc, eq, gt, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lt, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/durable-sqlite";
 import {
     emptyProjection,
+    type ProjectedEventIdentity,
     type ProjectionWrites,
     type StoredInteractionRecord,
     type StoredProjection,
@@ -19,12 +20,16 @@ import { sessionRecordingDurableObjectMigrations } from "../generated/session-re
 import { RecordingSqlMetrics } from "../infra/recording-sql-metrics.ts";
 import * as schema from "../schema/session-recording-do/index.ts";
 import {
+    projectedSessionEvent,
     recordedInteraction,
     recordedTurn,
     recordedTurnItem,
     recordingProjection,
 } from "../schema/session-recording-do/index.ts";
 import { applyDurableObjectMigrations } from "./durable-object-migrations.ts";
+
+// Each identity binds two parameters, within Durable Object SQLite's 100-parameter limit.
+const eventIdentityChunk = 50;
 
 function safeJson(encoded: string): unknown {
     try {
@@ -50,6 +55,42 @@ export class SessionTurnHistoryStorage {
 
     /** Runs `operation` atomically; nested inside another transaction it rolls back on its own. */
     readonly transaction = <T>(operation: () => T): T => this.#storage.transactionSync(operation);
+
+    /** Invalidates derived history atomically without changing any received event frames. */
+    readonly resetProjection = (): void => {
+        this.transaction(() => {
+            this.#database.delete(recordedInteraction).run();
+            this.#database.delete(recordedTurnItem).run();
+            this.#database.delete(recordedTurn).run();
+            this.#database.delete(recordingProjection).run();
+            this.#database.delete(projectedSessionEvent).run();
+        });
+    };
+
+    readonly projectedEvents = (events: readonly ProjectedEventIdentity[]): readonly ProjectedEventIdentity[] => {
+        const stored: ProjectedEventIdentity[] = [];
+        for (let index = 0; index < events.length; index += eventIdentityChunk) {
+            stored.push(
+                ...this.#database
+                    .select()
+                    .from(projectedSessionEvent)
+                    .where(
+                        or(
+                            ...events
+                                .slice(index, index + eventIdentityChunk)
+                                .map((event) =>
+                                    and(
+                                        eq(projectedSessionEvent.generationId, event.generationId),
+                                        eq(projectedSessionEvent.eventId, event.eventId),
+                                    ),
+                                ),
+                        ),
+                    )
+                    .all(),
+            );
+        }
+        return stored;
+    };
 
     readonly projection = (): StoredProjection | null => {
         const row = this.#database
@@ -171,6 +212,12 @@ export class SessionTurnHistoryStorage {
                 .insert(recordedInteraction)
                 .values(values)
                 .onConflictDoUpdate({ target: recordedInteraction.interactionId, set: values })
+                .run();
+        }
+        for (let index = 0; index < writes.events.length; index += eventIdentityChunk) {
+            this.#database
+                .insert(projectedSessionEvent)
+                .values(writes.events.slice(index, index + eventIdentityChunk))
                 .run();
         }
         this.#database

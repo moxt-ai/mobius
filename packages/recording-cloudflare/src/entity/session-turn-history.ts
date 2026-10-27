@@ -59,6 +59,8 @@ export const storedProjectionStateSchema = z
         // Generations that a later one replaced. A batch from one of them arrives late and is not a restart.
         retiredGenerationIds: z.array(z.string().min(1)).readonly(),
         title: z.string().nullable(),
+        // Version 1 did not deduplicate event identities and must be rebuilt before further folding.
+        version: z.union([z.literal(1), z.literal(2)]).default(1),
     })
     .readonly();
 export type StoredProjectionState = z.infer<typeof storedProjectionStateSchema>;
@@ -84,7 +86,7 @@ export interface StoredProjection {
 export const emptyProjection: StoredProjection = {
     failure: null,
     foldedThroughOrdinal: 0,
-    state: { activeCommands: null, generationId: null, retiredGenerationIds: [], title: null },
+    state: { activeCommands: null, generationId: null, retiredGenerationIds: [], title: null, version: 2 },
     turnCount: 0,
 };
 
@@ -109,11 +111,20 @@ export interface TurnItemWrite {
 
 /** Everything one fold commits; storage encodes all of it before writing any of it. */
 export interface ProjectionWrites {
+    readonly events: readonly ProjectedEventIdentity[];
     readonly interactions: readonly StoredInteractionRecord[];
     readonly items: readonly TurnItemWrite[];
     readonly projection: StoredProjection;
     readonly turns: readonly { readonly open: boolean; readonly turn: StoredTurn }[];
 }
+
+export interface ProjectedEventIdentity {
+    readonly eventId: string;
+    readonly generationId: string;
+}
+
+export const projectedEventKey = (event: ProjectedEventIdentity): string =>
+    JSON.stringify([event.generationId, event.eventId]);
 
 /** A stored item as a read sees it: its fields, its bounded listing, and a prefix of its text. */
 export interface StoredTurnItemRead {
