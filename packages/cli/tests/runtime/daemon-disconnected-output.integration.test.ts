@@ -23,13 +23,10 @@ import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { runRuntime } from "../../src/runtime/run.ts";
-import {
-    InProcessAcpAgentDefinition,
-    type InProcessAcpEndpointFactory,
-    RuntimeLocalContext,
-} from "../../src/runtime.ts";
+import { AcpAgentDefinition, type InProcessAcpEndpointFactory, RuntimeLocalContext } from "../../src/runtime.ts";
 import { RuntimeTurnActivity } from "../../src/session/turn/runtime-turn-activity.ts";
 import type { ScheduledTask, Timer } from "../../src/util/timer.ts";
+import { ControlledEndpointConnection } from "../support/agents/controlled-endpoint-connection.ts";
 import { createControlledRuntimeConfig as createRuntimeConfig } from "../support/controlled-runtime-config.ts";
 
 // Failure modes exercised through the production daemon and its real WebSocket transport:
@@ -282,7 +279,21 @@ async function startRuntime() {
             defaultWorkspace: workspace,
             relayUrl: new URL(`ws://127.0.0.1:${port(http).toString()}/daemon?token=${"r".repeat(43)}`),
         },
-        [new InProcessAcpAgentDefinition("controlled", "Controlled Agent", process.execPath, producer.createEndpoint)],
+        [
+            new AcpAgentDefinition(
+                "controlled",
+                "Controlled Agent",
+                process.execPath,
+                (options) =>
+                    new ControlledEndpointConnection(
+                        producer.createEndpoint({
+                            ...options,
+                            onSessionUpdate: options.client.onUpdate,
+                        }),
+                        options.client,
+                    ),
+            ),
+        ],
         new RuntimeLocalContext(directory, {}),
     );
     const cancellation = new AbortController();

@@ -22,7 +22,7 @@ import {
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
-import type { InProcessAcpEndpointFactory } from "../../src/acp/agent/in-process-endpoint.ts";
+import type { AgentConnectionFactory } from "../../src/acp/connection/agent-connection.ts";
 import { InProcessAcpAgentSpecification } from "../../src/agent/specification/agent-specification.ts";
 import { ControlledSessionAgent } from "../support/agents/controlled-session-agent.ts";
 import { type RealDaemonPeer, withControlledDaemon as withRealDaemon } from "../support/agents/real-daemon.ts";
@@ -39,7 +39,7 @@ class ClosableAgentSpecification extends InProcessAcpAgentSpecification {
     override readonly maximumTestedAgentVersion = process.versions.node;
     override readonly minimumSupportedAgentVersion = process.versions.node;
     readonly sessions = new ControlledSessionAgent();
-    readonly createEndpoint: InProcessAcpEndpointFactory = this.sessions.createEndpoint;
+    readonly createConnection: AgentConnectionFactory = this.sessions.createConnection;
 
     constructor() {
         super("MOBIUS_TEST_CONTROLLED_CLOSABLE_PATH");

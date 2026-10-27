@@ -7,9 +7,9 @@ import {
     encodeSessionPreviewHistoryPageLoad,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
-import { DirectAcpAgentSpecification } from "../../src/agent/specification/agent-specification.ts";
+import { ControlledAcpSpecification } from "../support/agents/controlled-acp-specification.ts";
 
-class HistoryAgentSpecification extends DirectAcpAgentSpecification {
+class HistoryAgentSpecification extends ControlledAcpSpecification {
     readonly id = "claude";
     readonly label = "Claude Code";
     readonly agentExecutable = "controlled-acp";

@@ -35,8 +35,8 @@ import {
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { expect, test } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
-import { InProcessAcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
-import { CodexAcpAgent } from "../../src/acp/harness/codex/agent.ts";
+import { CodexAgentConnection } from "../../src/acp/adapter/codex/agent-connection.ts";
+import { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { RuntimeAgentDependencies } from "../../src/agent/runtime-agents.ts";
 import { createRuntimeConfig, RuntimeLocalContext } from "../../src/runtime/config.ts";
 import { runRuntime } from "../../src/runtime/run.ts";
@@ -100,11 +100,11 @@ test("Given real Codex streams commentary after a tool, When clients watch and r
     await listen(relay);
     const relayUrl = new URL(`ws://127.0.0.1:${port(relay).toString()}${MOBIUS_API_PREFIX}/channels/real-codex/daemon`);
     relayUrl.searchParams.set("token", "r".repeat(43));
-    const agent = new InProcessAcpAgentDefinition(
+    const agent = new AcpAgentDefinition(
         "codex",
         "Codex",
         codex.executable,
-        (options) => new CodexAcpAgent(options),
+        (options) => new CodexAgentConnection(options),
         codex.environment,
     );
     const config = createRuntimeConfig(

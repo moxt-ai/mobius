@@ -2,13 +2,14 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
+import { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
 import { RuntimeLocalContext } from "../../src/runtime/config.ts";
 import { NullSessionObserver } from "../../src/session/api/session-api.ts";
 import { MemorySessionStore } from "../../src/session/record/session-store.ts";
 import { systemTimer } from "../../src/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
+import { ControlledAcpConnection } from "../support/agents/controlled-acp-connection.ts";
 import { createControlledRuntimeConfig as createRuntimeConfig } from "../support/controlled-runtime-config.ts";
 import { SessionRuntimeFixture as SessionManager } from "../support/session-runtime.ts";
 import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
@@ -36,11 +37,21 @@ describe("acp commands environment", () => {
             timer: systemTimer,
             maxProcesses: null,
         });
-        const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
-            fakeAgentPath,
-            "--agent-name",
+        const agent = new AcpAgentDefinition(
+            "controlled-acp",
             "Controlled ACP",
-        ]);
+            process.execPath,
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "controlled-acp",
+                        adapterPath: process.execPath,
+                        arguments: [fakeAgentPath, "--agent-name", "Controlled ACP"],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
+        );
 
         try {
             const prepared = await manager.prepareSession({

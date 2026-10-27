@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
+import { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
 import { MemorySessionStore } from "../../src/session/record/session-store.ts";
 import { systemTimer } from "../../src/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
+import { ControlledAcpConnection } from "../support/agents/controlled-acp-connection.ts";
 import { SessionRuntimeFixture as SessionManager } from "../support/session-runtime.ts";
 import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
 import { fakeAgentPath, RecordingObserver } from "./acp-feature-fixture.ts";
@@ -19,11 +20,26 @@ const tokenCount = {
 const quota = { model_usage: [{ model: "test-model", token_count: tokenCount }], token_count: tokenCount };
 const contextUsage = { used: 50_000, size: 200_000, cost: { amount: 0.125, currency: "USD" } };
 
-function usageAgent(response: Readonly<Record<string, unknown>>, context?: typeof contextUsage): LocalAgentDefinition {
-    return new LocalAgentDefinition("controlled-usage", "Controlled ACP", process.execPath, [fakeAgentPath], {
-        MOBIUS_FAKE_ACP_PROMPT_RESPONSE: JSON.stringify(response),
-        ...(context === undefined ? {} : { MOBIUS_FAKE_ACP_CONTEXT_USAGE: JSON.stringify(context) }),
-    });
+function usageAgent(response: Readonly<Record<string, unknown>>, context?: typeof contextUsage): AcpAgentDefinition {
+    return new AcpAgentDefinition(
+        "controlled-usage",
+        "Controlled ACP",
+        process.execPath,
+        (options) =>
+            new ControlledAcpConnection(
+                {
+                    id: "controlled-usage",
+                    adapterPath: process.execPath,
+                    arguments: [fakeAgentPath],
+                    environment: options.environment,
+                },
+                options,
+            ),
+        {
+            MOBIUS_FAKE_ACP_PROMPT_RESPONSE: JSON.stringify(response),
+            ...(context === undefined ? {} : { MOBIUS_FAKE_ACP_CONTEXT_USAGE: JSON.stringify(context) }),
+        },
+    );
 }
 
 async function run(

@@ -11,6 +11,8 @@ import type {
     InProcessAcpEndpoint,
     InProcessAcpEndpointFactory,
 } from "../../../src/acp/agent/in-process-endpoint.ts";
+import type { AgentConnectionFactory } from "../../../src/acp/connection/agent-connection.ts";
+import { ControlledEndpointConnection } from "./controlled-endpoint-connection.ts";
 
 export interface AgentOperation {
     readonly endpoint: number;
@@ -101,6 +103,11 @@ export class ControlledSessionEndpoint implements InProcessAcpEndpoint {
  * endpoint index, so a scenario can tell which process served each request.
  */
 export class ControlledSessionAgent {
+    readonly createConnection: AgentConnectionFactory = (options) =>
+        new ControlledEndpointConnection(
+            this.createEndpoint({ ...options, onSessionUpdate: options.client.onUpdate }),
+            options.client,
+        );
     readonly operations: AgentOperation[] = [];
     /** Holds the end of process teardown, so a close stays in flight. */
     readonly closes = new RequestGate();

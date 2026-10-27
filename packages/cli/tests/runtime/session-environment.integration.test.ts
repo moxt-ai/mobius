@@ -18,10 +18,11 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test, vi } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
-import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
+import { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { type RuntimeConfig, RuntimeLocalContext } from "../../src/runtime/config.ts";
 import { runRuntime } from "../../src/runtime/run.ts";
 import { fakeAgentHarness } from "../support/agent-harness.ts";
+import { ControlledAcpConnection } from "../support/agents/controlled-acp-connection.ts";
 import { createControlledRuntimeConfig } from "../support/controlled-runtime-config.ts";
 
 // @no-uc: Compatibility; public Runtime commands and real ACP children verify embedding context isolation.
@@ -231,17 +232,20 @@ await import(${JSON.stringify(agentPeer)});
     );
     const external = fakeAgentHarness({ id: "codex", label: "Controlled ACP" }, harnessState);
     const createAgent = (id: string) =>
-        new LocalAgentDefinition(
+        new AcpAgentDefinition(
             id,
             external.label,
             process.execPath,
-            [launcher],
+            (options) =>
+                new ControlledAcpConnection(
+                    { id, adapterPath: process.execPath, arguments: [launcher], environment: options.environment },
+                    options,
+                ),
             external.environment,
-            external.adapterVersion,
             external.agentVersion,
             undefined,
-            undefined,
             external.capabilities,
+            external.adapterVersion,
         );
     const agent = createAgent("codex");
     const otherAgent = createAgent("other-codex");

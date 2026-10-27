@@ -6,8 +6,8 @@ import {
     type InitializeResponse,
     methods,
 } from "@agentclientprotocol/sdk";
-import type { InProcessAcpEndpointFactory } from "../../../acp/agent/in-process-endpoint.ts";
-import { PiAcpEndpoint } from "../../../acp/harness/pi/endpoint.ts";
+import { PiAgentConnection } from "../../../acp/adapter/pi/agent-connection.ts";
+import type { AgentConnectionFactory } from "../../../acp/connection/agent-connection.ts";
 import type { ResolvedExecutable } from "../../../util/process/executable.ts";
 import type { LocalAgentDiscoveryContext } from "../../discovery/agent-discovery-context.ts";
 import { AgentProbeError } from "../../discovery/agent-probe-error.ts";
@@ -18,7 +18,7 @@ const ACP_PROBE_TIMEOUT_MILLISECONDS = 30_000;
 export class PiAgentSpecification extends InProcessAcpAgentSpecification {
     override readonly acpProbeTimeoutMilliseconds = ACP_PROBE_TIMEOUT_MILLISECONDS;
     readonly agentExecutable = "pi";
-    readonly createEndpoint: InProcessAcpEndpointFactory = (options) => new PiAcpEndpoint(options);
+    readonly createConnection: AgentConnectionFactory = (options) => new PiAgentConnection(options);
     // The Pi ACP fork inlines embedded prompt resources into the turn message, so Mobius
     // keeps the adapter's opt-in capability flag enabled for every launch it owns.
     override readonly createLaunchEnvironment = async (

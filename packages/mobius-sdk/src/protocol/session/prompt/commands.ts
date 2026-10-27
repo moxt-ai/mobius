@@ -75,7 +75,7 @@ export const promptImageSchema = z
 
 export type PromptImage = z.infer<typeof promptImageSchema>;
 
-const promptResourceSchema = z
+export const promptResourceSchema = z
     .object({
         mimeType: z.string().max(255),
         name: z.string().min(1).max(500),

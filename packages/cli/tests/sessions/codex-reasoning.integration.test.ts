@@ -3,11 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionNotification } from "@agentclientprotocol/sdk";
 import { expect, it } from "vitest";
-import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
+import { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import type { CodexAppServerClient } from "../../src/acp/harness/codex/app-server-client.ts";
 import { reasoningText } from "../../src/acp/harness/codex/items.ts";
 import { CodexOwnedAcpAgent } from "../../src/acp/harness/codex/owned-agent.ts";
 import type { CodexSettings } from "../../src/acp/harness/codex/settings.ts";
+import { ControlledAcpConnection } from "../support/agents/controlled-acp-connection.ts";
 import { previewCodexHistory } from "../support/codex-history-preview.ts";
 
 it("Given Codex streams detailed reasoning and a summary, When Mobius forwards the turn, Then Thinking keeps the reasoning stream", async () => {
@@ -149,7 +150,16 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 `,
         { mode: 0o700 },
     );
-    const agent = new LocalAgentDefinition("codex", "Codex", executable, []);
+    const agent = new AcpAgentDefinition(
+        "codex",
+        "Codex",
+        executable,
+        (options) =>
+            new ControlledAcpConnection(
+                { id: "codex", adapterPath: executable, arguments: [], environment: options.environment },
+                options,
+            ),
+    );
     try {
         const page = await previewCodexHistory(agent, directory, nativeSessionId);
         const updates = page.events.flatMap((event) => (event.type === "acp" ? [event.payload] : []));

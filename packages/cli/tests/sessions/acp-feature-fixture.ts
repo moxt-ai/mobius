@@ -12,8 +12,9 @@ import type {
     SessionPermissionRequestedEvent,
     SessionPermissionResolvedEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
-import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
+import { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import type { SessionObserver } from "../../src/session/api/session-api.ts";
+import { ControlledAcpConnection } from "../support/agents/controlled-acp-connection.ts";
 
 export const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
 
@@ -133,12 +134,21 @@ export function fakeAgent(
     additionalArguments: readonly string[] = [],
     environment: Readonly<Record<string, string>> = {},
     id = "codex",
-): LocalAgentDefinition {
-    return new LocalAgentDefinition(
+): AcpAgentDefinition {
+    return new AcpAgentDefinition(
         id,
         "Codex",
         process.execPath,
-        [fakeAgentPath, "--agent-name", "Codex", ...additionalArguments],
+        (options) =>
+            new ControlledAcpConnection(
+                {
+                    id,
+                    adapterPath: process.execPath,
+                    arguments: [fakeAgentPath, "--agent-name", "Codex", ...additionalArguments],
+                    environment: options.environment,
+                },
+                options,
+            ),
         environment,
     );
 }
