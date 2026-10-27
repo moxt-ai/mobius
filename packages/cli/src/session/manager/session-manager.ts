@@ -548,9 +548,12 @@ export class SessionManager {
     ): Promise<{ readonly title: string; readonly updatedAt: string }> =>
         await this.#executionProcesses.use(options.sessionId, async () =>
             this.#operations.run(options, async (options) => {
+                this.#assertOpen(options.sessionId);
                 // Process reclamation must not turn a native rename into a metadata-only write.
                 // Keep the same process borrowed through recovery and the acknowledged rename.
-                await this.#prepareSession(options, { kind: "interactive-only" }, "keep-closed");
+                if (this.#executionProcesses.get(options.sessionId) === undefined) {
+                    await this.#prepareSession(options, { kind: "interactive-only" }, "keep-closed");
+                }
                 const runtime = this.#executionProcesses.get(options.sessionId);
                 if (runtime === undefined) {
                     throw new AcpExecutionError("ACP session did not start");
