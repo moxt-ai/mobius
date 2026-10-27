@@ -30,6 +30,7 @@ describe("Session prompt history policy", () => {
         expect(decodeSessionPromptCommand(encoded)).toMatchObject({
             historyPolicy: SessionHistoryPolicy.ExecutionOnly,
         });
+        expect(JSON.parse(encoded)).toMatchObject({ images: [], resources: [] });
     });
 
     it("keeps older prompt commands on the eager policy default", () => {
