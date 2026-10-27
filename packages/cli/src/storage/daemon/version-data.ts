@@ -109,6 +109,28 @@ export async function copyVersionData(
     }
 }
 
+/**
+ * Removes a version's data unless the current data pointer names it. The directory leaves in one rename, so a
+ * concurrent first use either finds it whole or inherits the current data.
+ */
+export async function discardVersionData(root: string, version: string, signal: AbortSignal): Promise<void> {
+    if ((await readCurrentDataVersion(root, signal)) === version || !(await versionDataExists(root, version, signal))) {
+        return;
+    }
+    const versions = join(root, STATE_ROOT_LAYOUT.versions);
+    const discarded = join(versions, `.${version}-discarded-${randomUUID()}`);
+    try {
+        await rename(join(versions, version), discarded);
+    } catch (cause) {
+        // Another process already discarded it.
+        if (isNodeError(cause, "ENOENT")) {
+            return;
+        }
+        throw cause;
+    }
+    await rm(discarded, { recursive: true, force: true });
+}
+
 /** Points the current data pointer at a version whose data directory exists. */
 export async function writeCurrentDataVersion(root: string, version: string, signal: AbortSignal): Promise<void> {
     await validateLocalPath(root, true, true, signal);

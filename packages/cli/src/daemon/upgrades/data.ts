@@ -1,6 +1,7 @@
 import { runtimeUpgradeVersionSchema } from "@moxt-ai/mobius-sdk/protocol";
 import {
     copyVersionData,
+    discardVersionData,
     readCurrentDataVersion,
     versionDataExists,
     writeCurrentDataVersion,
@@ -31,6 +32,12 @@ export async function prepareVersionData(
             `Mobius did not carry ${entry} into version ${targetVersion}: an earlier Mobius ran with that installation as its state root.\n`,
         );
     }
+}
+
+// A version whose switch rolled back never had the current data; once the previous version runs again, its copy is
+// stale, and its next attempt must inherit the current data rather than reuse that copy.
+export async function discardRolledBackData(version: string, signal: AbortSignal): Promise<void> {
+    await discardVersionData(readStateDirectory(), runtimeUpgradeVersionSchema.parse(version), signal);
 }
 
 export async function recordCurrentData(version: string, signal: AbortSignal): Promise<void> {
