@@ -110,9 +110,6 @@ export function decodeSessionPromptCommand(encoded: string): SessionPromptComman
     if (attachmentBytes > MAX_PROMPT_ATTACHMENT_BYTES) {
         throw new ProtocolMessageError("Prompt attachments are too large");
     }
-    if (new Set(attachments.map((attachment) => attachment.contentKey)).size !== attachments.length) {
-        throw new ProtocolMessageError("Prompt attachments must be unique");
-    }
     if (prompt.trim().length === 0 && attachments.length === 0) {
         throw new ProtocolMessageError("Prompt must contain content");
     }
@@ -189,7 +186,15 @@ export function decodeSessionPromptDispositionCommand(encoded: string): SessionP
 }
 
 export function encodeSessionPromptCommand(message: SessionPromptCommand): string {
-    return JSON.stringify(decodeSessionPromptCommand(JSON.stringify(message)));
+    const command = decodeSessionPromptCommand(JSON.stringify(message));
+    return JSON.stringify({
+        ...command,
+        // Keep text prompts compatible with the previous Runtime release while
+        // attachments move to the content-key protocol. Older Runtimes ignore
+        // `attachments` and require both legacy arrays to be present.
+        images: [],
+        resources: [],
+    });
 }
 
 export function encodeSessionCancelCommand(message: SessionCancelCommand): string {
