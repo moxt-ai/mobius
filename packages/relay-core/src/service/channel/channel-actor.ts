@@ -92,6 +92,7 @@ import {
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { SessionRuntimeError } from "../../entity/do/session.ts";
+import type { SessionStatusNotifications } from "../../infra/session-status-notifications.ts";
 import type { BestEffortRecording } from "./best-effort-recording.ts";
 import { SessionLiveEventRelay } from "./session-live-event-relay.ts";
 
@@ -159,14 +160,15 @@ export class ChannelActor {
         readonly gateways: {
             readonly peers: ChannelPeers;
             readonly recording: BestEffortRecording;
+            readonly notifications?: SessionStatusNotifications;
         };
     }) {
         const { projectId, runtimeId } = cx.config;
-        const { peers, recording } = cx.gateways;
+        const { peers, recording, notifications } = cx.gateways;
         this.#peers = peers;
         this.#projectId = projectId;
         this.#runtimeId = runtimeId;
-        this.#liveEvents = new SessionLiveEventRelay(projectId, runtimeId, peers, recording);
+        this.#liveEvents = new SessionLiveEventRelay(projectId, runtimeId, peers, recording, notifications);
     }
 
     readonly attachDaemon = async (replacedExistingConnection: boolean, _signal: AbortSignal): Promise<void> => {

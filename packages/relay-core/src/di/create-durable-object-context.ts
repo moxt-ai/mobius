@@ -4,6 +4,7 @@ import { DurableObjectSqlDatabase } from "../infra/durable-object-sql-database.t
 import type { ProjectDatabaseBindings } from "../infra/project-database-bindings.ts";
 import type { ProjectStorageDirectory } from "../infra/project-storage-directory.ts";
 import type { SessionRecording } from "../infra/session-recording.ts";
+import type { SessionStatusNotifications } from "../infra/session-status-notifications.ts";
 import { createDurableObjectDependencies } from "./create-durable-object-dependencies.ts";
 
 export function createDurableObjectContext(
@@ -13,6 +14,7 @@ export function createDurableObjectContext(
         readonly projects: ProjectStorageDirectory;
         readonly doDatabase?: DoSqlDatabase;
         readonly recording?: SessionRecording;
+        readonly notifications?: SessionStatusNotifications;
     },
 ) {
     return createDurableObjectDependencies({
@@ -24,6 +26,7 @@ export function createDurableObjectContext(
         gateways: {
             peers: new CloudflareChannelPeers(state),
             ...(options.recording === undefined ? {} : { recording: options.recording }),
+            ...(options.notifications === undefined ? {} : { notifications: options.notifications }),
         },
         utilities: {
             waitUntil: (operation) => state.waitUntil(operation),

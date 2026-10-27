@@ -25,7 +25,7 @@ export function SessionStatusWebhookPanel({ busy, onRotate, onSave, webhook }: S
                 <h3 className="m-0 text-xl font-bold">Session status webhook</h3>
                 <PanelNote>
                     Mobius signs each terminal Session status notification with this App's dedicated secret and sends it
-                    to this HTTPS endpoint. Notifications never block Recording.
+                    to this HTTPS endpoint. Notifications do not require Recording and never block live output.
                 </PanelNote>
             </div>
             <form

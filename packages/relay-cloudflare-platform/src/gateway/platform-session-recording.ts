@@ -1,22 +1,6 @@
-import {
-    RuntimeMessageScheduler,
-    type SessionRecording,
-    type SessionRecordingBatchResult,
-    type SessionRecordingScope,
-    type SessionRecordingTarget,
-} from "@moxt-ai/mobius-relay-core";
-import {
-    encodeSessionRecordingWrite,
-    encodeSessionStatusWebhookBody,
-    isIdentifier,
-    lastRecordedLifecycleStatus,
-    type SessionEvent,
-    type SessionEventEnvelope,
-    type SessionStatusWebhookCommand,
-} from "@moxt-ai/mobius-sdk/protocol";
+import type { SessionRecording, SessionRecordingBatchResult, SessionRecordingScope } from "@moxt-ai/mobius-relay-core";
+import { encodeSessionRecordingWrite, isIdentifier, type SessionEventEnvelope } from "@moxt-ai/mobius-sdk/protocol";
 import * as v from "valibot";
-import type { AppSessionStatusWebhookService } from "../service/app-session-status-webhook-service.ts";
-import type { AppSessionStatusWebhookStorage } from "../storage/app-session-status-webhook-storage.ts";
 import type { RecordingPolicyStorage } from "../storage/recording-policy-storage.ts";
 
 const batchResponseSchema = v.object({
@@ -46,13 +30,6 @@ const batchResponseSchema = v.object({
 });
 
 const RECORDING_REQUEST_TIMEOUT_MILLISECONDS = 10_000;
-const SESSION_STATUS_WEBHOOK_TIMEOUT_MILLISECONDS = 2_000;
-
-interface TerminalStatusNotification {
-    readonly commands: readonly SessionStatusWebhookCommand[];
-    readonly status: "running" | "idle" | "failed";
-}
-
 export type RecordingProvider =
     | { readonly kind: "absent" }
     | { readonly fetcher: Fetcher; readonly kind: "available"; readonly providerId: string };
@@ -60,29 +37,13 @@ export type RecordingProvider =
 export class PlatformSessionRecording implements SessionRecording {
     readonly #policies: RecordingPolicyStorage;
     readonly #provider: RecordingProvider;
-    readonly #transport: typeof fetch;
-    readonly #webhooks: AppSessionStatusWebhookStorage;
-    readonly #webhookService: AppSessionStatusWebhookService;
-    readonly #waitUntil: (operation: Promise<void>) => void;
-    readonly #webhookMessages = new RuntimeMessageScheduler(4, 512);
 
-    constructor(
-        policies: RecordingPolicyStorage,
-        provider: RecordingProvider,
-        webhooks: AppSessionStatusWebhookStorage,
-        webhookService: AppSessionStatusWebhookService,
-        waitUntil: (operation: Promise<void>) => void,
-        transport: typeof fetch = globalThis.fetch.bind(globalThis),
-    ) {
+    constructor(policies: RecordingPolicyStorage, provider: RecordingProvider) {
         if (provider.kind === "available" && !isIdentifier(provider.providerId)) {
             throw new Error("The Recording provider identifier is invalid");
         }
         this.#policies = policies;
         this.#provider = provider;
-        this.#transport = transport;
-        this.#webhooks = webhooks;
-        this.#webhookService = webhookService;
-        this.#waitUntil = waitUntil;
     }
 
     readonly deliverBatch = async (
@@ -140,42 +101,6 @@ export class PlatformSessionRecording implements SessionRecording {
                 sessions.some((id) => !identifiers.has(id))
             ) {
                 return failed("write_failed");
-            }
-            const eventsBySession = new Map<string, SessionEventEnvelope["events"][number][]>();
-            for (const event of envelope.events) {
-                const events = eventsBySession.get(event.sessionId) ?? [];
-                events.push(event);
-                eventsBySession.set(event.sessionId, events);
-            }
-            for (const result of decoded.results) {
-                const events = eventsBySession.get(result.sessionId) ?? [];
-                const commands = terminatedCommands(events);
-                if (result.kind !== "recorded" || commands.length === 0) {
-                    continue;
-                }
-                const notification: TerminalStatusNotification = {
-                    commands,
-                    status: lastRecordedLifecycleStatus(events) ?? "idle",
-                };
-                // A slow webhook must not hold every Session in an already committed Recording batch.
-                const publication = this.#webhookMessages
-                    .run(
-                        JSON.stringify([target.projectId, target.runtimeId, result.sessionId]),
-                        signal,
-                        async () =>
-                            await this.#publishTerminalStatus(
-                                { ...target, sessionId: result.sessionId },
-                                notification,
-                                signal,
-                            ),
-                    )
-                    .catch(() => {
-                        console.warn("Session status webhook failed", {
-                            code: "session_status_webhook_failed",
-                            sessionId: result.sessionId,
-                        });
-                    });
-                this.#waitUntil(publication);
             }
             return decoded.results;
         } catch {
@@ -241,97 +166,6 @@ export class PlatformSessionRecording implements SessionRecording {
             ([sessionId]) => results.get(sessionId) ?? { sessionId, kind: "failed", code: "write_failed" },
         );
     }
-
-    async #publishTerminalStatus(
-        target: SessionRecordingTarget,
-        notification: TerminalStatusNotification,
-        signal: AbortSignal,
-    ): Promise<void> {
-        const webhook = await this.#webhooks.read(target.projectId);
-        if (webhook === null || !webhook.enabled || signal.aborted) {
-            return;
-        }
-        const secret = await this.#webhookService.decryptSecret(webhook);
-        const timestamp = Math.floor(Date.now() / 1_000).toString();
-        const body = encodeSessionStatusWebhookBody({
-            appId: webhook.appId,
-            commands: notification.commands,
-            projectId: target.projectId,
-            runtimeId: target.runtimeId,
-            sessionId: target.sessionId,
-            status: notification.status,
-        });
-        try {
-            const signature = `v1.${await hmacSha256Hex(secret, `${timestamp}.${body}`)}`;
-            const response = await this.#transport(webhook.endpoint, {
-                body,
-                headers: {
-                    "content-type": "application/json",
-                    "x-mobius-signature": signature,
-                    "x-mobius-timestamp": timestamp,
-                },
-                method: "POST",
-                signal: AbortSignal.any([signal, AbortSignal.timeout(SESSION_STATUS_WEBHOOK_TIMEOUT_MILLISECONDS)]),
-            });
-            await response.body?.cancel();
-            if (!response.ok) {
-                console.warn("Mobius Session status webhook rejected", { status: response.status });
-            }
-        } catch {
-            if (!signal.aborted) {
-                console.warn("Mobius Session status webhook failed");
-            }
-        }
-    }
-}
-/**
- * The commands this delivery watched finish, newest terminal outcome per command. The delivery only
- * observes the events it carries, so a command that ended earlier is absent here and must not be
- * inferred from these results.
- */
-function terminatedCommands(events: readonly SessionEvent[]): SessionStatusWebhookCommand[] {
-    const byCommand = new Map<string, SessionStatusWebhookCommand>();
-    for (const event of events) {
-        if (event.type !== "lifecycle-metadata") {
-            continue;
-        }
-        const payload = event.payload;
-        if (payload.kind === "prompt.completed") {
-            const cancelled = payload.stopReason === "cancelled" || payload.stopReason === "canceled";
-            byCommand.set(
-                payload.commandId,
-                cancelled
-                    ? { cancelledAt: event.recordedAt, commandId: payload.commandId, outcome: "cancelled" }
-                    : {
-                          commandId: payload.commandId,
-                          completedAt: event.recordedAt,
-                          outcome: "succeeded",
-                          stopReason: payload.stopReason,
-                      },
-            );
-        } else if (payload.kind === "prompt.failed" || payload.kind === "prompt.failed-before-start") {
-            byCommand.set(payload.commandId, {
-                code: payload.code,
-                commandId: payload.commandId,
-                failedAt: event.recordedAt,
-                message: payload.message,
-                outcome: "failed",
-            });
-        }
-    }
-    return [...byCommand.values()];
-}
-
-async function hmacSha256Hex(secret: string, value: string): Promise<string> {
-    const key = await crypto.subtle.importKey(
-        "raw",
-        new TextEncoder().encode(secret),
-        { hash: "SHA-256", name: "HMAC" },
-        false,
-        ["sign"],
-    );
-    const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value));
-    return Array.from(new Uint8Array(signature), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 export function platformRecordingProvider(environment: {

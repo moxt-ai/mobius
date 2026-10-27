@@ -1,4 +1,5 @@
 import { encodeSessionEventEnvelope, type SessionEventEnvelope } from "@moxt-ai/mobius-sdk/protocol";
+import type { SessionStatusNotifications } from "../../infra/session-status-notifications.ts";
 import type { BestEffortRecording } from "./best-effort-recording.ts";
 import type { ChannelPeers } from "./channel-actor.ts";
 
@@ -7,12 +8,20 @@ export class SessionLiveEventRelay {
     readonly #runtimeId: string;
     readonly #peers: ChannelPeers;
     readonly #recording: BestEffortRecording;
+    readonly #notifications: SessionStatusNotifications | undefined;
 
-    constructor(projectId: string, runtimeId: string, peers: ChannelPeers, recording: BestEffortRecording) {
+    constructor(
+        projectId: string,
+        runtimeId: string,
+        peers: ChannelPeers,
+        recording: BestEffortRecording,
+        notifications?: SessionStatusNotifications,
+    ) {
         this.#projectId = projectId;
         this.#runtimeId = runtimeId;
         this.#peers = peers;
         this.#recording = recording;
+        this.#notifications = notifications;
     }
 
     readonly receive = (envelope: SessionEventEnvelope): void => {
@@ -87,7 +96,9 @@ export class SessionLiveEventRelay {
                 }
             }
         }
-        // Recording is another consumer, including when no browsers are watching.
-        this.#recording.publish({ projectId: this.#projectId, runtimeId: this.#runtimeId }, envelope);
+        // Both consumers observe live events, including when no browsers are watching.
+        const scope = { projectId: this.#projectId, runtimeId: this.#runtimeId };
+        this.#notifications?.publish(scope, envelope);
+        this.#recording.publish(scope, envelope);
     };
 }

@@ -1,16 +1,20 @@
+import { abortAllDurableObjects, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
+import { DurableObjectSqlDatabase, RuntimeRelay, type SessionRecording } from "@moxt-ai/mobius-relay-core";
 import {
     decodeSessionStatusWebhookBody,
+    encodeSessionEventEnvelope,
     MOBIUS_API_PREFIX,
     type SessionEventEnvelope,
 } from "@moxt-ai/mobius-sdk/protocol";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDurableObjectDependencies } from "../../relay-core/src/di/create-durable-object-dependencies.ts";
 import { createTestMobiusPlatformApp } from "../../test-support/src/app.ts";
 import { FakeClerk } from "../../test-support/src/clerk.ts";
-import { PlatformSessionRecording, platformRecordingProvider } from "../src/gateway/platform-session-recording.ts";
+import { createPlatformDurableObjectContext } from "../src/durable-objects/platform-durable-object-context.ts";
+import { PlatformSessionStatusNotifications } from "../src/gateway/platform-session-status-notifications.ts";
 import { AppSessionStatusWebhookService } from "../src/service/app-session-status-webhook-service.ts";
 import { AppSessionStatusWebhookStorage } from "../src/storage/app-session-status-webhook-storage.ts";
-import { RecordingPolicyStorage } from "../src/storage/recording-policy-storage.ts";
 import {
     createPlatformGateways,
     PlatformAuthenticationConfiguration,
@@ -140,17 +144,6 @@ async function provisionProject(name: string): Promise<{ appId: string; projectI
     );
     await responseJson(
         await worker.fetch(
-            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${appId}/recording-policy`, {
-                body: JSON.stringify({ mode: "enabled" }),
-                headers: developerHeaders(),
-                method: "PUT",
-            }),
-            environment,
-        ),
-        200,
-    );
-    await responseJson(
-        await worker.fetch(
             new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${appId}/session-status-webhook`, {
                 body: JSON.stringify({ enabled: true, endpoint: "https://consumer.example.test/webhook" }),
                 headers: developerHeaders(),
@@ -175,30 +168,112 @@ function event(index: number, payload: Record<string, unknown>): SessionEventEnv
     } as SessionEventEnvelope["events"][number];
 }
 
-async function deliver(projectId: string, events: SessionEventEnvelope["events"]): Promise<RecordedWebhookTransport> {
+class StalledRecording implements SessionRecording {
+    readonly started = Promise.withResolvers<void>();
+    readonly release = Promise.withResolvers<void>();
+
+    readonly deliverBatch: SessionRecording["deliverBatch"] = async (_target, envelope, signal) => {
+        signal.throwIfAborted();
+        this.started.resolve();
+        const cancelled = Promise.withResolvers<never>();
+        const cancel = () => cancelled.reject(signal.reason);
+        signal.addEventListener("abort", cancel, { once: true });
+        try {
+            await Promise.race([this.release.promise, cancelled.promise]);
+            signal.throwIfAborted();
+            return [...new Set(envelope.events.map((event) => event.sessionId))].map((sessionId) => ({
+                sessionId,
+                kind: "failed",
+                code: "write_failed",
+            }));
+        } finally {
+            signal.removeEventListener("abort", cancel);
+        }
+    };
+}
+
+async function throughRelay(
+    projectId: string,
+    exercise: (
+        send: (events: SessionEventEnvelope["events"]) => Promise<void>,
+        flushNotifications: () => Promise<void>,
+        transport: RecordedWebhookTransport,
+    ) => Promise<void>,
+    recording?: SessionRecording,
+): Promise<RecordedWebhookTransport> {
     const environment = bindings();
     const webhookStorage = new AppSessionStatusWebhookStorage(environment.PLATFORM_DIRECTORY_DATABASE);
     const transport = new RecordedWebhookTransport();
-    const notifications: Promise<void>[] = [];
-    const recording = new PlatformSessionRecording(
-        new RecordingPolicyStorage(environment.PLATFORM_DIRECTORY_DATABASE),
-        platformRecordingProvider(environment),
+    const publications: Promise<void>[] = [];
+    const notifications = new PlatformSessionStatusNotifications(
         webhookStorage,
         new AppSessionStatusWebhookService(
             null,
             webhookStorage,
             environment.MOBIUS_SESSION_WEBHOOK_SECRET_ENCRYPTION_KEY,
         ),
-        (operation) => notifications.push(operation),
+        (operation) => publications.push(operation),
         transport.fetch,
     );
-    await recording.deliverBatch(
-        { projectId, runtimeId: projectId },
-        { events, kind: "session.event.v2" },
-        new AbortController().signal,
-    );
-    await Promise.all(notifications);
+    const flushNotifications = async () => {
+        await Promise.all(publications.splice(0));
+    };
+    await runInDurableObject(environment.RUNTIME_RELAY.getByName(projectId), async (_instance, state) => {
+        const pending: Promise<void>[] = [];
+        const database = new DurableObjectSqlDatabase(state.storage);
+        const context = createPlatformDurableObjectContext(state, environment, { database });
+        const relay = new RuntimeRelay(
+            createDurableObjectDependencies({
+                doDatabase: database,
+                storages: context.storages,
+                gateways: {
+                    ...context.gateways,
+                    notifications,
+                    ...(recording === undefined ? {} : { recording }),
+                },
+                utilities: { waitUntil: (operation) => pending.push(operation) },
+            }),
+        );
+        const response = await relay.fetch(
+            new Request(`https://runtime.internal/projects/${projectId}/daemon`, {
+                headers: {
+                    Upgrade: "websocket",
+                    "x-mobius-runtime-id": projectId,
+                    "x-mobius-channel-id": projectId,
+                },
+            }),
+        );
+        expect(response.status).toBe(101);
+        const client = response.webSocket;
+        const daemon = state.getWebSockets("daemon")[0];
+        if (client === null || daemon === undefined) {
+            throw new Error("Expected a connected daemon");
+        }
+        client.accept();
+        try {
+            await exercise(
+                async (events) =>
+                    await relay.webSocketMessage(
+                        daemon,
+                        encodeSessionEventEnvelope({ events, kind: "session.event.v2" }),
+                    ),
+                flushNotifications,
+                transport,
+            );
+            await flushNotifications();
+        } finally {
+            while (pending.length > 0) {
+                await Promise.allSettled(pending.splice(0));
+            }
+            await flushNotifications();
+            client.close(1000, "Test complete");
+        }
+    });
     return transport;
+}
+
+async function deliver(projectId: string, events: SessionEventEnvelope["events"]): Promise<RecordedWebhookTransport> {
+    return await throughRelay(projectId, async (send) => await send(events));
 }
 
 describe("App Session status webhook delivery", () => {
@@ -209,6 +284,86 @@ describe("App Session status webhook delivery", () => {
 
     afterEach(() => {
         vi.useRealTimers();
+    });
+
+    afterAll(async () => {
+        await abortAllDurableObjects();
+    });
+
+    it("Given Recording is disabled by default, When a command finishes, Then the enabled webhook receives its outcome", async () => {
+        const { projectId } = await provisionProject("recording-disabled");
+        const transport = await deliver(projectId, [
+            event(1, { commandId: "finished-command", kind: "prompt.completed", stopReason: "stop" }),
+        ]);
+
+        expect(transport.delivered).toHaveLength(1);
+        expect(decodeSessionStatusWebhookBody(transport.only()).commands).toStrictEqual([
+            {
+                commandId: "finished-command",
+                completedAt: "2026-10-15T00:00:00.000Z",
+                outcome: "succeeded",
+                stopReason: "stop",
+            },
+        ]);
+    });
+
+    it("Given Recording stalls at capacity and then fails, When commands finish, Then their notifications are delivered independently", async () => {
+        const { projectId } = await provisionProject("recording-unavailable");
+        const recording = new StalledRecording();
+        await throughRelay(
+            projectId,
+            async (send, flushNotifications, transport) => {
+                const chunk = (index: number): SessionEventEnvelope["events"][number] => ({
+                    eventId: `session-status-delivery-event-${index}`,
+                    position: String(index),
+                    recordedAt: "2026-10-15T00:00:00.000Z",
+                    sessionGenerationId: "session-status-delivery-generation",
+                    sessionId: "session-status-delivery-session",
+                    type: "acp",
+                    payload: {
+                        sessionUpdate: "agent_message_chunk",
+                        content: { type: "text", text: "x".repeat(900_000) },
+                    },
+                });
+                try {
+                    // Keep Recording's 32 MiB buffer occupied without waiting for its write.
+                    await send(Array.from({ length: 7 }, (_, index) => chunk(index)));
+                    await recording.started.promise;
+                    for (let batch = 1; batch < 5; batch += 1) {
+                        await send(Array.from({ length: 7 }, (_, index) => chunk(batch * 7 + index)));
+                    }
+                    await send([
+                        chunk(35),
+                        chunk(36),
+                        chunk(37),
+                        event(38, { commandId: "capacity-command", kind: "prompt.completed", stopReason: "stop" }),
+                    ]);
+                    await flushNotifications();
+                    expect(transport.delivered.map((body) => decodeSessionStatusWebhookBody(body).commands)).toEqual([
+                        [expect.objectContaining({ commandId: "capacity-command", outcome: "succeeded" })],
+                    ]);
+
+                    recording.release.resolve();
+                    await send([
+                        event(39, {
+                            commandId: "failed-recording-command",
+                            kind: "prompt.completed",
+                            stopReason: "stop",
+                        }),
+                    ]);
+                    await flushNotifications();
+                    expect(
+                        transport.delivered.flatMap((body) => decodeSessionStatusWebhookBody(body).commands),
+                    ).toEqual([
+                        expect.objectContaining({ commandId: "capacity-command", outcome: "succeeded" }),
+                        expect.objectContaining({ commandId: "failed-recording-command", outcome: "succeeded" }),
+                    ]);
+                } finally {
+                    recording.release.resolve();
+                }
+            },
+            recording,
+        );
     });
 
     it("Given a steer finished while the root prompt is still working, When the delivery is published, Then it resolves only the finished command and keeps the Session running", async () => {
