@@ -42,10 +42,10 @@ export class MobiusRuntimeEngine {
         this.#engineDataDir = resolve(params.engineDataDir);
         this.#agentLaunchEnvironment = Object.freeze({ ...params.agentLaunchEnvironment });
         this.#maxAcpProcesses = params.maxAcpProcesses ?? 1000;
-        this.#connections = new ConnectionManager(this.#getInstallation);
+        this.#connections = new ConnectionManager(this.#ensureInstallation);
     }
 
-    readonly #getInstallation = async (signal: AbortSignal): Promise<RuntimeInstallationStore> => {
+    readonly #ensureInstallation = async (signal: AbortSignal): Promise<RuntimeInstallationStore> => {
         signal.throwIfAborted();
         const state = this.#installation;
         switch (state.kind) {
@@ -55,7 +55,7 @@ export class MobiusRuntimeEngine {
                 // A borrower can stop waiting without cancelling the owner. If the owner
                 // fails or cancels, a surviving borrower can become the next initializer.
                 await waitForSharedOperation(state.completion, signal);
-                return await this.#getInstallation(signal);
+                return await this.#ensureInstallation(signal);
             case "uninitialized": {
                 const completion = Promise.withResolvers<void>();
                 // Claim initialization before the first filesystem await. Exclusive file
@@ -87,11 +87,16 @@ export class MobiusRuntimeEngine {
         input: MobiusRuntimePairingOptions,
         signal: AbortSignal,
     ): Promise<VerifiedRuntimeConnection> =>
-        await pairRuntimeConnection(await this.#getInstallation(signal), input, signal, this.#agentLaunchEnvironment);
+        await pairRuntimeConnection(
+            await this.#ensureInstallation(signal),
+            input,
+            signal,
+            this.#agentLaunchEnvironment,
+        );
 
     readonly runLoop = async ({ connection, signal, ...options }: RunLoopParams): Promise<void> => {
         const loop = new RuntimeLoop(async (preparationSignal) => {
-            const installation = await this.#getInstallation(preparationSignal);
+            const installation = await this.#ensureInstallation(preparationSignal);
             switch (connection.kind) {
                 case "saved": {
                     const saved = await installation.readConnection(connection.connectionId, preparationSignal);
