@@ -15,16 +15,9 @@ export class PromptArtifactError extends OperationError {
 export class ResolvedPromptArtifacts {
     readonly images: readonly PromptImageInput[];
     readonly resources: readonly PromptResourceInput[];
-    readonly skipped: readonly string[];
-
-    constructor(
-        images: readonly PromptImageInput[],
-        resources: readonly PromptResourceInput[],
-        skipped: readonly string[] = [],
-    ) {
+    constructor(images: readonly PromptImageInput[], resources: readonly PromptResourceInput[]) {
         this.images = images;
         this.resources = resources;
-        this.skipped = skipped;
     }
 }
 
@@ -47,7 +40,6 @@ export async function resolvePromptArtifacts(
 ): Promise<ResolvedPromptArtifacts> {
     const images: PromptImageInput[] = [];
     const resources: PromptResourceInput[] = [];
-    const skipped: string[] = [];
     for (const attachment of attachments) {
         signal.throwIfAborted();
         const bytes = await read(attachment, signal);
@@ -62,7 +54,6 @@ export async function resolvePromptArtifacts(
         }
         if (attachment.kind === "image") {
             if (bytes.byteLength > PROMPT_IMAGE_MAX_BYTES || images.length >= 8) {
-                skipped.push(`${JSON.stringify(attachment.name)} (image limit exceeded)`);
                 continue;
             }
             images.push({
@@ -73,11 +64,9 @@ export async function resolvePromptArtifacts(
             continue;
         }
         if (!isTextMediaType(attachment.mimeType)) {
-            skipped.push(`${JSON.stringify(attachment.name)} (unsupported media type)`);
             continue;
         }
         if (bytes.byteLength > MAX_AGENT_RESOURCE_BYTE_LENGTH || resources.length >= 16) {
-            skipped.push(`${JSON.stringify(attachment.name)} (resource limit exceeded)`);
             continue;
         }
         let text: string;
@@ -85,10 +74,9 @@ export async function resolvePromptArtifacts(
             text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
         } catch {
             signal.throwIfAborted();
-            skipped.push(`${JSON.stringify(attachment.name)} (unsupported text encoding)`);
             continue;
         }
         resources.push({ mimeType: attachment.mimeType, text, type: "embedded", uri: attachment.uri });
     }
-    return new ResolvedPromptArtifacts(images, resources, skipped);
+    return new ResolvedPromptArtifacts(images, resources);
 }

@@ -35,7 +35,7 @@ test("Given an image above the shared prompt limit, When prompt artifacts resolv
         new AbortController().signal,
     );
     expect(result.images).toEqual([]);
-    expect(result.skipped).toEqual(['"large-image.png" (image limit exceeded)']);
+    expect(result.resources).toEqual([]);
 });
 
 test("Given an unsupported attachment with invalid integrity, When resolving the prompt, Then corruption is rejected instead of downgraded", async () => {

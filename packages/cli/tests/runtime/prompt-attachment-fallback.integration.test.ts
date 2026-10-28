@@ -14,7 +14,7 @@ import { withControlledDaemon } from "../support/agents/real-daemon.ts";
 import { uploadPromptContent } from "../support/agents/upload-prompt-content.ts";
 import { writeControlledAcpExecutable } from "../support/controlled-acp-executable.ts";
 
-test("Given unsupported attachments, When a prompt has text, Then the daemon delivers text and records warnings without losing the connection", async () => {
+test("Given unsupported attachments, When a prompt has text, Then the daemon delivers the original text without losing the connection", async () => {
     const directory = await mkdtemp(join(tmpdir(), "old-pdf-peer-"));
     try {
         const executable = await writeControlledAcpExecutable(directory);
@@ -26,7 +26,6 @@ test("Given unsupported attachments, When a prompt has text, Then the daemon del
             },
             async (peer) => {
                 const finish = async (id: string) => {
-                    let visibleWarning = false;
                     let output = "";
                     for (;;) {
                         const raw = await peer.nextMessage();
@@ -34,9 +33,6 @@ test("Given unsupported attachments, When a prompt has text, Then the daemon del
                             continue;
                         }
                         for (const event of decodeSessionEventEnvelope(raw).events) {
-                            if (JSON.stringify(event).includes("Mobius skipped attachments:")) {
-                                visibleWarning = true;
-                            }
                             if (event.type === "acp") {
                                 if (
                                     event.payload.sessionUpdate === "agent_message_chunk" &&
@@ -55,7 +51,7 @@ test("Given unsupported attachments, When a prompt has text, Then the daemon del
                                     payload.kind,
                                 )
                             ) {
-                                return { payload, visibleWarning, output };
+                                return { payload, output };
                             }
                         }
                     }
@@ -101,9 +97,7 @@ test("Given unsupported attachments, When a prompt has text, Then the daemon del
                     });
                     const outcome = await send([attachment], "Read attached file");
                     expect(outcome.payload.kind).toBe("prompt.completed");
-                    expect(outcome.visibleWarning).toBe(true);
-                    expect(outcome.output).toContain("Read attached file");
-                    expect(outcome.output).toContain("Mobius skipped attachments:");
+                    expect(outcome.output).toMatch(/Controlled ACP turn \d+: Read attached file$/u);
                     const onlyAttachment = await send([attachment], "");
                     expect(onlyAttachment.payload).toMatchObject({
                         kind: "prompt.failed-before-start",

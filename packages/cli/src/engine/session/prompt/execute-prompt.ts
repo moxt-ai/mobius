@@ -126,7 +126,7 @@ export async function executePrompt({
             }
         }
         const stream = activateAttempt();
-        const requested = eventProjection.started(
+        const lifecycle = eventProjection.started(
             command.sessionId,
             command.commandId,
             attemptId,
@@ -134,27 +134,17 @@ export async function executePrompt({
             availability.disposition,
         );
         const attachments = await resolvePromptArtifacts(readArtifact, command.attachments, signal);
-        const warning =
-            attachments.skipped.length === 0
-                ? ""
-                : `Mobius skipped attachments: ${attachments.skipped.join("; ")}. Their contents were not supplied to the Agent.`;
+        const skipped = command.attachments.length - attachments.images.length - attachments.resources.length;
+        if (skipped > 0) {
+            reportFailure("prompt_attachments_skipped", command.commandId, { count: skipped.toString() });
+        }
         if (
             command.prompt.trim().length === 0 &&
             attachments.images.length === 0 &&
             attachments.resources.length === 0
         ) {
-            throw new PromptArtifactError("prompt_attachments_unsupported", warning);
+            throw new PromptArtifactError("prompt_attachments_unsupported", "No supported prompt content remains");
         }
-        // Persist the warning in the visible requested content, as well as the
-        // native prompt, so degradation is observable even if the Agent omits it.
-        const lifecycle = {
-            ...requested,
-            content:
-                warning.length === 0
-                    ? requested.content
-                    : [...requested.content, { type: "text" as const, text: warning }],
-        };
-        const prompt = warning.length === 0 ? command.prompt : `${command.prompt}\n\n${warning}`;
         let stopReason: string;
         if (availability.disposition === SessionPromptDisposition.Steer) {
             await sessions.steerPrompt({
@@ -165,7 +155,7 @@ export async function executePrompt({
                 cwd: resolved.cwd,
                 images: attachments.images,
                 lifecycle,
-                prompt,
+                prompt: command.prompt,
                 resources: attachments.resources,
                 sessionId: command.sessionId,
                 signal,
@@ -182,7 +172,7 @@ export async function executePrompt({
                 disposition: availability.disposition,
                 images: attachments.images,
                 lifecycle,
-                prompt,
+                prompt: command.prompt,
                 resources: attachments.resources,
                 sessionId: command.sessionId,
                 signal,
