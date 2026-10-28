@@ -16,6 +16,13 @@ pnpm add @moxt-ai/mobius-sdk
 
 Use `@moxt-ai/mobius-sdk/channel` for the live browser channel, `@moxt-ai/mobius-sdk/server` for project Runtime and pairing operations, and `@moxt-ai/mobius-sdk/platform` for Platform provisioning.
 
+Platform `createApp`, `issueAppCredential`, and `rotateAppCredential` return new
+secrets once and do not provide idempotent result replay. The SDK does not
+automatically retry them. After a timeout or lost response, the write may already have committed: do not
+blindly retry or assume cancellation rolled it back. Save successful secrets before
+continuing provisioning. See [AppCredential issuance and recovery](https://github.com/moxt-ai/mobius/blob/main/docs/GUIDE.md#appcredential-issuance-and-recovery)
+for the per-operation retry contract, reconciliation steps, and concurrency limits.
+
 Server clients use `HttpTransport` by default. A shared `WsTransport` can tunnel HTTP requests through the Relay's `/mobius/api/v1/transport` endpoint; its owner closes the transport when finished. The channel client manages its own WebSocket connection.
 
 Agent catalogs belong to a Runtime. Read one with `client.runtimes.getAgents(runtimeId, signal)`. Agent settings belong to the selected Runtime and Agent. Discover them with `client.runtimes.discoverAgentSettings(runtimeId, agentId, request, signal)` and pass the selected values to the live channel when prompting.
