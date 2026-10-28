@@ -5,10 +5,11 @@ import cliPackage from "../../package.json" with { type: "json" };
 
 // Lifecycle scenarios start with an installed release and run the production CLI.
 // The registry journey separately covers downloading and installing that release.
+// Test command prehooks build this bundle once, avoiding source transpilation on every managed process restart.
 export async function installWorkspaceDaemonRelease(
     stateRoot: string,
     version = cliPackage.version,
-    entry = resolve(import.meta.dirname, "../../src/cli/entrypoint.ts"),
+    entry = resolve(import.meta.dirname, "../../dist/cli.js"),
 ): Promise<void> {
     const root = join(stateRoot, "npm", version, "node_modules", "@moxt-ai", "mobius");
     await mkdir(join(root, "dist"), { recursive: true });
