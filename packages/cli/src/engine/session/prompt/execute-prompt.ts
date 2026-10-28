@@ -11,7 +11,7 @@ import type { ExecutionReceipts } from "../turn/execution-receipts.ts";
 import { resolveSessionDirectories } from "../workspace/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
 import { agentForSessionConfiguration, applyCompleteSessionConfiguration } from "./apply-session-configuration.ts";
-import { type ReadPromptArtifact, resolvePromptArtifacts } from "./prompt-artifacts.ts";
+import { PromptArtifactError, type ReadPromptArtifact, resolvePromptArtifacts } from "./prompt-artifacts.ts";
 import type { PromptLifecycle } from "./prompt-lifecycle.ts";
 
 export interface ExecutePromptOptions {
@@ -126,7 +126,7 @@ export async function executePrompt({
             }
         }
         const stream = activateAttempt();
-        const lifecycle = eventProjection.started(
+        const requested = eventProjection.started(
             command.sessionId,
             command.commandId,
             attemptId,
@@ -134,6 +134,27 @@ export async function executePrompt({
             availability.disposition,
         );
         const attachments = await resolvePromptArtifacts(readArtifact, command.attachments, signal);
+        const warning =
+            attachments.skipped.length === 0
+                ? ""
+                : `Mobius skipped attachments: ${attachments.skipped.join("; ")}. Their contents were not supplied to the Agent.`;
+        if (
+            command.prompt.trim().length === 0 &&
+            attachments.images.length === 0 &&
+            attachments.resources.length === 0
+        ) {
+            throw new PromptArtifactError("prompt_attachments_unsupported", warning);
+        }
+        // Persist the warning in the visible requested content, as well as the
+        // native prompt, so degradation is observable even if the Agent omits it.
+        const lifecycle = {
+            ...requested,
+            content:
+                warning.length === 0
+                    ? requested.content
+                    : [...requested.content, { type: "text" as const, text: warning }],
+        };
+        const prompt = warning.length === 0 ? command.prompt : `${command.prompt}\n\n${warning}`;
         let stopReason: string;
         if (availability.disposition === SessionPromptDisposition.Steer) {
             await sessions.steerPrompt({
@@ -144,7 +165,7 @@ export async function executePrompt({
                 cwd: resolved.cwd,
                 images: attachments.images,
                 lifecycle,
-                prompt: command.prompt,
+                prompt,
                 resources: attachments.resources,
                 sessionId: command.sessionId,
                 signal,
@@ -161,7 +182,7 @@ export async function executePrompt({
                 disposition: availability.disposition,
                 images: attachments.images,
                 lifecycle,
-                prompt: command.prompt,
+                prompt,
                 resources: attachments.resources,
                 sessionId: command.sessionId,
                 signal,
