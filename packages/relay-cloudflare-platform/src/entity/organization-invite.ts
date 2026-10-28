@@ -12,3 +12,8 @@ export const organizationInviteRowSchema = v.object({
     revoked_at: v.nullable(v.number()),
 });
 export type OrganizationInviteRow = Readonly<v.InferOutput<typeof organizationInviteRowSchema>>;
+
+export interface OrganizationInviteAcceptance {
+    readonly membershipId: string;
+    readonly acceptedAt: number;
+}

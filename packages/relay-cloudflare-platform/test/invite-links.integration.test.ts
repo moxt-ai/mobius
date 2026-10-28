@@ -61,7 +61,7 @@ function fixture() {
     };
 }
 
-it("Given an admin's shareable link, When a user without an organization previews and accepts it twice, Then they join as a member with exactly one acceptance audit", async () => {
+it("Given an admin's shareable link, When a user retries acceptance and later rejoins, Then each actual membership creation has exactly one audit", async () => {
     const { request, admin, visitor, clerk, acceptances } = fixture();
     const created = await request("tenants/org_invites/invite-links", admin, "POST", {});
     expect(created.status).toBe(201);
@@ -87,6 +87,10 @@ it("Given an admin's shareable link, When a user without an organization preview
     const listed = await (await request("tenants/org_invites/invite-links", admin)).text();
     expect(listed).toContain(link.id);
     expect(listed).not.toContain(link.token);
+
+    clerk.setMembership("org_invites", "user_visitor", null);
+    expect((await request("invite-links/accept", visitor, "POST", { token: link.token })).status).toBe(200);
+    expect(await acceptances(link.id)).toHaveLength(2);
 });
 
 it("Given an existing organization admin, When they accept a shared invite, Then their role is preserved without an acceptance audit", async () => {
@@ -104,6 +108,64 @@ it("Given an existing organization admin, When they accept a shared invite, Then
     });
     expect(clerk.membership("org_invites", "user_admin")).toBe("org:admin");
     expect(await acceptances(link.id)).toEqual([]);
+});
+
+it("Given a membership was created but its acceptance audit failed, When the user retries, Then the original acceptance is audited exactly once", async () => {
+    const { request, admin, visitor, clerk, acceptances } = fixture();
+    const link = await (await request("tenants/org_invites/invite-links", admin, "POST", {})).json<{
+        token: string;
+        id: string;
+    }>();
+    const accept = () => request("invite-links/accept", visitor, "POST", { token: link.token });
+    await env.PLATFORM_DIRECTORY_DATABASE.prepare(
+        `CREATE TRIGGER reject_invite_acceptance_audit BEFORE INSERT ON platform_dashboard_audit_events
+         WHEN NEW.action = 'organization_invite.accepted'
+         BEGIN SELECT RAISE(ABORT, 'Controlled acceptance failure'); END`,
+    ).run();
+    try {
+        expect((await accept()).status).toBe(500);
+        expect(clerk.membership("org_invites", "user_visitor")).toBe("org:member");
+        expect(await acceptances(link.id)).toEqual([]);
+    } finally {
+        await env.PLATFORM_DIRECTORY_DATABASE.prepare("DROP TRIGGER reject_invite_acceptance_audit").run();
+    }
+
+    const other = await (await request("tenants/org_invites/invite-links", admin, "POST", {})).json<{
+        token: string;
+        id: string;
+    }>();
+    expect((await request("invite-links/accept", visitor, "POST", { token: other.token })).status).toBe(200);
+    expect(await acceptances(other.id)).toEqual([]);
+
+    vi.setSystemTime(new Date("2026-09-15T00:01:00Z"));
+    for (let attempt = 0; attempt < 2; attempt++) {
+        expect((await accept()).status).toBe(200);
+        expect(await acceptances(link.id)).toMatchObject([
+            { actorId: "user_visitor", outcome: "succeeded", recordedAt: "2026-09-15T00:00:00.000Z" },
+        ]);
+    }
+});
+
+it("Given an active invite, When a non-member accepts it concurrently, Then both requests succeed with one acceptance audit", async () => {
+    const { request, admin, visitor, clerk, acceptances } = fixture();
+    const link = await (await request("tenants/org_invites/invite-links", admin, "POST", {})).json<{
+        token: string;
+        id: string;
+    }>();
+    const responses = await Promise.all([
+        request("invite-links/accept", visitor, "POST", { token: link.token }),
+        request("invite-links/accept", visitor, "POST", { token: link.token }),
+    ]);
+    for (const response of responses) {
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({
+            organizationId: "org_invites",
+            organizationName: "Invite team",
+            member: true,
+        });
+    }
+    expect(clerk.membership("org_invites", "user_visitor")).toBe("org:member");
+    expect(await acceptances(link.id)).toMatchObject([{ actorId: "user_visitor", outcome: "succeeded" }]);
 });
 
 it("Given a shared link, When it is revoked or expires, Then recipients cannot join", async () => {

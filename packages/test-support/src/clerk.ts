@@ -14,6 +14,14 @@ interface FakeClerkOptions {
     readonly secret?: string;
 }
 
+interface FakeOrganizationMembership {
+    readonly id: string;
+    readonly created_at: number;
+    readonly role: string;
+    readonly public_user_data: { readonly user_id: string };
+    readonly private_metadata: unknown;
+}
+
 /**
  * In-memory Clerk service boundary. Production OIDC and organization gateways
  * consume its signed tokens, JWKS source, and Backend API fetch implementation.
@@ -31,7 +39,7 @@ export class FakeClerk implements OidcJwksSource {
     #defaultOrganizationId = `org_${crypto.randomUUID().replaceAll("-", "")}`;
     #keyId: string;
     #keys = generateKeyPairSync("rsa", { modulusLength: 2_048 });
-    readonly #memberships = new Map<string, string>();
+    readonly #memberships = new Map<string, FakeOrganizationMembership>();
     readonly #organizations = new Map<string, string>();
     readonly #redirects = new Map<string, string>();
     #sessionNumber = 0;
@@ -96,17 +104,34 @@ export class FakeClerk implements OidcJwksSource {
         this.#redirects.set(id, location);
     };
 
-    readonly setMembership = (organizationId: string, userId: string, role: string | null): void => {
+    readonly setMembership = (
+        organizationId: string,
+        userId: string,
+        role: string | null,
+        newMembershipMetadata: unknown = {},
+    ): void => {
         const key = `${organizationId}:${userId}`;
         if (role === null) {
             this.#memberships.delete(key);
         } else {
-            this.#memberships.set(key, role);
+            const existing = this.#memberships.get(key);
+            this.#memberships.set(
+                key,
+                existing === undefined
+                    ? {
+                          id: `orgmem_${crypto.randomUUID().replaceAll("-", "")}`,
+                          created_at: Date.now(),
+                          role,
+                          public_user_data: { user_id: userId },
+                          private_metadata: newMembershipMetadata,
+                      }
+                    : { ...existing, role },
+            );
         }
     };
 
     readonly membership = (organizationId: string, userId: string): string | null =>
-        this.#memberships.get(`${organizationId}:${userId}`) ?? null;
+        this.#memberships.get(`${organizationId}:${userId}`)?.role ?? null;
 
     readonly session = (subject: string, organizationId = "", role = "org:admin"): string => {
         // A session's organization role comes from a membership; an explicitly changed membership stays as set.
@@ -218,21 +243,25 @@ export class FakeClerk implements OidcJwksSource {
         }
         if (request.method === "GET") {
             const userId = url.searchParams.get("user_id") ?? "";
-            const role = this.#memberships.get(`${id}:${userId}`);
+            const membership = this.#memberships.get(`${id}:${userId}`);
             return Response.json({
-                data: role === undefined ? [] : [{ role, public_user_data: { user_id: userId } }],
+                data: membership === undefined ? [] : [membership],
             });
         }
         if (request.method === "POST") {
-            const body = (await request.json()) as { readonly role?: unknown; readonly user_id?: unknown };
+            const body = (await request.json()) as {
+                readonly role?: unknown;
+                readonly user_id?: unknown;
+                readonly private_metadata?: unknown;
+            };
             if (typeof body.user_id !== "string" || typeof body.role !== "string") {
                 return new Response(null, { status: 400 });
             }
             if (this.membership(id, body.user_id) !== null) {
                 return new Response(null, { status: 422 });
             }
-            this.setMembership(id, body.user_id, body.role);
-            return Response.json({ role: body.role, public_user_data: { user_id: body.user_id } });
+            this.setMembership(id, body.user_id, body.role, body.private_metadata ?? {});
+            return Response.json(this.#memberships.get(`${id}:${body.user_id}`));
         }
         return new Response(null, { status: 405 });
     };
