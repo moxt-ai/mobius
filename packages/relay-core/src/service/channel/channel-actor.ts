@@ -42,7 +42,6 @@ import {
     decodeSessionRestoreCommand,
     decodeWorkspaceListCommand,
     encodeAgentSettingsDiscoveryFailedEvent,
-    encodeDaemonToServiceMessage,
     encodeRuntimeStatusEvent,
     encodeServiceToDaemonMessage,
     encodeSessionOperationFailedEvent,
@@ -50,6 +49,7 @@ import {
     FILE_END_KIND,
     FILE_FAILED_KIND,
     FILE_READ_KIND,
+    isIdentifier,
     NATIVE_SESSION_CANCEL_KIND,
     NATIVE_SESSION_REQUEST_KIND,
     NATIVE_SESSION_RESULT_KIND,
@@ -95,6 +95,7 @@ import {
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { SessionRuntimeError } from "../../entity/do/session.ts";
+import { logger } from "../../infra/logger.ts";
 import type { SessionStatusNotifications } from "../../infra/session-status-notifications.ts";
 import type { BestEffortRecording } from "./best-effort-recording.ts";
 import { SessionLiveEventRelay } from "./session-live-event-relay.ts";
@@ -114,6 +115,15 @@ function copyBinaryFrame(value: unknown): ArrayBuffer {
         return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength) as ArrayBuffer;
     }
     throw new ProtocolMessageError("Content chunk must be binary");
+}
+
+function knownChunk(value: unknown, skipped: () => void) {
+    try {
+        return decodeContentChunkFrame(value);
+    } catch {
+        skipped();
+        return null;
+    }
 }
 
 export type HistoryRequestKind = "live" | "preview";
@@ -153,6 +163,28 @@ export interface ChannelPeers {
 }
 
 export class ChannelActor {
+    #lastSkippedLogAt = Number.NEGATIVE_INFINITY;
+    #skippedCount = 0;
+
+    readonly recordSkipped = (reason: string): void => {
+        this.#skippedCount += 1;
+        const now = Date.now();
+        if (now - this.#lastSkippedLogAt < 60_000) {
+            return;
+        }
+        logger.warn(
+            {
+                event: "relay_message_skipped",
+                reason,
+                skippedCount: this.#skippedCount,
+                runtimeId: this.#runtimeId,
+                projectId: this.#projectId,
+            },
+            "Relay skipped unsupported input",
+        );
+        this.#lastSkippedLogAt = now;
+        this.#skippedCount = 0;
+    };
     readonly #peers: ChannelPeers;
     readonly #projectId: string;
     readonly #runtimeId: string;
@@ -205,10 +237,50 @@ export class ChannelActor {
 
     readonly receiveDaemonMessage = async (
         socket: ChannelSocket,
-        message: DaemonToRelayMessage,
+        message: DaemonToRelayMessage | null,
         signal: AbortSignal,
+        encoded?: string,
     ): Promise<void> => {
         try {
+            if (message === null) {
+                if (encoded === undefined) {
+                    this.recordSkipped("missing_daemon_payload");
+                    return;
+                }
+                let value: unknown;
+                try {
+                    value = JSON.parse(encoded);
+                } catch {
+                    this.recordSkipped("invalid_daemon_json");
+                    return;
+                }
+                if (typeof value !== "object" || value === null || Array.isArray(value)) {
+                    this.recordSkipped("unsupported_daemon_envelope");
+                    return;
+                }
+                const sessionId: unknown = Reflect.get(value, "sessionId");
+                const kind: unknown = Reflect.get(value, "kind");
+                if (typeof kind !== "string" || kind.length === 0 || kind.length > 64 || !isIdentifier(sessionId)) {
+                    this.recordSkipped("unroutable_daemon_message");
+                    return;
+                }
+                // The authenticated daemon owns its output. Unknown payloads can
+                // reach only hosts subscribed to their explicit Session.
+                const requestId: unknown = Reflect.get(value, "requestId");
+                this.broadcast(
+                    [
+                        ...this.#peers.hosts(),
+                        ...this.#peers
+                            .operations()
+                            .filter((route) => route.requestId === requestId && route.sessionId === sessionId)
+                            .map((route) => route.socket),
+                    ],
+                    encoded,
+                    sessionId,
+                );
+                return;
+            }
+            const wire = encoded ?? JSON.stringify(message);
             const kind = message.kind;
             if (kind === SESSION_EVENT_KIND) {
                 this.#liveEvents.receive(message);
@@ -217,7 +289,7 @@ export class ChannelActor {
             if (kind === SESSION_INFO_UPDATED_KIND) {
                 this.broadcast(
                     this.#peers.hosts(),
-                    encodeDaemonToServiceMessage({ ...message, projectId: this.#projectId }),
+                    JSON.stringify({ ...JSON.parse(wire), projectId: this.#projectId }),
                     message.sessionId,
                 );
                 return;
@@ -235,21 +307,17 @@ export class ChannelActor {
                             .filter(({ requestId }) => requestId === message.requestId)
                             .map(({ socket }) => socket),
                     ],
-                    encodeDaemonToServiceMessage(message),
+                    wire,
                     message.sessionId,
                 );
                 return;
             }
             if (kind === AGENT_SETTINGS_DISCOVERED_KIND) {
-                this.returnAgentSettingsDiscoveryResult(
-                    message.requestId,
-                    message.agentId,
-                    encodeDaemonToServiceMessage(message),
-                );
+                this.returnAgentSettingsDiscoveryResult(message.requestId, message.agentId, wire);
                 return;
             }
             if (kind === AGENT_SETTINGS_DISCOVERY_FAILED_KIND) {
-                this.returnAgentSettingsDiscoveryFailure(message.requestId, encodeDaemonToServiceMessage(message));
+                this.returnAgentSettingsDiscoveryFailure(message.requestId, wire);
                 return;
             }
             if (kind === SESSION_HISTORY_PAGE_LOADED_KIND) {
@@ -268,14 +336,10 @@ export class ChannelActor {
                         .operations()
                         .filter((route) => route.requestId === id)
                         .map(({ socket }) => socket),
-                    encodeDaemonToServiceMessage(message),
+                    wire,
                 );
             }
-            this.broadcast(
-                this.#peers.hosts(),
-                encodeDaemonToServiceMessage(message),
-                "sessionId" in message ? message.sessionId : undefined,
-            );
+            this.broadcast(this.#peers.hosts(), wire, "sessionId" in message ? message.sessionId : undefined);
         } catch (error) {
             if (signal.aborted) {
                 throw error;
@@ -292,7 +356,10 @@ export class ChannelActor {
     };
 
     readonly receiveDaemonChunk = (_socket: ChannelSocket, message: unknown): void => {
-        const chunk = decodeContentChunkFrame(message);
+        const chunk = knownChunk(message, () => this.recordSkipped("unsupported_daemon_frame"));
+        if (chunk === null) {
+            return;
+        }
         const recipient = this.#peers
             .operations()
             .find((route) => route.requestId === chunk.requestId && route.socket.isOpen())?.socket;
@@ -307,7 +374,10 @@ export class ChannelActor {
     };
 
     readonly receiveHostChunk = (socket: ChannelSocket, message: unknown): void => {
-        const chunk = decodeContentChunkFrame(message);
+        const chunk = knownChunk(message, () => this.recordSkipped("unsupported_host_frame"));
+        if (chunk === null) {
+            return;
+        }
         const ownsOperation = this.#peers
             .operations()
             .some((route) => route.requestId === chunk.requestId && route.socket.isSame(socket));
@@ -332,59 +402,67 @@ export class ChannelActor {
         }
         try {
             if (decodeKnownServiceToDaemonMessage(message) === null) {
+                this.recordSkipped("unsupported_host_message");
                 return;
             }
             const kind = decodeMessageKind(message);
             if (kind === SESSION_PROMPT_KIND) {
                 const command = decodeSessionPromptCommand(message);
-                this.forwardPrompt(socket, command);
+                this.forwardPrompt(socket, command, message);
                 return;
             }
             if (kind === SESSION_PREPARE_KIND) {
                 const command = decodeSessionPrepareCommand(message);
-                this.forwardControl(socket, command, command.requestId, command.sessionId);
+                this.forwardControl(socket, command, command.requestId, command.sessionId, command, message);
                 return;
             }
             if (kind === AGENT_SETTINGS_DISCOVER_KIND) {
                 const command = decodeAgentSettingsDiscoverCommand(message);
-                this.forwardAgentSettingsDiscovery(socket, command, command.requestId, command.agentId);
+                this.forwardAgentSettingsDiscovery(socket, command, command.requestId, command.agentId, message);
                 return;
             }
             if (kind === NATIVE_SESSION_REQUEST_KIND) {
                 const request = decodeNativeSessionRequest(message);
                 const command: NativeSessionCommand = decodeNativeSessionCommand(message);
-                this.forwardControl(socket, command, request.requestId, request.sessionId, request);
+                this.forwardControl(socket, command, request.requestId, request.sessionId, request, message);
                 return;
             }
             if (kind === SESSION_HISTORY_PAGE_LOAD_KIND) {
                 if (!socket.permitsSessionHistory()) {
                     throw new ProtocolMessageError("Live Session history requires an internal connection");
                 }
-                this.forwardHistoryPage(socket, "live", decodeSessionHistoryPageLoad(message));
+                this.forwardHistoryPage(socket, "live", decodeSessionHistoryPageLoad(message), message);
                 return;
             }
             if (kind === SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND) {
                 if (!socket.permitsSessionHistory()) {
                     throw new ProtocolMessageError("Session preview history requires an internal connection");
                 }
-                this.forwardHistoryPage(socket, "preview", decodeSessionPreviewHistoryPageLoad(message));
+                this.forwardHistoryPage(socket, "preview", decodeSessionPreviewHistoryPageLoad(message), message);
                 return;
             }
             if (kind === SESSION_PERMISSION_RESPOND_KIND) {
                 const command = decodeSessionPermissionRespondCommand(message);
-                this.forwardControl(socket, command, command.interactionId, command.sessionId);
+                this.forwardControl(socket, command, command.interactionId, command.sessionId, command, message);
                 return;
             }
             if (kind === SESSION_ELICITATION_RESPOND_KIND) {
                 const command = decodeSessionElicitationRespondCommand(message);
-                this.forwardControl(socket, command, command.interactionId, command.sessionId);
+                this.forwardControl(socket, command, command.interactionId, command.sessionId, command, message);
                 return;
             }
             const control = this.validateHostControl(kind, message);
             if (control === null) {
                 return;
             }
-            this.forwardControl(socket, control.message, control.requestId, control.sessionId);
+            this.forwardControl(
+                socket,
+                control.message,
+                control.requestId,
+                control.sessionId,
+                control.message,
+                message,
+            );
         } catch (error) {
             if (signal.aborted) {
                 throw error;
@@ -565,8 +643,9 @@ export class ChannelActor {
         requestId: string,
         sessionId: string,
         broadcastMessage: ServiceToDaemonMessage = message,
+        encoded?: string,
     ): void => {
-        if (!this.sendToDaemon(message)) {
+        if (!this.sendToDaemon(message, encoded)) {
             socket.send(
                 encodeSessionOperationFailedEvent({
                     code: "runtime_offline",
@@ -580,13 +659,15 @@ export class ChannelActor {
         }
         this.broadcast(
             this.#peers.hosts(),
-            encodeServiceToDaemonMessage(broadcastMessage),
+            broadcastMessage === message && encoded !== undefined
+                ? encoded
+                : encodeServiceToDaemonMessage(broadcastMessage),
             sessionId.length === 0 ? undefined : sessionId,
         );
     };
 
-    private readonly forwardPrompt = (socket: ChannelSocket, command: SessionPromptCommand): void => {
-        if (!this.sendToDaemon(command)) {
+    private readonly forwardPrompt = (socket: ChannelSocket, command: SessionPromptCommand, encoded: string): void => {
+        if (!this.sendToDaemon(command, encoded)) {
             socket.send(
                 encodeSessionOperationFailedEvent({
                     code: "runtime_offline",
@@ -604,6 +685,7 @@ export class ChannelActor {
         message: ServiceToDaemonMessage,
         requestId: string,
         agentId: string,
+        encoded?: string,
     ): void => {
         const route = socket.trackAgentSettingsDiscovery(requestId, agentId);
         if (route === "duplicate") {
@@ -620,7 +702,7 @@ export class ChannelActor {
             );
             return;
         }
-        if (!this.sendToDaemon(message)) {
+        if (!this.sendToDaemon(message, encoded)) {
             socket.consumeAgentSettingsDiscoveryFailure(requestId);
             socket.send(
                 encodeAgentSettingsDiscoveryFailedEvent({
@@ -683,10 +765,11 @@ export class ChannelActor {
                 readonly kind: typeof SESSION_HISTORY_PAGE_LOAD_KIND | typeof SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND;
             }
         >,
+        encoded: string,
     ): void => {
         // Internal history connections belong to one operation; only its reply address survives hibernation.
         socket.bindHistoryRequest(kind, command.requestId);
-        if (!this.sendToDaemon(command)) {
+        if (!this.sendToDaemon(command, encoded)) {
             socket.close(1013, "Runtime offline");
         }
     };
@@ -708,13 +791,13 @@ export class ChannelActor {
         }
     };
 
-    private readonly sendToDaemon = (message: ServiceToDaemonMessage): boolean => {
+    private readonly sendToDaemon = (message: ServiceToDaemonMessage, encoded?: string): boolean => {
         const daemon = this.#peers.daemons().find((socket) => socket.isOpen());
         if (daemon === undefined) {
             return false;
         }
         try {
-            daemon.send(encodeServiceToDaemonMessage(message));
+            daemon.send(encoded ?? encodeServiceToDaemonMessage(message));
             return true;
         } catch {
             return false;

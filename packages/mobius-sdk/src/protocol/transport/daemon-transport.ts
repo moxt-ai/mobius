@@ -365,12 +365,12 @@ const serviceToDaemonRegistry: Readonly<Record<string, MessageSignature<ServiceT
 
 /** Decodes a message this SDK can consume, or skips it when its schema is not understood. */
 export function decodeKnownServiceToDaemonMessage(encoded: string): ServiceToDaemonMessage | null {
-    const kind = decodeMessageKind(encoded);
-    const signature = serviceToDaemonRegistry[kind];
-    if (signature === undefined) {
-        return null;
-    }
     try {
+        const kind = decodeMessageKind(encoded);
+        const signature = serviceToDaemonRegistry[kind];
+        if (signature === undefined) {
+            return null;
+        }
         return signature.decoder(encoded);
     } catch {
         return null;

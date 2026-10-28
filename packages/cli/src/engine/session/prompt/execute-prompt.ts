@@ -11,7 +11,7 @@ import type { ExecutionReceipts } from "../turn/execution-receipts.ts";
 import { resolveSessionDirectories } from "../workspace/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
 import { agentForSessionConfiguration, applyCompleteSessionConfiguration } from "./apply-session-configuration.ts";
-import { type ReadPromptArtifact, resolvePromptArtifacts } from "./prompt-artifacts.ts";
+import { PromptArtifactError, type ReadPromptArtifact, resolvePromptArtifacts } from "./prompt-artifacts.ts";
 import type { PromptLifecycle } from "./prompt-lifecycle.ts";
 
 export interface ExecutePromptOptions {
@@ -134,6 +134,17 @@ export async function executePrompt({
             availability.disposition,
         );
         const attachments = await resolvePromptArtifacts(readArtifact, command.attachments, signal);
+        const skipped = command.attachments.length - attachments.images.length - attachments.resources.length;
+        if (skipped > 0) {
+            reportFailure("prompt_attachments_skipped", command.commandId, { count: skipped.toString() });
+        }
+        if (
+            command.prompt.trim().length === 0 &&
+            attachments.images.length === 0 &&
+            attachments.resources.length === 0
+        ) {
+            throw new PromptArtifactError("prompt_attachments_unsupported", "No supported prompt content remains");
+        }
         let stopReason: string;
         if (availability.disposition === SessionPromptDisposition.Steer) {
             await sessions.steerPrompt({

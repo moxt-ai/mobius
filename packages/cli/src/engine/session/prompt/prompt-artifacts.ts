@@ -15,7 +15,6 @@ export class PromptArtifactError extends OperationError {
 export class ResolvedPromptArtifacts {
     readonly images: readonly PromptImageInput[];
     readonly resources: readonly PromptResourceInput[];
-
     constructor(images: readonly PromptImageInput[], resources: readonly PromptResourceInput[]) {
         this.images = images;
         this.resources = resources;
@@ -55,10 +54,7 @@ export async function resolvePromptArtifacts(
         }
         if (attachment.kind === "image") {
             if (bytes.byteLength > PROMPT_IMAGE_MAX_BYTES || images.length >= 8) {
-                throw new PromptArtifactError(
-                    "artifact_too_large_for_agent",
-                    "The prompt attachment exceeds the Agent image limit",
-                );
+                continue;
             }
             images.push({
                 data: Buffer.from(bytes).toString("base64"),
@@ -68,28 +64,17 @@ export async function resolvePromptArtifacts(
             continue;
         }
         if (!isTextMediaType(attachment.mimeType)) {
-            throw new PromptArtifactError(
-                "artifact_media_type_unsupported",
-                "The Agent cannot consume this prompt attachment media type",
-            );
+            continue;
         }
         if (bytes.byteLength > MAX_AGENT_RESOURCE_BYTE_LENGTH || resources.length >= 16) {
-            throw new PromptArtifactError(
-                "artifact_too_large_for_agent",
-                "The prompt attachment exceeds the Agent resource limit",
-            );
+            continue;
         }
         let text: string;
         try {
             text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-        } catch (cause) {
-            throw new PromptArtifactError(
-                "artifact_encoding_invalid",
-                "The prompt attachment is not valid UTF-8 text",
-                {
-                    cause,
-                },
-            );
+        } catch {
+            signal.throwIfAborted();
+            continue;
         }
         resources.push({ mimeType: attachment.mimeType, text, type: "embedded", uri: attachment.uri });
     }

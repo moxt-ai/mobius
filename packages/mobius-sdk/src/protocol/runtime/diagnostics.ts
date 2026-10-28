@@ -2,7 +2,7 @@ import { z } from "zod";
 import { type Identifier, isIdentifier } from "../shared/identifier.ts";
 
 const identifier = z.custom<Identifier>(isIdentifier);
-export const runtimeDiagnosticsRequestSchema = z.strictObject({
+export const runtimeDiagnosticsRequestSchema = z.object({
     kind: z.literal("runtime.diagnostics.read"),
     requestId: identifier,
 });

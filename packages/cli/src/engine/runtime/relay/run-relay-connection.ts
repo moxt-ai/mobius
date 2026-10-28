@@ -223,6 +223,9 @@ export async function runRelayConnection({
                 try {
                     const message = decodeKnownServiceToDaemonMessage(encoded);
                     if (message === null) {
+                        diagnostics.daemonDiagnostic("protocol_message_discarded", "unknown", {
+                            reason: "unsupported_message",
+                        });
                         return;
                     }
                     const kind = message.kind;

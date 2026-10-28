@@ -462,17 +462,15 @@ export class RuntimeService {
         try {
             daemonMessage = decodeDaemonToRelayMessage(message);
         } catch {
-            socket.close(1008, "Invalid protocol message");
-            return;
-        }
-        if (daemonMessage === null) {
+            // Reject this frame without disconnecting unrelated Sessions.
+            this.channel(identity.runtimeId, scope).recordSkipped("invalid_daemon_message");
             return;
         }
         // The host answers fixed-text heartbeats without the Relay. Daemons released before that send an
         // identifier the host cannot match, so the Relay answers those itself, bypassing message scheduling.
         if (
             identity.role === "daemon" &&
-            daemonMessage.kind === RUNTIME_HEARTBEAT_KIND &&
+            daemonMessage?.kind === RUNTIME_HEARTBEAT_KIND &&
             "heartbeatId" in daemonMessage
         ) {
             if (!this.#cx.services.connections.isCurrent(identity)) {
@@ -488,7 +486,7 @@ export class RuntimeService {
             );
             return;
         }
-        const lane = this.daemonMessageLane(daemonMessage);
+        const lane = daemonMessage === null ? "runtime" : this.daemonMessageLane(daemonMessage);
         try {
             await this.#daemonMessages.run(lane, signal, async () => {
                 signal.throwIfAborted();
@@ -496,7 +494,7 @@ export class RuntimeService {
                     return;
                 }
                 const channel = this.channel(identity.runtimeId, scope);
-                await channel.receiveDaemonMessage(socket, daemonMessage, signal);
+                await channel.receiveDaemonMessage(socket, daemonMessage, signal, message);
             });
         } catch (error) {
             if (error instanceof RuntimeMessageSchedulerCapacityError) {

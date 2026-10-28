@@ -47,6 +47,8 @@ function addFailureDetails(details: Record<string, string>, failure: unknown): v
 }
 
 export class RelayConnectionDiagnostics {
+    #lastSkippedLogAt = Number.NEGATIVE_INFINITY;
+    #skippedCount = 0;
     readonly #channelId: string;
     readonly #localLog: RuntimeDiagnosticLog;
     #lastClosedEpoch = 0;
@@ -134,6 +136,21 @@ export class RelayConnectionDiagnostics {
         details: Readonly<Record<string, string>>,
         failure?: unknown,
     ): void => {
+        if (
+            event === "protocol_message_discarded" ||
+            event === "content_frame_discarded" ||
+            event === "content_chunk_discarded" ||
+            event === "prompt_attachments_skipped"
+        ) {
+            this.#skippedCount += 1;
+            const now = Date.now();
+            if (now - this.#lastSkippedLogAt < 60_000) {
+                return;
+            }
+            details = { ...details, skippedCount: this.#skippedCount.toString() };
+            this.#lastSkippedLogAt = now;
+            this.#skippedCount = 0;
+        }
         const recordedDetails: Record<string, string> = { ...details };
         if (failure !== undefined) {
             addFailureDetails(recordedDetails, failure);
