@@ -20,6 +20,7 @@ import {
     PlatformAuthenticationConfiguration,
     type PlatformRelayBindings,
 } from "../src/worker.ts";
+import { registerRuntimeFixture } from "./registered-runtime.ts";
 
 const relayOrigin = "https://platform.test";
 const clerk = new FakeClerk();
@@ -201,6 +202,7 @@ async function throughRelay(
     ) => Promise<void>,
     recording?: SessionRecording,
 ): Promise<RecordedWebhookTransport> {
+    await registerRuntimeFixture(projectId, projectId);
     const environment = bindings();
     const webhookStorage = new AppSessionStatusWebhookStorage(environment.PLATFORM_DIRECTORY_DATABASE);
     const transport = new RecordedWebhookTransport();

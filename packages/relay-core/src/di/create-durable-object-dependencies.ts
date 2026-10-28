@@ -40,10 +40,14 @@ function createRuntimeRelayDependencies(cx: {
         const database = cx.storages.databaseResolver.resolve(project.storagePlacement);
         return new ChannelCredentialService(new ChannelCredentialStorage(database));
     };
-    const credentials: Pick<ChannelCredentialService, "isActive"> = {
+    const credentials: Pick<ChannelCredentialService, "isActive" | "isRuntimeActive"> = {
         isActive: async (identity, signal) => {
             const scope = new ProjectScope(identity.projectId);
             return (await credentialService(scope, signal)).isActive(identity, signal);
+        },
+        isRuntimeActive: async (identity, signal) => {
+            const scope = new ProjectScope(identity.projectId);
+            return (await credentialService(scope, signal)).isRuntimeActive(identity, signal);
         },
     };
     const recording = new BestEffortRecording(cx.gateways.recording, cx.utilities.waitUntil);

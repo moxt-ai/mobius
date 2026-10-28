@@ -7,6 +7,15 @@ export class ChannelCredentialService {
         this.#storage = storage;
     }
 
+    readonly isRuntimeActive = async (
+        identity: { readonly projectId: string; readonly runtimeId: string },
+        signal: AbortSignal,
+    ): Promise<boolean> => {
+        const row = await this.#storage.readActiveRuntime(identity, signal);
+        signal.throwIfAborted();
+        return row?.active === 1;
+    };
+
     readonly isActive = async (identity: ChannelCredentialIdentity, signal: AbortSignal): Promise<boolean> => {
         const row = await this.#storage.readActive(identity, signal);
         signal.throwIfAborted();
