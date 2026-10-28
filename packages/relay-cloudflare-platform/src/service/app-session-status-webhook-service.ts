@@ -62,15 +62,21 @@ export class AppSessionStatusWebhookService {
                 configured(true),
             );
             // A committed secret is returned even if the request is cancelled now; it is shown only once.
-            if (created !== null) {
-                return { ...this.resource(created), secret: secret.plaintext };
+            if (created.kind === "app-unavailable") {
+                throw appUnavailable();
+            }
+            if (created.kind !== "conflict") {
+                return { ...this.resource(created.webhook), secret: secret.plaintext };
             }
         }
         const stored = await this.#storage.updateSettings(appId, enabled, normalizedEndpoint, now, configured(false));
-        if (stored === null) {
+        if (stored.kind === "app-unavailable") {
+            throw appUnavailable();
+        }
+        if (stored.kind === "conflict") {
             throw new Error("The App Session status webhook could not be stored");
         }
-        return this.resource(stored);
+        return this.resource(stored.webhook);
     };
 
     readonly rotate = async (
@@ -91,7 +97,10 @@ export class AppSessionStatusWebhookService {
             now,
             this.#audit(access, appId, "app.session-status-webhook.secret-rotated", {}, now),
         );
-        if (stored === null) {
+        if (stored.kind === "app-unavailable") {
+            throw appUnavailable();
+        }
+        if (stored.kind === "conflict") {
             throw new PlatformControlPlaneError(
                 "webhook_rotation_conflict",
                 "The App webhook secret was rotated by another request",
@@ -99,7 +108,7 @@ export class AppSessionStatusWebhookService {
             );
         }
         // A committed secret is returned even if the request is cancelled now; it is shown only once.
-        return { ...this.resource(stored), secret: secret.plaintext };
+        return { ...this.resource(stored.webhook), secret: secret.plaintext };
     };
 
     readonly decryptSecret = async (webhook: StoredAppSessionStatusWebhook): Promise<string> =>
@@ -146,6 +155,10 @@ export class AppSessionStatusWebhookService {
         endpoint: webhook.endpoint,
         secretId: webhook.secretId,
     });
+}
+
+function appUnavailable(): PlatformControlPlaneError {
+    return new PlatformControlPlaneError("app_access_denied", "The App is unavailable", 403);
 }
 
 function httpsEndpoint(value: string): string {

@@ -33,11 +33,20 @@ import {
     RUNTIME_HEARTBEAT_MESSAGE,
     type SessionConfigReadResult,
 } from "@moxt-ai/mobius-sdk/protocol";
+import { eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDurableObjectDependencies } from "../../relay-core/src/di/create-durable-object-dependencies.ts";
 import { createTestMobiusPlatformApp } from "../../test-support/src/app.ts";
 import { FakeClerk } from "../../test-support/src/clerk.ts";
 import { createPlatformDurableObjectContext } from "../src/durable-objects/platform-durable-object-context.ts";
+import {
+    platformApp,
+    platformAppRecordingPolicy,
+    platformAppSessionStatusWebhook,
+    platformDashboardAuditEvent,
+    platformProjectRecordingPolicy,
+} from "../src/schema/d1/index.ts";
+import { platformDrizzle } from "../src/storage/platform-drizzle-database.ts";
 import {
     createPlatformGateways,
     PlatformAuthenticationConfiguration,
@@ -1666,6 +1675,99 @@ describe.sequential("Platform Recording policy configuration", () => {
         );
         return { appId, projectId: text(project, "projectId") };
     }
+
+    it.each([
+        { lifecycle: "deleted", configured: false },
+        { lifecycle: "deleted", configured: true },
+        { lifecycle: "suspended", configured: false },
+        { lifecycle: "suspended", configured: true },
+    ] as const)(
+        "Given a $lifecycle App with configured=$configured, When its policies or webhook are changed, Then no configuration, secret, or success audit is written",
+        async ({ lifecycle, configured }) => {
+            const worker = createTestMobiusPlatformApp(
+                new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+                createPlatformGateways,
+                () => clerk.organizationGateway,
+            );
+            const environment = recordingBindings();
+            const { appId, projectId } = await createPolicyTarget(worker, environment);
+            const database = platformDrizzle(environment.PLATFORM_DIRECTORY_DATABASE);
+            const dashboard = (path: string, method: string, body?: object) =>
+                worker.fetch(
+                    new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/${path}`, {
+                        headers: developerHeaders(),
+                        method,
+                        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+                    }),
+                    environment,
+                );
+            const webhook = `apps/${appId}/session-status-webhook`;
+            const policies = [`apps/${appId}/recording-policy`, `projects/${projectId}/recording-policy`];
+            if (configured) {
+                for (const policy of policies) {
+                    await responseJson(await dashboard(policy, "PUT", { mode: "enabled" }), 200);
+                }
+                await responseJson(
+                    await dashboard(webhook, "PUT", {
+                        enabled: true,
+                        endpoint: "https://consumer.example.test/original",
+                    }),
+                    200,
+                );
+            }
+            if (lifecycle === "deleted") {
+                await responseJson(await dashboard(`apps/${appId}`, "DELETE"), 200);
+            } else {
+                await database.update(platformApp).set({ lifecycle }).where(eq(platformApp.appId, appId));
+            }
+            const snapshot = async () => ({
+                appPolicy: await database
+                    .select()
+                    .from(platformAppRecordingPolicy)
+                    .where(eq(platformAppRecordingPolicy.appId, appId)),
+                projectPolicy: await database
+                    .select()
+                    .from(platformProjectRecordingPolicy)
+                    .where(eq(platformProjectRecordingPolicy.projectId, projectId)),
+                webhook: await database
+                    .select()
+                    .from(platformAppSessionStatusWebhook)
+                    .where(eq(platformAppSessionStatusWebhook.appId, appId)),
+                audit: await database
+                    .select()
+                    .from(platformDashboardAuditEvent)
+                    .where(eq(platformDashboardAuditEvent.appId, appId))
+                    .orderBy(platformDashboardAuditEvent.auditId),
+            });
+            const before = await snapshot();
+            for (const policy of policies) {
+                for (const mode of ["disabled", "inherit", "enabled"]) {
+                    const response = await dashboard(policy, "PUT", { mode });
+                    expect.soft(response.status).toBe(404);
+                    expect.soft(await response.json()).toMatchObject({
+                        error: {
+                            code:
+                                policy.startsWith("projects/") && lifecycle === "deleted"
+                                    ? "project_not_found"
+                                    : "recording_target_not_found",
+                        },
+                    });
+                }
+            }
+            const saved = await dashboard(webhook, "PUT", {
+                enabled: false,
+                endpoint: "https://consumer.example.test/changed",
+            });
+            expect.soft(saved.status).toBe(403);
+            expect.soft(await saved.json()).toMatchObject({ error: { code: "app_access_denied" } });
+            if (configured) {
+                const rotated = await dashboard(`${webhook}/rotate`, "POST", {});
+                expect.soft(rotated.status).toBe(403);
+                expect.soft(await rotated.json()).toMatchObject({ error: { code: "app_access_denied" } });
+            }
+            expect(await snapshot()).toEqual(before);
+        },
+    );
 
     it("Given a member, a current admin, and an admin demoted in Clerk, When each changes Recording policy or the webhook, Then only the current admin changes policy, the member still configures the webhook, and each change has a secret-free audit event", async () => {
         const worker = createTestMobiusPlatformApp(
