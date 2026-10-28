@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,12 +25,14 @@ import {
     type PromptAttachment,
     SESSION_EVENT_KIND,
     SESSION_HISTORY_PAGE_LOADED_KIND,
+    type SessionEvent,
     type SessionLiveEvent,
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { listen, port, sendBinary, sendText } from "@moxt-ai/mobius-test/websocket";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { RuntimeLocalContext } from "../../src/runtime/config.ts";
 import { SESSION_EVENT_BATCH_WINDOW_MILLISECONDS } from "../../src/runtime/relay/session-event-publisher.ts";
@@ -419,7 +421,11 @@ async function cancel(fixture: Fixture, command: SessionPromptCommand): Promise<
 async function history(
     fixture: Fixture,
     command: SessionPromptCommand,
-    options: { readonly eventLimit?: number; readonly omit?: readonly "agent-reasoning"[] } = {},
+    options: {
+        readonly cursor?: string | null;
+        readonly eventLimit?: number;
+        readonly omit?: readonly "agent-reasoning"[];
+    } = {},
 ) {
     sendText(
         fixture.socket,
@@ -427,7 +433,7 @@ async function history(
             kind: "session.live-history.v2.page.load",
             requestId: "history",
             sessionId: command.sessionId,
-            cursor: null,
+            cursor: options.cursor ?? null,
             eventLimit: options.eventLimit ?? 200,
             ...(options.omit === undefined ? {} : { omit: options.omit }),
         }),
@@ -470,6 +476,145 @@ async function activeTurn(fixture: Fixture, command: SessionPromptCommand) {
     }
 }
 describe("daemon V2 live delivery", () => {
+    it.each(["user_message_chunk", "agent_message_chunk"])(
+        "Given consecutive %s blocks cross the wire bound, When a viewer loads history, Then exact-limit merges remain valid and overflow text is retained in order without cutting Unicode",
+        async (sessionUpdate) => {
+            const fixture = await startControlledDaemon();
+            try {
+                const command = prompt(fixture, `stream merged text ${sessionUpdate}`);
+                sendText(fixture.socket, encodeSessionPromptCommand(command));
+                for (;;) {
+                    const event = await nextLive(fixture);
+                    if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
+                        break;
+                    }
+                }
+                const page = await history(fixture, command);
+                const chunks = page.events.flatMap((event) =>
+                    event.type === "acp" &&
+                    (event.payload.sessionUpdate === "user_message_chunk" ||
+                        event.payload.sessionUpdate === "agent_message_chunk") &&
+                    event.payload.messageId === "merged-message"
+                        ? [event.payload]
+                        : [],
+                );
+                expect(chunks).toEqual(
+                    [
+                        `${"a".repeat(500_000)}${"b".repeat(500_000)}`,
+                        `\u{1f600}${"c".repeat(499_999)}`,
+                        "d".repeat(500_000),
+                    ].map((text) => ({ sessionUpdate, messageId: "merged-message", content: { type: "text", text } })),
+                );
+            } finally {
+                await fixture.close();
+            }
+        },
+    );
+
+    it("Given a stored conversation has valid user blocks totaling 1666038 characters, When it reopens after restart, Then paginated history retains all text and a follow-up continues the same native session", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-large-saved-history-"));
+        try {
+            const first = await startControlledDaemon({ stateDirectory });
+            try {
+                sendText(first.socket, encodeSessionPromptCommand(prompt(first, "Seed saved conversation")));
+                for (;;) {
+                    const event = await nextLive(first);
+                    if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
+                        break;
+                    }
+                }
+            } finally {
+                await first.close();
+            }
+            const nativeDirectory = join(stateDirectory, "native");
+            const nativeFiles = (await readdir(nativeDirectory)).filter((name) => name.endsWith(".json"));
+            expect(nativeFiles).toHaveLength(1);
+            const nativeFile = nativeFiles[0];
+            if (nativeFile === undefined) {
+                throw new Error("Missing saved native session");
+            }
+            const nativePath = join(nativeDirectory, nativeFile);
+            const state = z.record(z.string(), z.unknown()).parse(JSON.parse(await readFile(nativePath, "utf8")));
+            const blocks = [6, 24, 24, 24, 24, 10_169, 551_920, 551_924, 551_923].map((length, index) =>
+                `${index}:`.padEnd(length, String(index)),
+            );
+            expect(blocks.join("")).toHaveLength(1_666_038);
+            const saved = JSON.stringify({
+                ...state,
+                history: [
+                    ...blocks.map((text) => ({ messageId: "saved-user", role: "user", text })),
+                    { messageId: "saved-answer", role: "assistant", text: "The saved answer" },
+                ],
+            });
+            await writeFile(nativePath, saved);
+
+            const restarted = await startControlledDaemon({ stateDirectory });
+            try {
+                const command = {
+                    ...prompt(restarted, "Continue the saved conversation"),
+                    commandId: "continue-saved-conversation",
+                };
+                const events: SessionEvent[] = [];
+                let cursor: string | null = null;
+                do {
+                    const page = await history(restarted, command, { cursor, eventLimit: 1 });
+                    expect(page.events).toHaveLength(1);
+                    events.unshift(...page.events);
+                    cursor = page.nextCursor;
+                } while (cursor !== null);
+                expect(new Set(events.map((event) => event.eventId)).size).toBe(events.length);
+                const userChunks = events.flatMap((event) =>
+                    event.type === "acp" &&
+                    event.payload.sessionUpdate === "user_message_chunk" &&
+                    event.payload.content.type === "text"
+                        ? [{ messageId: event.payload.messageId, text: event.payload.content.text }]
+                        : [],
+                );
+                expect(userChunks).toHaveLength(3);
+                expect(userChunks.every((chunk) => chunk.messageId === "saved-user")).toBe(true);
+                expect(userChunks.every((chunk) => chunk.text.length <= 1_000_000)).toBe(true);
+                expect(userChunks.map((chunk) => chunk.text).join("")).toBe(blocks.join(""));
+                expect(events).toContainEqual(
+                    expect.objectContaining({
+                        payload: expect.objectContaining({
+                            messageId: "saved-answer",
+                            content: { type: "text", text: "The saved answer" },
+                        }),
+                    }),
+                );
+                expect((await history(restarted, command)).events).toEqual(events);
+                expect(await readFile(nativePath, "utf8")).toBe(saved);
+                sendText(restarted.socket, encodeSessionPromptCommand(command));
+                for (;;) {
+                    const event = await nextLive(restarted);
+                    if (
+                        event.type === "lifecycle-metadata" &&
+                        event.payload.kind === "prompt.completed" &&
+                        event.payload.commandId === command.commandId
+                    ) {
+                        break;
+                    }
+                }
+                expect((await readdir(nativeDirectory)).filter((name) => name.endsWith(".json"))).toEqual(nativeFiles);
+                const continued = z
+                    .object({
+                        turnCount: z.number(),
+                        history: z.array(z.object({ messageId: z.string(), text: z.string() })),
+                    })
+                    .parse(JSON.parse(await readFile(nativePath, "utf8")));
+                expect(continued.turnCount).toBe(2);
+                expect(
+                    continued.history.filter((message) => message.messageId === "saved-user").map((m) => m.text),
+                ).toEqual(blocks);
+                expect(continued.history).toContainEqual({ messageId: "user-2", text: command.prompt });
+            } finally {
+                await restarted.close();
+            }
+        } finally {
+            await rm(stateDirectory, { recursive: true, force: true });
+        }
+    });
+
     it.each(["user_message_chunk", "agent_message_chunk", "agent_thought_chunk", "compaction_summary_chunk"])(
         "Given oversized %s text, When the daemon publishes and replays it, Then text is bounded with an exact omission marker and the turn completes",
         async (sessionUpdate) => {
