@@ -1,7 +1,6 @@
 import { z } from "zod";
 
 import { identifierSchema } from "../../shared/identifier.ts";
-import { ProtocolMessageError } from "../../shared/message-codec.ts";
 import { sessionConfigurationSelectionsSchema } from "../configuration/index.ts";
 
 const timestampSchema = z.string().datetime({ offset: true });
@@ -91,35 +90,8 @@ const turnSchema = z.union([
 
 export type Turn = z.infer<typeof turnSchema>;
 
-function decodeResource<T>(value: unknown, schema: z.ZodType<T>): T {
-    const decoded = schema.safeParse(value);
-    if (!decoded.success) {
-        throw new ProtocolMessageError("Resource does not match its schema", {
-            cause: decoded.error,
-        });
-    }
-    return decoded.data;
-}
-
-const turnStateKinds = new Set(["cancelled", "failed", "indeterminate", "queued", "running", "succeeded"]);
-const turnRequestKinds = new Set(["not_retained", "prompt"]);
-
-function unknownKind(value: unknown, known: ReadonlySet<string>): boolean {
-    if (typeof value !== "object" || value === null || !("kind" in value)) {
-        return false;
-    }
-    return typeof value.kind === "string" && !known.has(value.kind);
-}
-
-/** Decodes a known Turn resource, or skips a future Turn variant. */
+/** Decodes a Turn resource, or skips an entry this SDK cannot consume. */
 export const decodeTurn = (value: unknown): Turn | null => {
-    if (typeof value === "object" && value !== null) {
-        if ("request" in value && unknownKind(value.request, turnRequestKinds)) {
-            return null;
-        }
-        if ("state" in value && unknownKind(value.state, turnStateKinds)) {
-            return null;
-        }
-    }
-    return decodeResource(value, turnSchema);
+    const decoded = turnSchema.safeParse(value);
+    return decoded.success ? decoded.data : null;
 };

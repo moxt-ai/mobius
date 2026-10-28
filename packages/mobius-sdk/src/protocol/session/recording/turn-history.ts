@@ -249,19 +249,18 @@ const recordingActiveCommandsSchema = z
     .readonly()
     .nullable();
 
+const sessionRecordingExecutionCommandSchema = z
+    .object({
+        attempt: sessionRecordingTurnAttemptSchema,
+        commandId: identifierStringSchema,
+        generationId: identifierStringSchema,
+    })
+    .readonly();
 const sessionRecordingExecutionSchema = z
     .object({
         activeCommands: recordingActiveCommandsSchema,
         commands: z
-            .array(
-                z
-                    .object({
-                        attempt: sessionRecordingTurnAttemptSchema,
-                        commandId: identifierStringSchema,
-                        generationId: identifierStringSchema,
-                    })
-                    .readonly(),
-            )
+            .array(sessionRecordingExecutionCommandSchema)
             .max(SESSION_RECORDING_EXECUTION_COMMAND_MAX_LIMIT)
             .readonly(),
         sessionId: identifierStringSchema,
@@ -343,72 +342,41 @@ function decodeSanitized<T>(encoded: string, sanitize: (value: unknown) => unkno
 
 type JsonRecord = Record<string, unknown>;
 
-const turnAttemptKinds = new Set([
-    "cancelled",
-    "failed",
-    "indeterminate",
-    "none",
-    "running",
-    "succeeded",
-    "waiting_input",
-]);
-const turnItemKinds = new Set(["answer", "thought", "tool"]);
-const toolDetailKinds = new Set(["inline", "omitted"]);
-const recordingInteractionKinds = new Set(["elicitation", "permission"]);
-const contentBlockTypes = new Set([
-    "audio",
-    "external_audio",
-    "external_image",
-    "external_resource",
-    "image",
-    "resource",
-    "resource_link",
-    "text",
-]);
-const toolContentTypes = new Set(["content", "diff", "terminal"]);
-
 function record(value: unknown): JsonRecord | null {
     return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as JsonRecord) : null;
 }
 
-function isUnknownVariant(value: unknown, discriminator: string, known: ReadonlySet<string>): boolean {
-    const candidate = record(value)?.[discriminator];
-    return typeof candidate === "string" && !known.has(candidate);
+function decodedEntries<T>(value: unknown, schema: z.ZodType<T>, maximum: number): unknown {
+    return Array.isArray(value) && value.length <= maximum
+        ? value.flatMap((entry) => {
+              const decoded = schema.safeParse(entry);
+              return decoded.success ? [decoded.data] : [];
+          })
+        : value;
 }
 
-function knownVariants(value: unknown, discriminator: string, known: ReadonlySet<string>): unknown {
-    return Array.isArray(value) ? value.filter((item) => !isUnknownVariant(item, discriminator, known)) : value;
+function sanitizedEntries(value: unknown, sanitize: (entry: unknown) => unknown | null, maximum: number): unknown {
+    return Array.isArray(value) && value.length <= maximum
+        ? value.flatMap((entry) => {
+              const decoded = sanitize(entry);
+              return decoded === null ? [] : [decoded];
+          })
+        : value;
 }
 
 function sanitizeToolContent(value: unknown): unknown {
-    if (!Array.isArray(value)) {
-        return value;
-    }
-    return value
-        .filter((item) => !isUnknownVariant(item, "type", toolContentTypes))
-        .filter((item) => {
-            const candidate = record(item);
-            return (
-                candidate?.["type"] !== "content" || !isUnknownVariant(candidate["content"], "type", contentBlockTypes)
-            );
-        });
+    return decodedEntries(value, toolCallContentSchema, 1_000);
 }
 
 function sanitizeTurnItem(value: unknown): unknown | null {
-    if (isUnknownVariant(value, "kind", turnItemKinds)) {
-        return null;
-    }
     const item = record(value);
-    if (item?.["kind"] !== "tool") {
-        return value;
-    }
-    if (isUnknownVariant(item["detail"], "kind", toolDetailKinds)) {
-        return null;
-    }
-    const detail = record(item["detail"]);
-    return detail?.["kind"] === "inline"
-        ? { ...item, detail: { ...detail, content: sanitizeToolContent(detail["content"]) } }
-        : value;
+    const detail = item?.["kind"] === "tool" ? record(item["detail"]) : null;
+    const candidate =
+        detail?.["kind"] === "inline"
+            ? { ...item, detail: { ...detail, content: sanitizeToolContent(detail["content"]) } }
+            : value;
+    const decoded = sessionRecordingTurnItemSchema.safeParse(candidate);
+    return decoded.success ? decoded.data : null;
 }
 
 function sanitizePrompt(value: unknown): unknown {
@@ -416,22 +384,26 @@ function sanitizePrompt(value: unknown): unknown {
     if (prompt === null || !Array.isArray(prompt["content"])) {
         return value;
     }
-    const content = knownVariants(prompt["content"], "type", contentBlockTypes) as readonly unknown[];
-    return content.length === 0 ? null : { ...prompt, content };
+    const content = decodedEntries(prompt["content"], contentBlockSchema, 100) as readonly unknown[];
+    if (content.length === 0) {
+        return null;
+    }
+    const decoded = sessionRecordingTurnPromptSchema.safeParse({ ...prompt, content });
+    return decoded.success ? decoded.data : null;
 }
 
 function sanitizeTurn(value: unknown): unknown | null {
     const turn = record(value);
-    if (turn === null || isUnknownVariant(turn["attempt"], "kind", turnAttemptKinds)) {
-        return turn === null ? value : null;
+    if (turn === null) {
+        return null;
     }
-    return {
+    const candidate = {
         ...turn,
-        items: Array.isArray(turn["items"])
-            ? turn["items"].map(sanitizeTurnItem).filter((item) => item !== null)
-            : turn["items"],
+        items: sanitizedEntries(turn["items"], sanitizeTurnItem, SESSION_RECORDING_TURN_PAGE_DECODE_MAX_ELEMENTS),
         prompt: sanitizePrompt(turn["prompt"]),
     };
+    const decoded = sessionRecordingTurnSchema.safeParse(candidate);
+    return decoded.success ? decoded.data : null;
 }
 
 function sanitizeTurnPage(value: unknown): unknown {
@@ -441,10 +413,8 @@ function sanitizeTurnPage(value: unknown): unknown {
     }
     return {
         ...page,
-        interactions: knownVariants(page["interactions"], "kind", recordingInteractionKinds),
-        turns: Array.isArray(page["turns"])
-            ? page["turns"].map(sanitizeTurn).filter((turn) => turn !== null)
-            : page["turns"],
+        interactions: decodedEntries(page["interactions"], sessionRecordingInteractionSchema, 1_000),
+        turns: sanitizedEntries(page["turns"], sanitizeTurn, SESSION_RECORDING_TURN_PAGE_DECODE_MAX_ELEMENTS),
     };
 }
 
@@ -455,8 +425,10 @@ function sanitizeExecution(value: unknown): unknown {
     }
     return {
         ...execution,
-        commands: execution["commands"].filter(
-            (command) => !isUnknownVariant(record(command)?.["attempt"], "kind", turnAttemptKinds),
+        commands: decodedEntries(
+            execution["commands"],
+            sessionRecordingExecutionCommandSchema,
+            SESSION_RECORDING_EXECUTION_COMMAND_MAX_LIMIT,
         ),
     };
 }
@@ -476,9 +448,11 @@ export const decodeSessionRecordingTurnItemPage = (encoded: string): SessionReco
                 ? value
                 : {
                       ...page,
-                      items: Array.isArray(page["items"])
-                          ? page["items"].map(sanitizeTurnItem).filter((item) => item !== null)
-                          : page["items"],
+                      items: sanitizedEntries(
+                          page["items"],
+                          sanitizeTurnItem,
+                          SESSION_RECORDING_TURN_PAGE_DECODE_MAX_ELEMENTS,
+                      ),
                   };
         },
         sessionRecordingTurnItemPageSchema,

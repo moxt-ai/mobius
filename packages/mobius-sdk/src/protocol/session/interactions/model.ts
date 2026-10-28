@@ -1,7 +1,6 @@
 import { z } from "zod";
 
 import { identifierSchema } from "../../shared/identifier.ts";
-import { ProtocolMessageError } from "../../shared/message-codec.ts";
 import { elicitationFieldSchema, permissionOptionSchema } from "./index.ts";
 
 const timestampSchema = z.string().datetime({ offset: true });
@@ -91,45 +90,8 @@ const interactionSchema = z
 
 export type Interaction = z.infer<typeof interactionSchema>;
 
-function decodeResource<T>(value: unknown, schema: z.ZodType<T>): T {
-    const decoded = schema.safeParse(value);
-    if (!decoded.success) {
-        throw new ProtocolMessageError("Resource does not match its schema", {
-            cause: decoded.error,
-        });
-    }
-    return decoded.data;
-}
-
-const interactionRequestKinds = new Set(["elicitation", "permission"]);
-const interactionStateKinds = new Set(["cancelled", "expired", "pending", "resolved", "responded"]);
-const interactionResolutionKinds = new Set(["response_applied", "without_response"]);
-
-function unknownKind(value: unknown, known: ReadonlySet<string>): boolean {
-    if (typeof value !== "object" || value === null || !("kind" in value)) {
-        return false;
-    }
-    return typeof value.kind === "string" && !known.has(value.kind);
-}
-
-/** Decodes a known interaction resource, or skips a future interaction variant. */
+/** Decodes an interaction resource, or skips an entry this SDK cannot consume. */
 export const decodeInteraction = (value: unknown): Interaction | null => {
-    if (typeof value === "object" && value !== null) {
-        if ("request" in value && unknownKind(value.request, interactionRequestKinds)) {
-            return null;
-        }
-        if ("state" in value && unknownKind(value.state, interactionStateKinds)) {
-            return null;
-        }
-        if (
-            "state" in value &&
-            typeof value.state === "object" &&
-            value.state !== null &&
-            "resolution" in value.state &&
-            unknownKind(value.state.resolution, interactionResolutionKinds)
-        ) {
-            return null;
-        }
-    }
-    return decodeResource(value, interactionSchema);
+    const decoded = interactionSchema.safeParse(value);
+    return decoded.success ? decoded.data : null;
 };
