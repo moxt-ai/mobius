@@ -45,6 +45,7 @@ import {
     type AppCredentialAuthenticationService,
     appCredentialActive,
 } from "./app-credential-authentication-service.ts";
+import type { OrganizationAdministrators } from "./organization-administrators.ts";
 
 const MAXIMUM_CREDENTIAL_OVERLAP_MILLISECONDS = 60 * 60 * 1_000;
 
@@ -332,13 +333,16 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
     readonly #storage: PlatformControlPlaneStorage;
     readonly #placements: PlatformProjectPlacementRegistry;
     readonly #appAuthentication: AppCredentialAuthenticationService;
+    readonly #administrators: OrganizationAdministrators;
 
     constructor(
         storage: PlatformControlPlaneStorage,
         authentication: PlatformAuthenticationConfiguration,
         placements: PlatformProjectPlacementRegistry,
         appAuthentication: AppCredentialAuthenticationService,
+        administrators: OrganizationAdministrators,
     ) {
+        this.#administrators = administrators;
         this.#storage = storage;
         this.#authentication = authentication;
         this.#placements = placements;
@@ -444,19 +448,14 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         }
         await this.ensureOrganization(identity, signal);
         await this.readTenant(organization.tenantId, signal);
-        return new PlatformDeveloperAccess(identity, organization.tenantId, organization.role);
+        return new PlatformDeveloperAccess(identity, organization.tenantId);
     };
 
-    private readonly organization = (
-        identity: VerifiedExternalIdentity,
-    ): { readonly tenantId: string; readonly role: string } => {
+    private readonly organization = (identity: VerifiedExternalIdentity): { readonly tenantId: string } => {
         if (identity.providerId !== "clerk" || identity.organization.kind === "none") {
             throw new PlatformControlPlaneError("organization_required", "Select a Clerk organization", 403);
         }
-        return {
-            tenantId: identity.organization.id,
-            role: identity.organization.role === "org:admin" ? "owner" : "developer",
-        };
+        return { tenantId: identity.organization.id };
     };
 
     readonly resolveProjectPlacement = (projectId: string, signal: AbortSignal): { readonly location: string } => {
@@ -561,7 +560,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         requestedDisplayName: string,
         signal: AbortSignal,
     ): Promise<object> => {
-        this.requireOwner(access);
+        await this.requireAdministrator(access, signal);
         if (access.tenantId !== app.tenant_id || app.lifecycle !== "active") {
             throw new PlatformControlPlaneError("app_access_denied", "The App is unavailable", 403);
         }
@@ -592,7 +591,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
     };
 
     readonly deleteApp = async (access: PlatformDeveloperAccess, app: AppRow, signal: AbortSignal): Promise<object> => {
-        this.requireOwner(access);
+        await this.requireAdministrator(access, signal);
         // Suspension blocks use of the App, but its owner can still delete it.
         if (access.tenantId !== app.tenant_id || app.lifecycle === "deleted") {
             throw new PlatformControlPlaneError("app_access_denied", "The App is unavailable", 403);
@@ -1338,11 +1337,38 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         return row;
     };
 
-    private readonly requireOwner = (access: PlatformDeveloperAccess): void => {
-        if (access.role !== "owner") {
+    /** Requires a current organization admin, as Clerk reports it now. */
+    readonly requireAdministrator = async (access: PlatformDeveloperAccess, signal: AbortSignal): Promise<void> => {
+        if ((await this.#administrators.administrator(access.identity, access.tenantId, signal)) === null) {
             throw new PlatformControlPlaneError("tenant_owner_required", "Tenant owner authorization is required", 403);
         }
     };
+
+    /**
+     * An attributable, secret-free dashboard record of a developer's successful configuration change. Dashboard events
+     * are tenant-scoped, so the changed App or Project is the subject.
+     */
+    readonly developerAuditRecord = (
+        access: PlatformDeveloperAccess,
+        appId: string,
+        subjectId: string,
+        action: string,
+        details: Readonly<Record<string, unknown>>,
+        now: number,
+    ): PlatformAuditRecord =>
+        this.auditRecord(
+            access.tenantId,
+            appId,
+            "",
+            "platform_developer",
+            access.identity.subject,
+            "",
+            action,
+            subjectId,
+            "succeeded",
+            details,
+            now,
+        );
 
     private readonly auditRecord = (
         tenantId: string,

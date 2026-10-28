@@ -159,6 +159,7 @@ async function createRecordingProject(): Promise<{
     const worker = createTestMobiusPlatformApp(
         new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-mini-recording"])),
         createPlatformGateways,
+        () => clerk.organizationGateway,
     );
     const environment = bindings();
     const tenants = await json(

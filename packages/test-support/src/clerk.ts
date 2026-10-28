@@ -109,6 +109,10 @@ export class FakeClerk implements OidcJwksSource {
         this.#memberships.get(`${organizationId}:${userId}`) ?? null;
 
     readonly session = (subject: string, organizationId = "", role = "org:admin"): string => {
+        // A session's organization role comes from a membership; an explicitly changed membership stays as set.
+        if (organizationId !== "" && this.membership(organizationId, subject) === null) {
+            this.setMembership(organizationId, subject, role);
+        }
         const now = Math.floor(Date.now() / 1_000);
         return this.signClaims({
             aud: this.audience,

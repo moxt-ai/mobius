@@ -298,6 +298,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 new Set([browserOrigin]),
             ),
             createPlatformGateways,
+            () => clerk.organizationGateway,
         );
         const projectId = "prj_ap_01_abcdefghijklmnopqrstuvwx";
 
@@ -326,6 +327,7 @@ describe.sequential("Platform Session-only boundary", () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
+            () => clerk.organizationGateway,
         );
         const projectId = "prj_ap_01_abcdefghijklmnopqrstuvwx";
 
@@ -346,6 +348,7 @@ describe.sequential("Platform Session-only boundary", () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
+            () => clerk.organizationGateway,
         );
         const environment = bindings();
         const tenants = await responseJson(
@@ -405,6 +408,7 @@ describe.sequential("Platform Session-only boundary", () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
+            () => clerk.organizationGateway,
         );
         const environment = bindings();
         const tenants = await responseJson(
@@ -471,6 +475,7 @@ describe.sequential("Platform Session-only boundary", () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
+            () => clerk.organizationGateway,
         );
         const environment = bindings();
         const tenants = await responseJson(
@@ -592,6 +597,7 @@ describe.sequential("Platform Session-only boundary", () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
+            () => clerk.organizationGateway,
         );
         const environment = bindings();
         const tenants = await responseJson(
@@ -1489,6 +1495,7 @@ describe.sequential("Platform Session-only boundary", () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
+            () => clerk.organizationGateway,
         );
         const environment = bindings();
         const tenants = await responseJson(
@@ -1660,6 +1667,86 @@ describe.sequential("Platform Recording policy configuration", () => {
         return { appId, projectId: text(project, "projectId") };
     }
 
+    it("Given a member, a current admin, and an admin demoted in Clerk, When each changes Recording policy or the webhook, Then only the current admin changes policy, the member still configures the webhook, and each change has a secret-free audit event", async () => {
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+            createPlatformGateways,
+            () => clerk.organizationGateway,
+        );
+        const environment = bindings();
+        const { appId, projectId } = await createPolicyTarget(worker, environment);
+        const organizationId = clerk.defaultOrganizationId;
+        const headers = (token: string) =>
+            new Headers({
+                authorization: `Bearer ${token}`,
+                "content-type": "application/json",
+                "x-mobius-oidc-provider": "clerk",
+            });
+        const member = headers(clerk.session("developer-member", organizationId, "org:member"));
+        const demoted = headers(clerk.session("developer-demoted", organizationId, "org:admin"));
+        clerk.setMembership(organizationId, "developer-demoted", "org:member");
+        const dashboard = (path: string, requestHeaders: Headers, method = "GET", body?: object) =>
+            worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/${path}`, {
+                    headers: requestHeaders,
+                    method,
+                    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+                }),
+                environment,
+            );
+        const policies = [`apps/${appId}/recording-policy`, `projects/${projectId}/recording-policy`];
+
+        for (const path of policies) {
+            for (const denied of [member, demoted]) {
+                const response = await dashboard(path, denied, "PUT", { mode: "disabled" });
+                expect(await responseJson(response, 403)).toMatchObject({ error: { code: "tenant_owner_required" } });
+            }
+            expect(await responseJson(await dashboard(path, member), 200)).toMatchObject({ mode: "inherit" });
+            await responseJson(await dashboard(path, developerHeaders(), "PUT", { mode: "disabled" }), 200);
+        }
+        const endpoint = "https://consumer.example.test/webhook?token=private-value";
+        await responseJson(
+            await dashboard(`apps/${appId}/session-status-webhook`, member, "PUT", { enabled: true, endpoint }),
+            200,
+        );
+
+        const audit = await responseJson(
+            await dashboard(`platform/tenants/${organizationId}/audit-events`, developerHeaders()),
+            200,
+        );
+        expect(JSON.stringify(audit)).not.toContain("private-value");
+        const events = audit["events"];
+        if (!Array.isArray(events)) {
+            throw new Error("Expected audit events");
+        }
+        // Denied writes leave no policy change to record.
+        expect(
+            events.filter((event) => String(record(event)["action"]).endsWith("recording-policy.updated")),
+        ).toHaveLength(2);
+        expect(events).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    action: "app.recording-policy.updated",
+                    actorId: "developer-1",
+                    subjectId: appId,
+                    details: { mode: "disabled" },
+                }),
+                expect.objectContaining({
+                    action: "project.recording-policy.updated",
+                    actorId: "developer-1",
+                    subjectId: projectId,
+                    details: { mode: "disabled" },
+                }),
+                expect.objectContaining({
+                    action: "app.session-status-webhook.configured",
+                    actorId: "developer-member",
+                    subjectId: appId,
+                    details: { created: true, enabled: true },
+                }),
+            ]),
+        );
+    });
+
     async function recordThroughRelay(projectId: string, sessionId: string, textContent: string) {
         await registerRuntimeFixture(projectId, projectId);
         return await runInDurableObject(env.RUNTIME_RELAY.getByName(projectId), async (_instance, state) => {
@@ -1740,6 +1827,7 @@ describe.sequential("Platform Recording policy configuration", () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
+            () => clerk.organizationGateway,
         );
         const environment = recordingBindings();
         const { appId, projectId } = await createPolicyTarget(worker, environment);
@@ -1796,6 +1884,7 @@ describe.sequential("Platform Recording policy configuration", () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
+            () => clerk.organizationGateway,
         );
         const environment = recordingBindings();
         const { appId, projectId } = await createPolicyTarget(worker, environment);
@@ -1843,6 +1932,7 @@ async function connectRuntimeDaemon(slug: string, options: { readonly anchorCloc
     const worker = createTestMobiusPlatformApp(
         new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
         createPlatformGateways,
+        () => clerk.organizationGateway,
     );
     const environment = bindings();
     const tenants = await responseJson(
@@ -2907,6 +2997,7 @@ describe.sequential("Platform Turn submission", () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
+            () => clerk.organizationGateway,
         );
         const environment = bindings();
         const tenants = await responseJson(
@@ -3279,6 +3370,7 @@ describe.sequential("Platform Turn submission", () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
+            () => clerk.organizationGateway,
         );
         const environment = bindings();
         const tenants = await responseJson(
@@ -3481,6 +3573,7 @@ describe.sequential("Platform Turn submission", () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
+            () => clerk.organizationGateway,
         );
         const environment = bindings();
         const tenants = await responseJson(
