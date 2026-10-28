@@ -14,9 +14,8 @@ import { miniflareDurableObjects } from "./miniflare-durable-objects.ts";
 
 export { convertV4MiniflareOptions, Miniflare, miniflareDurableObjects, WebSocketPair, WorkerResponse };
 
-/** Owns the real Cloudflare adapters for Runtime/Worker integration scenarios. */
-async function createCloudflareRuntime(allowedOrigins: ReadonlySet<string>) {
-    const packageDirectory = new NodeURL("../../relay-cloudflare-platform/", import.meta.url);
+/** Prepare once per suite run; only immutable code is shared, never a runtime or its storage. */
+export async function prepareTestMobiusPlatformBindings() {
     const bundle = await build({
         entryPoints: [fileURLToPath(new NodeURL("./platform-worker-entry.ts", import.meta.url))],
         bundle: true,
@@ -29,10 +28,17 @@ async function createCloudflareRuntime(allowedOrigins: ReadonlySet<string>) {
     if (output === undefined) {
         throw new Error("Expected the Platform Worker bundle");
     }
+    const script = output.text;
+    return (allowedOrigins: ReadonlySet<string> = new Set(["*"])) => createPlatformBindings(script, allowedOrigins);
+}
+
+/** Owns the real Cloudflare adapters for Runtime/Worker integration scenarios. */
+function createCloudflareRuntime(script: string, allowedOrigins: ReadonlySet<string>) {
+    const packageDirectory = new NodeURL("../../relay-cloudflare-platform/", import.meta.url);
     const runtime = new Miniflare(
         convertV4MiniflareOptions({
             modules: true,
-            script: output.text,
+            script,
             compatibilityDate: "2026-09-03",
             d1Databases: ["PLATFORM_DIRECTORY_DATABASE"],
             r2Buckets: ["R2_BUCKET_APAC", "R2_BUCKET_WNAM"],
@@ -55,7 +61,12 @@ async function migrate(database: D1Database, directory: NodeURL) {
 }
 
 export async function createTestMobiusPlatformBindings(allowedOrigins: ReadonlySet<string> = new Set(["*"])) {
-    const runtime = await createCloudflareRuntime(allowedOrigins);
+    const createBindings = await prepareTestMobiusPlatformBindings();
+    return createBindings(allowedOrigins);
+}
+
+async function createPlatformBindings(script: string, allowedOrigins: ReadonlySet<string>) {
+    const runtime = createCloudflareRuntime(script, allowedOrigins);
     try {
         const ready = await runtime.ready;
         const env = await runtime.getBindings<TestPlatformBindings>();
