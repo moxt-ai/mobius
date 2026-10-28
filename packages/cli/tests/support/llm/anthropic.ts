@@ -252,6 +252,7 @@ export class FakeAnthropicProvider implements AsyncDisposable {
             ) => Promise<void>;
             readonly disconnectsBeforeSuccess?: number;
             readonly readPath?: string;
+            readonly toolPrompt?: string;
             readonly bash?: { readonly command: string; readonly runInBackground: boolean };
             readonly subagent?: SubagentScript;
         } = {},
@@ -279,9 +280,15 @@ export class FakeAnthropicProvider implements AsyncDisposable {
             }
 
             const tools = availableTools(payload);
-            const scenario = selectFakeProviderScenario(payload);
             const completedToolCalls = toolResultCount(payload);
             const prompt = latestUserPrompt(payload);
+            // A configured fixture request owns its tool actions. Native reminders
+            // and unrelated conversations must not accidentally select that script.
+            const scenario = selectFakeProviderScenario(
+                options.toolPrompt === undefined
+                    ? payload
+                    : { input: tools.length > 0 && prompt.includes(options.toolPrompt) ? options.toolPrompt : "" },
+            );
             const scripted =
                 options.subagent !== undefined
                     ? subagentStep(options.subagent, tools, prompt, completedToolCalls)
