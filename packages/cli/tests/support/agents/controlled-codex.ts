@@ -21,6 +21,7 @@ export class ControlledCodexFixture implements AsyncDisposable {
             readonly holdTurn?: boolean;
             readonly consumeSteeringAfterFirstTurn?: boolean;
             readonly endFirstTurnOnSteering?: "completed" | "failed";
+            readonly failTurnWith?: string;
             readonly latePreviousUser?: boolean;
             readonly skipSecondSteering?: boolean;
         } = {},
@@ -69,7 +70,9 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         send({ method: "thread/settings/updated", params: {
             threadId, threadSettings: { collaborationMode: { mode: "plan" } },
         } });
-        if (!${options.holdTurn === true}) {
+        if (${JSON.stringify(options.failTurnWith ?? null)} !== null) {
+            send({ method: "turn/completed", params: { threadId, turn: { ...turn, status: "failed", error: { message: ${JSON.stringify(options.failTurnWith ?? null)} } } } });
+        } else if (!${options.holdTurn === true}) {
             send({ method: "turn/completed", params: { threadId, turn: { ...turn, status: "completed" } } });
         }
         return;
