@@ -159,17 +159,13 @@ export class ClerkOrganizationGateway implements OrganizationMembershipGateway {
             );
         }
         const parsed = v.safeParse(membershipSchema, await this.json(response, signal));
-        const receipt =
-            parsed.success && parsed.output.public_user_data.user_id === userId
-                ? acceptance(parsed.output, inviteId, userId)
-                : null;
-        if (receipt === null) {
+        if (!parsed.success || parsed.output.public_user_data.user_id !== userId) {
             throw new PlatformControlPlaneError(
                 "clerk_invalid_response",
                 "Organization service returned an invalid membership",
                 502,
             );
         }
-        return receipt;
+        return { membershipId: parsed.output.id, acceptedAt: parsed.output.created_at };
     };
 }

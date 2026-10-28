@@ -261,7 +261,11 @@ export class FakeClerk implements OidcJwksSource {
                 return new Response(null, { status: 422 });
             }
             this.setMembership(id, body.user_id, body.role, body.private_metadata ?? {});
-            return Response.json(this.#memberships.get(`${id}:${body.user_id}`));
+            // Clerk's creation response may omit optional metadata; subsequent reads still expose it.
+            return Response.json({
+                ...this.#memberships.get(`${id}:${body.user_id}`),
+                private_metadata: undefined,
+            });
         }
         return new Response(null, { status: 405 });
     };
