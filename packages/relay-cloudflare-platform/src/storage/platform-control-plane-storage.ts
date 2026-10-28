@@ -67,7 +67,7 @@ export class PlatformControlPlaneStorage {
                             tenant.created_at,
                             tenant.updated_at,
                         ),
-                    this.dashboardAuditStatement(audit),
+                    this.auditOfPreviousChange(audit),
                 ]),
             signal,
         );
@@ -108,7 +108,7 @@ export class PlatformControlPlaneStorage {
                             "UPDATE platform_apps SET display_name = ?, updated_at = ? WHERE app_id = ? AND lifecycle = 'active'",
                         )
                         .bind(displayName, updatedAt, appId),
-                    this.dashboardAuditStatement(audit),
+                    this.auditOfPreviousChange(audit),
                 ]),
             signal,
         );
@@ -135,6 +135,7 @@ export class PlatformControlPlaneStorage {
                                 ),
                             ),
                     ),
+                    this.auditOfPreviousChange(audit),
                     this.#database
                         .prepare(
                             `UPDATE platform_projects SET lifecycle = 'deleted', deleted_at = ?, updated_at = ?
@@ -146,11 +147,10 @@ export class PlatformControlPlaneStorage {
                             "UPDATE platform_app_credentials SET revoked_at = COALESCE(revoked_at, ?) WHERE app_id = ?",
                         )
                         .bind(deletedAt, appId),
-                    this.dashboardAuditStatement(audit),
                 ]),
             signal,
         );
-        return results[0]?.meta.changes === 1 && results[3]?.meta.changes === 1;
+        return results[0]?.meta.changes === 1 && results[1]?.meta.changes === 1;
     };
 
     readonly countActiveApps = async (tenantId: string, signal: AbortSignal): Promise<number> => {
@@ -441,7 +441,7 @@ export class PlatformControlPlaneStorage {
         const scope = projectIds.map((projectId) =>
             this.statement(this.scopeInsert(credential.credentialId, projectId, credential.issuedAt)),
         );
-        const statements = [this.credentialInsertStatement(credential), ...scope, this.dashboardAuditStatement(audit)];
+        const statements = [this.credentialInsertStatement(credential), this.auditOfPreviousChange(audit), ...scope];
         const results = await waitForD1(() => this.#database.batch(statements), signal);
         return results.every((result) => result.meta.changes === 1);
     };
@@ -647,7 +647,7 @@ export class PlatformControlPlaneStorage {
                             "UPDATE platform_app_credentials SET revoked_at = ? WHERE credential_id = ? AND revoked_at IS NULL",
                         )
                         .bind(revokedAt, credentialId),
-                    this.dashboardAuditStatement(audit),
+                    this.auditOfPreviousChange(audit),
                 ]),
             signal,
         );
@@ -922,6 +922,34 @@ export class PlatformControlPlaneStorage {
             )
             .bind(
                 audit.action === "project.created" ? `pae_created_${audit.projectId}` : audit.auditId,
+                audit.tenantId,
+                audit.appId,
+                audit.projectId,
+                audit.actorKind,
+                audit.actorId,
+                audit.actorRef,
+                audit.action,
+                audit.subjectId,
+                audit.outcome,
+                audit.detailsJson,
+                audit.recordedAt,
+            );
+
+    /**
+     * Records the change made by the statement immediately before it in the same batch, and only if that statement
+     * changed a row: an audit event is a historical fact, so a write that took no effect leaves none.
+     */
+    private readonly auditOfPreviousChange = (audit: PlatformAuditRecord): D1PreparedStatement =>
+        this.#database
+            .prepare(
+                `INSERT INTO platform_dashboard_audit_events (
+                   audit_id, tenant_id, app_id, project_id, actor_kind, actor_id,
+                   actor_ref, action, subject_id, outcome, details_json, recorded_at
+                 ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE changes() = 1
+                 ON CONFLICT(audit_id) DO NOTHING`,
+            )
+            .bind(
+                audit.auditId,
                 audit.tenantId,
                 audit.appId,
                 audit.projectId,

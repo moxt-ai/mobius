@@ -162,6 +162,7 @@ async function application() {
         readApp: async () => await responseJson(await dashboard(`apps/${appId}`), 200),
         projectId,
         defaultCredential,
+        dashboard,
         listCredentials: async () => await responseJson(await dashboard(`apps/${appId}/credentials`), 200),
         listAuditEvents: async () =>
             await responseJson(await dashboard(`platform/tenants/${tenant.tenantId}/audit-events`), 200),
@@ -361,6 +362,25 @@ it.each(["rotated", "revoked"] as const)(
         expect(await app.listAuditEvents()).toEqual(audits);
     },
 );
+
+it("Given a revoked AppCredential, When it is revoked again, Then the repeat fails and only the revocation that happened is audited", async () => {
+    const app = await application();
+    await app.revoke();
+
+    await expectRejected(
+        await app.dashboard(`platform/app-credentials/${app.defaultCredential.credentialId}/revoke`, {}),
+        "app_credential_not_found",
+        404,
+    );
+
+    const { events } = v.parse(
+        v.object({ events: v.array(v.object({ action: v.string(), subjectId: v.string() })) }),
+        await app.listAuditEvents(),
+    );
+    expect(events.filter((event) => event.action === "app-credential.revoked")).toEqual([
+        { action: "app-credential.revoked", subjectId: app.defaultCredential.credentialId },
+    ]);
+});
 
 it("Given an active AppCredential, When two rotations compete, Then only the returned replacement is created and audited", async () => {
     const app = await application();
