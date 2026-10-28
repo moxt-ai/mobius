@@ -1,7 +1,7 @@
 import { createServer, type Socket } from "node:net";
-import { readOrCreateControlToken } from "../../engine/storage/daemon/control-token.ts";
 import type { InstallationDirectory } from "../../engine/storage/installation/installation-files.ts";
 import { platformSupportFor } from "../../engine/util/platform/index.ts";
+import { readOrCreateControlToken } from "../../storage/daemon/control-token.ts";
 import { controlSocketPath, readSocketMessage } from "./local-client.ts";
 
 export async function serveLocalControl(

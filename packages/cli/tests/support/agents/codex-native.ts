@@ -7,7 +7,7 @@ import { AcpAgentDefinition } from "../../../src/engine/acp/agent/agent-definiti
 import { AcpContentExternalizer } from "../../../src/engine/acp/content/content-externalizer.ts";
 import type { AdapterResolver } from "../../../src/engine/acp/native-history/preview-contract.ts";
 import { RuntimeAgentDependencies } from "../../../src/engine/agent/runtime-agents.ts";
-import { createRuntimeConfig } from "../../../src/engine/runtime/config.ts";
+import { createRuntimeConfig, RuntimeLocalContext } from "../../../src/engine/runtime/config.ts";
 import { NullSessionObserver } from "../../../src/engine/session/api/session-api.ts";
 import { NativeSessionService } from "../../../src/engine/session/native/native-session-browser.ts";
 import { MemorySessionStore } from "../../../src/engine/session/record/session-store.ts";
@@ -64,6 +64,7 @@ export async function codexFixture(
             relayUrl: new URL("ws://localhost/"),
         },
         new RuntimeAgentDependencies([agent]),
+        new RuntimeLocalContext(workspace, process.env),
     );
     const directories = new WorkspaceDirectoryService("workspace", workspace);
     const service = new NativeSessionService(

@@ -266,7 +266,7 @@ async function startControlledDaemon(options: { readonly stateDirectory?: string
     const config = createRuntimeConfig(
         { channelId: "channel_alpha", defaultWorkspace: workspace, relayUrl },
         [agent],
-        new RuntimeLocalContext(stateDirectory),
+        new RuntimeLocalContext(stateDirectory, process.env),
     );
     const cancellation = new AbortController();
     const timer = new ControllableTimer();

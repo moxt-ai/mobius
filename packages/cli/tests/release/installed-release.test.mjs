@@ -49,11 +49,30 @@ test("Given an installed release, When a user imports its APIs and starts the CL
         "--input-type=module",
         "--eval",
         `import assert from 'node:assert/strict';
+        import { readFile } from 'node:fs/promises';
+        import { join } from 'node:path';
         const engine = await import('@moxt-ai/mobius/engine');
         assert.deepEqual(Object.keys(engine).sort(), ['MobiusRuntimeEngine', 'RuntimeRelayRevokedError', 'openRuntimeInstallationStore', 'pairMobiusRuntime', 'resumeMobiusRuntime'].sort());
         for (const name of ['openRuntimeInstallationStore', 'pairMobiusRuntime', 'resumeMobiusRuntime', 'MobiusRuntimeEngine', 'RuntimeRelayRevokedError']) {
             assert.equal(typeof engine[name], 'function', name);
-        }`,
+        }
+        const signal = AbortSignal.timeout(5000);
+        const store = await engine.openRuntimeInstallationStore(join(process.env.MOBIUS_STATE_DIRECTORY, 'embedded-data'), signal);
+        const connection = await store.saveConnection({
+            appId: 'platform_installed',
+            channelId: 'installed_channel',
+            defaultWorkspace: join(process.env.MOBIUS_STATE_DIRECTORY, 'workspace'),
+            pairingId: 'installed_pairing',
+            relayOrigin: new URL('https://relay.example.com/'),
+            runtimeCredential: 'a'.repeat(43),
+            runtimeId: 'installed_runtime',
+        }, signal);
+        assert.equal(connection.appId, 'platform_installed');
+        assert.equal(Object.hasOwn(connection, 'applicationId'), false);
+        assert.deepEqual(await store.readConnection(connection.connectionId, signal), connection);
+        const record = JSON.parse(await readFile(store.connectionPath(connection.connectionId), 'utf8'));
+        assert.equal(record.version, 6);
+        assert.equal(Object.hasOwn(record, 'applicationId'), false);`,
     ]);
     assert.match((await run([entry, "--help"])).stdout, /Usage: mobius/);
     assert.equal((await run([entry, "--version"])).stdout, `CLI: ${metadata.version}\nDaemon: not running\n`);

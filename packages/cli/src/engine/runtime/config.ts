@@ -1,31 +1,22 @@
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { RUNTIME_WORKSPACE_BINDING_ID } from "@moxt-ai/mobius-sdk/protocol";
 import type { CatalogAgent } from "../agent/catalog.ts";
 import { LocalAgentCatalog } from "../agent/catalog.ts";
-import { RuntimeAgentDependencies } from "../agent/runtime-agents.ts";
-import { readStateDirectory } from "../storage/state-directory.ts";
-
-/** The workspace new conversations use: `MOBIUS_DEFAULT_WORKSPACE`, or `workspace` in the Runtime's data directory. */
-export function loadDefaultWorkspace(
-    dataDirectory: string,
-    environment: Readonly<NodeJS.ProcessEnv> = process.env,
-): string {
-    const { MOBIUS_DEFAULT_WORKSPACE: configuredWorkspace } = environment;
-    return configuredWorkspace ?? join(dataDirectory, "workspace");
-}
+import type { RuntimeAgentDependencies } from "../agent/runtime-agents.ts";
 
 /**
  * Where a Runtime keeps its local data, and the environment it runs and launches Agents with. The data directory is
- * passed explicitly: the environment keeps the caller's MOBIUS_STATE_DIRECTORY, which names the CLI state root, so
- * Mobius run from an Agent addresses the same root as Mobius outside it.
+ * passed explicitly and never selected from the Agent launch environment.
  */
 export class RuntimeLocalContext {
-    readonly environment: Readonly<NodeJS.ProcessEnv>;
+    readonly agentLaunchEnvironment: Readonly<NodeJS.ProcessEnv>;
     readonly stateDirectory: string;
+    readonly maxAcpProcesses: number;
 
-    constructor(stateDirectory: string, environment: Readonly<NodeJS.ProcessEnv> = process.env) {
+    constructor(stateDirectory: string, agentLaunchEnvironment: Readonly<NodeJS.ProcessEnv>, maxAcpProcesses = 1000) {
         this.stateDirectory = resolve(stateDirectory);
-        this.environment = Object.freeze({ ...environment });
+        this.agentLaunchEnvironment = Object.freeze({ ...agentLaunchEnvironment });
+        this.maxAcpProcesses = maxAcpProcesses;
     }
 }
 
@@ -90,13 +81,15 @@ export interface RuntimeConnectionConfig {
 
 export function createRuntimeConfig(
     connection: RuntimeConnectionConfig,
-    dependencies: RuntimeAgentDependencies = new RuntimeAgentDependencies([]),
-    localContext: RuntimeLocalContext = new RuntimeLocalContext(readStateDirectory(), process.env),
+    dependencies: RuntimeAgentDependencies,
+    localContext: RuntimeLocalContext,
     reconnectTarget: RuntimeReconnectTarget | null = null,
     resolveAgent?: RuntimeConfig["resolveAgent"],
     rediscoverAgents?: RuntimeConfig["rediscoverAgents"],
 ): RuntimeConfig {
-    const runtimeAgents = dependencies.agents.map((agent) => withRuntimeEnvironment(agent, localContext.environment));
+    const runtimeAgents = dependencies.agents.map((agent) =>
+        withRuntimeEnvironment(agent, localContext.agentLaunchEnvironment),
+    );
     return {
         adapters: dependencies.adapters,
         agents: runtimeAgents,

@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import packageMetadata from "../../package.json" with { type: "json" };
+import { installWorkspaceDaemonRelease } from "../support/installed-daemon-release.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -69,6 +70,59 @@ function environment(home: string, stateDirectory: string): NodeJS.ProcessEnv {
 }
 
 describe("Mobius state root", () => {
+    it.each(["pair list", "start"])(
+        "Given the version-data directory is a symlink, When the user runs %s, Then the CLI or Worker refuses without creating connection state in the link target",
+        async (command) => {
+            const home = await mkdtemp(join(tmpdir(), "mobius-version-container-"));
+            temporaryDirectories.push(home);
+            const root = join(home, "state");
+            const target = join(home, "redirected");
+            await mkdir(join(root, "versions"), { recursive: true, mode: 0o700 });
+            await mkdir(target, { mode: 0o700 });
+            await symlink(
+                target,
+                join(root, "versions", packageMetadata.version),
+                process.platform === "win32" ? "junction" : "dir",
+            );
+
+            const env = environment(home, root);
+            if (command === "start") {
+                await installWorkspaceDaemonRelease(root);
+                // Startup must validate the container even when no inheritance is needed.
+                await writeFile(join(root, "current-data.txt"), `versions/${packageMetadata.version}\n`, {
+                    mode: 0o600,
+                });
+            }
+            try {
+                const result = await runCli(command === "start" ? ["start"] : ["pair", "list"], env);
+
+                expect(result.code).not.toBe(0);
+                expect(await readdir(target)).toEqual([]);
+            } finally {
+                if (command === "start") {
+                    await runCli(["quit"], env);
+                }
+            }
+        },
+    );
+
+    it.skipIf(process.platform === "win32")(
+        "Given a user-owned version-data directory allows other users to write, When the user lists pairings, Then the CLI makes the container private before initializing state",
+        async () => {
+            const home = await mkdtemp(join(tmpdir(), "mobius-version-container-"));
+            temporaryDirectories.push(home);
+            const root = join(home, "state");
+            const versionDirectory = join(root, "versions", packageMetadata.version);
+            await mkdir(versionDirectory, { recursive: true });
+            await chmod(versionDirectory, 0o777);
+
+            const listed = await runCli(["pair", "list"], environment(home, root));
+
+            expect(listed.code, listed.stderr).toBe(0);
+            expect((await stat(versionDirectory)).mode & 0o777).toBe(0o700);
+        },
+    );
+
     it("Given an Agent environment whose MOBIUS_STATE_DIRECTORY names an installation's data, When Mobius runs there, Then it refuses with a configuration error that names the owning root and creates nothing inside that data", async () => {
         const { root, installation, home } = await openedStateRoot();
         const before = await readdir(installation);

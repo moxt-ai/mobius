@@ -1,8 +1,8 @@
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import type { Command } from "commander";
 import { openMobiusCliInstallation } from "../../../daemon/pairing/pair-local-machine.ts";
 import { discoverLocalAgentInventory } from "../../../engine/agent/discovery/discover-local-agents.ts";
-import { loadDefaultWorkspace, RuntimeLocalContext } from "../../../engine/runtime/config.ts";
+import { RuntimeLocalContext } from "../../../engine/runtime/config.ts";
 import { ensurePrivateDirectory } from "../../../engine/storage/files/local-files.ts";
 import type { CliContext } from "../../context.ts";
 import { valueOption } from "../../util/options.ts";
@@ -24,12 +24,12 @@ export function registerAgentsHandler(program: Command, context: CliContext): vo
         .action(async (options: AgentOptions) => {
             const installation = await openMobiusCliInstallation(context.shutdownSignal, process.env);
             const localContext = new RuntimeLocalContext(installation.stateDirectory, process.env);
-            const defaultWorkspace = loadDefaultWorkspace(localContext.stateDirectory, localContext.environment);
+            const defaultWorkspace = join(localContext.stateDirectory, "workspace");
             await ensurePrivateDirectory(defaultWorkspace);
             const inventory = await discoverLocalAgentInventory({
                 defaultWorkspace,
                 dataDirectory: localContext.stateDirectory,
-                environment: localContext.environment,
+                environment: localContext.agentLaunchEnvironment,
                 signal: context.shutdownSignal,
             });
             if (options.outputJson !== undefined) {

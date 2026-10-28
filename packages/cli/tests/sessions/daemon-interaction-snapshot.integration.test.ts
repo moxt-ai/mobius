@@ -126,7 +126,7 @@ test("Given an Agent was inspected transiently, When its first Turn materializes
     const config = createRuntimeConfig(
         { channelId: "interaction", defaultWorkspace: workspace, relayUrl },
         [agent],
-        new RuntimeLocalContext(stateDirectory),
+        new RuntimeLocalContext(stateDirectory, process.env),
     );
     const cancellation = new AbortController();
     const runtime = runRuntime(config, cancellation.signal);
@@ -297,7 +297,7 @@ test("Given an Agent announced a tool call with its input, When it requests perm
     const config = createRuntimeConfig(
         { channelId: "announced-permission", defaultWorkspace: workspace, relayUrl },
         [agent],
-        new RuntimeLocalContext(stateDirectory),
+        new RuntimeLocalContext(stateDirectory, process.env),
     );
     const cancellation = new AbortController();
     const runtime = runRuntime(config, cancellation.signal);
@@ -406,7 +406,7 @@ test("Given an Agent announced a tool call and then sent a rawInput null update,
     const config = createRuntimeConfig(
         { channelId: "null-input-permission", defaultWorkspace: workspace, relayUrl },
         [agent],
-        new RuntimeLocalContext(stateDirectory),
+        new RuntimeLocalContext(stateDirectory, process.env),
     );
     const cancellation = new AbortController();
     const runtime = runRuntime(config, cancellation.signal);
@@ -515,7 +515,7 @@ test("Given an Agent's first recorded form of a tool call is an update, When it 
     const config = createRuntimeConfig(
         { channelId: "orphan-update-permission", defaultWorkspace: workspace, relayUrl },
         [agent],
-        new RuntimeLocalContext(stateDirectory),
+        new RuntimeLocalContext(stateDirectory, process.env),
     );
     const cancellation = new AbortController();
     const runtime = runRuntime(config, cancellation.signal);
@@ -624,7 +624,7 @@ test("Given a real daemon prepared a Session, When Platform queries its metadata
     const config = createRuntimeConfig(
         { channelId: "session-query", defaultWorkspace: workspace, relayUrl },
         [agent],
-        new RuntimeLocalContext(stateDirectory),
+        new RuntimeLocalContext(stateDirectory, process.env),
     );
     const cancellation = new AbortController();
     const runtime = runRuntime(config, cancellation.signal);
@@ -709,7 +709,7 @@ test("Given a real daemon persisted a Session, When Platform restores it by iden
     const config = createRuntimeConfig(
         { channelId: "session-restore", defaultWorkspace: workspace, relayUrl },
         [agent],
-        new RuntimeLocalContext(stateDirectory),
+        new RuntimeLocalContext(stateDirectory, process.env),
     );
     const startDaemon = async () => {
         const connected = Promise.withResolvers<WebSocket>();
@@ -873,7 +873,7 @@ test("Given queued prompts from the running Agent identity and another one, When
     const config = createRuntimeConfig(
         { channelId: "queued-identity", defaultWorkspace: workspace, relayUrl },
         [agent, otherAgent],
-        new RuntimeLocalContext(stateDirectory),
+        new RuntimeLocalContext(stateDirectory, process.env),
     );
     const cancellation = new AbortController();
     const runtime = runRuntime(config, cancellation.signal);

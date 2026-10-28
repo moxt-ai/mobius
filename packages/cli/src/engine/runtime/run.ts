@@ -3,7 +3,7 @@ import type { RuntimeUpgradeResult } from "@moxt-ai/mobius-sdk/protocol";
 import { createRuntimeAdapterRegistry } from "../agent/runtime-agents.ts";
 import { buildSessionLayer } from "../session/api/session-layer.ts";
 import { LocalExternalContentStore } from "../session/content/external-content-store.ts";
-import { AgentProcessPool, resolveMaxAcpProcesses } from "../session/process/agent-process-pool.ts";
+import { AgentProcessPool } from "../session/process/agent-process-pool.ts";
 import type { RuntimeTurnActivity } from "../session/turn/runtime-turn-activity.ts";
 import { runCleanup } from "../util/run-cleanup.ts";
 import { systemTimer, type Timer } from "../util/timer.ts";
@@ -105,7 +105,7 @@ export async function runRuntime(
     const publisher = new RuntimeSessionEventPublisher(timer);
     // Dispose media only after session and adapter operations have drained.
     await using externalContent = new LocalExternalContentStore(stateDirectory);
-    const processes = new AgentProcessPool(resolveMaxAcpProcesses(config.localContext.environment) ?? undefined, timer);
+    const processes = new AgentProcessPool(config.localContext.maxAcpProcesses, timer);
     const adapters = createRuntimeAdapterRegistry(config.adapters, processes, (sessionId, content, contentSignal) =>
         externalContent.put({ ...content, sessionId, signal: contentSignal }),
     );

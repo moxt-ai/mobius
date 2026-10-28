@@ -20,6 +20,7 @@ import {
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { type WebSocket, WebSocketServer } from "ws";
 import { collectLocalDaemonLogs } from "../../../src/cli/handler/logs/logic/collect-local-logs.ts";
+import { resolveMaxAcpProcesses } from "../../../src/daemon/config.ts";
 import { sendLocalRequest } from "../../../src/daemon/control/local-client.ts";
 import { lifecycleResponse } from "../../../src/daemon/control/protocol.ts";
 import {
@@ -178,7 +179,11 @@ export async function withRealDaemon(
                       return createRuntimeConfig(
                           { channelId: "real-agent", defaultWorkspace: workspace, relayUrl },
                           new RuntimeAgentDependencies([agent], adapters),
-                          new RuntimeLocalContext(directory, { ...process.env, ...environment }),
+                          new RuntimeLocalContext(
+                              directory,
+                              { ...process.env, ...environment },
+                              resolveMaxAcpProcesses(cliEnvironment),
+                          ),
                       );
                   })()
                 : null;

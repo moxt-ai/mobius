@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { isIdentifier, type RuntimeUpgradeResult } from "@moxt-ai/mobius-sdk/protocol";
+import type { RuntimeUpgradeResult } from "@moxt-ai/mobius-sdk/protocol";
 import {
     discoverLocalAgentInventory,
     supportedLocalAgentSpecifications,
@@ -7,10 +7,10 @@ import {
 import { RuntimeAgentDependencies } from "../agent/runtime-agents.ts";
 import type { RuntimeTurnActivity } from "../session/turn/runtime-turn-activity.ts";
 import { ensureCanonicalDirectory } from "../storage/files/local-files.ts";
-import { readStateDirectory } from "../storage/state-directory.ts";
 import { publishAgentCatalog } from "./catalog/publish-agent-catalog.ts";
 import { createCatalogAgentResolver } from "./catalog/resolve-catalog-agent.ts";
-import { createRuntimeConfig, loadDefaultWorkspace, type RuntimeConfig, RuntimeLocalContext } from "./config.ts";
+import { createRuntimeConfig, type RuntimeConfig, RuntimeLocalContext } from "./config.ts";
+import { openEngineInstallationStore } from "./connection/runtime-installation-store.ts";
 import { runRuntime } from "./run.ts";
 
 const RUNTIME_CREDENTIAL_PATTERN = /^[a-zA-Z0-9_-]{32,256}$/;
@@ -56,14 +56,6 @@ function validateRuntimeConfiguration(config: RuntimeConfig): void {
     validateRuntimeRelay(config.relayUrl);
 }
 
-function requiredEnvironmentValue(environment: Readonly<NodeJS.ProcessEnv>, name: string): string {
-    const value = environment[name]?.trim();
-    if (value === undefined || value.length === 0) {
-        throw new MobiusRuntimeConfigurationError(`${name} is required`);
-    }
-    return value;
-}
-
 function relayUrlFromConnection(connection: MobiusRuntimeConnection): URL {
     let relayUrl: URL;
     try {
@@ -74,21 +66,6 @@ function relayUrlFromConnection(connection: MobiusRuntimeConnection): URL {
     relayUrl.searchParams.set("token", connection.runtimeCredential);
     validateRuntimeRelay(relayUrl);
     return relayUrl;
-}
-
-export function loadMobiusRuntimeConnection(
-    environment: Readonly<NodeJS.ProcessEnv> = process.env,
-): MobiusRuntimeConnection {
-    const channelId = requiredEnvironmentValue(environment, "MOBIUS_CHANNEL_ID");
-    if (!isIdentifier(channelId)) {
-        throw new MobiusRuntimeConfigurationError("MOBIUS_CHANNEL_ID is invalid");
-    }
-    return Object.freeze({
-        channelId,
-        defaultWorkspace: loadDefaultWorkspace(readStateDirectory(environment), environment),
-        relayUrl: requiredEnvironmentValue(environment, "MOBIUS_RELAY_URL"),
-        runtimeCredential: requiredEnvironmentValue(environment, "MOBIUS_RELAY_TOKEN"),
-    });
 }
 
 async function resolveWorkspace(path: string): Promise<string> {
@@ -105,17 +82,27 @@ async function resolveWorkspace(path: string): Promise<string> {
     return resolved;
 }
 
-export async function createMobiusRuntimeEngine(
-    connection: MobiusRuntimeConnection,
-    signal: AbortSignal,
-    environment: Readonly<NodeJS.ProcessEnv> = process.env,
-): Promise<MobiusRuntimeEngine> {
+export interface CreateMobiusRuntimeEngineParams {
+    /** Engine data directory containing current.json and its data directories. */
+    readonly engineDataDir: string;
+    readonly connection: MobiusRuntimeConnection;
+    readonly signal: AbortSignal;
+    readonly agentLaunchEnvironment: Readonly<NodeJS.ProcessEnv>;
+}
+
+export async function createMobiusRuntimeEngine({
+    engineDataDir,
+    connection,
+    signal,
+    agentLaunchEnvironment,
+}: CreateMobiusRuntimeEngineParams): Promise<MobiusRuntimeEngine> {
     signal.throwIfAborted();
-    const localContext = new RuntimeLocalContext(readStateDirectory(environment), environment);
     const relayUrl = relayUrlFromConnection(connection);
+    const installation = await openEngineInstallationStore(engineDataDir, signal);
+    const localContext = new RuntimeLocalContext(installation.stateDirectory, agentLaunchEnvironment);
     const defaultWorkspace = await resolveWorkspace(connection.defaultWorkspace);
     const specifications = supportedLocalAgentSpecifications();
-    const discoveryEnvironment = localContext.environment;
+    const discoveryEnvironment = localContext.agentLaunchEnvironment;
     const discover = async (refreshSignal: AbortSignal) =>
         await discoverLocalAgentInventory({
             defaultWorkspace,
@@ -216,6 +203,5 @@ export {
     openRuntimeInstallationStore,
     RuntimeInstallationStore,
     RuntimeInstallationStoreError,
-    type RuntimeInstallationStoreOptions,
 } from "./connection/runtime-installation-store.ts";
 export { RuntimeRelayRevokedError } from "./relay/runtime-revocation.ts";

@@ -170,13 +170,7 @@ describe("daemon environment proxy", () => {
             );
 
             const pairingPort = port(pairingServer);
-            const installation = await openRuntimeInstallationStore(
-                {
-                    applicationId: "dev.mobius.proxy-test",
-                    stateDirectory,
-                },
-                AbortSignal.timeout(2_000),
-            );
+            const installation = await openRuntimeInstallationStore(stateDirectory, AbortSignal.timeout(2_000));
             const paired = await pairMobiusRuntime(
                 installation,
                 {

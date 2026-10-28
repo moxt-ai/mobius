@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import { cp, lstat, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { decodeRuntimeUpgradeVersion } from "@moxt-ai/mobius-sdk/protocol";
-import { validateLocalPath } from "../../util/filesystem/private-path.ts";
-import { isNodeError } from "../../util/node-error.ts";
+import { ensurePrivateDirectory } from "../../engine/storage/files/local-files.ts";
+import { validateLocalPath } from "../../engine/util/filesystem/private-path.ts";
+import { isNodeError } from "../../engine/util/node-error.ts";
 import type { StateRoot } from "../state-directory.ts";
 import { STATE_ROOT_ENTRY_NAMES, STATE_ROOT_LAYOUT } from "../state-root-layout.ts";
 
@@ -12,6 +13,24 @@ import { STATE_ROOT_ENTRY_NAMES, STATE_ROOT_LAYOUT } from "../state-root-layout.
 
 export class DataInheritanceError extends Error {
     readonly code = "data_inheritance_failed";
+}
+
+/** Validate the version container itself before opening any installation beneath it. */
+export async function prepareVersionDataDirectory(
+    root: StateRoot,
+    version: string,
+    signal: AbortSignal,
+): Promise<string> {
+    signal.throwIfAborted();
+    const directory = join(root, STATE_ROOT_LAYOUT.versions, decodeRuntimeUpgradeVersion(version));
+    try {
+        await ensurePrivateDirectory(directory);
+        await validateLocalPath(directory, true, true, signal);
+    } catch (cause) {
+        signal.throwIfAborted();
+        throw new DataInheritanceError("The version data directory cannot be initialized", { cause });
+    }
+    return directory;
 }
 
 /** The version the current data pointer names, or null when there is no pointer. */

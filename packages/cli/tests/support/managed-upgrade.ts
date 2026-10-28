@@ -534,7 +534,11 @@ export function registerManagedUpgradeScenarios(
                     // The second result is already held. Let a different session finish
                     // to observe that upgrade admission remains open during that hold.
                     holdAnswer = false;
-                    const concurrent = prompt("Say hello");
+                    // Reproduce Claude's injected context without depending on its
+                    // platform-specific reminder wording. A greeting must not run tools.
+                    const concurrent = prompt(
+                        "Say hello\n<system-reminder>Available tools include Bash shell commands.</system-reminder>",
+                    );
                     expect(
                         await wait(
                             Promise.race([
