@@ -4,29 +4,20 @@ import type { SessionConfigurationSelection } from "../../acp/protocol/session-c
 
 export type StoredSessionConfiguration = SessionConfigurationSelection;
 
-const storedSessionConfigurationsSchema = z
-    .array(
-        z.discriminatedUnion("type", [
-            z.object({ booleanValue: z.boolean(), configId: z.string().max(128), type: z.literal("boolean") }),
-            z.object({ configId: z.string().max(128), type: z.literal("select"), value: z.string().max(500) }),
-        ]),
-    )
-    .max(100);
+const storedSessionConfigurationSchema = z.discriminatedUnion("type", [
+    z.object({ booleanValue: z.boolean(), configId: z.string().max(128), type: z.literal("boolean") }),
+    z.object({ configId: z.string().max(128), type: z.literal("select"), value: z.string().max(500) }),
+]);
 
 export const decodeStoredSessionConfigurations = (value: unknown): readonly StoredSessionConfiguration[] =>
-    storedSessionConfigurationsSchema.parse(
-        Array.isArray(value)
-            ? value.filter(
-                  (configuration) =>
-                      typeof configuration !== "object" ||
-                      configuration === null ||
-                      !("type" in configuration) ||
-                      typeof configuration.type !== "string" ||
-                      configuration.type === "boolean" ||
-                      configuration.type === "select",
-              )
-            : value,
-    );
+    z
+        .array(z.unknown())
+        .max(100)
+        .parse(value)
+        .flatMap((configuration) => {
+            const decoded = storedSessionConfigurationSchema.safeParse(configuration);
+            return decoded.success ? [decoded.data] : [];
+        });
 
 export type ApplyStoredSessionConfiguration = (
     configuration: StoredSessionConfiguration,

@@ -81,16 +81,9 @@ export const decodeSessionStatusWebhookBody = (encoded: string): SessionStatusWe
         typeof value === "object" && value !== null && "commands" in value && Array.isArray(value.commands)
             ? {
                   ...value,
-                  commands: value.commands.filter((command) => {
-                      if (typeof command !== "object" || command === null || !("outcome" in command)) {
-                          return true;
-                      }
-                      return (
-                          typeof command.outcome !== "string" ||
-                          command.outcome === "cancelled" ||
-                          command.outcome === "failed" ||
-                          command.outcome === "succeeded"
-                      );
+                  commands: value.commands.flatMap((command) => {
+                      const decoded = sessionStatusWebhookCommandSchema.safeParse(command);
+                      return decoded.success ? [decoded.data] : [];
                   }),
               }
             : value;

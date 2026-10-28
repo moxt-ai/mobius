@@ -202,7 +202,7 @@ import {
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "../session/workspace/index.ts";
-import { decodeMessageKind, ProtocolMessageError, parseJson } from "../shared/message-codec.ts";
+import { decodeMessageKind, ProtocolMessageError } from "../shared/message-codec.ts";
 
 interface MessageSignature<TMessage extends { readonly kind: string }> {
     readonly decoder: (encoded: string) => TMessage;
@@ -363,69 +363,18 @@ export type ServiceToDaemonMessage = ReturnType<
 const serviceToDaemonRegistry: Readonly<Record<string, MessageSignature<ServiceToDaemonMessage>>> =
     serviceToDaemonSignatures;
 
-const knownNativeActions = new Set(["active-turn", "find", "list", "import", "fork"]);
-const knownSessionStatuses = new Set(["idle", "working"]);
-const knownRuntimeUpgradeStatuses = new Set(["accepted", "succeeded", "failed", "rejected"]);
-const knownInteractionKinds = new Set(["session.permission.requested", "session.elicitation.requested"]);
-
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-    return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function hasUnknownDiscriminator(value: unknown, key: string, known: ReadonlySet<string>): boolean {
-    if (!isRecord(value)) {
-        return false;
-    }
-    const variant = value[key];
-    return typeof variant === "string" && !known.has(variant);
-}
-
-function hasUnknownServiceVariant(kind: string, value: Readonly<Record<string, unknown>>): boolean {
-    return kind === NATIVE_SESSION_REQUEST_KIND && hasUnknownDiscriminator(value, "action", knownNativeActions);
-}
-
-function hasUnknownSessionStatus(value: unknown): boolean {
-    return hasUnknownDiscriminator(value, "kind", knownSessionStatuses);
-}
-
-function hasUnknownDaemonVariant(kind: string, value: Readonly<Record<string, unknown>>): boolean {
-    if (kind === SESSION_STATUS_CHANGED_KIND) {
-        return hasUnknownSessionStatus(value["status"]);
-    }
-    if (kind === SESSION_LISTED_KIND || kind === SESSION_QUERIED_KIND) {
-        const entries = value["entries"];
-        return (
-            Array.isArray(entries) &&
-            entries.some((entry) => isRecord(entry) && hasUnknownSessionStatus(entry["status"]))
-        );
-    }
-    if (kind === SESSION_RESTORED_KIND) {
-        const entry = value["entry"];
-        return isRecord(entry) && hasUnknownSessionStatus(entry["status"]);
-    }
-    if (kind === "runtime.upgrade.result") {
-        return hasUnknownDiscriminator(value["outcome"], "status", knownRuntimeUpgradeStatuses);
-    }
-    if (kind === NATIVE_SESSION_RESULT_KIND) {
-        if (hasUnknownDiscriminator(value, "action", knownNativeActions)) {
-            return true;
-        }
-        if (value["action"] === "active-turn" && isRecord(value["turn"])) {
-            return hasUnknownDiscriminator(value["turn"]["interaction"], "kind", knownInteractionKinds);
-        }
-    }
-    return false;
-}
-
-/** Decodes only message and nested variants known by this SDK. */
+/** Decodes a message this SDK can consume, or skips it when its schema is not understood. */
 export function decodeKnownServiceToDaemonMessage(encoded: string): ServiceToDaemonMessage | null {
     const kind = decodeMessageKind(encoded);
     const signature = serviceToDaemonRegistry[kind];
     if (signature === undefined) {
         return null;
     }
-    const value = parseJson(encoded);
-    return hasUnknownServiceVariant(kind, value) ? null : signature.decoder(encoded);
+    try {
+        return signature.decoder(encoded);
+    } catch {
+        return null;
+    }
 }
 
 export function decodeServiceToDaemonMessage(encoded: string): ServiceToDaemonMessage {
@@ -577,15 +526,18 @@ export type DaemonToServiceMessage = ReturnType<
 const daemonToServiceRegistry: Readonly<Record<string, MessageSignature<DaemonToServiceMessage>>> =
     daemonToServiceSignatures;
 
-/** Decodes only message and nested variants known by this SDK. */
+/** Decodes a message this SDK can consume, or skips it when its schema is not understood. */
 export function decodeKnownDaemonToServiceMessage(encoded: string): DaemonToServiceMessage | null {
     const kind = decodeMessageKind(encoded);
     const signature = daemonToServiceRegistry[kind];
     if (signature === undefined) {
         return null;
     }
-    const value = parseJson(encoded);
-    return hasUnknownDaemonVariant(kind, value) ? null : signature.decoder(encoded);
+    try {
+        return signature.decoder(encoded);
+    } catch {
+        return null;
+    }
 }
 
 export function decodeDaemonToServiceMessage(encoded: string): DaemonToServiceMessage {
