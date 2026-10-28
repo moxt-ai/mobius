@@ -55,8 +55,9 @@ export type CommandDelivery = z.infer<typeof commandDeliverySchema>;
 /**
  * How the Session's most recent started command ended, from the Runtime's execution receipts.
  * A client that missed the live outcome, after leaving, reloading or reconnecting, shows it from
- * this. A failure preserves the bounded client-facing message from its lifecycle event.
- * Older receipts may retain a generic failure message.
+ * this. While the Runtime retains the live receipt, a failure carries its bounded client-facing
+ * lifecycle message. After a Runtime restart (or on older Runtimes), it carries the sanitized
+ * durable summary: Agent error text may quote user input and is not persisted in receipts.
  */
 export const lastTurnOutcomeSchema = z.discriminatedUnion("state", [
     z.object({ commandId: identifier, state: z.literal("completed"), stopReason: z.string().max(2_048) }).readonly(),

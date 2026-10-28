@@ -151,27 +151,35 @@ test("Given turns that complete, fail, run or are interrupted by a restart, When
                 });
 
                 const failed = randomUUID();
-                submit(peer, failed, "fail with model unavailable");
+                const rejectedPrompt = "fail echoing the prompt CANARY-prompt-body-9f3a";
+                submit(peer, failed, rejectedPrompt);
                 const failure = await waitForLifecycle(peer, failed, "prompt.failed");
                 expect(failure).toMatchObject({
                     code: "acp_agent_error",
-                    message: "Internal error: Model unavailable: controlled/test-model",
+                    message: "Internal error: Rejected prompt: CANARY-prompt-body-9f3a",
                 });
                 const expectedFailure = {
                     lastTurn: {
                         commandId: failed,
                         state: "failed",
                         code: "acp_agent_error",
-                        message: "Internal error: Model unavailable: controlled/test-model",
+                        message: "Internal error: Rejected prompt: CANARY-prompt-body-9f3a",
                     },
                 };
                 expect((await readExecution(peer)).result).toMatchObject(expectedFailure);
                 await peer.restart();
-                expect((await readExecution(peer)).result).toMatchObject(expectedFailure);
+                // Public Agent text can quote user input. Only a content-free summary survives restart.
+                const persistedMessage = "The local Agent could not complete the request";
+                expect((await readExecution(peer)).result).toMatchObject({
+                    lastTurn: { ...expectedFailure.lastTurn, message: persistedMessage },
+                });
 
-                // Replaying the same command returns its original failure without running it again.
-                submit(peer, failed, "fail with model unavailable");
-                expect(await waitForLifecycle(peer, failed, "prompt.failed")).toEqual(failure);
+                // Replaying the same command uses the durable summary without running it again.
+                submit(peer, failed, rejectedPrompt);
+                expect(await waitForLifecycle(peer, failed, "prompt.failed")).toEqual({
+                    ...failure,
+                    message: persistedMessage,
+                });
 
                 const interrupted = randomUUID();
                 submit(peer, interrupted, "hold after first delta");
