@@ -21,6 +21,7 @@ export async function packedRelease(
         await writeFile(join(source, "package.json"), JSON.stringify({ ...cliPackage, version }));
         await symlink(resolve(import.meta.dirname, "../../node_modules"), join(source, "node_modules"), "junction");
         // Stamp and bundle each release once, rather than transpiling its source graph on every CLI/daemon restart.
+        const diagnostic = join(source, "bundle-error.txt");
         await runBoundedProcess({
             command: process.execPath,
             arguments: [
@@ -28,7 +29,7 @@ export async function packedRelease(
                 "--eval",
                 // esbuild's extensionless bin entry can be JavaScript or a native binary. Its JS API is portable;
                 // running it in a child keeps bundling bounded and cancellable without depending on PATH shims.
-                `import { build } from ${JSON.stringify(import.meta.resolve("esbuild"))}; await build(JSON.parse(process.argv[1]));`,
+                `import { writeFile } from "node:fs/promises"; try { const { build } = await import(${JSON.stringify(import.meta.resolve("esbuild"))}); await build(JSON.parse(process.argv[1])); } catch (error) { await writeFile(process.argv[2], String(error).slice(0, 4000)); process.exitCode = 1; }`,
                 JSON.stringify({
                     entryPoints: [join(source, "src/cli/entrypoint.ts")],
                     outfile: join(source, "dist/cli.js"),
@@ -37,12 +38,20 @@ export async function packedRelease(
                     target: "node22.19.0",
                     format: "esm",
                     external: ["@agentclientprotocol/sdk", "undici"],
+                    logLevel: "silent",
                 }),
+                diagnostic,
             ],
             cwd: source,
             environment: process.env,
             signal,
             timeoutMilliseconds: 30_000,
+        }).catch(async (cause: unknown) => {
+            if (!signal.aborted) {
+                const detail = await readFile(diagnostic, "utf8").catch(() => "No bundle diagnostic was written.");
+                console.error(`Fixture release ${version} bundling failed: ${detail}`);
+            }
+            throw cause;
         });
         await writeFile(
             join(root, "dist/cli.js"),
