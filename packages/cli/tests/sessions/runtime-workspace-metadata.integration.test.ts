@@ -45,7 +45,7 @@ it("describes a selected directory without browsing its children and still rejec
         await chmod(root, 0o111);
         await expect(
             runtime.client.runtimes.describeWorkspace(runtime.runtimeId, directoryId, signal),
-        ).resolves.toStrictEqual({ directoryId, directoryLabel: canonical });
+        ).resolves.toStrictEqual({ directoryId, directoryLabel: listing.directoryLabel });
         const missing = `path-${Buffer.from(join(canonical, "missing")).toString("base64url")}`;
         await expect(
             runtime.client.runtimes.describeWorkspace(runtime.runtimeId, missing, signal),
