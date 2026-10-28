@@ -127,14 +127,19 @@ export class AppCredentialAuthenticationService {
     };
 }
 
+/** Whether an AppCredential authenticates now. Authentication and every listing apply this one rule. */
+export function appCredentialActive(row: CredentialRow, now: number): boolean {
+    return (
+        row.revoked_at === null &&
+        (row.replaced_by_credential_id === null ||
+            (typeof row.overlap_ends_at === "number" && row.overlap_ends_at > now)) &&
+        row.app_lifecycle === "active" &&
+        row.tenant_lifecycle === "active"
+    );
+}
+
 function requireActiveCredential(row: CredentialRow, now: number): void {
-    if (
-        row.revoked_at !== null ||
-        (row.replaced_by_credential_id !== null &&
-            (typeof row.overlap_ends_at !== "number" || row.overlap_ends_at <= now)) ||
-        row.app_lifecycle !== "active" ||
-        row.tenant_lifecycle !== "active"
-    ) {
+    if (!appCredentialActive(row, now)) {
         throw new ProjectAuthenticationError("credential_revoked", "The AppCredential is no longer active");
     }
 }

@@ -273,6 +273,8 @@ export class MobiusPlatformAppCredential {
 }
 
 export class MobiusPlatformAppCredentialMetadata {
+    /** Whether the Platform authenticates this credential now. Undefined from a Platform that predates it. */
+    readonly active: boolean | undefined;
     readonly allProjects: boolean;
     readonly appId: string;
     readonly credentialId: string;
@@ -290,6 +292,11 @@ export class MobiusPlatformAppCredentialMetadata {
         if (typeof value["allProjects"] !== "boolean") {
             throw new MobiusProtocolError("The Platform returned an invalid AppCredential scope");
         }
+        const active = value["active"];
+        if (active !== undefined && typeof active !== "boolean") {
+            throw new MobiusProtocolError("The Platform returned an invalid AppCredential state");
+        }
+        this.active = active;
         this.allProjects = value["allProjects"];
         this.appId = identifier(value, "appId");
         this.credentialId = identifier(value, "credentialId");

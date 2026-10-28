@@ -90,6 +90,14 @@ interface PlatformStore {
     readonly failWebhook: (appId: string) => void;
 }
 
+/** A revocation is a recorded fact; whether the key authenticates otherwise is the Platform's answer. */
+export function credentialStatus(credential: MobiusPlatformAppCredentialMetadata): "active" | "inactive" | "revoked" {
+    if (credential.revokedAt.length > 0) {
+        return "revoked";
+    }
+    return credential.active === false ? "inactive" : "active";
+}
+
 export function createPlatformStore() {
     return createStore<PlatformStore>()((set, get) => ({
         issueCredential: async (client, signal = new AbortController().signal) => {
