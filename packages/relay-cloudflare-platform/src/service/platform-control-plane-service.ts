@@ -1007,6 +1007,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         const app = await this.readApp(source.app_id, signal);
         const access = await this.requireTenantDeveloper(identity, app.tenant_id, signal);
         const now = Date.now();
+        // Preserve the legacy v1 rotation value; it is not an App-wide sequence.
         const created = await this.createCredential(
             source.app_id,
             permissions(source.permissions_json),
@@ -1166,7 +1167,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
             actorReference(actorRef),
             signal,
         );
-        return new PlatformAppCredentialAccess(row.app_id, row.revision, project);
+        return new PlatformAppCredentialAccess(row.app_id, project);
     };
 
     private readonly authorizeCredentialForProject = async (
@@ -1246,6 +1247,8 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
     };
 
     private readonly nextCredentialRevision = async (appId: string, signal: AbortSignal): Promise<number> => {
+        // Preserve v1 issuance values for existing callers. Unlike rotation, issuance uses the App maximum.
+        // Neither rule guarantees uniqueness; revision must not drive identity, ordering or authorization.
         const revision = await this.#storage.nextCredentialRevision(appId, signal);
         if (revision === null || !Number.isSafeInteger(revision) || revision < 1) {
             throw new PlatformControlPlaneError(

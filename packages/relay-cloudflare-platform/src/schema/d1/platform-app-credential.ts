@@ -10,6 +10,7 @@ export const platformAppCredential = sqliteTable(
         secretDigest: text("secret_digest").notNull(),
         permissionsJson: text("permissions_json").notNull(),
         allProjects: integer("all_projects").notNull(),
+        // Legacy v1 response value retained for existing clients and Worker rollback; not unique or ordered.
         revision: integer("revision").notNull(),
         issuedAt: integer("issued_at").notNull(),
         lastUsedAt: integer("last_used_at").notNull(),
