@@ -3,17 +3,17 @@ import { z } from "zod";
 import { identifierStringSchema } from "../../shared/identifier.ts";
 import { ProtocolMessageError } from "../../shared/message-codec.ts";
 import {
-    sessionElicitationRequestedEventSchema,
-    sessionPermissionRequestedEventSchema,
-} from "../interactions/index.ts";
-import {
     boundedJsonSchema,
     contentBlockSchema,
     toolCallContentSchema,
     toolCallLocationSchema,
     toolKindSchema,
     toolStatusSchema,
-} from "../observability/event-log.ts";
+} from "../events/index.ts";
+import {
+    sessionElicitationRequestedEventSchema,
+    sessionPermissionRequestedEventSchema,
+} from "../interactions/index.ts";
 import { recordingCursorSchema } from "./recording.ts";
 
 /**

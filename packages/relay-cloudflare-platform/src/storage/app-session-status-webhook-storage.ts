@@ -1,6 +1,7 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { StoredAppSessionStatusWebhook } from "../entity/app-session-status-webhook.ts";
-import { platformAppSessionStatusWebhook, platformProject } from "../schema/d1/index.ts";
+import type { PlatformAuditRecord } from "../entity/platform-records.ts";
+import { platformAppSessionStatusWebhook, platformDashboardAuditEvent, platformProject } from "../schema/d1/index.ts";
 import { platformDrizzle } from "./platform-drizzle-database.ts";
 
 export class AppSessionStatusWebhookStorage {
@@ -36,21 +37,25 @@ export class AppSessionStatusWebhookStorage {
     readonly create = async (
         value: StoredAppSessionStatusWebhook,
         now: number,
+        audit: PlatformAuditRecord,
     ): Promise<StoredAppSessionStatusWebhook | null> => {
-        const result = await this.#database
-            .insert(platformAppSessionStatusWebhook)
-            .values({
-                appId: value.appId,
-                enabled: value.enabled ? 1 : 0,
-                endpoint: value.endpoint,
-                secretCiphertext: value.secretCiphertext,
-                secretId: value.secretId,
-                secretNonce: value.secretNonce,
-                createdAt: now,
-                updatedAt: now,
-            })
-            .onConflictDoNothing({ target: platformAppSessionStatusWebhook.appId })
-            .returning();
+        const [result] = await this.#database.batch([
+            this.#database
+                .insert(platformAppSessionStatusWebhook)
+                .values({
+                    appId: value.appId,
+                    enabled: value.enabled ? 1 : 0,
+                    endpoint: value.endpoint,
+                    secretCiphertext: value.secretCiphertext,
+                    secretId: value.secretId,
+                    secretNonce: value.secretNonce,
+                    createdAt: now,
+                    updatedAt: now,
+                })
+                .onConflictDoNothing({ target: platformAppSessionStatusWebhook.appId })
+                .returning(),
+            this.#auditWhere(audit, value.appId, value.secretId),
+        ]);
         return result[0] === undefined ? null : decode(result[0]);
     };
 
@@ -60,12 +65,16 @@ export class AppSessionStatusWebhookStorage {
         enabled: boolean,
         endpoint: string,
         now: number,
+        audit: PlatformAuditRecord,
     ): Promise<StoredAppSessionStatusWebhook | null> => {
-        const result = await this.#database
-            .update(platformAppSessionStatusWebhook)
-            .set({ enabled: enabled ? 1 : 0, endpoint, updatedAt: now })
-            .where(eq(platformAppSessionStatusWebhook.appId, appId))
-            .returning();
+        const [result] = await this.#database.batch([
+            this.#database
+                .update(platformAppSessionStatusWebhook)
+                .set({ enabled: enabled ? 1 : 0, endpoint, updatedAt: now })
+                .where(eq(platformAppSessionStatusWebhook.appId, appId))
+                .returning(),
+            this.#auditWhere(audit, appId, null),
+        ]);
         return result[0] === undefined ? null : decode(result[0]);
     };
 
@@ -75,19 +84,55 @@ export class AppSessionStatusWebhookStorage {
         previousSecretId: string,
         secret: Pick<StoredAppSessionStatusWebhook, "secretCiphertext" | "secretId" | "secretNonce">,
         now: number,
+        audit: PlatformAuditRecord,
     ): Promise<StoredAppSessionStatusWebhook | null> => {
-        const result = await this.#database
-            .update(platformAppSessionStatusWebhook)
-            .set({ ...secret, updatedAt: now })
-            .where(
-                and(
-                    eq(platformAppSessionStatusWebhook.appId, appId),
-                    eq(platformAppSessionStatusWebhook.secretId, previousSecretId),
-                ),
-            )
-            .returning();
+        const [result] = await this.#database.batch([
+            this.#database
+                .update(platformAppSessionStatusWebhook)
+                .set({ ...secret, updatedAt: now })
+                .where(
+                    and(
+                        eq(platformAppSessionStatusWebhook.appId, appId),
+                        eq(platformAppSessionStatusWebhook.secretId, previousSecretId),
+                    ),
+                )
+                .returning(),
+            this.#auditWhere(audit, appId, secret.secretId),
+        ]);
         return result[0] === undefined ? null : decode(result[0]);
     };
+
+    /**
+     * The audit event commits with the change it records and exists only if that change took effect: the webhook
+     * row exists, and when a secret was written, it holds that secret.
+     */
+    readonly #auditWhere = (audit: PlatformAuditRecord, appId: string, secretId: string | null) =>
+        this.#database.insert(platformDashboardAuditEvent).select(
+            this.#database
+                .select({
+                    auditId: sql<string>`${audit.auditId}`.as("auditId"),
+                    tenantId: sql<string>`${audit.tenantId}`.as("tenantId"),
+                    appId: sql<string>`${audit.appId}`.as("appId"),
+                    projectId: sql<string>`${audit.projectId}`.as("projectId"),
+                    actorKind: sql<string>`${audit.actorKind}`.as("actorKind"),
+                    actorId: sql<string>`${audit.actorId}`.as("actorId"),
+                    actorRef: sql<string>`${audit.actorRef}`.as("actorRef"),
+                    action: sql<string>`${audit.action}`.as("action"),
+                    subjectId: sql<string>`${audit.subjectId}`.as("subjectId"),
+                    outcome: sql<"succeeded" | "denied">`${audit.outcome}`.as("outcome"),
+                    detailsJson: sql<string>`${audit.detailsJson}`.as("detailsJson"),
+                    recordedAt: sql<number>`${audit.recordedAt}`.as("recordedAt"),
+                })
+                .from(platformAppSessionStatusWebhook)
+                .where(
+                    secretId === null
+                        ? eq(platformAppSessionStatusWebhook.appId, appId)
+                        : and(
+                              eq(platformAppSessionStatusWebhook.appId, appId),
+                              eq(platformAppSessionStatusWebhook.secretId, secretId),
+                          ),
+                ),
+        );
 }
 
 function decode(row: typeof platformAppSessionStatusWebhook.$inferSelect): StoredAppSessionStatusWebhook {

@@ -44,13 +44,13 @@ export {
     sessionConfigurationSelectionsSchema,
 } from "./session/configuration/index.ts";
 export * from "./session/configuration/title.ts";
+// Session event log and live events.
+export * from "./session/events/index.ts";
 export * from "./session/files/index.ts";
 export * from "./session/interactions/index.ts";
 export * from "./session/interactions/model.ts";
 export * from "./session/lifecycle/index.ts";
 export * from "./session/native/index.ts";
-// Session observability: event log, live events, and history paging.
-export * from "./session/observability/event-log.ts";
 export * from "./session/observability/history.ts";
 export * from "./session/prompt/commands.ts";
 export * from "./session/prompt/usage.ts";

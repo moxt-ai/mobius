@@ -1,4 +1,4 @@
-import type { SessionLiveEvent } from "../observability/event-log.ts";
+import type { SessionLiveEvent } from "../events/index.ts";
 import type { SessionRecordingStatus } from "./recording.ts";
 
 /**
