@@ -1,4 +1,5 @@
 import { env } from "cloudflare:workers";
+import { standardWebSocketHost } from "@moxt-ai/mobius-relay-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { FakeClerk } from "../../test-support/src/clerk.ts";
 import {
@@ -21,6 +22,7 @@ function fixture() {
     const application = createPlatformApplication(
         new PlatformAuthenticationConfiguration(identity, new Set()),
         createPlatformGateways,
+        standardWebSocketHost,
         () => clerk.organizationGateway,
     );
     const admin = clerk.session("user_admin", "org_invites");

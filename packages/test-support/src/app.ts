@@ -3,7 +3,7 @@ import {
     PlatformAuthenticationConfiguration,
     type PlatformRelayBindings,
 } from "@moxt-ai/mobius-relay-cloudflare-platform";
-import type { WorkerRuntimeGateways } from "@moxt-ai/mobius-relay-core";
+import { standardWebSocketHost, type WorkerRuntimeGateways } from "@moxt-ai/mobius-relay-core";
 import { type Env, Hono } from "hono";
 
 export { createPlatformGateways } from "@moxt-ai/mobius-relay-cloudflare-platform";
@@ -27,7 +27,7 @@ export function createTestMobiusPlatformApp(
         readonly bindings?: PlatformRelayBindings;
     },
     gateways: (environment: PlatformRelayBindings) => WorkerRuntimeGateways,
-    organizations?: Parameters<typeof createPlatformApplication>[2],
+    organizations?: Parameters<typeof createPlatformApplication>[3],
 ): Hono<{ Bindings: PlatformRelayBindings }> {
     const application = createPlatformApplication(
         new PlatformAuthenticationConfiguration(
@@ -36,6 +36,7 @@ export function createTestMobiusPlatformApp(
             options.allowedOrigins,
         ),
         gateways,
+        standardWebSocketHost,
         organizations,
     );
     return options.bindings === undefined ? application : new TestApplication(application, options.bindings);

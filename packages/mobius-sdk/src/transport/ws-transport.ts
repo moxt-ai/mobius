@@ -3,6 +3,8 @@ import { MobiusApiError, MobiusConnectionError, MobiusProtocolError, MobiusValid
 import type { MobiusHttpTransport, MobiusTransportSessionEvent } from "./http-transport.ts";
 
 const DEFAULT_CONNECTION_TIMEOUT_MILLISECONDS = 15_000;
+const HEARTBEAT_INTERVAL_MILLISECONDS = 20_000;
+const HEARTBEAT_TIMEOUT_MILLISECONDS = 10_000;
 
 export interface MobiusWebSocketConnector {
     readonly connect: (endpoint: URL, signal: AbortSignal) => Promise<WebSocket>;
@@ -156,6 +158,11 @@ export class WsTransport implements MobiusHttpTransport {
     readonly #subscriptions = new Map<string, LiveEventSubscription>();
     #origin: string | null = null;
     #state: WsTransportState = { kind: "disconnected" };
+    #heartbeat:
+        | { readonly kind: "inactive" }
+        | { readonly kind: "waiting" | "awaiting"; readonly timer: ReturnType<typeof globalThis.setTimeout> } = {
+        kind: "inactive",
+    };
 
     constructor(options: WsTransportOptions = {}) {
         this.#connectionTimeoutMilliseconds = validatePositiveInteger(
@@ -278,6 +285,7 @@ export class WsTransport implements MobiusHttpTransport {
     };
 
     readonly close = (): void => {
+        this.#stopHeartbeat();
         const state = this.#state;
         this.#state = { kind: "closed" };
         if (state.kind === "connected") {
@@ -318,7 +326,11 @@ export class WsTransport implements MobiusHttpTransport {
                 socket.close(1000, "Mobius transport closed");
                 throw new MobiusConnectionError("The Mobius WebSocket transport is closed");
             }
-            socket.addEventListener("message", this.#receive);
+            socket.addEventListener("message", (event) => {
+                if (this.#state.kind === "connected" && this.#state.socket === socket) {
+                    this.#receive(event);
+                }
+            });
             socket.addEventListener(
                 "close",
                 (event) => this.#disconnected(socket, webSocketCloseError(event, "remain connected")),
@@ -336,6 +348,7 @@ export class WsTransport implements MobiusHttpTransport {
                 { once: true },
             );
             this.#state = this.#connected(socket);
+            this.#scheduleHeartbeat(socket);
             return socket;
         } catch (cause) {
             if (this.#state.kind !== "closed") {
@@ -361,6 +374,12 @@ export class WsTransport implements MobiusHttpTransport {
             const value: unknown = JSON.parse(event.data);
             const message = wsRecord(value);
             const kind = wsString(message, "kind", 32);
+            if (kind === "pong" && Object.keys(message).length === 1 && this.#heartbeat.kind === "awaiting") {
+                if (this.#state.kind === "connected") {
+                    this.#scheduleHeartbeat(this.#state.socket);
+                }
+                return;
+            }
             if (kind.startsWith("session.events.")) {
                 this.#receiveSubscription(kind, message);
                 return;
@@ -406,6 +425,7 @@ export class WsTransport implements MobiusHttpTransport {
             return;
         }
         globalThis.clearTimeout(this.#state.idleTimeoutId);
+        this.#stopHeartbeat();
         this.#state = { kind: "disconnected" };
         this.#failPending(cause);
         this.#failSubscriptions(cause);
@@ -460,9 +480,6 @@ export class WsTransport implements MobiusHttpTransport {
             subscription.resolve(stream);
             return;
         }
-        if (kind === "session.events.heartbeat") {
-            return;
-        }
         if (kind === "session.events.error") {
             const status = message["status"];
             if (typeof status !== "number" || !Number.isSafeInteger(status) || status < 400 || status > 599) {
@@ -513,8 +530,7 @@ export class WsTransport implements MobiusHttpTransport {
         kind: "connected",
         idleTimeoutId: globalThis.setTimeout(() => {
             if (this.#state.kind === "connected" && this.#state.socket === socket) {
-                // The server heartbeats every open subscription, so a socket that stays silent has stopped
-                // delivering. Live streams fail with it: the next request opens a replacement socket that
+                // Live streams fail with their socket: the next request opens a replacement that
                 // never carries their subscription, and their owner must reconnect and reconcile.
                 this.#disconnected(socket, new MobiusConnectionError("The Mobius WebSocket transport became inactive"));
                 socket.close(4000, "Mobius transport idle timeout");
@@ -529,5 +545,43 @@ export class WsTransport implements MobiusHttpTransport {
         }
         globalThis.clearTimeout(this.#state.idleTimeoutId);
         this.#state = this.#connected(socket);
+    };
+
+    readonly #stopHeartbeat = (): void => {
+        if (this.#heartbeat.kind !== "inactive") {
+            globalThis.clearTimeout(this.#heartbeat.timer);
+        }
+        this.#heartbeat = { kind: "inactive" };
+    };
+
+    readonly #scheduleHeartbeat = (socket: WebSocket): void => {
+        this.#stopHeartbeat();
+        this.#heartbeat = {
+            kind: "waiting",
+            timer: globalThis.setTimeout(() => {
+                if (this.#state.kind !== "connected" || this.#state.socket !== socket) {
+                    return;
+                }
+                this.#heartbeat = {
+                    kind: "awaiting",
+                    timer: globalThis.setTimeout(() => {
+                        this.#disconnected(
+                            socket,
+                            new MobiusConnectionError("The Mobius WebSocket heartbeat timed out"),
+                        );
+                        socket.close(4001, "Mobius transport heartbeat timed out");
+                    }, HEARTBEAT_TIMEOUT_MILLISECONDS),
+                };
+                try {
+                    socket.send('{"kind":"ping"}');
+                } catch (cause) {
+                    this.#disconnected(
+                        socket,
+                        new MobiusConnectionError("The Mobius WebSocket heartbeat failed", { cause }),
+                    );
+                    socket.close(4001, "Mobius transport heartbeat failed");
+                }
+            }, HEARTBEAT_INTERVAL_MILLISECONDS),
+        };
     };
 }
