@@ -283,7 +283,13 @@ export class MobiusPlatformAppCredentialMetadata {
     readonly appId: string;
     readonly credentialId: string;
     readonly issuedAt: string;
+    /** @deprecated Includes an issuance-time fallback. Use lastObservedUsedAt for recorded usage evidence. */
     readonly lastUsedAt: string;
+    /**
+     * Latest recorded authentication observation, updated best-effort. Null means no evidence is available,
+     * including from older servers; it never proves the credential is unused or safe to revoke.
+     */
+    readonly lastObservedUsedAt: string | null;
     readonly overlapEndsAt: string;
     readonly permissions: readonly string[];
     readonly projectIds: readonly string[];
@@ -310,6 +316,13 @@ export class MobiusPlatformAppCredentialMetadata {
         this.credentialId = identifier(value, "credentialId");
         this.issuedAt = timestamp(value, "issuedAt");
         this.lastUsedAt = timestamp(value, "lastUsedAt");
+        this.lastObservedUsedAt =
+            value["lastObservedUsedAt"] === undefined || value["lastObservedUsedAt"] === null
+                ? null
+                : timestamp(value, "lastObservedUsedAt");
+        if (this.lastObservedUsedAt === "") {
+            throw new MobiusProtocolError("The Platform returned an invalid lastObservedUsedAt");
+        }
         this.overlapEndsAt = timestamp(value, "overlapEndsAt");
         this.permissions = strings(value, "permissions");
         this.projectIds = strings(value, "projectIds");

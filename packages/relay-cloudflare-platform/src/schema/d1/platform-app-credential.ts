@@ -13,7 +13,10 @@ export const platformAppCredential = sqliteTable(
         // Legacy v1 response value retained for existing clients and Worker rollback; not unique or ordered.
         revision: integer("revision").notNull(),
         issuedAt: integer("issued_at").notNull(),
+        // Legacy issuance fallback retained for old clients and Worker rollback.
         lastUsedAt: integer("last_used_at").notNull(),
+        // Null means no recorded observation, including legacy history and failed background writes.
+        lastObservedUsedAt: integer("last_observed_used_at"),
         overlapEndsAt: integer("overlap_ends_at"),
         replacedByCredentialId: text("replaced_by_credential_id"),
         revokedAt: integer("revoked_at"),

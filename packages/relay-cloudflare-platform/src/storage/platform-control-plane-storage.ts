@@ -1,5 +1,5 @@
 import { relayDrizzle } from "@moxt-ai/mobius-relay-core/database";
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 import {
     type ActiveCountRow,
     ActiveCountRowSchema,
@@ -588,6 +588,7 @@ export class PlatformControlPlaneStorage {
                                 revision: sql<number>`${credential.revision}`.as("revision"),
                                 issuedAt: sql<number>`${credential.issuedAt}`.as("issuedAt"),
                                 lastUsedAt: sql<number>`${credential.issuedAt}`.as("lastUsedAt"),
+                                lastObservedUsedAt: sql<null>`NULL`.as("lastObservedUsedAt"),
                                 overlapEndsAt: sql<null>`NULL`.as("overlapEndsAt"),
                                 replacedByCredentialId: sql<null>`NULL`.as("replacedByCredentialId"),
                                 revokedAt: sql<null>`NULL`.as("revokedAt"),
@@ -720,15 +721,26 @@ export class PlatformControlPlaneStorage {
     };
 
     readonly touchCredential = async (credentialId: string, now: number, signal: AbortSignal): Promise<boolean> => {
+        // Observations may finish out of order. Update the fact and its legacy projection atomically;
+        // an older or repeated observation is still a successful touch of an active credential.
         const result = await waitForD1(
             () =>
-                this.#database
-                    .prepare(
-                        `UPDATE platform_app_credentials SET last_used_at = ?
-                          WHERE credential_id = ? AND revoked_at IS NULL
-                            AND (replaced_by_credential_id IS NULL OR overlap_ends_at > ?)`,
+                platformDrizzle(this.#database)
+                    .update(platformAppCredential)
+                    .set({
+                        lastUsedAt: sql`max(${platformAppCredential.lastUsedAt}, coalesce(${platformAppCredential.lastObservedUsedAt}, ${now}), ${now})`,
+                        lastObservedUsedAt: sql`max(coalesce(${platformAppCredential.lastObservedUsedAt}, ${now}), ${now})`,
+                    })
+                    .where(
+                        and(
+                            eq(platformAppCredential.credentialId, credentialId),
+                            isNull(platformAppCredential.revokedAt),
+                            or(
+                                isNull(platformAppCredential.replacedByCredentialId),
+                                gt(platformAppCredential.overlapEndsAt, now),
+                            ),
+                        ),
                     )
-                    .bind(now, credentialId, now)
                     .run(),
             signal,
         );

@@ -6,6 +6,7 @@ interface PlatformTestBindings extends PlatformRelayBindings {
     readonly MOBIUS_SESSION_WEBHOOK_SECRET_ENCRYPTION_KEY: string;
     readonly R2_BUCKET_WNAM: R2Bucket;
     readonly TEST_UNINITIALIZED_SHARD: D1Database;
+    readonly TEST_CREDENTIAL_USAGE_DATABASE: D1Database;
     readonly TEST_PLATFORM_MIGRATIONS: D1Migration[];
 }
 

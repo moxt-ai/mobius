@@ -1,0 +1,1 @@
+ALTER TABLE `platform_app_credentials` ADD `last_observed_used_at` integer;
