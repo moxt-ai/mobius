@@ -7,7 +7,7 @@ import type { RuntimeTurnActivity } from "../../session/turn/runtime-turn-activi
 import type { InstallationDirectory } from "../../storage/installation/installation-files.ts";
 import { isNodeError } from "../../util/node-error.ts";
 import { sendLocalRequest } from "../control/local-client.ts";
-import { type DaemonReleaseSwitchState, lifecycleResponse, type WorkerLaunch } from "../control/protocol.ts";
+import { type DaemonReleaseSwitchState, decodeKnownLifecycleResponse, type WorkerLaunch } from "../control/protocol.ts";
 import { readSwitchStatus } from "../control/switch-status.ts";
 import { openMobiusControlInstallation } from "../pairing/pair-local-machine.ts";
 import { DaemonReleaseUpgradeError, findNewDaemonReleaseVersion, installDaemonReleaseVersion } from "./package.ts";
@@ -101,13 +101,13 @@ async function requestInstalledDaemonReleaseSwitch(
     signal: AbortSignal,
 ): Promise<Extract<DaemonReleaseUpgradeAttempt, { kind: "requested" }>> {
     const id = randomUUID();
-    const response = lifecycleResponse.parse(
+    const response = decodeKnownLifecycleResponse(
         await sendLocalRequest(stateDirectory, "manager", { kind: "switch", id, context: "npm", launch }, signal),
     );
-    if (response.kind === "error") {
+    if (response?.kind === "error") {
         throw new DaemonReleaseUpgradeError(response.code, response.message);
     }
-    if (response.kind !== "switching") {
+    if (response?.kind !== "switching") {
         throw new DaemonReleaseUpgradeError("manager_incompatible", "The manager does not support daemon switching");
     }
     return { kind: "requested", id, version: launch.version };

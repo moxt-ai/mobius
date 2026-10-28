@@ -139,3 +139,79 @@ it("Given independently versioned daemon content, When a mixed-session batch is 
         expect(await selected.inbox.next()).toEqual(legacy);
     });
 });
+
+it("Given future unroutable daemon variants, When the Relay receives them, Then it skips them and keeps forwarding known messages", async () => {
+    await withRuntimeRelay(async (connect) => {
+        const daemon = await connect("daemon");
+        const host = await connect("host");
+        expect(await host.inbox.next()).toMatchObject({ kind: "runtime.status", online: true });
+
+        for (const message of [
+            { kind: "future.runtime.event", value: true },
+            { kind: "session.status.changed", sessionId: "session-1", status: { kind: "future-status" } },
+            {
+                kind: "runtime.upgrade.result",
+                requestId: "upgrade-1",
+                version: "0.0.334",
+                targetVersion: "0.0.335",
+                outcome: { status: "future-outcome" },
+            },
+            {
+                kind: "native.session.result",
+                action: "future-action",
+                requestId: "native-1",
+                sessionId: "session-1",
+            },
+        ]) {
+            daemon.socket.send(JSON.stringify(message));
+        }
+
+        const status = { kind: "session.status.changed", sessionId: "session-1", status: { kind: "idle" } };
+        daemon.socket.send(JSON.stringify(status));
+        expect(await host.inbox.next()).toEqual(status);
+    });
+});
+
+it("Given a Session message with unknown variants and fields, When the Relay forwards it, Then the host receives the message unchanged", async () => {
+    await withRuntimeRelay(async (connect) => {
+        const daemon = await connect("daemon");
+        const host = await connect("host");
+        expect(await host.inbox.next()).toMatchObject({ kind: "runtime.status", online: true });
+
+        const message = {
+            kind: "session.event.v2",
+            futureEnvelopeField: { nested: [1, "two", null] },
+            events: [
+                {
+                    eventId: "future-event-type",
+                    position: "3",
+                    recordedAt: "2026-10-27T00:00:00.000Z",
+                    sessionGenerationId: "generation-1",
+                    sessionId: "session-1",
+                    type: "future-event",
+                    futureEventField: { retained: true },
+                    payload: {
+                        futurePayloadField: { retained: true },
+                        value: [false, 42, "opaque"],
+                    },
+                },
+                {
+                    eventId: "future-session-update",
+                    position: "4",
+                    recordedAt: "2026-10-27T00:00:00.000Z",
+                    sessionGenerationId: "generation-1",
+                    sessionId: "session-1",
+                    type: "acp",
+                    futureEventField: "retained",
+                    payload: {
+                        sessionUpdate: "future-session-update",
+                        futurePayloadField: { retained: true },
+                    },
+                },
+            ],
+        };
+
+        daemon.socket.send(JSON.stringify(message));
+        expect(await host.inbox.next()).toEqual(message);
+    });
+});

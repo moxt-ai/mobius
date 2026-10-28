@@ -6,9 +6,9 @@ import {
     decodeSessionConfigReadResult,
     decodeSessionConfigUpdatedEvent,
     decodeSessionElicitationResolvedEvent,
-    decodeSessionHistoryPageLoaded,
+    decodeSessionHistoryWirePageLoaded,
     decodeSessionPermissionResolvedEvent,
-    decodeSessionPreviewHistoryPageLoaded,
+    decodeSessionPreviewHistoryWirePageLoaded,
     decodeSessionReadyEvent,
     decodeSessionRenamedEvent,
     decodeSessionRestoredEvent,
@@ -109,11 +109,11 @@ export const runtimeControlRegistry = {
     },
     "session.preview-history.page.load": {
         permission: ProjectPermission.RuntimeRead,
-        reply: directReply("session.preview-history.page.loaded", decodeSessionPreviewHistoryPageLoaded),
+        reply: directReply("session.preview-history.page.loaded", decodeSessionPreviewHistoryWirePageLoaded),
     },
     "session.live-history.v2.page.load": {
         permission: ProjectPermission.SessionRead,
-        reply: directReply("session.live-history.v2.page.loaded", decodeSessionHistoryPageLoaded),
+        reply: directReply("session.live-history.v2.page.loaded", decodeSessionHistoryWirePageLoaded),
     },
     "session.elicitation.respond": {
         permission: ProjectPermission.SessionWrite,

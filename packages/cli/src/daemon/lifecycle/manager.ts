@@ -4,8 +4,8 @@ import type { InstallationDirectory } from "../../storage/installation/installat
 import { serveLocalControl } from "../control/local-server.ts";
 import {
     type DaemonReleaseSwitchState,
+    decodeKnownLifecycleCommand,
     type LifecycleResponse,
-    lifecycleCommand,
     type WorkerLaunch,
 } from "../control/protocol.ts";
 import { discardRolledBackData } from "../upgrades/data.ts";
@@ -112,16 +112,11 @@ export async function runManager(stateDirectory: InstallationDirectory, signal: 
             await discardRolledBackData(transition.next.version, combined);
         }
     };
-    const handle = async (value: unknown, requestSignal: AbortSignal): Promise<LifecycleResponse> => {
-        const parsed = lifecycleCommand.safeParse(value);
-        if (!parsed.success) {
-            return {
-                kind: "error",
-                code: "unsupported_lifecycle_command",
-                message: "The manager only accepts lifecycle commands",
-            };
+    const handle = async (value: unknown, requestSignal: AbortSignal): Promise<LifecycleResponse | null> => {
+        const command = decodeKnownLifecycleCommand(value);
+        if (command === null) {
+            return null;
         }
-        const command = parsed.data;
         // The new worker needs its source version before it can announce readiness.
         if (command.kind === "switch-status" && !command.wait) {
             return { kind: "switch-status", state: switchState };

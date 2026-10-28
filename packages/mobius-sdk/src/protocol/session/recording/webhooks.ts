@@ -53,20 +53,49 @@ export type SessionStatusWebhookCommand = z.infer<typeof sessionStatusWebhookCom
  * ending, so a consumer resolves those Turns and no others. `status` is the trailing state of the
  * same delivery and is retained for consumers that have not adopted `commands`.
  */
+const sessionStatusWebhookBodyFields = {
+    appId: identifierStringSchema,
+    projectId: identifierStringSchema,
+    runtimeId: identifierStringSchema,
+    sessionId: identifierStringSchema,
+    status: sessionRecordingStatusSchema,
+};
 export const sessionStatusWebhookBodySchema = z
     .object({
-        appId: identifierStringSchema,
+        ...sessionStatusWebhookBodyFields,
         commands: z.array(sessionStatusWebhookCommandSchema).min(1).readonly(),
-        projectId: identifierStringSchema,
-        runtimeId: identifierStringSchema,
-        sessionId: identifierStringSchema,
-        status: sessionRecordingStatusSchema,
     })
     .readonly();
 export type SessionStatusWebhookBody = z.infer<typeof sessionStatusWebhookBodySchema>;
 
-export const decodeSessionStatusWebhookBody = (encoded: string): SessionStatusWebhookBody =>
-    decode(encoded, sessionStatusWebhookBodySchema);
+const consumedSessionStatusWebhookBodySchema = z
+    .object({
+        ...sessionStatusWebhookBodyFields,
+        commands: z.array(sessionStatusWebhookCommandSchema).readonly(),
+    })
+    .readonly();
+
+export const decodeSessionStatusWebhookBody = (encoded: string): SessionStatusWebhookBody => {
+    const value: unknown = JSON.parse(encoded);
+    const candidate =
+        typeof value === "object" && value !== null && "commands" in value && Array.isArray(value.commands)
+            ? {
+                  ...value,
+                  commands: value.commands.filter((command) => {
+                      if (typeof command !== "object" || command === null || !("outcome" in command)) {
+                          return true;
+                      }
+                      return (
+                          typeof command.outcome !== "string" ||
+                          command.outcome === "cancelled" ||
+                          command.outcome === "failed" ||
+                          command.outcome === "succeeded"
+                      );
+                  }),
+              }
+            : value;
+    return decode(JSON.stringify(candidate), consumedSessionStatusWebhookBodySchema);
+};
 
 export const encodeSessionStatusWebhookBody = (value: SessionStatusWebhookBody): string =>
     encode(value, sessionStatusWebhookBodySchema);

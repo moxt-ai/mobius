@@ -1032,8 +1032,11 @@ export class MobiusTurn {
     }
 }
 
-export function decodeMobiusTurn(value: unknown): MobiusTurn {
+export function decodeMobiusTurn(value: unknown): MobiusTurn | null {
     const turn = decodeTurn(value);
+    if (turn === null) {
+        return null;
+    }
     let state: MobiusTurnState;
     switch (turn.state.kind) {
         case "queued":

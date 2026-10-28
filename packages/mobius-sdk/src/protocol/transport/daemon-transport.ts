@@ -165,8 +165,10 @@ import {
 import {
     decodeSessionHistoryPageLoad,
     decodeSessionHistoryPageLoaded,
+    decodeSessionHistoryWirePageLoaded,
     decodeSessionPreviewHistoryPageLoad,
     decodeSessionPreviewHistoryPageLoaded,
+    decodeSessionPreviewHistoryWirePageLoaded,
     encodeSessionHistoryPageLoad,
     encodeSessionHistoryPageLoaded,
     encodeSessionPreviewHistoryPageLoad,
@@ -175,6 +177,8 @@ import {
     SESSION_HISTORY_PAGE_LOADED_KIND,
     SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND,
     SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND,
+    type SessionHistoryWirePageLoaded,
+    type SessionPreviewHistoryWirePageLoaded,
 } from "../session/observability/history.ts";
 import {
     decodeSessionCancelBeforeStartCommand,
@@ -198,7 +202,7 @@ import {
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "../session/workspace/index.ts";
-import { decodeMessageKind, UnsupportedProtocolMessageKindError } from "../shared/message-codec.ts";
+import { decodeMessageKind, ProtocolMessageError, parseJson } from "../shared/message-codec.ts";
 
 interface MessageSignature<TMessage extends { readonly kind: string }> {
     readonly decoder: (encoded: string) => TMessage;
@@ -359,11 +363,76 @@ export type ServiceToDaemonMessage = ReturnType<
 const serviceToDaemonRegistry: Readonly<Record<string, MessageSignature<ServiceToDaemonMessage>>> =
     serviceToDaemonSignatures;
 
+const knownNativeActions = new Set(["active-turn", "find", "list", "import", "fork"]);
+const knownSessionStatuses = new Set(["idle", "working"]);
+const knownRuntimeUpgradeStatuses = new Set(["accepted", "succeeded", "failed", "rejected"]);
+const knownInteractionKinds = new Set(["session.permission.requested", "session.elicitation.requested"]);
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasUnknownDiscriminator(value: unknown, key: string, known: ReadonlySet<string>): boolean {
+    if (!isRecord(value)) {
+        return false;
+    }
+    const variant = value[key];
+    return typeof variant === "string" && !known.has(variant);
+}
+
+function hasUnknownServiceVariant(kind: string, value: Readonly<Record<string, unknown>>): boolean {
+    return kind === NATIVE_SESSION_REQUEST_KIND && hasUnknownDiscriminator(value, "action", knownNativeActions);
+}
+
+function hasUnknownSessionStatus(value: unknown): boolean {
+    return hasUnknownDiscriminator(value, "kind", knownSessionStatuses);
+}
+
+function hasUnknownDaemonVariant(kind: string, value: Readonly<Record<string, unknown>>): boolean {
+    if (kind === SESSION_STATUS_CHANGED_KIND) {
+        return hasUnknownSessionStatus(value["status"]);
+    }
+    if (kind === SESSION_LISTED_KIND || kind === SESSION_QUERIED_KIND) {
+        const entries = value["entries"];
+        return (
+            Array.isArray(entries) &&
+            entries.some((entry) => isRecord(entry) && hasUnknownSessionStatus(entry["status"]))
+        );
+    }
+    if (kind === SESSION_RESTORED_KIND) {
+        const entry = value["entry"];
+        return isRecord(entry) && hasUnknownSessionStatus(entry["status"]);
+    }
+    if (kind === "runtime.upgrade.result") {
+        return hasUnknownDiscriminator(value["outcome"], "status", knownRuntimeUpgradeStatuses);
+    }
+    if (kind === NATIVE_SESSION_RESULT_KIND) {
+        if (hasUnknownDiscriminator(value, "action", knownNativeActions)) {
+            return true;
+        }
+        if (value["action"] === "active-turn" && isRecord(value["turn"])) {
+            return hasUnknownDiscriminator(value["turn"]["interaction"], "kind", knownInteractionKinds);
+        }
+    }
+    return false;
+}
+
+/** Decodes only message and nested variants known by this SDK. */
+export function decodeKnownServiceToDaemonMessage(encoded: string): ServiceToDaemonMessage | null {
+    const kind = decodeMessageKind(encoded);
+    const signature = serviceToDaemonRegistry[kind];
+    if (signature === undefined) {
+        return null;
+    }
+    const value = parseJson(encoded);
+    return hasUnknownServiceVariant(kind, value) ? null : signature.decoder(encoded);
+}
+
 export function decodeServiceToDaemonMessage(encoded: string): ServiceToDaemonMessage {
     const kind = decodeMessageKind(encoded);
     const signature = serviceToDaemonRegistry[kind];
     if (signature === undefined) {
-        throw new UnsupportedProtocolMessageKindError("service-to-daemon", kind);
+        throw new ProtocolMessageError(`Unknown service-to-daemon message kind: ${kind}`);
     }
     return signature.decoder(encoded);
 }
@@ -508,23 +577,52 @@ export type DaemonToServiceMessage = ReturnType<
 const daemonToServiceRegistry: Readonly<Record<string, MessageSignature<DaemonToServiceMessage>>> =
     daemonToServiceSignatures;
 
+/** Decodes only message and nested variants known by this SDK. */
+export function decodeKnownDaemonToServiceMessage(encoded: string): DaemonToServiceMessage | null {
+    const kind = decodeMessageKind(encoded);
+    const signature = daemonToServiceRegistry[kind];
+    if (signature === undefined) {
+        return null;
+    }
+    const value = parseJson(encoded);
+    return hasUnknownDaemonVariant(kind, value) ? null : signature.decoder(encoded);
+}
+
 export function decodeDaemonToServiceMessage(encoded: string): DaemonToServiceMessage {
     const kind = decodeMessageKind(encoded);
     const signature = daemonToServiceRegistry[kind];
     if (signature === undefined) {
-        throw new UnsupportedProtocolMessageKindError("daemon-to-service", kind);
+        throw new ProtocolMessageError(`Unknown daemon-to-service message kind: ${kind}`);
     }
     return signature.decoder(encoded);
 }
 
 export type DaemonToRelayMessage =
-    | Exclude<DaemonToServiceMessage, { readonly kind: typeof SESSION_EVENT_KIND }>
-    | SessionWireEnvelope;
+    | Exclude<
+          DaemonToServiceMessage,
+          {
+              readonly kind:
+                  | typeof SESSION_EVENT_KIND
+                  | typeof SESSION_HISTORY_PAGE_LOADED_KIND
+                  | typeof SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND;
+          }
+      >
+    | SessionWireEnvelope
+    | SessionHistoryWirePageLoaded
+    | SessionPreviewHistoryWirePageLoaded;
 
-export function decodeDaemonToRelayMessage(encoded: string): DaemonToRelayMessage {
-    return decodeMessageKind(encoded) === SESSION_EVENT_KIND
-        ? decodeSessionWireEnvelope(encoded)
-        : decodeDaemonToServiceMessage(encoded);
+export function decodeDaemonToRelayMessage(encoded: string): DaemonToRelayMessage | null {
+    const kind = decodeMessageKind(encoded);
+    if (kind === SESSION_EVENT_KIND) {
+        return decodeSessionWireEnvelope(encoded);
+    }
+    if (kind === SESSION_HISTORY_PAGE_LOADED_KIND) {
+        return decodeSessionHistoryWirePageLoaded(encoded);
+    }
+    if (kind === SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND) {
+        return decodeSessionPreviewHistoryWirePageLoaded(encoded);
+    }
+    return decodeKnownDaemonToServiceMessage(encoded);
 }
 
 export function encodeDaemonToServiceMessage(message: DaemonToServiceMessage): string {

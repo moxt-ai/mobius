@@ -1,5 +1,5 @@
 import {
-    decodeDaemonToServiceMessage,
+    decodeKnownDaemonToServiceMessage,
     decodeMessageKind,
     decodeRuntimeStatusEvent,
     RUNTIME_STATUS_KIND,
@@ -144,7 +144,7 @@ export class MobiusClient {
                 this.#onStatus(decodeRuntimeStatusEvent(encoded).online);
                 return;
             }
-            decodeDaemonToServiceMessage(encoded);
+            decodeKnownDaemonToServiceMessage(encoded);
         } catch (error) {
             this.#onProtocolError(
                 new MobiusClientError("invalid_protocol_message", "Received an invalid message from the relay", {

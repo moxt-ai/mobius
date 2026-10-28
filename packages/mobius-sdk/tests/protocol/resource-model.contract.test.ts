@@ -26,6 +26,10 @@ describe("Mobius resource contract", () => {
         ];
         for (const state of terminalStates) {
             const decoded = decodeTurn({ ...turn, state });
+            expect(decoded).not.toBeNull();
+            if (decoded === null) {
+                throw new Error("expected a known Turn");
+            }
             expect(decoded.state.kind).toBe(state.kind);
         }
         const queued = decodeTurn({
@@ -33,6 +37,10 @@ describe("Mobius resource contract", () => {
             request: { content: "hello", kind: "prompt", sessionConfigurations: [] },
             state: { kind: "queued" },
         });
+        expect(queued).not.toBeNull();
+        if (queued === null) {
+            throw new Error("expected a known Turn");
+        }
         expect(queued.request.kind).toBe("prompt");
     });
 
@@ -59,6 +67,10 @@ describe("Mobius resource contract", () => {
             },
             turnId: "turn-a",
         });
+        expect(interaction).not.toBeNull();
+        if (interaction === null) {
+            throw new Error("expected a known interaction");
+        }
         expect(interaction.state.kind).toBe("responded");
         expect(interaction.request.kind).toBe("permission");
     });
