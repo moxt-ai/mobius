@@ -36,12 +36,12 @@ const submit = (peer: RealDaemonPeer, commandId: string, prompt: string): void =
         }),
     );
 
-const waitForLifecycle = async (peer: RealDaemonPeer, commandId: string, kind: string): Promise<void> => {
+const waitForLifecycle = async (peer: RealDaemonPeer, commandId: string, kind: string) => {
     for (;;) {
         const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
         if (event.type === "lifecycle-metadata" && event.payload.kind === kind && "commandId" in event.payload) {
             if (event.payload.commandId === commandId) {
-                return;
+                return event.payload;
             }
         }
     }
@@ -152,16 +152,26 @@ test("Given turns that complete, fail, run or are interrupted by a restart, When
 
                 const failed = randomUUID();
                 submit(peer, failed, "fail with model unavailable");
-                await waitForLifecycle(peer, failed, "prompt.failed");
-                // The receipt keeps a sanitized message: an Agent's raw error may quote the prompt.
-                expect((await readExecution(peer)).result).toMatchObject({
+                const failure = await waitForLifecycle(peer, failed, "prompt.failed");
+                expect(failure).toMatchObject({
+                    code: "acp_agent_error",
+                    message: "Internal error: Model unavailable: controlled/test-model",
+                });
+                const expectedFailure = {
                     lastTurn: {
                         commandId: failed,
                         state: "failed",
-                        code: expect.any(String),
-                        message: "The local Agent could not complete the request",
+                        code: "acp_agent_error",
+                        message: "Internal error: Model unavailable: controlled/test-model",
                     },
-                });
+                };
+                expect((await readExecution(peer)).result).toMatchObject(expectedFailure);
+                await peer.restart();
+                expect((await readExecution(peer)).result).toMatchObject(expectedFailure);
+
+                // Replaying the same command returns its original failure without running it again.
+                submit(peer, failed, "fail with model unavailable");
+                expect(await waitForLifecycle(peer, failed, "prompt.failed")).toEqual(failure);
 
                 const interrupted = randomUUID();
                 submit(peer, interrupted, "hold after first delta");

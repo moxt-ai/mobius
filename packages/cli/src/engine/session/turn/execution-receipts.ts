@@ -191,13 +191,11 @@ export class ExecutionReceipts {
         if (receipt === undefined) {
             return;
         }
-        const sanitized =
-            payload.kind === "prompt.completed"
-                ? payload
-                : { ...payload, message: "The local Agent could not complete the request" };
+        // The lifecycle event already carries the bounded client-facing failure. Preserve it so
+        // live delivery, command replay and last-turn recovery report the same outcome.
         this.#save(payload.commandId, {
             ...receipt,
-            outcome: JSON.stringify({ type: "lifecycle-metadata", payload: sanitized, recordedAt: event.recordedAt }),
+            outcome: JSON.stringify({ type: "lifecycle-metadata", payload, recordedAt: event.recordedAt }),
         });
     };
     readonly recover = (): readonly {
