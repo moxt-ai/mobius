@@ -37,6 +37,27 @@ prompt's submission from its execution and completion. A queued prompt has not
 started an Agent turn. Queue, reject and supported steering behavior are daemon
 admission decisions, not guarantees made by ACP's ordinary prompt request.
 
+### Prompt identity across HTTP and daemon APIs
+
+Within the same Runtime and Session, the Mobius HTTP/SDK `turnId` is an alias
+for the prompt's daemon `commandId`: their values are identical, including while
+the prompt is queued. Submission uses the prompt request's `idempotencyKey` as
+this identity. An idempotency key on a later control operation does not replace
+the target prompt's identity. This identity is not a native Agent turn ID or an
+execution attempt ID.
+
+Clients may use a prompt's `commandId` from lifecycle events or execution and
+active-turn snapshots, including queued entries, wherever Mobius expects that
+prompt's `turnId` for cancellation, steering or cancellation before start. Keep
+the same Runtime and Session routing and authorization; the original submission
+response is not required, and no separate ID mapping needs to be stored.
+
+This equality is a compatibility guarantee of the existing APIs. A future
+representation must not silently give these names different identities; any
+change must preserve existing callers under the [backward compatibility rules](#backward-compatibility).
+
+### Shared observation and interaction
+
 Clients observing one session must see prompts submitted by other clients as well
 as Agent output. Prompt lifecycle and queue changes therefore accompany ACP updates
 in the shared event stream. A command reply alone is insufficient to synchronize

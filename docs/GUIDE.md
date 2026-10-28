@@ -188,6 +188,11 @@ lose in-flight messages. Reconnecting resumes the broadcast; clients catch up th
 the available current-turn view, native Agent history, or optional cloud Recording.
 Restarting the daemon does not resume running work or queued prompts.
 
+When reconnecting or observing another client's prompts, use the
+[prompt identity contract](protocol.md#prompt-identity-across-http-and-daemon-apis)
+to target cancellation and steering from the current execution view, even when
+the original submission response is unavailable.
+
 Recording is best effort: slow writes, failures, or restarts can leave gaps. It must
 never block live output, and failed writes are not retried. Recording is not a
 lossless audit archive and does not keep an offline Agent running.
