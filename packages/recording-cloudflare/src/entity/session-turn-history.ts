@@ -1,19 +1,36 @@
 import {
-    sessionRecordingInteractionSchema,
-    sessionRecordingTurnAttemptSchema,
-    sessionRecordingTurnItemSchema,
-    sessionRecordingTurnPrecedingSchema,
-    sessionRecordingTurnPromptSchema,
+    decodeSessionRecordingInteraction,
+    decodeSessionRecordingTurnAttempt,
+    decodeSessionRecordingTurnItem,
+    decodeSessionRecordingTurnPreceding,
+    decodeSessionRecordingTurnPrompt,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { z } from "zod";
 
 const count = z.number().int().nonnegative().safe();
 
+function decodedProtocolValue<T>(decode: (value: unknown) => T): z.ZodType<T> {
+    return z.unknown().transform((value, context) => {
+        try {
+            return decode(value);
+        } catch {
+            context.addIssue({ code: "custom", message: "Value does not match the Mobius protocol" });
+            return z.NEVER;
+        }
+    });
+}
+
+const sessionRecordingTurnAttempt = decodedProtocolValue(decodeSessionRecordingTurnAttempt);
+const sessionRecordingTurnItem = decodedProtocolValue(decodeSessionRecordingTurnItem);
+const sessionRecordingTurnPreceding = decodedProtocolValue(decodeSessionRecordingTurnPreceding);
+const sessionRecordingTurnPrompt = decodedProtocolValue(decodeSessionRecordingTurnPrompt);
+const sessionRecordingInteraction = decodedProtocolValue(decodeSessionRecordingInteraction);
+
 /** A projected Turn together with the fold state its later Recording events need. */
 export const storedTurnSchema = z
     .object({
         answerLength: count,
-        attempt: sessionRecordingTurnAttemptSchema,
+        attempt: sessionRecordingTurnAttempt,
         commandId: z.string().min(1),
         createdAt: z.iso.datetime({ offset: true }),
         generationId: z.string().min(1),
@@ -30,8 +47,8 @@ export const storedTurnSchema = z
         // Null when no other command was running when the prompt was requested. A Turn folded before
         // this was recorded has no such key at all, and it is read as the anchor it is: a prompt that
         // was not placed between another command's work.
-        preceding: sessionRecordingTurnPrecedingSchema.nullish().transform((value) => value ?? null),
-        prompt: sessionRecordingTurnPromptSchema.nullable(),
+        preceding: sessionRecordingTurnPreceding.nullish().transform((value) => value ?? null),
+        prompt: sessionRecordingTurnPrompt.nullable(),
     })
     .readonly();
 export type StoredTurn = z.infer<typeof storedTurnSchema>;
@@ -40,10 +57,10 @@ export type StoredTurn = z.infer<typeof storedTurnSchema>;
  * Item fields as stored. Answer and thought text is kept outside this record, so stored text items
  * carry an empty `text` and `omittedCharacters`; reads fill both from the stored text.
  */
-export const storedTurnItemSchema = sessionRecordingTurnItemSchema;
+export const storedTurnItemSchema = sessionRecordingTurnItem;
 export type StoredTurnItem = z.infer<typeof storedTurnItemSchema>;
 
-export const storedInteractionSchema = sessionRecordingInteractionSchema;
+export const storedInteractionSchema = sessionRecordingInteraction;
 export type StoredInteraction = z.infer<typeof storedInteractionSchema>;
 
 /** Session-wide fold state carried from one folded batch to the next. */

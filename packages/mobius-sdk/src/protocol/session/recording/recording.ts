@@ -47,6 +47,8 @@ const sessionRecordingHistorySchema = z
 
 /** Legacy lifecycle observations from recorded events; never authoritative execution state. */
 export const sessionRecordingStatusSchema = z.enum(["running", "idle", "failed"]);
+export const decodeSessionRecordingStatus = (value: unknown): SessionRecordingStatus =>
+    sessionRecordingStatusSchema.parse(value);
 
 // Recording cursors are opaque append-order tokens. The ordinal locates a recorded batch and the
 // position locates an event inside that batch; event positions alone restart after a Session reload.

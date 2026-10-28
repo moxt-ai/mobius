@@ -1,13 +1,12 @@
 import type {
-    promptMetadataSchema,
-    promptUsageSchema,
+    PromptMetadata,
+    PromptUsage,
     SessionCapabilities,
     SessionConfigOption,
     SessionEvent,
     SessionEventPayload,
     SessionLiveEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
-import type { z } from "zod";
 import type { AgentProcessPool } from "../../session/process/agent-process-pool.ts";
 import type { AdapterSessionConnection, LiveSessionConnectionOptions } from "../adapter/session-events.ts";
 import type { AcpAgentDefinition } from "../agent/agent-definition.ts";
@@ -88,8 +87,8 @@ export interface AdapterSessionTarget {
 
 export interface AdapterPromptResult {
     readonly stopReason: "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" | "cancelled";
-    readonly usage?: z.infer<typeof promptUsageSchema> | null;
-    readonly _meta?: z.infer<typeof promptMetadataSchema> | null;
+    readonly usage?: PromptUsage | null;
+    readonly _meta?: PromptMetadata | null;
 }
 
 /** Business-facing session operations. Transport and initialization belong to the adapter. */

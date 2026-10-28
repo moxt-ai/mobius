@@ -1,7 +1,7 @@
 import {
+    isSessionLiveEvent,
     lastRecordedLifecycleStatus,
     type SessionRecordingStatus,
-    sessionLiveEventSchema,
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { SessionRecordingStorage } from "../storage/session-recording-storage.ts";
 
@@ -21,8 +21,7 @@ export function readLegacyRecordingStatus(
     for (const batch of storage.batchesNewestFirst()) {
         const status = lastRecordedLifecycleStatus(
             batch.events.flatMap((event) => {
-                const parsed = sessionLiveEventSchema.safeParse(event);
-                return parsed.success ? [parsed.data] : [];
+                return isSessionLiveEvent(event) ? [event] : [];
             }),
         );
         if (status !== null) {
