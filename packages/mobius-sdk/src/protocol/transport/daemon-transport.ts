@@ -67,6 +67,13 @@ import {
     SESSION_RENAMED_KIND,
 } from "../session/configuration/title.ts";
 import {
+    decodeSessionEventEnvelope,
+    decodeSessionWireEnvelope,
+    encodeSessionEventEnvelope,
+    SESSION_EVENT_KIND,
+    type SessionWireEnvelope,
+} from "../session/events/index.ts";
+import {
     CONTENT_AVAILABLE_KIND,
     CONTENT_COMMIT_KIND,
     CONTENT_READY_KIND,
@@ -155,13 +162,6 @@ import {
     NATIVE_SESSION_REQUEST_KIND,
     NATIVE_SESSION_RESULT_KIND,
 } from "../session/native/index.ts";
-import {
-    decodeSessionEventEnvelope,
-    decodeSessionWireEnvelope,
-    encodeSessionEventEnvelope,
-    SESSION_EVENT_KIND,
-    type SessionWireEnvelope,
-} from "../session/observability/event-log.ts";
 import {
     decodeSessionHistoryPageLoad,
     decodeSessionHistoryPageLoaded,

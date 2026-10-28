@@ -2,7 +2,11 @@ import { z } from "zod";
 import { DIRECTORY_IDENTIFIER as directoryIdentifier } from "../../shared/directory.ts";
 import { identifierStringSchema as identifier } from "../../shared/identifier.ts";
 import { ProtocolMessageError } from "../../shared/message-codec.ts";
-import { decodeKnownNativeSessionEvents, nativeSessionEventsSchema, sessionEventOmissionSchema } from "./event-log.ts";
+import {
+    decodeKnownNativeSessionEvents,
+    nativeSessionEventsSchema,
+    sessionEventOmissionSchema,
+} from "../events/index.ts";
 
 export const SESSION_HISTORY_PAGE_LOAD_KIND = "session.live-history.v2.page.load";
 export const SESSION_HISTORY_PAGE_LOADED_KIND = "session.live-history.v2.page.loaded";
