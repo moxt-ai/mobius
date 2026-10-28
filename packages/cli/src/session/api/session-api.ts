@@ -18,6 +18,7 @@ import type {
     SessionStatusChangedEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { AcpAgentDefinition } from "../../acp/agent/agent-definition.ts";
+import type { BackgroundActivity } from "../../acp/agent/in-process-endpoint.ts";
 import type { PromptImageInput, PromptResourceInput } from "../../acp/client/prompt-content.ts";
 import type { Adapter } from "../../acp/native-history/preview-contract.ts";
 import type { NativeSessionOrigin } from "../../acp/protocol/native-session.ts";
@@ -100,7 +101,7 @@ export interface ElicitationResponseOptions {
 export type PromptResult = AgentPromptResponse;
 
 export interface SessionObserver {
-    readonly onBackgroundActivity?: (source: object, active: boolean) => void;
+    readonly onBackgroundActivity?: (source: object, activity: BackgroundActivity) => void;
     readonly onSessionEvent?: (event: SessionLiveEvent) => Promise<void>;
     readonly onCommands: (event: SessionCommandsUpdatedEvent) => Promise<void>;
     readonly onConfig: (event: SessionConfigUpdatedEvent) => Promise<void>;
@@ -112,7 +113,7 @@ export interface SessionObserver {
 }
 
 export class NullSessionObserver implements SessionObserver {
-    readonly onBackgroundActivity = (_source: object, _active: boolean): void => {};
+    readonly onBackgroundActivity = (_source: object, _activity: BackgroundActivity): void => {};
     readonly onSessionEvent = (_event: SessionLiveEvent): Promise<void> => Promise.resolve();
     readonly onCommands = (): Promise<void> => Promise.resolve();
     readonly onConfig = (): Promise<void> => Promise.resolve();

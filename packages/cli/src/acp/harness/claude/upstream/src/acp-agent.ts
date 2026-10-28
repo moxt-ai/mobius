@@ -1548,14 +1548,17 @@ export class ClaudeAcpAgent {
     private providerUpdate: Promise<void> | null = null;
     private readonly exitPlan: ExitPlanCoordinator<Session, Turn>;
     private readonly environment: Readonly<NodeJS.ProcessEnv>;
-    private readonly backgroundSessions = new Set<Session>();
-    private reportBackgroundActivity(session: Session, active: boolean): void {
-        if (active) {
-            this.backgroundSessions.add(session);
-        } else {
+    private readonly backgroundSessions = new Map<Session, Exclude<BackgroundActivity, "none">>();
+    private reportBackgroundActivity(session: Session, activity: BackgroundActivity): void {
+        if (activity === "none") {
             this.backgroundSessions.delete(session);
+        } else {
+            this.backgroundSessions.set(session, activity);
         }
-        this.onBackgroundActivity?.(this.backgroundSessions.size > 0);
+        const activities = new Set(this.backgroundSessions.values());
+        this.onBackgroundActivity?.(
+            activities.has("running") ? "running" : activities.has("awaiting-results") ? "awaiting-results" : "none",
+        );
     }
     /** Grace period before a `session/cancel` forces a wedged prompt loop to
      *  return "cancelled". See {@link DEFAULT_FORCE_CANCEL_GRACE_MS}. Mutable so
@@ -1567,7 +1570,7 @@ export class ClaudeAcpAgent {
         logger?: Logger,
         environment: Readonly<NodeJS.ProcessEnv> = process.env,
         private readonly spawnClaudeCodeProcess?: Options["spawnClaudeCodeProcess"],
-        private readonly onBackgroundActivity?: (active: boolean) => void,
+        private readonly onBackgroundActivity?: (activity: BackgroundActivity) => void,
     ) {
         this.sessions = {};
         this.client = client;
@@ -2342,7 +2345,10 @@ export class ClaudeAcpAgent {
         let processingBackgroundResults = new Set<string>();
         let hasBackgroundLevel = false;
         const reportBackgroundActivity = () =>
-            this.reportBackgroundActivity(session, backgroundTasks.size > 0 || awaitingBackgroundResults.size > 0);
+            this.reportBackgroundActivity(
+                session,
+                backgroundTasks.size > 0 ? "running" : awaitingBackgroundResults.size > 0 ? "awaiting-results" : "none",
+            );
         // Per-turn scratch, reset whenever a turn becomes active. Kept as consumer
         // locals (rather than per-Turn fields) because they describe the message
         // currently being processed, which is sequential — exactly one turn is
@@ -5028,7 +5034,7 @@ export class ClaudeAcpAgent {
         session.settingsManager.dispose();
         session.input.end();
         session.query.close();
-        this.reportBackgroundActivity(session, false);
+        this.reportBackgroundActivity(session, "none");
     }
 
     /** Cleanly tear down a session: cancel in-flight work, release stream
@@ -8662,6 +8668,9 @@ export interface ClaudeAcpApp {
     readonly app: AgentApp;
 }
 
+/** Native background work: tasks still running, or finished tasks whose results the model has not handled. */
+export type BackgroundActivity = "none" | "running" | "awaiting-results";
+
 export interface ClaudeAcpAppOptions {
     readonly spawnClaudeCodeProcess?: Options["spawnClaudeCodeProcess"];
     readonly environment?: Readonly<NodeJS.ProcessEnv>;
@@ -8669,7 +8678,7 @@ export interface ClaudeAcpAppOptions {
     readonly onConnect?: (connection: AgentConnection) => void;
     /** In-process delivery waits for consumption; standalone ACP uses the wire transport. */
     readonly onSessionUpdate?: (params: ClaudeSessionNotification) => Promise<void>;
-    readonly onBackgroundActivity?: (active: boolean) => void;
+    readonly onBackgroundActivity?: (activity: BackgroundActivity) => void;
 }
 
 export function createClaudeAcpApp(options: ClaudeAcpAppOptions = {}): ClaudeAcpApp {

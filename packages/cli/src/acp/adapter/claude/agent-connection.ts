@@ -12,7 +12,7 @@ export class ClaudeAgentConnection extends EndpointAgentConnection {
             onSessionUpdate: async (notification: ClaudeSessionNotification) => {
                 await options.client.onUpdate(notification);
             },
-            onBackgroundActivity: (active) => options.onBackgroundActivity?.(active),
+            onBackgroundActivity: (activity) => options.onBackgroundActivity?.(activity),
         });
         super(endpoint, options.client);
     }

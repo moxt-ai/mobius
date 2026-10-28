@@ -34,11 +34,18 @@ import { packedRelease } from "../support/packed-daemon-release.ts";
 
 // The daemon switches only after this much idle time, checked once a minute.
 const UPGRADE_QUIET_MILLISECONDS = 31 * 60_000;
+const BACKGROUND_AGENT = {
+    dispatchDescription: "Check in the background",
+    dispatchPrompt: "Delegate the verification to a background helper",
+    innerPrompt: "Use a shell tool successfully, then reply with your findings",
+    innerReport: "BACKGROUND_HELPER_DONE",
+    runInBackground: true,
+} as const;
 
 export function registerManagedUpgradeScenarios(
     scenarios: readonly {
         readonly agentId: "claude" | "codex" | "pi";
-        readonly mode: "foreground" | "long-foreground" | "background" | "endpoint-exit";
+        readonly mode: "foreground" | "long-foreground" | "background" | "background-agent" | "endpoint-exit";
         readonly exitCode: 0 | 1;
         readonly taskCount: 1 | 2;
     }[],
@@ -57,6 +64,10 @@ export function registerManagedUpgradeScenarios(
             const secondAnswering = Promise.withResolvers<void>();
             const releaseSecondAnswer = Promise.withResolvers<void>();
             const tasksCompleted = Promise.withResolvers<void>();
+            const agentRunning = Promise.withResolvers<void>();
+            const releaseAgent = Promise.withResolvers<void>();
+            const agentResultHeld = Promise.withResolvers<void>();
+            const releaseAgentResult = Promise.withResolvers<void>();
             const terminalTasks = new Set<string>();
             let startedTasks = 0;
             let heldAnswers = 0;
@@ -75,6 +86,8 @@ export function registerManagedUpgradeScenarios(
                 releaseSecondTask.resolve();
                 releaseAnswer.resolve();
                 releaseSecondAnswer.resolve();
+                releaseAgent.resolve();
+                releaseAgentResult.resolve();
                 taskServer.closeAllConnections();
                 await new Promise<void>((done) => taskServer.close(() => done()));
             });
@@ -85,10 +98,24 @@ export function registerManagedUpgradeScenarios(
                 if (agentId === "claude") {
                     const provider = resources.use(
                         await FakeAnthropicProvider.start("claude-sonnet-4-6", "UPGRADE_PRESERVED_REPLY", {
-                            ...(mode === "foreground"
+                            ...(mode === "foreground" || mode === "background-agent"
                                 ? {}
                                 : { bash: { command, runInBackground: mode === "background" } }),
-                            beforeFirstText: async (scenario) => {
+                            ...(mode === "background-agent" ? { subagent: BACKGROUND_AGENT } : {}),
+                            beforeFirstText: async (scenario, _signal, conversation) => {
+                                if (mode === "background-agent") {
+                                    // Hold the subagent's answer, then the root's handling of its result.
+                                    if (!conversation.includes(BACKGROUND_AGENT.dispatchPrompt)) {
+                                        if (conversation.includes(BACKGROUND_AGENT.innerPrompt)) {
+                                            agentRunning.resolve();
+                                            await releaseAgent.promise;
+                                        }
+                                    } else if (conversation.includes(BACKGROUND_AGENT.innerReport)) {
+                                        agentResultHeld.resolve();
+                                        await releaseAgentResult.promise;
+                                    }
+                                    return;
+                                }
                                 if (!holdAnswer || scenario.toolCalls === 0) {
                                     return;
                                 }
@@ -343,7 +370,7 @@ export function registerManagedUpgradeScenarios(
                 );
                 return commandId;
             };
-            const deferred = Promise.withResolvers<void>();
+            const deferred = Promise.withResolvers<Record<string, unknown>>();
             let watcher: ReturnType<typeof watch> | undefined;
             const abort = (): void => {
                 failed.reject(signal.reason);
@@ -375,8 +402,9 @@ export function registerManagedUpgradeScenarios(
                 watcher = watch(logs, () => {
                     void readFile(join(logs, "daemon.log"), "utf8").then(
                         (text) => {
-                            if (text.includes('"event":"daemon_upgrade_deferred"')) {
-                                deferred.resolve();
+                            const line = /\{[^\n]*"event":"daemon_upgrade_deferred"[^\n]*\}/u.exec(text)?.[0];
+                            if (line !== undefined) {
+                                deferred.resolve(JSON.parse(line));
                             }
                         },
                         () => undefined,
@@ -402,6 +430,26 @@ export function registerManagedUpgradeScenarios(
                     await advance(3_600_000);
                     expect(await outcome()).toBe("upgraded");
                     expect((await wait(upgraded.promise)).outcome.status).toBe("succeeded");
+                    expect(failures).toEqual([]);
+                    return;
+                }
+                if (mode === "background-agent") {
+                    const dispatch = prompt(BACKGROUND_AGENT.dispatchPrompt);
+                    await wait(agentRunning.promise);
+                    await advance(3_600_000);
+                    expect(await outcome()).toBe("deferred");
+                    releaseAgent.resolve();
+                    // The Agent finished but its result is still being handled after the
+                    // quiet period has elapsed; the reply must still reach this worker.
+                    await wait(agentResultHeld.promise);
+                    await advance(UPGRADE_QUIET_MILLISECONDS);
+                    releaseAgentResult.resolve();
+                    await wait(completions.get(dispatch)?.promise ?? Promise.reject(new Error("Missing completion")));
+                    expect(replies.join("")).toContain("UPGRADE_PRESERVED_REPLY");
+                    expect(await readFile(join(control.stateDirectory, "worker.lock"), "utf8")).toBe(worker);
+                    await advance(UPGRADE_QUIET_MILLISECONDS);
+                    expect((await wait(upgraded.promise)).outcome.status).toBe("succeeded");
+                    expect(taskStatuses).toContain("completed");
                     expect(failures).toEqual([]);
                     return;
                 }
@@ -431,6 +479,12 @@ export function registerManagedUpgradeScenarios(
                 }
                 await advance(3_600_000);
                 expect(await outcome()).toBe("deferred");
+                // The diagnostic names what holds the upgrade.
+                expect(await deferred.promise).toMatchObject(
+                    mode === "foreground"
+                        ? { turns: second === undefined ? 1 : 2, backgroundRunning: 0, backgroundAwaitingResults: 0 }
+                        : { turns: 0, backgroundRunning: 1, backgroundAwaitingResults: 0 },
+                );
                 if (mode !== "foreground") {
                     expect(taskStatuses).toContain("running");
                     const sessionId = nativeSessions.get(first);
@@ -508,6 +562,9 @@ export function registerManagedUpgradeScenarios(
                 expect(await readFile(join(control.stateDirectory, "worker.lock"), "utf8")).toBe(worker);
                 await advance(UPGRADE_QUIET_MILLISECONDS);
                 const upgrade = await wait(upgraded.promise);
+                expect(await readFile(join(control.stateDirectory, "logs", "daemon.log"), "utf8")).toContain(
+                    '"event":"daemon_upgrade_released"',
+                );
                 expect(upgrade.outcome.status).toBe("succeeded");
                 expect(upgrade.version).toBe(version);
                 if (mode === "background") {

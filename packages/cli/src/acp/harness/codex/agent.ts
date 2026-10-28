@@ -109,11 +109,11 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             threadId: () => this.#nativeSessionId,
             connection: () => this.#connection,
             emit: this.#emit,
-            onBackgroundActivity: (active) => {
+            onBackgroundActivity: (activity) => {
                 // Closure owns the final release after process cleanup. Queued native
                 // items must not reacquire activity once that cleanup has started.
                 if (this.#closePromise === null) {
-                    this.#onBackgroundActivity?.(active);
+                    this.#onBackgroundActivity?.(activity);
                 }
             },
             close: this.close,
@@ -287,7 +287,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                     await stopProcessTree(child, captured);
                 } finally {
                     this.#connection?.close();
-                    this.#onBackgroundActivity?.(false);
+                    this.#onBackgroundActivity?.("none");
                 }
             })();
         }

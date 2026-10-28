@@ -9,7 +9,7 @@ export class CodexAgentConnection extends EndpointAgentConnection {
             cwd: options.cwd,
             environment: options.environment,
             onSessionUpdate: options.client.onUpdate,
-            onBackgroundActivity: (active) => options.onBackgroundActivity?.(active),
+            onBackgroundActivity: (activity) => options.onBackgroundActivity?.(activity),
         });
         super(endpoint, options.client);
     }
