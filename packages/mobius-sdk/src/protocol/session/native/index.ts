@@ -52,6 +52,24 @@ export const commandDeliverySchema = z.discriminatedUnion("state", [
 ]);
 export type CommandDelivery = z.infer<typeof commandDeliverySchema>;
 
+/**
+ * How the Session's most recent started command ended, from the Runtime's execution receipts.
+ * A client that missed the live outcome, after leaving, reloading or reconnecting, shows it from
+ * this. A failure carries the receipt's sanitized message, never the Agent's raw error.
+ */
+export const lastTurnOutcomeSchema = z.discriminatedUnion("state", [
+    z.object({ commandId: identifier, state: z.literal("completed"), stopReason: z.string().max(2_048) }).readonly(),
+    z
+        .object({
+            code: identifier,
+            commandId: identifier,
+            message: z.string().min(1).max(500),
+            state: z.literal("failed"),
+        })
+        .readonly(),
+]);
+export type LastTurnOutcome = z.infer<typeof lastTurnOutcomeSchema>;
+
 const identity = {
     ...envelope,
     kind: z.literal(NATIVE_SESSION_REQUEST_KIND),
@@ -162,6 +180,8 @@ const nativeSessionResultSchema = z.discriminatedUnion("action", [
             // Present only when the request named a command and every hop understands it. An
             // unrecognized delivery from a newer peer reads as absent instead of failing the snapshot.
             command: commandDeliverySchema.optional().catch(undefined),
+            // Absent from older Runtimes and while the last started command is still running.
+            lastTurn: lastTurnOutcomeSchema.optional().catch(undefined),
         })
         .readonly(),
     z

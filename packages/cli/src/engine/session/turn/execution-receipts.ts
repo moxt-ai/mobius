@@ -3,6 +3,7 @@ import {
     type CommandDelivery,
     decodeKnownSessionEventPayload,
     encodeSessionCancelBeforeStartCommand,
+    type LastTurnOutcome,
     type SessionEventPayload,
     type SessionLiveEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
@@ -102,6 +103,44 @@ export class ExecutionReceipts {
                 return { code: outcome.payload.code, state: "failed" };
             default:
                 return { state: "expired" };
+        }
+    };
+    /**
+     * How the Session's most recent started command ended. Receipts keep admission order, or the
+     * order they last changed after a restart; commands that never started (queued, or reserved for
+     * cancellation) are not turns, unless a restart failed them before they could start. Undefined
+     * while that command still runs, or when no turn is retained.
+     */
+    readonly lastTurn = (sessionId: string): LastTurnOutcome | undefined => {
+        let last: string | undefined;
+        for (const [commandId, receipt] of this.#executions) {
+            if (receipt.sessionId !== sessionId) {
+                continue;
+            }
+            const outcome = receipt.outcome === null ? undefined : this.outcome(commandId);
+            const failedBeforeStart =
+                outcome?.type === "lifecycle-metadata" && outcome.payload.kind === "prompt.failed-before-start";
+            if (receipt.started || failedBeforeStart) {
+                last = commandId;
+            }
+        }
+        const outcome = last === undefined ? undefined : this.outcome(last);
+        if (last === undefined || outcome?.type !== "lifecycle-metadata") {
+            return undefined;
+        }
+        switch (outcome.payload.kind) {
+            case "prompt.completed":
+                return { commandId: last, state: "completed", stopReason: outcome.payload.stopReason };
+            case "prompt.failed":
+            case "prompt.failed-before-start":
+                return {
+                    code: outcome.payload.code,
+                    commandId: last,
+                    message: outcome.payload.message,
+                    state: "failed",
+                };
+            default:
+                return undefined;
         }
     };
     /** Reserves an unseen command for cancellation before a delayed prompt can claim its identity. */

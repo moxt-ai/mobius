@@ -128,3 +128,62 @@ test("Given commands the Runtime finished, failed, is running or never received,
         await rm(directory, { recursive: true, force: true });
     }
 }, 90_000);
+
+// @no-uc: Compatibility; a client that missed a turn's live outcome recovers it from the Runtime's execution receipts.
+test("Given turns that complete, fail, run or are interrupted by a restart, When a client reads the Session execution, Then it reports how the last started turn ended until a newer turn replaces it", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mobius-last-turn-"));
+    try {
+        const executableDirectory = await writeControlledAcpExecutable(directory);
+        await withControlledDaemon(
+            new ControlledAcpAgentSpecification(),
+            {
+                MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(directory, "agent"),
+                PATH: executableDirectory,
+            },
+            async (peer) => {
+                expect((await readExecution(peer)).raw).not.toHaveProperty("lastTurn");
+
+                const completed = randomUUID();
+                submit(peer, completed, "The request completes");
+                await waitForLifecycle(peer, completed, "prompt.completed");
+                expect((await readExecution(peer)).result).toMatchObject({
+                    lastTurn: { commandId: completed, state: "completed", stopReason: "end_turn" },
+                });
+
+                const failed = randomUUID();
+                submit(peer, failed, "fail with model unavailable");
+                await waitForLifecycle(peer, failed, "prompt.failed");
+                // The receipt keeps a sanitized message: an Agent's raw error may quote the prompt.
+                expect((await readExecution(peer)).result).toMatchObject({
+                    lastTurn: {
+                        commandId: failed,
+                        state: "failed",
+                        code: expect.any(String),
+                        message: "The local Agent could not complete the request",
+                    },
+                });
+
+                const interrupted = randomUUID();
+                submit(peer, interrupted, "hold after first delta");
+                await waitForLifecycle(peer, interrupted, "prompt.started");
+                const running = await readExecution(peer);
+                expect(running.result).toMatchObject({ turn: { commandId: interrupted, state: "running" } });
+                expect(running.raw).not.toHaveProperty("lastTurn");
+
+                await peer.restart();
+                expect((await readExecution(peer)).result).toMatchObject({
+                    lastTurn: { commandId: interrupted, state: "failed", code: "runtime_restarted" },
+                });
+
+                const next = randomUUID();
+                submit(peer, next, "The next request completes");
+                await waitForLifecycle(peer, next, "prompt.completed");
+                expect((await readExecution(peer)).result).toMatchObject({
+                    lastTurn: { commandId: next, state: "completed", stopReason: "end_turn" },
+                });
+            },
+        );
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+}, 90_000);
