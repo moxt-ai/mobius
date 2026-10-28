@@ -33,6 +33,8 @@ export async function packedRelease(
                 JSON.stringify({
                     entryPoints: [join(source, "src/cli/entrypoint.ts")],
                     outfile: join(source, "dist/cli.js"),
+                    // Windows fixtures can be on a different drive from the workspace's pnpm dependency junctions.
+                    nodePaths: [resolve(import.meta.dirname, "../../node_modules")],
                     bundle: true,
                     platform: "node",
                     target: "node22.19.0",
