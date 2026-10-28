@@ -14,7 +14,19 @@ const storedSessionConfigurationsSchema = z
     .max(100);
 
 export const decodeStoredSessionConfigurations = (value: unknown): readonly StoredSessionConfiguration[] =>
-    storedSessionConfigurationsSchema.parse(value);
+    storedSessionConfigurationsSchema.parse(
+        Array.isArray(value)
+            ? value.filter(
+                  (configuration) =>
+                      typeof configuration !== "object" ||
+                      configuration === null ||
+                      !("type" in configuration) ||
+                      typeof configuration.type !== "string" ||
+                      configuration.type === "boolean" ||
+                      configuration.type === "select",
+              )
+            : value,
+    );
 
 export type ApplyStoredSessionConfiguration = (
     configuration: StoredSessionConfiguration,

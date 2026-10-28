@@ -11,19 +11,6 @@ export class ProtocolMessageError extends Error {
     }
 }
 
-export class UnsupportedProtocolMessageKindError extends Error {
-    readonly code = "unsupported_protocol_message_kind";
-    readonly direction: "daemon-to-service" | "service-to-daemon";
-    readonly messageKind: string;
-
-    constructor(direction: "daemon-to-service" | "service-to-daemon", messageKind: string) {
-        super(`Unsupported ${direction} message kind: ${messageKind}`);
-        this.name = "UnsupportedProtocolMessageKindError";
-        this.direction = direction;
-        this.messageKind = messageKind;
-    }
-}
-
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }

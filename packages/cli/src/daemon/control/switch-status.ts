@@ -1,16 +1,16 @@
 import type { InstallationDirectory } from "../../storage/installation/installation-files.ts";
 import { sendLocalRequest } from "./local-client.ts";
-import { type DaemonReleaseSwitchState, lifecycleResponse } from "./protocol.ts";
+import { type DaemonReleaseSwitchState, decodeKnownLifecycleResponse } from "./protocol.ts";
 
 export async function readSwitchStatus(
     directory: InstallationDirectory,
     signal: AbortSignal,
     wait = false,
 ): Promise<DaemonReleaseSwitchState | null> {
-    const response = lifecycleResponse.parse(
+    const response = decodeKnownLifecycleResponse(
         await sendLocalRequest(directory, "manager", { kind: "switch-status", wait }, signal),
     );
-    if (response.kind !== "switch-status") {
+    if (response?.kind !== "switch-status") {
         throw new Error("The manager could not return the switch status");
     }
     return response.state;

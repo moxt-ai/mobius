@@ -274,7 +274,7 @@ const sessionRecordingExecutionSchema = z
 export type SessionRecordingExecution = z.infer<typeof sessionRecordingExecutionSchema>;
 
 export const decodeSessionRecordingExecution = (encoded: string): SessionRecordingExecution =>
-    decode(encoded, sessionRecordingExecutionSchema);
+    decodeSanitized(encoded, sanitizeExecution, sessionRecordingExecutionSchema);
 
 export const encodeSessionRecordingExecution = (value: SessionRecordingExecution): string =>
     JSON.stringify(sessionRecordingExecutionSchema.parse(value));
@@ -333,29 +333,173 @@ export type SessionRecordingTurnPage = z.infer<typeof sessionRecordingTurnPageSc
 export type SessionRecordingTurnItemPage = z.infer<typeof sessionRecordingTurnItemPageSchema>;
 export type SessionRecordingTurnItemDetail = z.infer<typeof sessionRecordingTurnItemDetailSchema>;
 
-function decode<T>(encoded: string, schema: z.ZodType<T>): T {
+function decodeSanitized<T>(encoded: string, sanitize: (value: unknown) => unknown, schema: z.ZodType<T>): T {
     try {
-        const value: unknown = JSON.parse(encoded);
-        return schema.parse(value);
+        return schema.parse(sanitize(JSON.parse(encoded)));
     } catch (cause) {
         throw new ProtocolMessageError("Invalid Session Recording message", { cause });
     }
 }
 
+type JsonRecord = Record<string, unknown>;
+
+const turnAttemptKinds = new Set([
+    "cancelled",
+    "failed",
+    "indeterminate",
+    "none",
+    "running",
+    "succeeded",
+    "waiting_input",
+]);
+const turnItemKinds = new Set(["answer", "thought", "tool"]);
+const toolDetailKinds = new Set(["inline", "omitted"]);
+const recordingInteractionKinds = new Set(["elicitation", "permission"]);
+const contentBlockTypes = new Set([
+    "audio",
+    "external_audio",
+    "external_image",
+    "external_resource",
+    "image",
+    "resource",
+    "resource_link",
+    "text",
+]);
+const toolContentTypes = new Set(["content", "diff", "terminal"]);
+
+function record(value: unknown): JsonRecord | null {
+    return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as JsonRecord) : null;
+}
+
+function isUnknownVariant(value: unknown, discriminator: string, known: ReadonlySet<string>): boolean {
+    const candidate = record(value)?.[discriminator];
+    return typeof candidate === "string" && !known.has(candidate);
+}
+
+function knownVariants(value: unknown, discriminator: string, known: ReadonlySet<string>): unknown {
+    return Array.isArray(value) ? value.filter((item) => !isUnknownVariant(item, discriminator, known)) : value;
+}
+
+function sanitizeToolContent(value: unknown): unknown {
+    if (!Array.isArray(value)) {
+        return value;
+    }
+    return value
+        .filter((item) => !isUnknownVariant(item, "type", toolContentTypes))
+        .filter((item) => {
+            const candidate = record(item);
+            return (
+                candidate?.["type"] !== "content" || !isUnknownVariant(candidate["content"], "type", contentBlockTypes)
+            );
+        });
+}
+
+function sanitizeTurnItem(value: unknown): unknown | null {
+    if (isUnknownVariant(value, "kind", turnItemKinds)) {
+        return null;
+    }
+    const item = record(value);
+    if (item?.["kind"] !== "tool") {
+        return value;
+    }
+    if (isUnknownVariant(item["detail"], "kind", toolDetailKinds)) {
+        return null;
+    }
+    const detail = record(item["detail"]);
+    return detail?.["kind"] === "inline"
+        ? { ...item, detail: { ...detail, content: sanitizeToolContent(detail["content"]) } }
+        : value;
+}
+
+function sanitizePrompt(value: unknown): unknown {
+    const prompt = record(value);
+    if (prompt === null || !Array.isArray(prompt["content"])) {
+        return value;
+    }
+    const content = knownVariants(prompt["content"], "type", contentBlockTypes) as readonly unknown[];
+    return content.length === 0 ? null : { ...prompt, content };
+}
+
+function sanitizeTurn(value: unknown): unknown | null {
+    const turn = record(value);
+    if (turn === null || isUnknownVariant(turn["attempt"], "kind", turnAttemptKinds)) {
+        return turn === null ? value : null;
+    }
+    return {
+        ...turn,
+        items: Array.isArray(turn["items"])
+            ? turn["items"].map(sanitizeTurnItem).filter((item) => item !== null)
+            : turn["items"],
+        prompt: sanitizePrompt(turn["prompt"]),
+    };
+}
+
+function sanitizeTurnPage(value: unknown): unknown {
+    const page = record(value);
+    if (page === null) {
+        return value;
+    }
+    return {
+        ...page,
+        interactions: knownVariants(page["interactions"], "kind", recordingInteractionKinds),
+        turns: Array.isArray(page["turns"])
+            ? page["turns"].map(sanitizeTurn).filter((turn) => turn !== null)
+            : page["turns"],
+    };
+}
+
+function sanitizeExecution(value: unknown): unknown {
+    const execution = record(value);
+    if (execution === null || !Array.isArray(execution["commands"])) {
+        return value;
+    }
+    return {
+        ...execution,
+        commands: execution["commands"].filter(
+            (command) => !isUnknownVariant(record(command)?.["attempt"], "kind", turnAttemptKinds),
+        ),
+    };
+}
+
 export const decodeSessionRecordingTurnPage = (encoded: string): SessionRecordingTurnPage =>
-    decode(encoded, sessionRecordingTurnPageSchema);
+    decodeSanitized(encoded, sanitizeTurnPage, sessionRecordingTurnPageSchema);
 
 export const encodeSessionRecordingTurnPage = (value: SessionRecordingTurnPage): string =>
     JSON.stringify(sessionRecordingTurnPageSchema.parse(value));
 
 export const decodeSessionRecordingTurnItemPage = (encoded: string): SessionRecordingTurnItemPage =>
-    decode(encoded, sessionRecordingTurnItemPageSchema);
+    decodeSanitized(
+        encoded,
+        (value) => {
+            const page = record(value);
+            return page === null
+                ? value
+                : {
+                      ...page,
+                      items: Array.isArray(page["items"])
+                          ? page["items"].map(sanitizeTurnItem).filter((item) => item !== null)
+                          : page["items"],
+                  };
+        },
+        sessionRecordingTurnItemPageSchema,
+    );
 
 export const encodeSessionRecordingTurnItemPage = (value: SessionRecordingTurnItemPage): string =>
     JSON.stringify(sessionRecordingTurnItemPageSchema.parse(value));
 
-export const decodeSessionRecordingTurnItemDetail = (encoded: string): SessionRecordingTurnItemDetail =>
-    decode(encoded, sessionRecordingTurnItemDetailSchema);
+export const decodeSessionRecordingTurnItemDetail = (encoded: string): SessionRecordingTurnItemDetail | null => {
+    try {
+        const value: unknown = JSON.parse(encoded);
+        const detail = record(value);
+        if (detail === null) {
+            return sessionRecordingTurnItemDetailSchema.parse(value);
+        }
+        const item = sanitizeTurnItem(detail["item"]);
+        return item === null ? null : sessionRecordingTurnItemDetailSchema.parse({ ...detail, item });
+    } catch (cause) {
+        throw new ProtocolMessageError("Invalid Session Recording message", { cause });
+    }
+};
 
 export const encodeSessionRecordingTurnItemDetail = (value: SessionRecordingTurnItemDetail): string =>
     JSON.stringify(sessionRecordingTurnItemDetailSchema.parse(value));

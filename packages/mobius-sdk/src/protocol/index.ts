@@ -104,7 +104,6 @@ export { decodeIdentifier, type Identifier, isIdentifier } from "./shared/identi
 export {
     decodeMessageKind,
     ProtocolMessageError,
-    UnsupportedProtocolMessageKindError,
 } from "./shared/message-codec.ts";
 // Transport and platform addressing.
 export * from "./transport/daemon-transport.ts";

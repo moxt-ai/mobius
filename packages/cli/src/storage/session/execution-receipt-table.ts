@@ -1,4 +1,4 @@
-import { sessionEventPayloadSchema } from "@moxt-ai/mobius-sdk/protocol";
+import { decodeKnownSessionEventPayload } from "@moxt-ai/mobius-sdk/protocol";
 import { and, asc, desc, eq, isNotNull, notInArray, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { executionIdentity, executionReceipt } from "../../schema/acp-session-store/index.ts";
@@ -24,7 +24,10 @@ function legacyState(receipt: PersistedExecutionReceipt): string {
     if (receipt.outcome === null) {
         return receipt.started ? "running" : "dispatching";
     }
-    const event = sessionEventPayloadSchema.parse(JSON.parse(receipt.outcome));
+    const event = decodeKnownSessionEventPayload(JSON.parse(receipt.outcome));
+    if (event === null) {
+        return "failed";
+    }
     return event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed"
         ? event.payload.stopReason === "cancelled"
             ? "cancelled"

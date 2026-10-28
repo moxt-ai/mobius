@@ -101,4 +101,25 @@ function decodeResource<T>(value: unknown, schema: z.ZodType<T>): T {
     return decoded.data;
 }
 
-export const decodeTurn = (value: unknown): Turn => decodeResource(value, turnSchema);
+const turnStateKinds = new Set(["cancelled", "failed", "indeterminate", "queued", "running", "succeeded"]);
+const turnRequestKinds = new Set(["not_retained", "prompt"]);
+
+function unknownKind(value: unknown, known: ReadonlySet<string>): boolean {
+    if (typeof value !== "object" || value === null || !("kind" in value)) {
+        return false;
+    }
+    return typeof value.kind === "string" && !known.has(value.kind);
+}
+
+/** Decodes a known Turn resource, or skips a future Turn variant. */
+export const decodeTurn = (value: unknown): Turn | null => {
+    if (typeof value === "object" && value !== null) {
+        if ("request" in value && unknownKind(value.request, turnRequestKinds)) {
+            return null;
+        }
+        if ("state" in value && unknownKind(value.state, turnStateKinds)) {
+            return null;
+        }
+    }
+    return decodeResource(value, turnSchema);
+};

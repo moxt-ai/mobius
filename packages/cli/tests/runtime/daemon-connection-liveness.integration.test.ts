@@ -8,7 +8,6 @@ import { fileURLToPath } from "node:url";
 import {
     decodeMessageKind,
     decodeSessionEventEnvelope,
-    decodeSessionOperationFailedEvent,
     encodeRuntimeLivenessReadyEvent,
     encodeSessionPromptCommand,
     encodeWorkspaceListCommand,
@@ -18,7 +17,6 @@ import {
     RUNTIME_HEARTBEAT_MESSAGE,
     RUNTIME_LIVENESS_READY_KIND,
     SESSION_EVENT_KIND,
-    SESSION_OPERATION_FAILED_KIND,
     SESSION_PROMPT_KIND,
     type SessionLiveEvent,
     WORKSPACE_ENTRIES_KIND,
@@ -642,13 +640,8 @@ describe("daemon relay connection liveness", () => {
                     requestId: "after-twenty-minutes",
                 }),
             );
-            // The unrecognized kind is answered directly instead of skipped, so
-            // a newer sender fails fast; the connection itself must survive.
-            const failed = decodeSessionOperationFailedEvent((await frames.next()).text);
-            expect(failed.kind).toBe(SESSION_OPERATION_FAILED_KIND);
-            expect(failed.code).toBe("unsupported_protocol_message_kind");
-            expect(failed.requestId).toBe("future-changed-request");
-            expect(failed.sessionId).toBe("session-1");
+            // The unrecognized kind is skipped; the known command behind it still
+            // completes on the same connection.
             expect(decodeMessageKind((await frames.next()).text)).toBe(WORKSPACE_ENTRIES_KIND);
 
             expect({ catalogRequestCount, connectionCount, requestedUrls }).toEqual({
@@ -682,7 +675,7 @@ describe("daemon relay connection liveness", () => {
         }
     });
 
-    it("Given a connected daemon, When the Relay sends a command kind the daemon does not recognize, Then the daemon answers with a typed failure and keeps serving the same connection", async () => {
+    it("Given a connected daemon, When the Relay sends command kinds the daemon does not recognize, Then it skips them and keeps serving the same connection", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-unsupported-command-"));
         const defaultWorkspace = join(stateDirectory, "workspace");
         await mkdir(defaultWorkspace);
@@ -777,14 +770,7 @@ describe("daemon relay connection liveness", () => {
                     sessionId: "future-session",
                 }),
             );
-            const rejection = decodeSessionOperationFailedEvent(
-                (await nextFrameOfKind(frames, SESSION_OPERATION_FAILED_KIND)).text,
-            );
-            expect(rejection.code).toBe("unsupported_protocol_message_kind");
-            expect(rejection.requestId).toBe("future-read-request");
-            expect(rejection.sessionId).toBe("future-session");
-
-            // The rejection must not disturb the connection: a known command
+            // The unknown command must not disturb the connection: a known command
             // on the same socket still completes.
             writeServerTextFrame(
                 socket,
@@ -798,14 +784,18 @@ describe("daemon relay connection liveness", () => {
             await nextFrameOfKind(frames, WORKSPACE_ENTRIES_KIND);
             expect(connectionCount).toBe(1);
 
-            // A command whose identifiers do not satisfy the identifier
-            // contract is still answered, with placeholder correlation.
+            // Unknown commands are skipped regardless of their other fields.
             writeServerTextFrame(socket, JSON.stringify({ kind: "session.future.read", requestId: "??" }));
-            const placeholder = decodeSessionOperationFailedEvent(
-                (await nextFrameOfKind(frames, SESSION_OPERATION_FAILED_KIND)).text,
+            writeServerTextFrame(
+                socket,
+                encodeWorkspaceListCommand({
+                    bindingId: "workspace",
+                    directoryId: "default",
+                    kind: WORKSPACE_LIST_KIND,
+                    requestId: "after-second-unknown",
+                }),
             );
-            expect(placeholder.requestId).toBe("unsupported");
-            expect(placeholder.sessionId).toBe("");
+            await nextFrameOfKind(frames, WORKSPACE_ENTRIES_KIND);
             expect(connectionCount).toBe(1);
         } finally {
             cancellation.abort();

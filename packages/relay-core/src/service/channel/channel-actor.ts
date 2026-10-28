@@ -17,6 +17,7 @@ import {
     decodeContentCommitCommand,
     decodeContentWriteCommand,
     decodeFileReadCommand,
+    decodeKnownServiceToDaemonMessage,
     decodeMessageKind,
     decodeNativeSessionCancel,
     decodeNativeSessionCommand,
@@ -90,7 +91,6 @@ import {
     SESSION_STATUS_CHANGED_KIND,
     type ServiceToDaemonMessage,
     type SessionPromptCommand,
-    UnsupportedProtocolMessageKindError,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-sdk/protocol";
@@ -280,14 +280,6 @@ export class ChannelActor {
             if (signal.aborted) {
                 throw error;
             }
-            if (error instanceof UnsupportedProtocolMessageKindError) {
-                console.warn("Runtime message skipped", {
-                    code: error.code,
-                    direction: error.direction,
-                    messageKind: error.messageKind,
-                });
-                return;
-            }
             if (error instanceof SessionRuntimeError) {
                 socket.close(sessionErrorCloseCode(error), error.code);
                 return;
@@ -339,6 +331,9 @@ export class ChannelActor {
             return;
         }
         try {
+            if (decodeKnownServiceToDaemonMessage(message) === null) {
+                return;
+            }
             const kind = decodeMessageKind(message);
             if (kind === SESSION_PROMPT_KIND) {
                 const command = decodeSessionPromptCommand(message);
@@ -386,18 +381,13 @@ export class ChannelActor {
                 return;
             }
             const control = this.validateHostControl(kind, message);
+            if (control === null) {
+                return;
+            }
             this.forwardControl(socket, control.message, control.requestId, control.sessionId);
         } catch (error) {
             if (signal.aborted) {
                 throw error;
-            }
-            if (error instanceof UnsupportedProtocolMessageKindError) {
-                console.warn("Host message skipped", {
-                    code: error.code,
-                    direction: error.direction,
-                    messageKind: error.messageKind,
-                });
-                return;
             }
             if (error instanceof SessionRuntimeError) {
                 socket.close(sessionErrorCloseCode(error), error.code);
@@ -458,7 +448,7 @@ export class ChannelActor {
             case SESSION_READY_KIND:
                 return;
             default:
-                throw new UnsupportedProtocolMessageKindError("daemon-to-service", message.kind);
+                return;
         }
     };
 
@@ -469,7 +459,7 @@ export class ChannelActor {
         readonly message: ServiceToDaemonMessage;
         readonly requestId: string;
         readonly sessionId: string;
-    } => {
+    } | null => {
         switch (kind) {
             case NATIVE_SESSION_REQUEST_KIND: {
                 // Native session requests are fully handled before this validator runs;
@@ -565,7 +555,7 @@ export class ChannelActor {
                 return { message: command, requestId: command.requestId, sessionId: "" };
             }
             default:
-                throw new UnsupportedProtocolMessageKindError("service-to-daemon", kind);
+                return null;
         }
     };
 
@@ -669,7 +659,7 @@ export class ChannelActor {
     private readonly returnHistoryPage = (
         kind: HistoryRequestKind,
         message: Extract<
-            DaemonToServiceMessage,
+            DaemonToRelayMessage,
             {
                 readonly kind:
                     | typeof SESSION_HISTORY_PAGE_LOADED_KIND
@@ -681,7 +671,7 @@ export class ChannelActor {
             .historyRecipients()
             .find((socket) => socket.isOpen() && socket.matchesHistoryRequest(kind, message.requestId));
         // A caller can close or time out independently of the authenticated daemon.
-        recipient?.send(encodeDaemonToServiceMessage(message));
+        recipient?.send(JSON.stringify(message));
     };
 
     private readonly forwardHistoryPage = (

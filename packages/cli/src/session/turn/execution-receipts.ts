@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+    decodeKnownSessionEventPayload,
     encodeSessionCancelBeforeStartCommand,
     type SessionEventPayload,
     type SessionLiveEvent,
-    sessionEventPayloadSchema,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { z } from "zod";
 import type { ExecutionReceiptTable } from "../../storage/session/execution-receipt-table.ts";
@@ -73,7 +73,7 @@ export class ExecutionReceipts {
         const receipt = this.#executions.get(commandId);
         return receipt?.outcome === null || receipt === undefined
             ? undefined
-            : sessionEventPayloadSchema.parse(JSON.parse(receipt.outcome));
+            : (decodeKnownSessionEventPayload(JSON.parse(receipt.outcome)) ?? undefined);
     };
     /** Reserves an unseen command for cancellation before a delayed prompt can claim its identity. */
     readonly recordCancellationBeforeAdmission = (
@@ -139,7 +139,7 @@ export class ExecutionReceipts {
     }[] => {
         const recovered: { sessionId: string; event: SessionEventPayload; recordedAt: string }[] = [];
         for (const [commandId, receipt] of [...this.#executions]) {
-            const event: SessionEventPayload =
+            const event: SessionEventPayload | null =
                 receipt.outcome === null
                     ? {
                           type: "lifecycle-metadata",
@@ -158,7 +158,10 @@ export class ExecutionReceipts {
                                     message: "The local runtime restarted before this request started",
                                 },
                       }
-                    : sessionEventPayloadSchema.parse(JSON.parse(receipt.outcome));
+                    : decodeKnownSessionEventPayload(JSON.parse(receipt.outcome));
+            if (event === null) {
+                continue;
+            }
             const recordedAt =
                 receipt.outcome === null
                     ? new Date().toISOString()

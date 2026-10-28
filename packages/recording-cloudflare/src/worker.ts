@@ -27,7 +27,7 @@ import {
     sessionRecordingStatusSchema,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { type Context, Hono } from "hono";
-import { directoryUpdateSchema } from "./entity/recording-directory-update.ts";
+import { decodeKnownDirectoryUpdate } from "./entity/recording-directory-update.ts";
 import { RecordingSqlMetrics } from "./infra/recording-sql-metrics.ts";
 import { readLegacyRecordingStatus } from "./service/legacy-recording-status.ts";
 import { RecordingDirectory } from "./service/recording-directory.ts";
@@ -314,11 +314,15 @@ function recordingDirectoryRoutes(
             }
         })
         .post("/updates", async (context): Promise<Response> => {
-            const decoded = directoryUpdateSchema.safeParse(await context.req.json<unknown>());
-            if (!decoded.success) {
+            let write: ReturnType<typeof decodeKnownDirectoryUpdate>;
+            try {
+                write = decodeKnownDirectoryUpdate(await context.req.json<unknown>());
+            } catch {
                 return errorResponse("invalid_envelope", 400);
             }
-            const write = decoded.data;
+            if (write === null) {
+                return context.body(null, 204);
+            }
             const before = metrics.snapshot();
             directory.apply(write);
             const after = metrics.snapshot();

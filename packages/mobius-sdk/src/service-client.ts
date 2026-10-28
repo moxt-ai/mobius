@@ -2,16 +2,16 @@ import {
     type AgentSettingsDiscoveredEvent,
     CONTENT_WRITE_MAX_BYTES,
     decodeAgentSettingsDiscoveredEvent,
+    decodeKnownNativeSessionEvents,
+    decodeKnownSessionEventLogPage,
+    decodeKnownSessionLiveEventBatch,
     decodeMobiusSessionExport,
-    decodeNativeSessionEvents,
     decodeNativeSessionResult,
     decodePromptAttachment,
     decodeRuntimeDiagnosticsResult,
     decodeSessionClosedEvent,
     decodeSessionConfigReadResult,
     decodeSessionConfigUpdatedEvent,
-    decodeSessionEventLogPage,
-    decodeSessionLiveEventBatch,
     decodeSessionReadyEvent,
     decodeSessionRenamedEvent,
     decodeSessionRestoredEvent,
@@ -1368,7 +1368,7 @@ export class MobiusSessionResources {
             },
             signal,
         );
-        return decodeNativeSessionEvents(result);
+        return decodeKnownNativeSessionEvents(result);
     };
 
     readonly previewSessionNativeEvents = async (
@@ -1394,7 +1394,9 @@ export class MobiusSessionResources {
         for (const directoryId of identity.additionalDirectoryIds) {
             path.searchParams.append("additionalDirectoryId", directoryId);
         }
-        return decodeNativeSessionEvents(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
+        return decodeKnownNativeSessionEvents(
+            await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal),
+        );
     };
 
     readonly readSessionExecution = async (
@@ -1466,8 +1468,15 @@ export class MobiusTurnResources {
         sessionId: string,
         request: SubmitMobiusTurnRequest & { readonly agentId?: string; readonly directoryId?: string },
         signal: AbortSignal,
-    ): Promise<MobiusTurn> =>
-        decodeMobiusTurn(await this.#executor.post(sessionPath(this.#projectId, sessionId, "turns"), request, signal));
+    ): Promise<MobiusTurn> => {
+        const turn = decodeMobiusTurn(
+            await this.#executor.post(sessionPath(this.#projectId, sessionId, "turns"), request, signal),
+        );
+        if (turn === null) {
+            throw new MobiusProtocolError("The service returned an invalid Turn");
+        }
+        return turn;
+    };
 
     readonly submitToRuntime = async (
         runtimeId: string,
@@ -1503,14 +1512,19 @@ export class MobiusTurnResources {
         turnId: string,
         request: CancelMobiusTurnRequest,
         signal: AbortSignal,
-    ): Promise<MobiusTurn> =>
-        decodeMobiusTurn(
+    ): Promise<MobiusTurn> => {
+        const turn = decodeMobiusTurn(
             await this.#executor.post(
                 sessionPath(this.#projectId, sessionId, `turns/${encodeURIComponent(turnId)}/cancel`),
                 request,
                 signal,
             ),
         );
+        if (turn === null) {
+            throw new MobiusProtocolError("The service returned an invalid Turn");
+        }
+        return turn;
+    };
 
     readonly steer = async (
         sessionId: string,
@@ -1646,7 +1660,10 @@ export class MobiusLiveEventSubscription {
                                 cause,
                             });
                         }
-                        const events = decodeSessionLiveEventBatch(value);
+                        const events = decodeKnownSessionLiveEventBatch(value);
+                        if (events.length === 0) {
+                            continue;
+                        }
                         if (!(await this.#observer.receive(events))) {
                             this.close();
                         }
@@ -1761,7 +1778,9 @@ export class MobiusEventResources {
         ) {
             throw new MobiusValidationError("The Session event omission is invalid");
         }
-        return decodeSessionEventLogPage(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
+        return decodeKnownSessionEventLogPage(
+            await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal),
+        );
     };
 
     readonly close = (): void => {

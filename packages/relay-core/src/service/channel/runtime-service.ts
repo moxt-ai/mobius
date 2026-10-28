@@ -9,7 +9,6 @@ import {
     RUNTIME_STATUS_KIND,
     type RuntimeLivenessReadyEvent,
     SESSION_EVENT_KIND,
-    UnsupportedProtocolMessageKindError,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { ProjectScope } from "../../entity/do/session.ts";
 import { PairingDirectoryError } from "../../entity/pairing/pairing.ts";
@@ -463,19 +462,14 @@ export class RuntimeService {
             socket.close(1003, "Bounded text message required");
             return;
         }
-        let daemonMessage: DaemonToRelayMessage;
+        let daemonMessage: DaemonToRelayMessage | null;
         try {
             daemonMessage = decodeDaemonToRelayMessage(message);
-        } catch (cause) {
-            if (cause instanceof UnsupportedProtocolMessageKindError) {
-                console.warn("Runtime message skipped", {
-                    code: cause.code,
-                    direction: cause.direction,
-                    messageKind: cause.messageKind,
-                });
-                return;
-            }
+        } catch {
             socket.close(1008, "Invalid protocol message");
+            return;
+        }
+        if (daemonMessage === null) {
             return;
         }
         // The host answers fixed-text heartbeats without the Relay. Daemons released before that send an

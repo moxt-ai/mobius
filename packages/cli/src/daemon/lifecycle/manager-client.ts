@@ -6,7 +6,7 @@ import type { InstallationDirectory } from "../../storage/installation/installat
 import { readStateDirectory } from "../../storage/state-directory.ts";
 import { isNodeError } from "../../util/node-error.ts";
 import { CONTROL_TIMEOUT_MILLISECONDS, sendLocalRequest } from "../control/local-client.ts";
-import { type LifecycleResponse, lifecycleResponse, type WorkerLaunch } from "../control/protocol.ts";
+import { decodeKnownLifecycleResponse, type LifecycleResponse, type WorkerLaunch } from "../control/protocol.ts";
 import { prepareDaemonReleaseVersion } from "../upgrades/package.ts";
 
 async function spawnManager(launch: WorkerLaunch): Promise<ChildProcess> {
@@ -57,13 +57,13 @@ export async function ensureWorkingProcess(
     const launch = await prepareDaemonReleaseVersion(version, signal);
     const deadline = AbortSignal.any([signal, AbortSignal.timeout(CONTROL_TIMEOUT_MILLISECONDS)]);
     await ensureManager(stateDirectory, launch, deadline);
-    const response = lifecycleResponse.parse(
+    const response = decodeKnownLifecycleResponse(
         await sendLocalRequest(stateDirectory, "manager", { kind: "ensure", launch }, deadline),
     );
-    if (response.kind === "error") {
+    if (response?.kind === "error") {
         throw new Error(response.message);
     }
-    if (response.kind !== "status" || response.worker?.version !== version) {
+    if (response?.kind !== "status" || response.worker?.version !== version) {
         throw new Error("The working daemon did not start");
     }
     return version;
@@ -76,11 +76,11 @@ export async function readWorkingProcessVersion(
     signal: AbortSignal,
 ): Promise<string | null> {
     try {
-        const response = lifecycleResponse.safeParse(
+        const response = decodeKnownLifecycleResponse(
             await sendLocalRequest(stateDirectory, "manager", { kind: "status" }, signal),
         );
-        if (response.success && response.data.kind === "status") {
-            return response.data.worker?.version ?? null;
+        if (response?.kind === "status") {
+            return response.worker?.version ?? null;
         }
     } catch (cause) {
         if (!isNodeError(cause, "ENOENT") && !isNodeError(cause, "ECONNREFUSED")) {
@@ -98,10 +98,10 @@ async function ensureManager(
     let managerStarted = false;
     while (!signal.aborted) {
         try {
-            const response = lifecycleResponse.safeParse(
+            const response = decodeKnownLifecycleResponse(
                 await sendLocalRequest(stateDirectory, "manager", { kind: "status" }, signal),
             );
-            if (response.success && response.data.kind === "status") {
+            if (response?.kind === "status") {
                 if (managerStarted) {
                     process.stdout.write(`Mobius daemon ${launch.version} started\n`);
                 }
@@ -139,13 +139,13 @@ export async function stopManager(
     signal: AbortSignal,
 ): Promise<Extract<LifecycleResponse, { kind: "stopped" }>> {
     try {
-        const response = lifecycleResponse.parse(
+        const response = decodeKnownLifecycleResponse(
             await sendLocalRequest(stateDirectory, "manager", { kind: "stop" }, signal),
         );
-        if (response.kind === "error") {
+        if (response?.kind === "error") {
             throw new Error(response.message);
         }
-        if (response.kind !== "stopped") {
+        if (response?.kind !== "stopped") {
             throw new Error("The Mobius manager returned an unexpected response");
         }
         await waitForManagerExit(stateDirectory, signal);

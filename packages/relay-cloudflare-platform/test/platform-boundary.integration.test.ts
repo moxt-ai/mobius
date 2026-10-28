@@ -1207,11 +1207,11 @@ describe.sequential("Platform Session-only boundary", () => {
                 title: "Renamed session",
                 updatedAt: "2026-09-18T00:01:00.000Z",
             });
-            const historyPage = encodeSessionHistoryPageLoaded({
+            const historyPage = JSON.stringify({
                 events: {
                     events: {
                         sessionGenerationId: "session-generation-1",
-                        events: [rawEvent],
+                        events: [futureEvent, historicalEvent],
                         nextCursor: null,
                         tailCursor: rawEvent.eventId,
                         truncated: false,
@@ -1226,7 +1226,7 @@ describe.sequential("Platform Session-only boundary", () => {
             daemon.send(historyPage);
             expect(await responseJson(await historyResponse, 200)).toEqual({
                 sessionGenerationId: "session-generation-1",
-                events: [historicalEvent],
+                events: [futureEvent, historicalEvent],
                 nextCursor: null,
                 tailCursor: rawEvent.eventId,
                 truncated: false,

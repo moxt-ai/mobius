@@ -48,3 +48,43 @@ export const directoryUpdateSchema = z
     );
 export type DirectoryOperation = z.infer<typeof directoryOperationSchema>;
 export type RecordingDirectoryUpdate = z.infer<typeof directoryUpdateSchema>;
+
+const knownDirectoryOperationKinds = new Set(["activity", "requested", "status", "title"]);
+
+/** Decodes an update for consumption, omitting operation variants this deployment does not know. */
+export function decodeKnownDirectoryUpdate(value: unknown): RecordingDirectoryUpdate | null {
+    if (typeof value !== "object" || value === null || !("updates" in value) || !Array.isArray(value.updates)) {
+        return directoryUpdateSchema.parse(value);
+    }
+    const updates = value.updates
+        .map((update) => {
+            if (
+                typeof update !== "object" ||
+                update === null ||
+                !("operations" in update) ||
+                !Array.isArray(update.operations)
+            ) {
+                return update;
+            }
+            return {
+                ...update,
+                operations: update.operations.filter(
+                    (operation: unknown) =>
+                        typeof operation !== "object" ||
+                        operation === null ||
+                        !("kind" in operation) ||
+                        typeof operation.kind !== "string" ||
+                        knownDirectoryOperationKinds.has(operation.kind),
+                ),
+            };
+        })
+        .filter(
+            (update) =>
+                typeof update !== "object" ||
+                update === null ||
+                !("operations" in update) ||
+                !Array.isArray(update.operations) ||
+                update.operations.length > 0,
+        );
+    return updates.length === 0 ? null : directoryUpdateSchema.parse({ ...value, updates });
+}

@@ -481,8 +481,142 @@ export const sessionWireEnvelopeSchema = z
         kind: z.literal(SESSION_EVENT_KIND),
         events: z.array(sessionWireEventSchema).min(1).max(SESSION_EVENT_BATCH_MAX_SIZE).readonly(),
     })
+    .passthrough()
     .readonly();
 export type SessionWireEnvelope = z.infer<typeof sessionWireEnvelopeSchema>;
+
+const knownContentBlockTypes = new Set([
+    "text",
+    "image",
+    "audio",
+    "resource_link",
+    "resource",
+    "external_image",
+    "external_audio",
+    "external_resource",
+]);
+const knownToolCallContentTypes = new Set(["content", "diff", "terminal"]);
+const knownPlanTypes = new Set(["items", "file", "markdown"]);
+const knownConfigOptionTypes = new Set(["select", "boolean"]);
+const knownSessionUpdates = new Set([
+    "user_message_chunk",
+    "agent_message_chunk",
+    "agent_thought_chunk",
+    "tool_call",
+    "tool_call_update",
+    "plan",
+    "plan_update",
+    "plan_removed",
+    "available_commands_update",
+    "current_mode_update",
+    "config_option_update",
+    "session_info_update",
+    "usage_update",
+    "compaction_update",
+    "compaction_summary_chunk",
+]);
+const knownLifecycleKinds = new Set([
+    "session.queue.changed",
+    "session.permission.requested",
+    "session.permission.resolved",
+    "session.elicitation.requested",
+    "session.elicitation.resolved",
+    "prompt.requested",
+    "prompt.started",
+    "prompt.completed",
+    "prompt.failed-before-start",
+    "prompt.failed",
+]);
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasUnknownDiscriminator(value: unknown, key: string, known: ReadonlySet<string>): boolean {
+    if (!isRecord(value)) {
+        return false;
+    }
+    const variant = value[key];
+    return typeof variant === "string" && !known.has(variant);
+}
+
+function containsUnknownContentBlock(value: unknown): boolean {
+    return hasUnknownDiscriminator(value, "type", knownContentBlockTypes);
+}
+
+function containsUnknownToolCallContent(value: unknown): boolean {
+    if (hasUnknownDiscriminator(value, "type", knownToolCallContentTypes)) {
+        return true;
+    }
+    return isRecord(value) && value["type"] === "content" && containsUnknownContentBlock(value["content"]);
+}
+
+function arrayContainsUnknown(value: unknown, predicate: (entry: unknown) => boolean): boolean {
+    return Array.isArray(value) && value.some(predicate);
+}
+
+function containsUnknownAcpVariant(payload: Readonly<Record<string, unknown>>): boolean {
+    const update = payload["sessionUpdate"];
+    if (typeof update !== "string") {
+        return false;
+    }
+    if (!knownSessionUpdates.has(update)) {
+        return true;
+    }
+    if (
+        ["user_message_chunk", "agent_message_chunk", "agent_thought_chunk", "compaction_summary_chunk"].includes(
+            update,
+        )
+    ) {
+        return containsUnknownContentBlock(payload["content"]);
+    }
+    if (update === "tool_call" || update === "tool_call_update") {
+        return arrayContainsUnknown(payload["content"], containsUnknownToolCallContent);
+    }
+    if (update === "plan_update") {
+        return hasUnknownDiscriminator(payload["plan"], "type", knownPlanTypes);
+    }
+    if (update === "config_option_update") {
+        return arrayContainsUnknown(payload["configOptions"], (option) =>
+            hasUnknownDiscriminator(option, "type", knownConfigOptionTypes),
+        );
+    }
+    if (update === "compaction_update") {
+        return arrayContainsUnknown(payload["summary"], containsUnknownContentBlock);
+    }
+    return false;
+}
+
+function isKnownSessionEventVariant(value: unknown): boolean {
+    if (!isRecord(value)) {
+        return true;
+    }
+    const type = value["type"];
+    if (typeof type !== "string") {
+        return true;
+    }
+    if (type === "acp") {
+        const payload = value["payload"];
+        return !isRecord(payload) || !containsUnknownAcpVariant(payload);
+    }
+    if (type === "lifecycle-metadata") {
+        const payload = value["payload"];
+        if (!isRecord(payload)) {
+            return true;
+        }
+        const kind = payload["kind"];
+        if (typeof kind === "string" && !knownLifecycleKinds.has(kind)) {
+            return false;
+        }
+        return kind !== "prompt.requested" || !arrayContainsUnknown(payload["content"], containsUnknownContentBlock);
+    }
+    return false;
+}
+
+function filterKnownSessionEventVariants(events: unknown): unknown {
+    return Array.isArray(events) ? events.filter(isKnownSessionEventVariant) : events;
+}
+
 export const sessionEventBatchSchema = z.array(sessionEventSchema).min(1).max(SESSION_EVENT_BATCH_MAX_SIZE).readonly();
 export type SessionEventBatch = z.infer<typeof sessionEventBatchSchema>;
 export const sessionLiveEventBatchSchema = z
@@ -601,7 +735,32 @@ function decode<T>(value: unknown, schema: z.ZodType<T>): T {
 function encode<T>(value: T, schema: z.ZodType<T>): string {
     return JSON.stringify(decode(value, schema));
 }
+function sanitizeKnownNativeSessionEvents(value: unknown): unknown {
+    const input = inputValue(value);
+    if (!isRecord(input)) {
+        return input;
+    }
+    const page = input["events"];
+    const queuedPromptRequests = input["queuedPromptRequests"];
+    return {
+        ...input,
+        events: isRecord(page) ? { ...page, events: filterKnownSessionEventVariants(page["events"]) } : page,
+        queuedPromptRequests: Array.isArray(queuedPromptRequests)
+            ? queuedPromptRequests.filter(
+                  (prompt) =>
+                      !isRecord(prompt) || !arrayContainsUnknown(prompt["content"], containsUnknownContentBlock),
+              )
+            : queuedPromptRequests,
+    };
+}
+function sanitizeKnownSessionEventLogPage(value: unknown): unknown {
+    const input = inputValue(value);
+    return isRecord(input) ? { ...input, events: filterKnownSessionEventVariants(input["events"]) } : input;
+}
+const knownSessionLiveEventBatchSchema = z.array(sessionLiveEventSchema).max(SESSION_EVENT_BATCH_MAX_SIZE).readonly();
 export const decodeSessionEvent = (value: unknown): SessionEvent => decode(value, sessionEventSchema);
+export const decodeKnownSessionEventPayload = (value: unknown): SessionEventPayload | null =>
+    isKnownSessionEventVariant(value) ? decode(value, sessionEventPayloadSchema) : null;
 export const encodeSessionEvent = (value: SessionEvent): string => encode(value, sessionEventSchema);
 export const decodeSessionLiveEvent = (value: unknown): SessionLiveEvent => decode(value, sessionLiveEventSchema);
 export const encodeSessionLiveEvent = (value: SessionLiveEvent): string => encode(value, sessionLiveEventSchema);
@@ -613,6 +772,8 @@ export const decodeSessionEventBatch = (value: unknown): SessionEventBatch => de
 export const encodeSessionEventBatch = (value: SessionEventBatch): string => encode(value, sessionEventBatchSchema);
 export const decodeSessionLiveEventBatch = (value: unknown): SessionLiveEventBatch =>
     decode(value, sessionLiveEventBatchSchema);
+export const decodeKnownSessionLiveEventBatch = (value: unknown): SessionLiveEventBatch =>
+    decode(filterKnownSessionEventVariants(inputValue(value)), knownSessionLiveEventBatchSchema);
 export const encodeSessionLiveEventBatch = (value: SessionLiveEventBatch): string =>
     encode(value, sessionLiveEventBatchSchema);
 export const decodeMobiusSessionExport = (value: unknown): MobiusSessionExport =>
@@ -626,9 +787,13 @@ export const encodeSessionEventEnvelope = (value: SessionEventEnvelope): string 
 export const decodeAcpSessionUpdate = (value: unknown): AcpSessionUpdate => decode(value, acpSessionUpdateSchema);
 export const decodeSessionEventLogPage = (value: unknown): SessionEventLogPage =>
     decode(value, sessionEventLogPageSchema);
+export const decodeKnownSessionEventLogPage = (value: unknown): SessionEventLogPage =>
+    decode(sanitizeKnownSessionEventLogPage(value), sessionEventLogPageSchema);
 export const encodeSessionEventLogPage = (value: SessionEventLogPage): string =>
     encode(value, sessionEventLogPageSchema);
 export const decodeNativeSessionEvents = (value: unknown): NativeSessionEvents =>
     decode(value, nativeSessionEventsSchema);
+export const decodeKnownNativeSessionEvents = (value: unknown): NativeSessionEvents =>
+    decode(sanitizeKnownNativeSessionEvents(value), nativeSessionEventsSchema);
 export const encodeNativeSessionEvents = (value: NativeSessionEvents): string =>
     encode(value, nativeSessionEventsSchema);

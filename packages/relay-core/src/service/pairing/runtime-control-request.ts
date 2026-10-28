@@ -45,13 +45,13 @@ import {
     type SessionElicitationResolvedEvent,
     type SessionElicitationRespondCommand,
     type SessionHistoryPageLoad,
-    type SessionHistoryPageLoaded,
+    type SessionHistoryWirePageLoaded,
     type SessionListCommand,
     type SessionPermissionResolvedEvent,
     type SessionPermissionRespondCommand,
     type SessionPrepareCommand,
     type SessionPreviewHistoryPageLoad,
-    type SessionPreviewHistoryPageLoaded,
+    type SessionPreviewHistoryWirePageLoaded,
     type SessionPromptCommand,
     type SessionPromptDispositionCommand,
     type SessionQueryCommand,
@@ -134,8 +134,8 @@ export type RuntimeControlResult =
     | TurnCompleted
     | TurnStarted
     | TurnQueued
-    | SessionPreviewHistoryPageLoaded
-    | SessionHistoryPageLoaded
+    | SessionPreviewHistoryWirePageLoaded
+    | SessionHistoryWirePageLoaded
     | SessionElicitationResolvedEvent
     | SessionPermissionResolvedEvent
     | SessionsListedEvent

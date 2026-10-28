@@ -60,3 +60,37 @@ export const lifecycleResponse = z
     ])
     .readonly();
 export type LifecycleResponse = z.infer<typeof lifecycleResponse>;
+
+const lifecycleCommandKinds = new Set(["ensure", "status", "stop", "switch", "switch-status"]);
+const lifecycleResponseKinds = new Set(["error", "status", "stopped", "switching", "switch-status"]);
+const daemonSwitchStateKinds = new Set(["rolled-back", "switched", "switching"]);
+
+function hasUnknownKind(value: unknown, known: ReadonlySet<string>): boolean {
+    return (
+        typeof value === "object" &&
+        value !== null &&
+        "kind" in value &&
+        typeof value.kind === "string" &&
+        !known.has(value.kind)
+    );
+}
+
+export const decodeKnownLifecycleCommand = (value: unknown): z.infer<typeof lifecycleCommand> | null =>
+    hasUnknownKind(value, lifecycleCommandKinds) ? null : lifecycleCommand.parse(value);
+
+export const decodeKnownLifecycleResponse = (value: unknown): LifecycleResponse | null => {
+    if (hasUnknownKind(value, lifecycleResponseKinds)) {
+        return null;
+    }
+    if (
+        typeof value === "object" &&
+        value !== null &&
+        "kind" in value &&
+        value.kind === "switch-status" &&
+        "state" in value &&
+        hasUnknownKind(value.state, daemonSwitchStateKinds)
+    ) {
+        return lifecycleResponse.parse({ ...value, state: null });
+    }
+    return lifecycleResponse.parse(value);
+};

@@ -454,7 +454,7 @@ describe("Recording Turn history", () => {
             env,
         );
         expect(detail.status).toBe(200);
-        expect(decodeSessionRecordingTurnItemDetail(await detail.text()).item).toMatchObject({
+        expect(decodeSessionRecordingTurnItemDetail(await detail.text())?.item).toMatchObject({
             detail: { kind: "inline", rawOutput: "x".repeat(40_000) },
         });
     });
@@ -668,7 +668,11 @@ describe("Recording Turn history", () => {
             env,
         );
         expect(detail.status).toBe(200);
-        const full = decodeSessionRecordingTurnItemDetail(await detail.text()).item;
+        const full = decodeSessionRecordingTurnItemDetail(await detail.text())?.item;
+        expect(full).toBeDefined();
+        if (full === undefined) {
+            throw new Error("expected a known Turn item");
+        }
         expect(full).toMatchObject({ kind: "answer", omittedCharacters: 0 });
         expect(full.kind === "answer" ? full.text : "").toBe(chunk.repeat(10));
     });
