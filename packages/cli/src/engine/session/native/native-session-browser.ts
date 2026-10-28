@@ -74,7 +74,7 @@ export class NativeSessionService {
     readonly #activeTurn: (
         command: Extract<NativeSessionCommand, { readonly action: "active-turn" }>,
         options: SessionPrepareOptions,
-    ) => Promise<Pick<Extract<NativeSessionResult, { readonly action: "active-turn" }>, "turn" | "queued">>;
+    ) => Promise<Pick<Extract<NativeSessionResult, { readonly action: "active-turn" }>, "turn" | "queued" | "command">>;
 
     constructor(
         bindingId: string,
@@ -84,7 +84,9 @@ export class NativeSessionService {
         activeTurn: (
             command: Extract<NativeSessionCommand, { readonly action: "active-turn" }>,
             options: SessionPrepareOptions,
-        ) => Promise<Pick<Extract<NativeSessionResult, { readonly action: "active-turn" }>, "turn" | "queued">>,
+        ) => Promise<
+            Pick<Extract<NativeSessionResult, { readonly action: "active-turn" }>, "turn" | "queued" | "command">
+        >,
     ) {
         this.#bindingId = bindingId;
         this.#resolveAgent = resolveAgent;

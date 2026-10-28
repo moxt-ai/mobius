@@ -127,8 +127,8 @@ export function buildSessionLayer(options: SessionLayerOptions) {
         resolveAgent,
         directories,
         manager,
-        async (request, requestOptions) =>
-            await activeSessions.executionSnapshot(async (command) => {
+        async (request, requestOptions) => {
+            const snapshot = await activeSessions.executionSnapshot(async (command) => {
                 if (command.sessionId !== request.targetSessionId || command.agentId !== request.agentId) {
                     return false;
                 }
@@ -145,7 +145,12 @@ export function buildSessionLayer(options: SessionLayerOptions) {
                         (directory, index) => directory === requestOptions.additionalDirectories[index],
                     )
                 );
-            }),
+            });
+            // Read after the snapshot, so the delivery is never older than the execution beside it.
+            return request.deliveryCommandId === undefined
+                ? snapshot
+                : { ...snapshot, command: operations.delivery(request.deliveryCommandId, request.targetSessionId) };
+        },
     );
     const recoveredEvents = operations
         .recover()

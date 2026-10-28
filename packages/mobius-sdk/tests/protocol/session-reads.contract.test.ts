@@ -1,5 +1,6 @@
 import {
     decodeDaemonToServiceMessage,
+    decodeNativeSessionResult,
     decodeServiceToDaemonMessage,
     encodeDaemonToServiceMessage,
     encodeServiceToDaemonMessage,
@@ -41,5 +42,32 @@ describe("Session config read contracts", () => {
             sessionId: "session-1",
         } as const;
         expect(decodeDaemonToServiceMessage(encodeDaemonToServiceMessage(result))).toEqual(result);
+    });
+});
+
+describe("Session execution read contracts", () => {
+    const execution = {
+        action: "active-turn",
+        kind: "native.session.result",
+        queued: [],
+        requestId: "request-execution-1",
+        sessionId: "session-1",
+        targetSessionId: "session-1",
+        turn: null,
+    } as const;
+
+    // @no-uc: Compatibility; a delivery state from a newer Runtime must not fail the execution read it rides on.
+    it("Given an execution whose command delivery state this reader does not know, When it is decoded, Then the execution is kept and the delivery reads as absent", () => {
+        const decoded = decodeNativeSessionResult(
+            JSON.stringify({ ...execution, command: { state: "superseded", by: "command-2" } }),
+        );
+        expect(decoded).toMatchObject({ action: "active-turn", turn: null, queued: [] });
+        expect(decoded.action === "active-turn" ? decoded.command : null).toBeUndefined();
+    });
+
+    it("Given an execution with a known command delivery, When it is decoded, Then the delivery is kept", () => {
+        expect(
+            decodeNativeSessionResult(JSON.stringify({ ...execution, command: { state: "failed", code: "boom" } })),
+        ).toMatchObject({ command: { state: "failed", code: "boom" } });
     });
 });
