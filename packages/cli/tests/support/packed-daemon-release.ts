@@ -22,6 +22,10 @@ export async function packedRelease(
         await symlink(resolve(import.meta.dirname, "../../node_modules"), join(source, "node_modules"), "junction");
         // Stamp and bundle each release once, rather than transpiling its source graph on every CLI/daemon restart.
         const diagnostic = join(source, "bundle-error.txt");
+        const runtimeDependencies = {
+            "@agentclientprotocol/sdk": import.meta.resolve("@agentclientprotocol/sdk"),
+            undici: import.meta.resolve("undici"),
+        };
         await runBoundedProcess({
             command: process.execPath,
             arguments: [
@@ -39,7 +43,9 @@ export async function packedRelease(
                     platform: "node",
                     target: "node22.19.0",
                     format: "esm",
-                    external: ["@agentclientprotocol/sdk", "undici"],
+                    // Keep these dependencies external, but do not resolve them through a temporary junction at runtime.
+                    alias: runtimeDependencies,
+                    external: Object.values(runtimeDependencies),
                     logLevel: "silent",
                 }),
                 diagnostic,
