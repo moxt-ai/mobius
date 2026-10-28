@@ -1,15 +1,21 @@
-import { DurableObjectDatabaseAdapter, DurableObjectSqlDatabase } from "@moxt-ai/mobius-relay-core";
+import {
+    DurableObjectDatabaseAdapter,
+    DurableObjectSqlDatabase,
+    standardWebSocketHost,
+} from "@moxt-ai/mobius-relay-core";
 import { logger } from "@moxt-ai/mobius-relay-core/logging";
 import { decodePlatformProjectPlacement } from "../entity/platform-project-id.ts";
 import { decodeProjectDurableObjectPath } from "../entity/project-durable-object-path.ts";
-import platformWorker, {
+import {
     type ConfiguredPlatformRelayBindings,
+    createPlatformSocketWorker,
     type ProjectPlatformRelayBindings,
 } from "../platform-worker.ts";
 import { executeProjectDatabaseRequest } from "../storage/project-durable-object-database.ts";
 import { initializeProjectDurableObjectSchema } from "../storage/project-durable-object-schema.ts";
 
 export class ProjectDO {
+    readonly #application = createPlatformSocketWorker(standardWebSocketHost);
     readonly #database: DurableObjectDatabaseAdapter;
     readonly #sqlite: DurableObjectSqlDatabase;
     readonly #environment: ConfiguredPlatformRelayBindings;
@@ -71,7 +77,7 @@ export class ProjectDO {
                 MOBIUS_PROJECT_DATABASE: this.#database,
                 MOBIUS_PROJECT_ID: projectId,
             };
-            return await platformWorker.fetch(routedRequest, environment);
+            return await this.#application.fetch(routedRequest, environment);
         } catch (error) {
             request.signal.throwIfAborted();
             logger.error(

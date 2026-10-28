@@ -97,6 +97,26 @@ it("Given an HTTP-over-WebSocket client, When it uses the public DO-owned transp
     }
 });
 
+it.each([
+    { name: "missing", authorization: null, code: "session_access_required" },
+    { name: "malformed", authorization: "Bearer invalid-session-credential", code: "project_credential_invalid" },
+])(
+    "Given a $name Session credential, When the public event-stream upgrade crosses ProjectDO, Then it returns the authentication error without another public handoff",
+    { timeout: 5_000 },
+    async ({ authorization, code }) => {
+        const headers = new Headers({ Upgrade: "websocket" });
+        if (authorization !== null) {
+            headers.set("Authorization", authorization);
+        }
+        const response = await SELF.fetch(
+            "https://platform.test/mobius/api/v1/projects/prj_wn_01_ABCDEFGHIJKLMNOPQRSTUVWX/sessions/session-unauthorized/events-v2",
+            { headers },
+        );
+        expect(response.status).toBe(401);
+        expect(await response.json()).toMatchObject({ error: { code } });
+    },
+);
+
 class SubscriptionDaemonBoundary {
     requestSignal: AbortSignal | null = null;
     downstream: WebSocket | null = null;
