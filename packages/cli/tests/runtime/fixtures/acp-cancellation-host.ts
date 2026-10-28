@@ -11,12 +11,10 @@ import {
     RUNTIME_LIVENESS_READY_KIND,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { WebSocketServer } from "ws";
-import {
-    AcpAgentDefinition,
-    type InProcessAcpEndpoint,
-    MobiusRuntimeEngine,
-    RuntimeLocalContext,
-} from "../../../src/runtime.ts";
+import { AcpAgentDefinition } from "../../../src/engine/acp/agent/agent-definition.ts";
+import type { InProcessAcpEndpoint } from "../../../src/engine/acp/agent/in-process-endpoint.ts";
+import { RuntimeLocalContext } from "../../../src/engine/runtime/config.ts";
+import { MobiusRuntimeEngine } from "../../../src/exports/engine.ts";
 import { ControlledEndpointConnection } from "../../support/agents/controlled-endpoint-connection.ts";
 import { createControlledRuntimeConfig as createRuntimeConfig } from "../../support/controlled-runtime-config.ts";
 

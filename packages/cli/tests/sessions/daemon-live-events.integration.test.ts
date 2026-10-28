@@ -33,11 +33,11 @@ import {
 import { listen, port, sendBinary, sendText } from "@moxt-ai/mobius-test/websocket";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
-import { RuntimeLocalContext } from "../../src/runtime/config.ts";
-import { SESSION_EVENT_BATCH_WINDOW_MILLISECONDS } from "../../src/runtime/relay/session-event-publisher.ts";
-import { runRuntime } from "../../src/runtime/run.ts";
-import type { ScheduledTask, Timer } from "../../src/util/timer.ts";
+import { AcpAgentDefinition } from "../../src/engine/acp/agent/agent-definition.ts";
+import { RuntimeLocalContext } from "../../src/engine/runtime/config.ts";
+import { SESSION_EVENT_BATCH_WINDOW_MILLISECONDS } from "../../src/engine/runtime/relay/session-event-publisher.ts";
+import { runRuntime } from "../../src/engine/runtime/run.ts";
+import type { ScheduledTask, Timer } from "../../src/engine/util/timer.ts";
 import { ControlledAcpConnection } from "../support/agents/controlled-acp-connection.ts";
 import { createControlledRuntimeConfig as createRuntimeConfig } from "../support/controlled-runtime-config.ts";
 

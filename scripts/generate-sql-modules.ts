@@ -49,12 +49,12 @@ const platform = join(root, "packages/relay-cloudflare-platform");
 const recording = join(root, "packages/recording-cloudflare");
 
 await writeMigrationModule(
-    join(cli, "src/generated/acp-session-store-migrations.ts"),
+    join(cli, "src/engine/generated/acp-session-store-migrations.ts"),
     "acpSessionStoreMigrations",
     await sqlFiles(join(cli, "migrations/acp-session-store")),
 );
 await writeMigrationModule(
-    join(cli, "src/generated/session-event-cache-migrations.ts"),
+    join(cli, "src/engine/generated/session-event-cache-migrations.ts"),
     "sessionEventCacheMigrations",
     await sqlFiles(join(cli, "migrations/session-event-cache")),
 );

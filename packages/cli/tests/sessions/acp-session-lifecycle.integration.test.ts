@@ -8,21 +8,28 @@ import { fileURLToPath } from "node:url";
 
 import { SESSION_CLOSED_ERROR_CODE, type SessionStatusChangedEvent } from "@moxt-ai/mobius-sdk/protocol";
 import { describe, expect, it, vi } from "vitest";
-import { openPreviewEventCache } from "../../src/acp/adapter/preview-event-cache.ts";
-import { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
-import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
-import { acpSessionStoreMigrations } from "../../src/generated/acp-session-store-migrations.ts";
-import { AccumulatingOperationMetrics } from "../../src/infra/operation-metrics.ts";
-import { NullSessionObserver } from "../../src/session/api/session-api.ts";
-import { SqliteSessionLiveEventPosition } from "../../src/session/history/live-event-positions.ts";
-import { CachedSessionEventStore } from "../../src/session/history/session-event-store.ts";
-import { FoundStoredSession, MemorySessionStore, SqliteSessionStore } from "../../src/session/record/session-store.ts";
-import { AcpSessionTable } from "../../src/storage/session/acp-session-table.ts";
-import { LiveEventPositionTable } from "../../src/storage/session/live-event-position-table.ts";
-import { SessionEventCacheTable } from "../../src/storage/session/session-event-cache-table.ts";
-import { openAcpSessionDatabase, openSessionEventCacheDatabase } from "../../src/storage/sqlite/local-databases.ts";
-import { readExecutableIdentity } from "../../src/util/process/local-executable.ts";
-import { systemTimer } from "../../src/util/timer.ts";
+import { openPreviewEventCache } from "../../src/engine/acp/adapter/preview-event-cache.ts";
+import { AcpAgentDefinition } from "../../src/engine/acp/agent/agent-definition.ts";
+import { AcpContentExternalizer } from "../../src/engine/acp/content/content-externalizer.ts";
+import { acpSessionStoreMigrations } from "../../src/engine/generated/acp-session-store-migrations.ts";
+import { AccumulatingOperationMetrics } from "../../src/engine/infra/operation-metrics.ts";
+import { NullSessionObserver } from "../../src/engine/session/api/session-api.ts";
+import { SqliteSessionLiveEventPosition } from "../../src/engine/session/history/live-event-positions.ts";
+import { CachedSessionEventStore } from "../../src/engine/session/history/session-event-store.ts";
+import {
+    FoundStoredSession,
+    MemorySessionStore,
+    SqliteSessionStore,
+} from "../../src/engine/session/record/session-store.ts";
+import { AcpSessionTable } from "../../src/engine/storage/session/acp-session-table.ts";
+import { LiveEventPositionTable } from "../../src/engine/storage/session/live-event-position-table.ts";
+import { SessionEventCacheTable } from "../../src/engine/storage/session/session-event-cache-table.ts";
+import {
+    openAcpSessionDatabase,
+    openSessionEventCacheDatabase,
+} from "../../src/engine/storage/sqlite/local-databases.ts";
+import { readExecutableIdentity } from "../../src/engine/util/process/local-executable.ts";
+import { systemTimer } from "../../src/engine/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
 import { createWritableAcpStream } from "../support/agents/acp-stream.ts";
 import { ControlledAcpConnection } from "../support/agents/controlled-acp-connection.ts";

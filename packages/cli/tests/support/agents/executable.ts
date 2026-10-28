@@ -1,4 +1,4 @@
-import { findExecutableOnPath, resolveExecutablePath } from "../../../src/util/process/executable.ts";
+import { findExecutableOnPath, resolveExecutablePath } from "../../../src/engine/util/process/executable.ts";
 
 export async function resolveTestExecutable(name: string, overrideVariable: string): Promise<string> {
     const configured = process.env[overrideVariable];

@@ -163,10 +163,10 @@ describe("daemon environment proxy", () => {
         Object.assign(process.env, codex.environment);
 
         try {
-            const { openRuntimeInstallationStore, pairMobiusRuntime } = await import("../../src/runtime.ts");
-            const { connectRelay } = await import("../../src/runtime/relay/connect.ts");
+            const { openRuntimeInstallationStore, pairMobiusRuntime } = await import("../../src/exports/engine.ts");
+            const { connectRelay } = await import("../../src/engine/runtime/relay/connect.ts");
             const { describeEnvironmentProxyRoute, environmentProxyDispatcher } = await import(
-                "../../src/util/network/environment-proxy.ts"
+                "../../src/engine/util/network/environment-proxy.ts"
             );
 
             const pairingPort = port(pairingServer);

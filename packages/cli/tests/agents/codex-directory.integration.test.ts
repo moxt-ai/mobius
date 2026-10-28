@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { harnessAdapters } from "../../src/acp/adapter/registry.ts";
+import { harnessAdapters } from "../../src/engine/acp/adapter/registry.ts";
 import { codexFixture } from "../support/agents/codex-native.ts";
 import { previewCodexHistory } from "../support/codex-history-preview.ts";
 

@@ -17,7 +17,7 @@ import {
     openMobiusCliInstallation,
     openMobiusControlInstallation,
 } from "../../src/daemon/pairing/pair-local-machine.ts";
-import { processPlatformSupportFor } from "../../src/util/process/platform/index.ts";
+import { processPlatformSupportFor } from "../../src/engine/util/process/platform/index.ts";
 import { installWorkspaceDaemonRelease } from "../support/installed-daemon-release.ts";
 
 const temporaryDirectories: string[] = [];

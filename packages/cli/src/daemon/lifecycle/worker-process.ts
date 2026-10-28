@@ -1,8 +1,8 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { isAbsolute } from "node:path";
 
-import { resolveLaunchFiles } from "../../util/process/local-executable.ts";
-import { isRecord } from "../../util/value-utils.ts";
+import { resolveLaunchFiles } from "../../engine/util/process/local-executable.ts";
+import { isRecord } from "../../engine/util/value-utils.ts";
 import { type WorkerLaunch, workerLaunch } from "../control/protocol.ts";
 
 export async function decodeWorkerLaunch(value: unknown): Promise<WorkerLaunch> {

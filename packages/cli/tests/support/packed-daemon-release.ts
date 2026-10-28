@@ -2,7 +2,7 @@ import { cp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import cliPackage from "../../package.json" with { type: "json" };
-import { findExecutableOnPath, runBoundedProcess } from "../../src/util/process/executable.ts";
+import { findExecutableOnPath, runBoundedProcess } from "../../src/engine/util/process/executable.ts";
 
 // The npm registry stores real packed releases; the Relay stores catalogs and
 // remains online across replacement processes. Neither replaces product code.

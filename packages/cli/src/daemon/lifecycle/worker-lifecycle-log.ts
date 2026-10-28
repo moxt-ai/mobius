@@ -1,6 +1,6 @@
-import type { InstallationDirectory } from "../../storage/installation/installation-files.ts";
-import { BoundedLineLog } from "../../storage/logs/bounded-log.ts";
-import { logDirectory, WORKER_LIFECYCLE_LOG_FILENAME } from "../../storage/logs/log-files.ts";
+import type { InstallationDirectory } from "../../engine/storage/installation/installation-files.ts";
+import { BoundedLineLog } from "../../engine/storage/logs/bounded-log.ts";
+import { logDirectory, WORKER_LIFECYCLE_LOG_FILENAME } from "../../engine/storage/logs/log-files.ts";
 
 const MAXIMUM_LIFECYCLE_LOG_BYTES = 512 * 1_024;
 const MAXIMUM_TEXT_BYTES = 2_048;

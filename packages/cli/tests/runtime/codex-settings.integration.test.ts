@@ -5,7 +5,7 @@ import {
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
-import { CodexAgentSpecification } from "../../src/agent/specification/vendors/codex-agent.ts";
+import { CodexAgentSpecification } from "../../src/engine/agent/specification/vendors/codex-agent.ts";
 import { ControlledCodexFixture } from "../support/agents/controlled-codex.ts";
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
 

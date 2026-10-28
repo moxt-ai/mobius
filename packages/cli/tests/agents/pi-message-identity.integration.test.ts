@@ -5,10 +5,10 @@ import { join } from "node:path";
 import { methods, PROTOCOL_VERSION, type SessionUpdate } from "@agentclientprotocol/sdk";
 import { expect, test } from "vitest";
 import { z } from "zod";
-import { PiAgentConnection } from "../../src/acp/adapter/pi/agent-connection.ts";
-import { createAcpClient } from "../../src/acp/connection/create-client.ts";
-import type { IdentifiedSessionUpdate } from "../../src/acp/connection/session-notification.ts";
-import { PiAcpEndpoint } from "../../src/acp/harness/pi/endpoint.ts";
+import { PiAgentConnection } from "../../src/engine/acp/adapter/pi/agent-connection.ts";
+import { createAcpClient } from "../../src/engine/acp/connection/create-client.ts";
+import type { IdentifiedSessionUpdate } from "../../src/engine/acp/connection/session-notification.ts";
+import { PiAcpEndpoint } from "../../src/engine/acp/harness/pi/endpoint.ts";
 import { PiFixture } from "../support/agents/pi.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 

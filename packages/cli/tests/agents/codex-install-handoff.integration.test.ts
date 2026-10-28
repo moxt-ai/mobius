@@ -10,8 +10,8 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
 import { z } from "zod";
-import { CodexAgentSpecification } from "../../src/agent/specification/vendors/codex-agent.ts";
-import { executableLaunch, runBoundedProcess } from "../../src/util/process/executable.ts";
+import { CodexAgentSpecification } from "../../src/engine/agent/specification/vendors/codex-agent.ts";
+import { executableLaunch, runBoundedProcess } from "../../src/engine/util/process/executable.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";

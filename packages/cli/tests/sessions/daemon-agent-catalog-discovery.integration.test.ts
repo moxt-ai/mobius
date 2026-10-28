@@ -20,12 +20,12 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { listen, port, sendText } from "@moxt-ai/mobius-test/websocket";
 import { expect, test } from "vitest";
-import { discoverLocalAgentInventory } from "../../src/agent/discovery/discover-local-agents.ts";
-import type { LocalAgentSpecification } from "../../src/agent/specification/agent-specification.ts";
-import { publishAgentCatalog } from "../../src/runtime/catalog/publish-agent-catalog.ts";
-import { createCatalogAgentResolver } from "../../src/runtime/catalog/resolve-catalog-agent.ts";
-import { RuntimeLocalContext } from "../../src/runtime/config.ts";
-import { runRuntime } from "../../src/runtime/run.ts";
+import { discoverLocalAgentInventory } from "../../src/engine/agent/discovery/discover-local-agents.ts";
+import type { LocalAgentSpecification } from "../../src/engine/agent/specification/agent-specification.ts";
+import { publishAgentCatalog } from "../../src/engine/runtime/catalog/publish-agent-catalog.ts";
+import { createCatalogAgentResolver } from "../../src/engine/runtime/catalog/resolve-catalog-agent.ts";
+import { RuntimeLocalContext } from "../../src/engine/runtime/config.ts";
+import { runRuntime } from "../../src/engine/runtime/run.ts";
 import { ControlledAcpSpecification } from "../support/agents/controlled-acp-specification.ts";
 import { createControlledRuntimeConfig as createRuntimeConfig } from "../support/controlled-runtime-config.ts";
 

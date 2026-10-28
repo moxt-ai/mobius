@@ -18,9 +18,9 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test, vi } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
-import { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
-import { type RuntimeConfig, RuntimeLocalContext } from "../../src/runtime/config.ts";
-import { runRuntime } from "../../src/runtime/run.ts";
+import { AcpAgentDefinition } from "../../src/engine/acp/agent/agent-definition.ts";
+import { type RuntimeConfig, RuntimeLocalContext } from "../../src/engine/runtime/config.ts";
+import { runRuntime } from "../../src/engine/runtime/run.ts";
 import { fakeAgentHarness } from "../support/agent-harness.ts";
 import { ControlledAcpConnection } from "../support/agents/controlled-acp-connection.ts";
 import { createControlledRuntimeConfig } from "../support/controlled-runtime-config.ts";

@@ -48,7 +48,12 @@ test("Given an installed release, When a user imports its APIs and starts the CL
     await run([
         "--input-type=module",
         "--eval",
-        "await import('@moxt-ai/mobius/runtime'); await import('@moxt-ai/mobius/process'); await import('@moxt-ai/mobius/filesystem');",
+        `import assert from 'node:assert/strict';
+        const engine = await import('@moxt-ai/mobius/engine');
+        assert.deepEqual(Object.keys(engine).sort(), ['MobiusRuntimeEngine', 'RuntimeRelayRevokedError', 'openRuntimeInstallationStore', 'pairMobiusRuntime', 'resumeMobiusRuntime'].sort());
+        for (const name of ['openRuntimeInstallationStore', 'pairMobiusRuntime', 'resumeMobiusRuntime', 'MobiusRuntimeEngine', 'RuntimeRelayRevokedError']) {
+            assert.equal(typeof engine[name], 'function', name);
+        }`,
     ]);
     assert.match((await run([entry, "--help"])).stdout, /Usage: mobius/);
     assert.equal((await run([entry, "--version"])).stdout, `CLI: ${metadata.version}\nDaemon: not running\n`);

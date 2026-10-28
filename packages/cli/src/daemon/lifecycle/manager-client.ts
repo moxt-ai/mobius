@@ -1,10 +1,10 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { gt } from "semver";
-import { managerLockExists } from "../../storage/daemon/manager-lock.ts";
-import { readCurrentDataVersion } from "../../storage/daemon/version-data.ts";
-import type { InstallationDirectory } from "../../storage/installation/installation-files.ts";
-import { readStateDirectory } from "../../storage/state-directory.ts";
-import { isNodeError } from "../../util/node-error.ts";
+import { managerLockExists } from "../../engine/storage/daemon/manager-lock.ts";
+import { readCurrentDataVersion } from "../../engine/storage/daemon/version-data.ts";
+import type { InstallationDirectory } from "../../engine/storage/installation/installation-files.ts";
+import { readStateDirectory } from "../../engine/storage/state-directory.ts";
+import { isNodeError } from "../../engine/util/node-error.ts";
 import { CONTROL_TIMEOUT_MILLISECONDS, sendLocalRequest } from "../control/local-client.ts";
 import { decodeKnownLifecycleResponse, type LifecycleResponse, type WorkerLaunch } from "../control/protocol.ts";
 import { prepareDaemonReleaseVersion } from "../upgrades/package.ts";

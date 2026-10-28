@@ -1,5 +1,5 @@
-import type { AgentConnectionFactory } from "../../../src/acp/connection/agent-connection.ts";
-import { LocalAgentSpecification } from "../../../src/agent/specification/agent-specification.ts";
+import type { AgentConnectionFactory } from "../../../src/engine/acp/connection/agent-connection.ts";
+import { LocalAgentSpecification } from "../../../src/engine/agent/specification/agent-specification.ts";
 import { ControlledAcpConnection } from "./controlled-acp-connection.ts";
 
 /** Discovery fixture for controlled peers that expose ACP on stdio. */

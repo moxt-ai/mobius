@@ -1,26 +1,16 @@
 {
     "name": "@moxt-ai/mobius",
-    "version": "0.0.340",
+    "version": "0.0.342",
     "description": "Mobius CLI for pairing and running local AI agent services.",
     "type": "module",
     "bin": {
         "mobius": "dist/cli.js"
     },
     "exports": {
-        "./runtime": {
-            "mobius-source": "./src/runtime.ts",
-            "types": "./dist/runtime.d.ts",
-            "default": "./dist/runtime.js"
-        },
-        "./process": {
-            "mobius-source": "./src/util/process/executable.ts",
-            "types": "./dist/util/process/executable.d.ts",
-            "default": "./dist/util/process/executable.js"
-        },
-        "./filesystem": {
-            "mobius-source": "./src/util/filesystem/private-path.ts",
-            "types": "./dist/util/filesystem/private-path.d.ts",
-            "default": "./dist/util/filesystem/private-path.js"
+        "./engine": {
+            "mobius-source": "./src/exports/engine.ts",
+            "types": "./dist/exports/engine.d.ts",
+            "default": "./dist/engine.js"
         }
     },
     "files": [
@@ -32,20 +22,10 @@
     "publishConfig": {
         "access": "public",
         "exports": {
-            "./runtime": {
-                "types": "./dist/runtime.d.ts",
-                "import": "./dist/runtime.js",
-                "default": "./dist/runtime.js"
-            },
-            "./process": {
-                "types": "./dist/util/process/executable.d.ts",
-                "import": "./dist/util/process/executable.js",
-                "default": "./dist/util/process/executable.js"
-            },
-            "./filesystem": {
-                "types": "./dist/util/filesystem/private-path.d.ts",
-                "import": "./dist/util/filesystem/private-path.js",
-                "default": "./dist/util/filesystem/private-path.js"
+            "./engine": {
+                "types": "./dist/exports/engine.d.ts",
+                "import": "./dist/engine.js",
+                "default": "./dist/engine.js"
             }
         }
     },
@@ -55,22 +35,22 @@
         "directory": "packages/cli"
     },
     "scripts": {
-        "prebuild": "tsc --project src/acp/harness/claude/upstream/tsconfig.json && tsc --project src/acp/harness/pi/upstream/tsconfig.json",
-        "build": "tsc --project tsconfig.build.json && esbuild cli=src/cli/entrypoint.ts runtime=src/runtime.ts src/util/process/executable.ts src/util/filesystem/private-path.ts --bundle --platform=node --target=node22.19.0 --format=esm --sourcemap --outbase=src --outdir=dist --external:@agentclientprotocol/sdk --external:undici",
+        "prebuild": "tsc --project src/engine/acp/harness/claude/upstream/tsconfig.json && tsc --project src/engine/acp/harness/pi/upstream/tsconfig.json",
+        "build": "tsc --project tsconfig.build.json && esbuild cli=src/cli/entrypoint.ts engine=src/exports/engine.ts --bundle --platform=node --target=node22.19.0 --format=esm --sourcemap --outbase=src --outdir=dist --external:@agentclientprotocol/sdk --external:undici",
         "dev": "node --watch src/cli/entrypoint.ts",
-        "pretypecheck": "tsc --project src/acp/harness/claude/upstream/tsconfig.json && tsc --project src/acp/harness/pi/upstream/tsconfig.json",
+        "pretypecheck": "tsc --project src/engine/acp/harness/claude/upstream/tsconfig.json && tsc --project src/engine/acp/harness/pi/upstream/tsconfig.json",
         "prepack": "pnpm build",
         "start": "node dist/cli.js",
         "typecheck": "tsc --project tsconfig.json && tsc --project tests/tsconfig.json",
-        "pretest:controlled": "tsc --project src/acp/harness/claude/upstream/tsconfig.json && tsc --project src/acp/harness/pi/upstream/tsconfig.json",
+        "pretest:controlled": "tsc --project src/engine/acp/harness/claude/upstream/tsconfig.json && tsc --project src/engine/acp/harness/pi/upstream/tsconfig.json",
         "test:controlled": "vitest run tests/sessions tests/runtime --maxWorkers=4",
         "pretest:manual": "pnpm pretest:controlled",
         "test:manual": "vitest run tests/manual",
-        "pretest:agents": "tsc --project src/acp/harness/claude/upstream/tsconfig.json && tsc --project src/acp/harness/pi/upstream/tsconfig.json",
+        "pretest:agents": "tsc --project src/engine/acp/harness/claude/upstream/tsconfig.json && tsc --project src/engine/acp/harness/pi/upstream/tsconfig.json",
         "test:agents": "vitest run tests/agents --maxWorkers=2",
-        "pretest:npm-compatibility": "tsc --project src/acp/harness/claude/upstream/tsconfig.json && tsc --project src/acp/harness/pi/upstream/tsconfig.json",
+        "pretest:npm-compatibility": "tsc --project src/engine/acp/harness/claude/upstream/tsconfig.json && tsc --project src/engine/acp/harness/pi/upstream/tsconfig.json",
         "test:npm-compatibility": "vitest run tests/runtime/daemon-upgrade.integration.test.ts",
-        "pretest:pressure": "tsc --project src/acp/harness/claude/upstream/tsconfig.json && tsc --project src/acp/harness/pi/upstream/tsconfig.json",
+        "pretest:pressure": "tsc --project src/engine/acp/harness/claude/upstream/tsconfig.json && tsc --project src/engine/acp/harness/pi/upstream/tsconfig.json",
         "test:pressure": "node tests/pressure/concurrent-sessions.mjs"
     },
     "dependencies": {

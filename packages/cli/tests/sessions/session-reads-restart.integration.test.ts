@@ -2,17 +2,17 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
-import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
-import { NullSessionObserver } from "../../src/session/api/session-api.ts";
+import { AcpAgentDefinition } from "../../src/engine/acp/agent/agent-definition.ts";
+import { AcpContentExternalizer } from "../../src/engine/acp/content/content-externalizer.ts";
+import { NullSessionObserver } from "../../src/engine/session/api/session-api.ts";
 import {
     MemorySessionStore,
     MissingStoredSession,
     SqliteSessionStore,
-} from "../../src/session/record/session-store.ts";
-import { AcpSessionTable } from "../../src/storage/session/acp-session-table.ts";
-import { openAcpSessionDatabase } from "../../src/storage/sqlite/local-databases.ts";
-import { systemTimer } from "../../src/util/timer.ts";
+} from "../../src/engine/session/record/session-store.ts";
+import { AcpSessionTable } from "../../src/engine/storage/session/acp-session-table.ts";
+import { openAcpSessionDatabase } from "../../src/engine/storage/sqlite/local-databases.ts";
+import { systemTimer } from "../../src/engine/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
 import { ControlledAcpConnection } from "../support/agents/controlled-acp-connection.ts";
 import { SessionRuntimeFixture as SessionManager } from "../support/session-runtime.ts";

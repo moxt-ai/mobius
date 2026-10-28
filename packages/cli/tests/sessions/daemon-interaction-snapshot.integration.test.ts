@@ -40,9 +40,9 @@ import {
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { expect, test } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
-import { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
-import { RuntimeLocalContext } from "../../src/runtime/config.ts";
-import { runRuntime } from "../../src/runtime/run.ts";
+import { AcpAgentDefinition } from "../../src/engine/acp/agent/agent-definition.ts";
+import { RuntimeLocalContext } from "../../src/engine/runtime/config.ts";
+import { runRuntime } from "../../src/engine/runtime/run.ts";
 import { ControlledAcpConnection } from "../support/agents/controlled-acp-connection.ts";
 import { createControlledRuntimeConfig as createRuntimeConfig } from "../support/controlled-runtime-config.ts";
 

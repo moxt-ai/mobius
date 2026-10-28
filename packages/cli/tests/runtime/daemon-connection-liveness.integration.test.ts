@@ -24,13 +24,13 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { listen, port as readPort, sendText as writeServerTextFrame } from "@moxt-ai/mobius-test/websocket";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
-import { RuntimeAgentDependencies } from "../../src/agent/runtime-agents.ts";
-import { createRuntimeConfig } from "../../src/runtime/config.ts";
-import { RuntimeRelayRevokedError } from "../../src/runtime/relay/runtime-revocation.ts";
-import { SESSION_EVENT_BATCH_WINDOW_MILLISECONDS } from "../../src/runtime/relay/session-event-publisher.ts";
-import { runRuntime } from "../../src/runtime/run.ts";
-import { type ScheduledTask, systemTimer, type Timer } from "../../src/util/timer.ts";
+import { AcpAgentDefinition } from "../../src/engine/acp/agent/agent-definition.ts";
+import { RuntimeAgentDependencies } from "../../src/engine/agent/runtime-agents.ts";
+import { createRuntimeConfig } from "../../src/engine/runtime/config.ts";
+import { RuntimeRelayRevokedError } from "../../src/engine/runtime/relay/runtime-revocation.ts";
+import { SESSION_EVENT_BATCH_WINDOW_MILLISECONDS } from "../../src/engine/runtime/relay/session-event-publisher.ts";
+import { runRuntime } from "../../src/engine/runtime/run.ts";
+import { type ScheduledTask, systemTimer, type Timer } from "../../src/engine/util/timer.ts";
 import { ControlledAcpConnection } from "../support/agents/controlled-acp-connection.ts";
 
 const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";

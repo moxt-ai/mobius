@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { WorkspaceDirectoryService } from "../../src/session/workspace/workspace-directory.ts";
+import { WorkspaceDirectoryService } from "../../src/engine/session/workspace/workspace-directory.ts";
 
 function directoryId(path: string): string {
     return `path-${Buffer.from(path, "utf8").toString("base64url")}`;

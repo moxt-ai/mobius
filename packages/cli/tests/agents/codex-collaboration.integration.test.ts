@@ -20,11 +20,11 @@ import {
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { expect, test } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
-import { CodexAgentConnection } from "../../src/acp/adapter/codex/agent-connection.ts";
-import { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
-import { RuntimeAgentDependencies } from "../../src/agent/runtime-agents.ts";
-import { createRuntimeConfig, RuntimeLocalContext } from "../../src/runtime/config.ts";
-import { runRuntime } from "../../src/runtime/run.ts";
+import { CodexAgentConnection } from "../../src/engine/acp/adapter/codex/agent-connection.ts";
+import { AcpAgentDefinition } from "../../src/engine/acp/agent/agent-definition.ts";
+import { RuntimeAgentDependencies } from "../../src/engine/agent/runtime-agents.ts";
+import { createRuntimeConfig, RuntimeLocalContext } from "../../src/engine/runtime/config.ts";
+import { runRuntime } from "../../src/engine/runtime/run.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 

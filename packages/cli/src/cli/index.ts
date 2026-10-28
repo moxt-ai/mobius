@@ -1,6 +1,6 @@
 import { Command, CommanderError } from "commander";
 import packageMetadata from "../../package.json" with { type: "json" };
-import { StateRootError, validateStateRoot } from "../storage/state-root.ts";
+import { StateRootError, validateStateRoot } from "../engine/storage/state-root.ts";
 
 import type { CliContext } from "./context.ts";
 import { registerAgentsHandler } from "./handler/agents/index.ts";

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { PROMPT_IMAGE_MAX_BYTES, type PromptAttachment } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
-import { type PromptArtifactError, resolvePromptArtifacts } from "../../src/session/prompt/prompt-artifacts.ts";
+import { type PromptArtifactError, resolvePromptArtifacts } from "../../src/engine/session/prompt/prompt-artifacts.ts";
 
 function imageAttachment(bytes: Uint8Array): PromptAttachment {
     return {

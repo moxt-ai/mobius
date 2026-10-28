@@ -8,7 +8,7 @@ import {
     encodeFileReadCommand,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
-import { PiAgentSpecification } from "../../src/agent/specification/vendors/pi-agent.ts";
+import { PiAgentSpecification } from "../../src/engine/agent/specification/vendors/pi-agent.ts";
 import { imageFixture } from "../support/agents/image-fixture.ts";
 import { PiFixture } from "../support/agents/pi.ts";
 import { prepareNewRealSession, withRealDaemon } from "../support/agents/real-daemon.ts";

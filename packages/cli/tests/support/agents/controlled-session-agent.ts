@@ -10,8 +10,8 @@ import type {
     AcpEndpointTermination,
     InProcessAcpEndpoint,
     InProcessAcpEndpointFactory,
-} from "../../../src/acp/agent/in-process-endpoint.ts";
-import type { AgentConnectionFactory } from "../../../src/acp/connection/agent-connection.ts";
+} from "../../../src/engine/acp/agent/in-process-endpoint.ts";
+import type { AgentConnectionFactory } from "../../../src/engine/acp/connection/agent-connection.ts";
 import { ControlledEndpointConnection } from "./controlled-endpoint-connection.ts";
 
 export interface AgentOperation {

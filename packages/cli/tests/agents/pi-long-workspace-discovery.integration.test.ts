@@ -3,8 +3,8 @@ import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { discoverLocalAgentInventory } from "../../src/agent/discovery/discover-local-agents.ts";
-import { PiAgentSpecification } from "../../src/agent/specification/vendors/pi-agent.ts";
+import { discoverLocalAgentInventory } from "../../src/engine/agent/discovery/discover-local-agents.ts";
+import { PiAgentSpecification } from "../../src/engine/agent/specification/vendors/pi-agent.ts";
 import { PiFixture } from "../support/agents/pi.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 
@@ -50,7 +50,7 @@ test("Given Pi's default workspace creates an oversized native session path, Whe
             join(legacyDirectory, "terminal-session.jsonl"),
             sessionHeader("terminal-pi-session", workspace),
         );
-        const { listPiSessions } = await import("../../src/acp/harness/pi/upstream/acp/pi-sessions.ts");
+        const { listPiSessions } = await import("../../src/engine/acp/harness/pi/upstream/acp/pi-sessions.ts");
         const discoveryEnvironment = { ...agent.environment, MOBIUS_PI_SESSION_DIR: sessionsRoot };
         expect(listPiSessions(discoveryEnvironment)).toContainEqual(
             expect.objectContaining({ sessionId: "terminal-pi-session", cwd: workspace }),

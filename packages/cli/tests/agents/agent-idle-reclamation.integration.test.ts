@@ -10,8 +10,8 @@ import {
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { afterEach, expect, test, vi } from "vitest";
-import { ClaudeCodeAgentSpecification } from "../../src/agent/specification/vendors/claude-code-agent.ts";
-import { CodexAgentSpecification } from "../../src/agent/specification/vendors/codex-agent.ts";
+import { ClaudeCodeAgentSpecification } from "../../src/engine/agent/specification/vendors/claude-code-agent.ts";
+import { CodexAgentSpecification } from "../../src/engine/agent/specification/vendors/codex-agent.ts";
 import { ClaudeFixture } from "../support/agents/claude.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
 import { waitForAgentFile, writeObservedAgentLauncher } from "../support/agents/observed-process.ts";

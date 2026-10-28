@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
+import { AcpAgentDefinition } from "../../src/engine/acp/agent/agent-definition.ts";
 import { ControlledAcpConnection } from "./agents/controlled-acp-connection.ts";
 
 const harnessPath = fileURLToPath(new URL("../sessions/fixtures/acp-peer.ts", import.meta.url));

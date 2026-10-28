@@ -1,7 +1,7 @@
 import { existsSync, watch } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { executableLaunch } from "../../../src/util/process/executable.ts";
+import { executableLaunch } from "../../../src/engine/util/process/executable.ts";
 
 /** Observe an actual Agent's process lifetime while forwarding its protocol unchanged. */
 export async function writeObservedAgentLauncher(

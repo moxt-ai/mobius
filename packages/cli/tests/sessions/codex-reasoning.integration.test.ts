@@ -3,11 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionNotification } from "@agentclientprotocol/sdk";
 import { expect, it } from "vitest";
-import { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
-import type { CodexAppServerClient } from "../../src/acp/harness/codex/app-server-client.ts";
-import { reasoningText } from "../../src/acp/harness/codex/items.ts";
-import { CodexOwnedAcpAgent } from "../../src/acp/harness/codex/owned-agent.ts";
-import type { CodexSettings } from "../../src/acp/harness/codex/settings.ts";
+import { AcpAgentDefinition } from "../../src/engine/acp/agent/agent-definition.ts";
+import type { CodexAppServerClient } from "../../src/engine/acp/harness/codex/app-server-client.ts";
+import { reasoningText } from "../../src/engine/acp/harness/codex/items.ts";
+import { CodexOwnedAcpAgent } from "../../src/engine/acp/harness/codex/owned-agent.ts";
+import type { CodexSettings } from "../../src/engine/acp/harness/codex/settings.ts";
 import { ControlledAcpConnection } from "../support/agents/controlled-acp-connection.ts";
 import { previewCodexHistory } from "../support/codex-history-preview.ts";
 
