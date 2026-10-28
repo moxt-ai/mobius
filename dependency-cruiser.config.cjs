@@ -37,14 +37,17 @@ module.exports = {
             // Tables, bytes on disk and execution contracts sit below the CLI domain.
             name: "cli-storage-is-below-the-domain",
             severity: "error",
-            from: { path: "^packages/cli/src/engine/(schema|storage|infra)/" },
+            from: { path: "^packages/cli/src/(engine/(schema|storage|infra)|storage)/" },
             to: { path: "^packages/cli/src/(engine/(acp|agent|session|runtime)/|daemon/|cli/|exports/)" },
         },
         {
             // Only storage/ and util/ touch the disk; the layers above reach files through them.
             name: "cli-disk-access-stays-in-storage",
             severity: "error",
-            from: { path: "^packages/cli/src/", pathNot: "^packages/cli/src/engine/(storage|util)/|/upstream/" },
+            from: {
+                path: "^packages/cli/src/",
+                pathNot: "^packages/cli/src/(engine/(storage|util)|storage)/|/upstream/",
+            },
             to: { dependencyTypes: ["core"], path: "^(node:)?(fs|fs/promises|sqlite)$" },
         },
         {

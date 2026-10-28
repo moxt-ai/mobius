@@ -5,7 +5,7 @@ import {
     type UnavailableAgent,
     UnsupportedAgentVersion,
 } from "../../../../engine/agent/discovery/agent-discovery.ts";
-import { writeExistingFile } from "../../../../engine/storage/files/output-file.ts";
+import { writeExistingFile } from "../../../../storage/files/output-file.ts";
 
 class AvailableAgentDiagnostic {
     readonly adapterVersion: string;

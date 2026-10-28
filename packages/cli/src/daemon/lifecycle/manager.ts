@@ -1,6 +1,6 @@
 import { setTimeout } from "node:timers/promises";
-import { acquireManagerLock } from "../../engine/storage/daemon/manager-lock.ts";
 import type { InstallationDirectory } from "../../engine/storage/installation/installation-files.ts";
+import { acquireManagerLock } from "../../storage/daemon/manager-lock.ts";
 import { serveLocalControl } from "../control/local-server.ts";
 import {
     type DaemonReleaseSwitchState,

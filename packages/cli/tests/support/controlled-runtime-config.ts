@@ -4,9 +4,10 @@ import {
     createRuntimeConfig,
     type RuntimeConfig,
     type RuntimeConnectionConfig,
-    type RuntimeLocalContext,
+    RuntimeLocalContext,
     type RuntimeReconnectTarget,
 } from "../../src/engine/runtime/config.ts";
+import { readStateDirectory } from "../../src/storage/state-directory.ts";
 import { acpAdapters } from "./acp-adapters.ts";
 
 /** Injects only the controlled Agent dependency; runtime services and transports remain production code. */
@@ -21,7 +22,7 @@ export function createControlledRuntimeConfig(
     return createRuntimeConfig(
         connection,
         new RuntimeAgentDependencies(agents, acpAdapters),
-        context,
+        context ?? new RuntimeLocalContext(readStateDirectory(), process.env),
         reconnectTarget,
         resolveAgent,
         rediscoverAgents,

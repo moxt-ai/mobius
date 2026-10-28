@@ -53,7 +53,7 @@ export function createCatalogAgentResolver(
             const rediscovered = inventory
                 .readyAgents()
                 .filter((ready) => ready.id === agent.id)
-                .map((ready) => withRuntimeEnvironment(ready, config.localContext.environment));
+                .map((ready) => withRuntimeEnvironment(ready, config.localContext.agentLaunchEnvironment));
             await config.catalog.replaceAndPublish(
                 (current) => {
                     if (!current.some((entry) => entry.id === agent.id)) {

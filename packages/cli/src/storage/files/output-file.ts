@@ -1,6 +1,6 @@
 import { constants } from "node:fs";
 import { type FileHandle, open } from "node:fs/promises";
-import { isNodeError } from "../../util/node-error.ts";
+import { isNodeError } from "../../engine/util/node-error.ts";
 
 export type ExistingFileWrite =
     | { readonly kind: "written" }

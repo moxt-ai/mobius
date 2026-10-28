@@ -5,11 +5,57 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { VerifiedRuntimeConnection } from "../../src/engine/runtime/connection/runtime-connection.ts";
 import {
+    openEngineInstallationStore,
     openRuntimeInstallationStore,
     type RuntimeInstallationStoreError,
 } from "../../src/engine/runtime/connection/runtime-installation-store.ts";
 
 describe("Runtime installation storage", () => {
+    it("Given an existing installation, When a host opens its explicit Engine data directory, Then old and new entrypoints retain the same identity and connections", async () => {
+        const stateRoot = await mkdtemp(join(tmpdir(), "mobius-engine-context-"));
+        const signal = new AbortController().signal;
+        try {
+            const original = await openRuntimeInstallationStore(
+                { applicationId: "dev.mobius.cli", stateDirectory: stateRoot },
+                signal,
+            );
+            const connection = await original.saveConnection(
+                {
+                    appId: "app_context",
+                    channelId: "channel_context",
+                    defaultWorkspace: join(stateRoot, "workspace"),
+                    pairingId: "pairing_context",
+                    relayOrigin: new URL("https://relay.example.com/"),
+                    runtimeCredential: "a".repeat(43),
+                    runtimeId: "runtime_context",
+                },
+                signal,
+            );
+            const engine = await openEngineInstallationStore(
+                join(stateRoot, "installations", "dev.mobius.cli"),
+                signal,
+            );
+            expect(engine.installationId).toBe(original.installationId);
+            expect(engine.stateDirectory).toBe(original.stateDirectory);
+            await expect(engine.readConnection(connection.connectionId, signal)).resolves.toEqual(connection);
+            const saved = await engine.saveConnection(
+                {
+                    appId: "app_new",
+                    channelId: "channel_new",
+                    defaultWorkspace: join(stateRoot, "workspace"),
+                    pairingId: "pairing_new",
+                    relayOrigin: new URL("https://relay.example.com/"),
+                    runtimeCredential: "b".repeat(43),
+                    runtimeId: "runtime_new",
+                },
+                signal,
+            );
+            await expect(original.readConnection(saved.connectionId, signal)).resolves.toEqual(saved);
+        } finally {
+            await rm(stateRoot, { recursive: true, force: true });
+        }
+    });
+
     it("Given an obsolete pairing record, When the Runtime restores it, Then it rejects the record without a compatibility fallback", async () => {
         const stateRoot = await mkdtemp(join(tmpdir(), "mobius-obsolete-pairing-"));
         const signal = new AbortController().signal;

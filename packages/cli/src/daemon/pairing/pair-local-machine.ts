@@ -13,21 +13,22 @@ import { publishAgentCatalog } from "../../engine/runtime/catalog/publish-agent-
 import { createCatalogAgentResolver } from "../../engine/runtime/catalog/resolve-catalog-agent.ts";
 import {
     createRuntimeConfig,
-    loadDefaultWorkspace,
     OpaqueRuntimeReconnectTarget,
     type RuntimeConfig,
     RuntimeLocalContext,
 } from "../../engine/runtime/config.ts";
 import type { VerifiedRuntimeConnection } from "../../engine/runtime/connection/runtime-connection.ts";
 import {
+    openEngineInstallationStore,
     openRuntimeInstallationStore,
     type RuntimeInstallationStore,
 } from "../../engine/runtime/connection/runtime-installation-store.ts";
-import { readCurrentDataVersion } from "../../engine/storage/daemon/version-data.ts";
 import { ensureCanonicalDirectory } from "../../engine/storage/files/local-files.ts";
-import { readStateDirectory } from "../../engine/storage/state-directory.ts";
 import { environmentProxyDispatcher } from "../../engine/util/network/environment-proxy.ts";
 import { isRecord } from "../../engine/util/value-utils.ts";
+import { readCurrentDataVersion } from "../../storage/daemon/version-data.ts";
+import { readStateDirectory } from "../../storage/state-directory.ts";
+import { mobiusEngineDataDir, resolveMaxAcpProcesses } from "../config.ts";
 
 const PAIRING_TIMEOUT_MILLISECONDS = 20_000;
 const PAIRING_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}$/;
@@ -300,7 +301,7 @@ function buildPairedRuntime(
                 discoverLocalAgentInventory({
                     defaultWorkspace,
                     dataDirectory: localContext.stateDirectory,
-                    environment: localContext.environment,
+                    environment: localContext.agentLaunchEnvironment,
                     signal: refreshSignal,
                 }),
             () => config,
@@ -310,7 +311,7 @@ function buildPairedRuntime(
             discoverLocalAgentInventory({
                 defaultWorkspace,
                 dataDirectory: localContext.stateDirectory,
-                environment: localContext.environment,
+                environment: localContext.agentLaunchEnvironment,
                 signal: refreshSignal,
             }).then((inventory) => inventory.readyAgents()),
     );
@@ -328,12 +329,16 @@ async function pairRuntime(
     signal: AbortSignal,
     environment: Readonly<NodeJS.ProcessEnv>,
 ): Promise<PairedRuntime> {
-    const localContext = new RuntimeLocalContext(installation.stateDirectory, environment);
+    const localContext = new RuntimeLocalContext(
+        installation.stateDirectory,
+        environment,
+        resolveMaxAcpProcesses(environment),
+    );
     const defaultWorkspace = await resolveDefaultWorkspace(options.workspace);
     const inventory = await discoverLocalAgentInventory({
         defaultWorkspace,
         dataDirectory: localContext.stateDirectory,
-        environment: localContext.environment,
+        environment: localContext.agentLaunchEnvironment,
         signal,
     });
     const claim = await claimPairing(options, defaultWorkspace, inventory.readyAgents(), signal);
@@ -377,12 +382,16 @@ async function resumeRuntimeConnection(
     signal: AbortSignal,
     environment: Readonly<NodeJS.ProcessEnv>,
 ): Promise<PairedRuntime> {
-    const localContext = new RuntimeLocalContext(installation.stateDirectory, environment);
+    const localContext = new RuntimeLocalContext(
+        installation.stateDirectory,
+        environment,
+        resolveMaxAcpProcesses(environment),
+    );
     const defaultWorkspace = await resolveDefaultWorkspace(connection.defaultWorkspace);
     const inventory = await discoverLocalAgentInventory({
         defaultWorkspace,
         dataDirectory: localContext.stateDirectory,
-        environment: localContext.environment,
+        environment: localContext.agentLaunchEnvironment,
         signal,
     });
     return buildPairedRuntime(installation, connection, defaultWorkspace, inventory, localContext);
@@ -428,13 +437,7 @@ export async function openMobiusVersionInstallation(
     signal: AbortSignal,
     environment: Readonly<NodeJS.ProcessEnv>,
 ): Promise<RuntimeInstallationStore> {
-    return await openRuntimeInstallationStore(
-        {
-            applicationId: MOBIUS_CLI_APPLICATION_ID,
-            stateDirectory: join(readStateDirectory(environment), "versions", version),
-        },
-        signal,
-    );
+    return await openEngineInstallationStore(mobiusEngineDataDir(version, environment), signal);
 }
 
 export async function pairLocalMachine(
@@ -458,7 +461,7 @@ export async function pairLocalMachine(
             relayOrigin: requested.relayOrigin,
             workspace: arguments_.includes("--workspace")
                 ? requested.workspace
-                : loadDefaultWorkspace(localContext.stateDirectory, localContext.environment),
+                : join(localContext.stateDirectory, "workspace"),
         },
         signal,
         process.env,

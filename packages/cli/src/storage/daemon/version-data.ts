@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { cp, lstat, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { decodeRuntimeUpgradeVersion } from "@moxt-ai/mobius-sdk/protocol";
-import { validateLocalPath } from "../../util/filesystem/private-path.ts";
-import { isNodeError } from "../../util/node-error.ts";
+import { validateLocalPath } from "../../engine/util/filesystem/private-path.ts";
+import { isNodeError } from "../../engine/util/node-error.ts";
 import type { StateRoot } from "../state-directory.ts";
 import { STATE_ROOT_ENTRY_NAMES, STATE_ROOT_LAYOUT } from "../state-root-layout.ts";
 

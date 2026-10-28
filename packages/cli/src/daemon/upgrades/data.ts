@@ -1,13 +1,13 @@
 import { decodeRuntimeUpgradeVersion } from "@moxt-ai/mobius-sdk/protocol";
+import type { InstallationDirectory } from "../../engine/storage/installation/installation-files.ts";
 import {
     copyVersionData,
     discardVersionData,
     readCurrentDataVersion,
     versionDataExists,
     writeCurrentDataVersion,
-} from "../../engine/storage/daemon/version-data.ts";
-import type { InstallationDirectory } from "../../engine/storage/installation/installation-files.ts";
-import { readStateDirectory } from "../../engine/storage/state-directory.ts";
+} from "../../storage/daemon/version-data.ts";
+import { readStateDirectory } from "../../storage/state-directory.ts";
 import { readSwitchStatus } from "../control/switch-status.ts";
 
 // A version whose data is not current inherits the current data. Without a current data pointer, a version that has

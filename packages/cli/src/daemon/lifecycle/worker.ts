@@ -1,18 +1,16 @@
 import { setTimeout } from "node:timers/promises";
 import { refreshAgentCatalog } from "../../engine/runtime/catalog/refresh-agent-catalog.ts";
 import type { RuntimeConfig } from "../../engine/runtime/config.ts";
+import { openEngineInstallationStore } from "../../engine/runtime/connection/runtime-installation-store.ts";
 import { MobiusRuntimeEngine } from "../../engine/runtime/engine.ts";
 import { RuntimeTurnActivity } from "../../engine/session/turn/runtime-turn-activity.ts";
-import { acquireManagerLock } from "../../engine/storage/daemon/manager-lock.ts";
 import type { InstallationDirectory } from "../../engine/storage/installation/installation-files.ts";
 import { isNodeError } from "../../engine/util/node-error.ts";
+import { acquireManagerLock } from "../../storage/daemon/manager-lock.ts";
+import { mobiusEngineDataDir } from "../config.ts";
 import { sendLocalRequest } from "../control/local-client.ts";
 import { serveLocalControl } from "../control/local-server.ts";
-import {
-    openMobiusControlInstallation,
-    openMobiusVersionInstallation,
-    resumeMobiusRuntime,
-} from "../pairing/pair-local-machine.ts";
+import { openMobiusControlInstallation, resumeMobiusRuntime } from "../pairing/pair-local-machine.ts";
 import { prepareUpgradeData, recordCurrentData } from "../upgrades/data.ts";
 import { reportDaemonUpgradeAvailability, runDaemonReleaseUpgrades } from "../upgrades/upgrade.ts";
 import { surviveUnhandledRejections, type UnhandledRejectionGuard } from "./unhandled-rejection.ts";
@@ -73,7 +71,8 @@ async function runWorkerRuntime(
 ): Promise<void> {
     const control = await openMobiusControlInstallation(combined, process.env);
     await prepareUpgradeData(control.stateDirectory, version, combined);
-    const installation = await openMobiusVersionInstallation(version, combined, process.env);
+    const engineDataDir = mobiusEngineDataDir(version, process.env);
+    const installation = await openEngineInstallationStore(engineDataDir, combined);
     const deadline = AbortSignal.any([combined, AbortSignal.timeout(15_000)]);
     let release: (() => Promise<void>) | null = null;
     while (release === null) {

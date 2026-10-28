@@ -1,7 +1,7 @@
 import { readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { isNodeError } from "../../util/node-error.ts";
-import type { InstallationDirectory } from "../installation/installation-files.ts";
+import type { InstallationDirectory } from "../../engine/storage/installation/installation-files.ts";
+import { isNodeError } from "../../engine/util/node-error.ts";
 
 /**
  * Takes the lock file that makes this process the only holder of a daemon role. A lock left by a

@@ -1,6 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { installationPointerPath } from "./installation/installation-files.ts";
+import { installationPointerPath } from "../engine/storage/installation/installation-files.ts";
 import { readStateDirectory } from "./state-directory.ts";
 import { STATE_ROOT_LAYOUT } from "./state-root-layout.ts";
 

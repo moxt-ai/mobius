@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import packageMetadata from "../../package.json" with { type: "json" };
 
 const temporaryDirectories: string[] = [];
 
@@ -60,6 +61,25 @@ async function machineWithoutAgents(): Promise<{ readonly environment: NodeJS.Pr
 }
 
 describe("Mobius agents command", () => {
+    it("Given an obsolete default-workspace environment override, When the user discovers Agents, Then the CLI uses its installation workspace and leaves the override path untouched", async () => {
+        const { environment, root } = await machineWithoutAgents();
+        const obsoleteWorkspace = join(root, "obsolete-workspace");
+        const result = await runCli(
+            ["agents", "--json"],
+            { ...environment, MOBIUS_DEFAULT_WORKSPACE: obsoleteWorkspace },
+            AbortSignal.timeout(60_000),
+        );
+        expect(result.code, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout)).toMatchObject({ available: [] });
+        const application = join(root, "state", "versions", packageMetadata.version, "installations", "dev.mobius.cli");
+        const installationId = (await readdir(application)).find((entry) => entry.startsWith("min_"));
+        if (installationId === undefined) {
+            throw new Error("The CLI did not initialize its installation");
+        }
+        await expect(readdir(join(application, installationId, "workspace"))).resolves.toEqual([]);
+        await expect(stat(obsoleteWorkspace)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
     it("Given a computer where Pi is not installed, When setup asks for the Agent inventory as a JSON file, Then the file reports Pi's unavailable status and nothing is printed", async () => {
         const { environment, root } = await machineWithoutAgents();
         const outputPath = join(root, "agents.json");

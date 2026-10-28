@@ -15,7 +15,7 @@ export async function refreshAgentCatalog(
     const readyAgents = await discover(signal);
     signal.throwIfAborted();
     return await config.catalog.replaceAndPublish(
-        () => readyAgents.map((agent) => withRuntimeEnvironment(agent, config.localContext.environment)),
+        () => readyAgents.map((agent) => withRuntimeEnvironment(agent, config.localContext.agentLaunchEnvironment)),
         (publishSignal) => publishAgentCatalog(config, publishSignal),
         signal,
     );

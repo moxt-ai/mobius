@@ -26,7 +26,7 @@ import { listen, port as readPort, sendText as writeServerTextFrame } from "@mox
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AcpAgentDefinition } from "../../src/engine/acp/agent/agent-definition.ts";
 import { RuntimeAgentDependencies } from "../../src/engine/agent/runtime-agents.ts";
-import { createRuntimeConfig } from "../../src/engine/runtime/config.ts";
+import { createRuntimeConfig, RuntimeLocalContext } from "../../src/engine/runtime/config.ts";
 import { RuntimeRelayRevokedError } from "../../src/engine/runtime/relay/runtime-revocation.ts";
 import { SESSION_EVENT_BATCH_WINDOW_MILLISECONDS } from "../../src/engine/runtime/relay/session-event-publisher.ts";
 import { runRuntime } from "../../src/engine/runtime/run.ts";
@@ -307,13 +307,17 @@ describe("daemon relay connection liveness", () => {
         process.env["NO_PROXY"] = "127.0.0.1,localhost";
         process.env["no_proxy"] = "127.0.0.1,localhost";
         process.env["PATH"] = "";
-        const config = createRuntimeConfig({
-            defaultWorkspace,
-            channelId: "heartbeat-channel",
-            relayUrl: new URL(
-                `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/heartbeat-channel/daemon`,
-            ),
-        });
+        const config = createRuntimeConfig(
+            {
+                defaultWorkspace,
+                channelId: "heartbeat-channel",
+                relayUrl: new URL(
+                    `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/heartbeat-channel/daemon`,
+                ),
+            },
+            new RuntimeAgentDependencies([]),
+            new RuntimeLocalContext(stateDirectory, process.env),
+        );
 
         vi.useFakeTimers({ toFake: ["Date", "clearTimeout", "setTimeout"] });
         vi.setSystemTime(new Date("2026-09-04T00:00:00.000Z"));
@@ -446,13 +450,17 @@ describe("daemon relay connection liveness", () => {
         process.env["NO_PROXY"] = "127.0.0.1,localhost";
         process.env["no_proxy"] = "127.0.0.1,localhost";
         process.env["PATH"] = "";
-        const config = createRuntimeConfig({
-            defaultWorkspace,
-            channelId: "runtime-revoked-channel",
-            relayUrl: new URL(
-                `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/runtime-revoked-channel/daemon`,
-            ),
-        });
+        const config = createRuntimeConfig(
+            {
+                defaultWorkspace,
+                channelId: "runtime-revoked-channel",
+                relayUrl: new URL(
+                    `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/runtime-revoked-channel/daemon`,
+                ),
+            },
+            new RuntimeAgentDependencies([]),
+            new RuntimeLocalContext(stateDirectory, process.env),
+        );
         const online = Promise.withResolvers<void>();
         const statuses: string[] = [];
         const runtime = runRuntime(config, cancellation.signal, undefined, {
@@ -595,11 +603,17 @@ describe("daemon relay connection liveness", () => {
         process.env["NO_PROXY"] = "127.0.0.1,localhost";
         process.env["no_proxy"] = "127.0.0.1,localhost";
         process.env["PATH"] = "";
-        const config = createRuntimeConfig({
-            defaultWorkspace,
-            channelId: "liveness-channel",
-            relayUrl: new URL(`ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/liveness-channel/daemon`),
-        });
+        const config = createRuntimeConfig(
+            {
+                defaultWorkspace,
+                channelId: "liveness-channel",
+                relayUrl: new URL(
+                    `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/liveness-channel/daemon`,
+                ),
+            },
+            new RuntimeAgentDependencies([]),
+            new RuntimeLocalContext(stateDirectory, process.env),
+        );
 
         vi.useFakeTimers({ toFake: ["Date", "clearTimeout", "setTimeout"] });
         vi.setSystemTime(new Date("2026-09-04T00:00:00.000Z"));
@@ -740,13 +754,17 @@ describe("daemon relay connection liveness", () => {
         process.env["NO_PROXY"] = "127.0.0.1,localhost";
         process.env["no_proxy"] = "127.0.0.1,localhost";
         process.env["PATH"] = "";
-        const config = createRuntimeConfig({
-            defaultWorkspace,
-            channelId: "unsupported-channel",
-            relayUrl: new URL(
-                `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/unsupported-channel/daemon`,
-            ),
-        });
+        const config = createRuntimeConfig(
+            {
+                defaultWorkspace,
+                channelId: "unsupported-channel",
+                relayUrl: new URL(
+                    `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/unsupported-channel/daemon`,
+                ),
+            },
+            new RuntimeAgentDependencies([]),
+            new RuntimeLocalContext(stateDirectory, process.env),
+        );
 
         vi.useFakeTimers({ toFake: ["Date"] });
         vi.setSystemTime(new Date("2026-09-04T00:00:00.000Z"));
@@ -962,6 +980,7 @@ describe("daemon relay connection liveness", () => {
                         ),
                 ),
             ]),
+            new RuntimeLocalContext(stateDirectory, process.env),
         );
 
         vi.useFakeTimers({ toFake: ["Date"] });

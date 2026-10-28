@@ -117,7 +117,7 @@ test("Given real Codex streams commentary after a tool, When clients watch and r
     const config = createRuntimeConfig(
         { channelId: "real-codex", defaultWorkspace: workspace, relayUrl },
         new RuntimeAgentDependencies([agent]),
-        new RuntimeLocalContext(stateDirectory),
+        new RuntimeLocalContext(stateDirectory, process.env),
     );
     const cancellation = new AbortController();
     const runtime = runRuntime(config, cancellation.signal);

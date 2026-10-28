@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { isIdentifier } from "@moxt-ai/mobius-sdk/protocol";
 import { ensurePrivateDirectory } from "../../storage/files/local-files.ts";
 import {
@@ -312,12 +312,36 @@ export class RuntimeInstallationStore {
     ): Promise<RuntimeInstallationStore> => {
         signal.throwIfAborted();
         const applicationId = validateApplicationId(options.applicationId);
-        const rootDirectory = resolve(options.stateDirectory);
-        const applicationDirectory = applicationDirectoryPath(rootDirectory, applicationId);
+        const dataDirectory = resolve(options.stateDirectory);
         try {
-            await ensurePrivateDirectory(rootDirectory);
-            await validateLocalPath(rootDirectory, true, true, signal);
+            await ensurePrivateDirectory(dataDirectory);
+            await validateLocalPath(dataDirectory, true, true, signal);
+        } catch (cause) {
+            signal.throwIfAborted();
+            throw new RuntimeInstallationStoreError(
+                "installation_unavailable",
+                "The local installation cannot be initialized",
+                { cause },
+            );
+        }
+        return await RuntimeInstallationStore.openEngine(
+            applicationDirectoryPath(dataDirectory, applicationId),
+            applicationId,
+            signal,
+        );
+    };
+
+    static readonly openEngine = async (
+        engineDataDir: string,
+        applicationId: string,
+        signal: AbortSignal,
+    ): Promise<RuntimeInstallationStore> => {
+        signal.throwIfAborted();
+        validateApplicationId(applicationId);
+        const applicationDirectory = resolve(engineDataDir);
+        try {
             await ensurePrivateDirectory(applicationDirectory);
+            await validateLocalPath(applicationDirectory, true, true, signal);
         } catch (cause) {
             throw new RuntimeInstallationStoreError(
                 "installation_unavailable",
@@ -577,4 +601,11 @@ export async function openRuntimeInstallationStore(
     signal: AbortSignal,
 ): Promise<RuntimeInstallationStore> {
     return await RuntimeInstallationStore.open(options, signal);
+}
+
+export async function openEngineInstallationStore(
+    engineDataDir: string,
+    signal: AbortSignal,
+): Promise<RuntimeInstallationStore> {
+    return await RuntimeInstallationStore.openEngine(engineDataDir, basename(resolve(engineDataDir)), signal);
 }

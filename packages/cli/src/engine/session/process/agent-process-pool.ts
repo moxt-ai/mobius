@@ -4,22 +4,6 @@ import { AcpProcessCapacityLock, waitForAcpProcessCapacity } from "./process-cap
 const DEFAULT_MAX_ACP_PROCESSES = 1000;
 const MAX_CONCURRENT_STARTS = 8;
 const ACP_PROCESS_IDLE_TIMEOUT_MILLISECONDS = 2 * 60 * 60 * 1_000;
-// Retired Sessions stay resumable through their stored row, so the cap bounds
-// live Agent processes only. Operators and tests may shrink it per daemon.
-const MAX_ACP_PROCESSES_ENVIRONMENT_KEY = "MOBIUS_MAX_ACP_PROCESSES";
-
-export function resolveMaxAcpProcesses(environment: Readonly<Record<string, string | undefined>>): number {
-    const configured = environment[MAX_ACP_PROCESSES_ENVIRONMENT_KEY];
-    if (configured === undefined || configured === "") {
-        return DEFAULT_MAX_ACP_PROCESSES;
-    }
-    const parsed = Number(configured);
-    if (!Number.isInteger(parsed) || parsed < 1) {
-        throw new Error(`${MAX_ACP_PROCESSES_ENVIRONMENT_KEY} must be a positive integer`);
-    }
-    return parsed;
-}
-
 export interface AgentProcess {
     readonly closeProcess: () => Promise<void>;
 }

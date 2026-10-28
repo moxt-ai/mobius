@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { createConnection, type Socket } from "node:net";
-import { readOrCreateControlToken } from "../../engine/storage/daemon/control-token.ts";
 import type { InstallationDirectory } from "../../engine/storage/installation/installation-files.ts";
 import { platformSupportFor } from "../../engine/util/platform/index.ts";
+import { readOrCreateControlToken } from "../../storage/daemon/control-token.ts";
 
 export const CONTROL_TIMEOUT_MILLISECONDS = 130_000;
 const MAXIMUM_MESSAGE_BYTES = 64 * 1024;

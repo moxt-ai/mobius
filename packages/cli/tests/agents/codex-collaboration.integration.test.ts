@@ -100,7 +100,7 @@ test("Given real Codex dispatches and waits for a subagent, When the turn runs t
     const config = createRuntimeConfig(
         { channelId: "real-codex-collaboration", defaultWorkspace: workspace, relayUrl },
         new RuntimeAgentDependencies([agent]),
-        new RuntimeLocalContext(stateDirectory),
+        new RuntimeLocalContext(stateDirectory, process.env),
     );
     const cancellation = new AbortController();
     const runtime = runRuntime(config, cancellation.signal);

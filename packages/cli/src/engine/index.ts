@@ -1,10 +1,3 @@
-export {
-    type MobiusRuntimePairingOptions,
-    type PairedRuntime,
-    PairingClientError,
-    pairMobiusRuntime,
-    resumeMobiusRuntime,
-} from "../daemon/pairing/pair-local-machine.ts";
 export { AcpAgentDefinition } from "./acp/agent/agent-definition.ts";
 export type {
     AcpEndpointTermination,
@@ -27,6 +20,7 @@ export {
     RuntimeLocalContext,
     RuntimeReconnectTarget,
 } from "./runtime/config.ts";
+export { openEngineInstallationStore } from "./runtime/connection/runtime-installation-store.ts";
 export * from "./runtime/engine.ts";
 export { MobiusRuntimeEngine, openRuntimeInstallationStore, RuntimeRelayRevokedError } from "./runtime/engine.ts";
 export * from "./util/filesystem/private-path.ts";

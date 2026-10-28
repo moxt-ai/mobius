@@ -1,8 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { isNodeError } from "../../util/node-error.ts";
-import type { InstallationDirectory } from "../installation/installation-files.ts";
+import type { InstallationDirectory } from "../../engine/storage/installation/installation-files.ts";
+import { isNodeError } from "../../engine/util/node-error.ts";
 
 function controlTokenPath(stateDirectory: InstallationDirectory): string {
     return join(stateDirectory, "manager.token");
