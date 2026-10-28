@@ -190,16 +190,12 @@ export function registerManagedUpgradeScenarios(
                 NPM_CONFIG_REGISTRY: "",
             };
             const cli = async (args: readonly string[], deadline = signal): Promise<void> => {
-                const child = spawn(
-                    process.execPath,
-                    [resolve(import.meta.dirname, "../../src/cli/entrypoint.ts"), ...args],
-                    {
-                        cwd: directory,
-                        env: environment,
-                        signal: deadline,
-                        stdio: ["ignore", "pipe", "pipe"],
-                    },
-                );
+                const child = spawn(process.execPath, [resolve(import.meta.dirname, "../../dist/cli.js"), ...args], {
+                    cwd: directory,
+                    env: environment,
+                    signal: deadline,
+                    stdio: ["ignore", "pipe", "pipe"],
+                });
                 let output = "";
                 child.stdout.on("data", (chunk: Buffer) => {
                     output += chunk.toString();

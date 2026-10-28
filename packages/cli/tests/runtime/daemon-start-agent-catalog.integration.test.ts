@@ -21,11 +21,11 @@ async function runCli(
     environment: Readonly<NodeJS.ProcessEnv>,
     signal: AbortSignal,
 ): Promise<{ readonly code: number | null; readonly stderr: string }> {
-    const child = spawn(
-        process.execPath,
-        [resolve(import.meta.dirname, "../../src/cli/entrypoint.ts"), ...arguments_],
-        { env: environment, signal, stdio: ["ignore", "ignore", "pipe"] },
-    );
+    const child = spawn(process.execPath, [resolve(import.meta.dirname, "../../dist/cli.js"), ...arguments_], {
+        env: environment,
+        signal,
+        stdio: ["ignore", "ignore", "pipe"],
+    });
     let stderr = "";
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {

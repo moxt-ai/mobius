@@ -20,9 +20,31 @@ export async function packedRelease(
         await cp(resolve(import.meta.dirname, "../../src"), join(source, "src"), { recursive: true });
         await writeFile(join(source, "package.json"), JSON.stringify({ ...cliPackage, version }));
         await symlink(resolve(import.meta.dirname, "../../node_modules"), join(source, "node_modules"), "junction");
+        // Stamp and bundle each release once, rather than transpiling its source graph on every CLI/daemon restart.
+        const esbuild = await findExecutableOnPath("esbuild", process.env);
+        if (esbuild === null) {
+            throw new Error("esbuild is required to bundle the upgrade scenario's releases");
+        }
+        await runBoundedProcess({
+            command: esbuild.path,
+            arguments: [
+                join(source, "src/cli/entrypoint.ts"),
+                `--outfile=${join(source, "dist/cli.js")}`,
+                "--bundle",
+                "--platform=node",
+                "--target=node22.19.0",
+                "--format=esm",
+                "--external:@agentclientprotocol/sdk",
+                "--external:undici",
+            ],
+            cwd: source,
+            environment: process.env,
+            signal,
+            timeoutMilliseconds: 30_000,
+        });
         await writeFile(
             join(root, "dist/cli.js"),
-            `import ${JSON.stringify(pathToFileURL(join(source, "src/cli/entrypoint.ts")).href)};`,
+            `import ${JSON.stringify(pathToFileURL(join(source, "dist/cli.js")).href)};`,
         );
     } else {
         await writeFile(
