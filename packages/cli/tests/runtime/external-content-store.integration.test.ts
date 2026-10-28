@@ -17,7 +17,7 @@ test("Given two Sessions produce identical media, When each retrieves its grante
             bytes,
             kind: "resource",
             mediaType: "text/plain",
-            name: "result",
+            name: "report.PDF",
             sessionId: "first",
             signal,
         });
@@ -30,7 +30,7 @@ test("Given two Sessions produce identical media, When each retrieves its grante
             bytes,
             kind: "resource",
             mediaType: "text/plain",
-            name: "result",
+            name: "report.PDF",
             sessionId: "second",
             signal,
         });
@@ -40,6 +40,7 @@ test("Given two Sessions produce identical media, When each retrieves its grante
         if (original === null) {
             throw new Error("Expected a retrievable media file");
         }
+        expect(original.path).toMatch(/\.pdf$/u);
         expect(await readFile(original.path)).toEqual(bytes);
         expect((await stat(original.path)).mode & 0o777).toBe(0o600);
         vi.setSystemTime(new Date("2026-10-10T00:00:00Z"));

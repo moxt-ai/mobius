@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
-import { PROMPT_IMAGE_MAX_BYTES, type PromptAttachment } from "@moxt-ai/mobius-sdk/protocol";
+import { pathToFileURL } from "node:url";
+import {
+    MAX_PROMPT_ATTACHMENT_BYTES,
+    PROMPT_IMAGE_MAX_BYTES,
+    type PromptAttachment,
+} from "@moxt-ai/mobius-sdk/protocol";
 import type { PromptImageInput, PromptResourceInput } from "../../acp/client/prompt-content.ts";
 import { OperationError } from "../../infra/operation-error.ts";
-
-const MAX_AGENT_RESOURCE_BYTE_LENGTH = 1_000_000;
 
 export class PromptArtifactError extends OperationError {
     constructor(code: string, message: string, options: ErrorOptions = {}) {
@@ -21,9 +24,17 @@ export class ResolvedPromptArtifacts {
     }
 }
 
-export type ReadPromptArtifact = (attachment: PromptAttachment, signal: AbortSignal) => Promise<Uint8Array>;
+export interface ReadPromptArtifactResult {
+    readonly bytes: Uint8Array;
+    readonly path: string;
+}
 
-function isTextMediaType(mediaType: string): boolean {
+export type ReadPromptArtifact = (
+    attachment: PromptAttachment,
+    signal: AbortSignal,
+) => Promise<ReadPromptArtifactResult>;
+
+export function isTextPromptResourceMediaType(mediaType: string): boolean {
     return (
         mediaType.startsWith("text/") ||
         mediaType === "application/json" ||
@@ -42,7 +53,8 @@ export async function resolvePromptArtifacts(
     const resources: PromptResourceInput[] = [];
     for (const attachment of attachments) {
         signal.throwIfAborted();
-        const bytes = await read(attachment, signal);
+        const artifact = await read(attachment, signal);
+        const { bytes } = artifact;
         if (
             bytes.byteLength !== attachment.byteLength ||
             createHash("sha256").update(bytes).digest("hex") !== attachment.contentKey
@@ -63,20 +75,15 @@ export async function resolvePromptArtifacts(
             });
             continue;
         }
-        if (!isTextMediaType(attachment.mimeType)) {
+        if (bytes.byteLength > MAX_PROMPT_ATTACHMENT_BYTES || resources.length >= 16) {
             continue;
         }
-        if (bytes.byteLength > MAX_AGENT_RESOURCE_BYTE_LENGTH || resources.length >= 16) {
-            continue;
-        }
-        let text: string;
-        try {
-            text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-        } catch {
-            signal.throwIfAborted();
-            continue;
-        }
-        resources.push({ mimeType: attachment.mimeType, text, type: "embedded", uri: attachment.uri });
+        resources.push({
+            mimeType: attachment.mimeType,
+            name: attachment.name,
+            type: "link",
+            uri: pathToFileURL(artifact.path).href,
+        });
     }
     return new ResolvedPromptArtifacts(images, resources);
 }
