@@ -162,9 +162,10 @@ export class WorkspaceDirectoryService {
         bindingId: string,
         id: string,
         signal: AbortSignal,
-    ): Promise<{ readonly path: string; readonly label: string }> => {
+    ): Promise<{ readonly path: string; readonly label: string; readonly parentDirectoryId: string }> => {
         const path = await this.resolve(bindingId, id, signal);
-        return { path, label: this.label(path) };
+        const parent = dirname(path);
+        return { path, label: this.label(path), parentDirectoryId: parent === path ? "" : encodePath(parent) };
     };
 
     readonly list = async (bindingId: string, id: string, signal: AbortSignal): Promise<WorkspaceDirectoryListing> => {

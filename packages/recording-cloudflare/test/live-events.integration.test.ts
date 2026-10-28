@@ -60,6 +60,8 @@ describe("Recording live V2 events", () => {
             (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: [next] }), env)).status,
         ).toBe(201);
         const response = await waiting;
+        expect(response.headers.get("Server-Timing")).toMatch(/recording-read;dur=[0-9.]+/u);
+        expect(response.headers.get("Server-Timing")).toMatch(/recording-wait;dur=[0-9.]+/u);
         expect(response.status).toBe(200);
         expect(decodeSessionRecordingHistoryPage(await response.text()).events).toEqual([next]);
         expect(response.headers.get("Mobius-Recording-Wait-Supported")).toBe("1");

@@ -15,6 +15,7 @@ const workspaceListCommandSchema = z
         directoryId: DIRECTORY_IDENTIFIER,
         kind: z.literal(WORKSPACE_LIST_KIND),
         requestId: IDENTIFIER,
+        view: z.literal("metadata").optional(),
     })
     .readonly();
 

@@ -875,6 +875,24 @@ export class MobiusRuntimeResources {
             ),
         );
 
+    readonly describeWorkspace = async (
+        runtimeId: string,
+        directoryId: string,
+        signal: AbortSignal,
+    ): Promise<Pick<WorkspaceEntriesEvent, "directoryId" | "directoryLabel">> => {
+        // Older relays and daemons ignore the optional view and return a full listing.
+        const listing = decodeWorkspaceEntriesEvent(
+            JSON.stringify(
+                await this.#executor.post(
+                    projectPath(this.#projectId, `runtimes/${encodeURIComponent(runtimeId)}/workspace`),
+                    { directoryId, view: "metadata" },
+                    signal,
+                ),
+            ),
+        );
+        return { directoryId: listing.directoryId, directoryLabel: listing.directoryLabel };
+    };
+
     readonly discoverAgentSettings = async (
         runtimeId: string,
         agentId: string,

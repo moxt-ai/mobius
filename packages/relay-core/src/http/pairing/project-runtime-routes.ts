@@ -626,12 +626,17 @@ export function createProjectRuntimeRoutes() {
             async (context) => {
                 const body = context.req.valid("json");
                 assertRequiredKeys(body, ["directoryId"]);
+                const view = body["view"];
+                if (view !== undefined && view !== "metadata") {
+                    throw new PairingDirectoryError("invalid_request", "The workspace view is invalid");
+                }
                 const command = decodeWorkspaceListCommand(
                     JSON.stringify({
                         bindingId: RUNTIME_WORKSPACE_BINDING_ID,
                         directoryId: readString(body, "directoryId", MAX_DIRECTORY_IDENTIFIER_LENGTH),
                         kind: "workspace.list",
                         requestId: crypto.randomUUID(),
+                        ...(view === undefined ? {} : { view }),
                     }),
                 );
                 const result = await context.env.services.runtimePairings.listWorkspace(
