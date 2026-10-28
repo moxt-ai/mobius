@@ -426,6 +426,7 @@ export function createPlatformApplication(
             );
             const agentId = v.parse(sessionIdentifier, context.req.query("agentId"));
             const directoryId = v.parse(v.custom<string>(isDirectoryIdentifier), context.req.query("directoryId"));
+            const commandId = context.req.query("commandId");
             const result = await sessionOperations(context).requestProjectScopeControl(
                 new ProjectScope(access.projectId),
                 access.runtimeId,
@@ -435,6 +436,9 @@ export function createPlatformApplication(
                         additionalDirectoryIds,
                         agentId,
                         bindingId: "workspace",
+                        ...(commandId === undefined
+                            ? {}
+                            : { deliveryCommandId: v.parse(sessionIdentifier, commandId) }),
                         directoryId,
                         kind: "native.session.request",
                         requestId: crypto.randomUUID(),

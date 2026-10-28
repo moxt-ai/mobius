@@ -2394,6 +2394,19 @@ async function connectRuntimeDaemon(slug: string, options: { readonly anchorCloc
                     },
                 ),
             ),
+        readSessionExecution: (commandId?: string) =>
+            env.RUNTIME_RELAY.getByName(runtimeId).fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/active-turn?${new URLSearchParams(
+                        {
+                            agentId: "codex",
+                            directoryId: "root",
+                            ...(commandId === undefined ? {} : { commandId }),
+                        },
+                    ).toString()}`,
+                    { headers: credentialHeaders(text(sessionAccess, "credential")) },
+                ),
+            ),
         submitTurn: (idempotencyKey: string) =>
             worker.fetch(
                 new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns`, {
@@ -2505,6 +2518,71 @@ it.each(["text", "binary"])(
         }
     },
 );
+
+// @no-uc: Compatibility; Chat recovers an unconfirmed submission from the Runtime that received it, and older Runtimes keep the previous answer.
+it("Given Chat reads the Session execution naming an unconfirmed command, When the Runtime reports that command's delivery or predates delivery reads, Then the Relay returns the delivery only when the Runtime supplied it", async () => {
+    const runtime = await connectRuntimeDaemon("command-delivery");
+    try {
+        for (const runtimeVersion of ["current", "previous"] as const) {
+            const response = runtime.readSessionExecution("unconfirmed-command");
+            const first = await Promise.race([
+                runtime.daemonMessages.next().then((message) => ({ kind: "command" as const, message })),
+                response.then((answered) => ({ kind: "response" as const, response: answered })),
+            ]);
+            if (first.kind === "response") {
+                throw new Error(
+                    `Expected a daemon request, received ${first.response.status}: ${await first.response.text()}`,
+                );
+            }
+            const query = decodeServiceToDaemonMessage(first.message);
+            if (query.kind !== "native.session.request" || query.action !== "active-turn") {
+                throw new Error("Expected the Session execution read to reach the daemon");
+            }
+            expect(query.deliveryCommandId).toBe("unconfirmed-command");
+            runtime.daemon.send(
+                encodeNativeSessionResult({
+                    kind: "native.session.result",
+                    action: "active-turn",
+                    requestId: query.requestId,
+                    sessionId: runtime.sessionId,
+                    targetSessionId: runtime.sessionId,
+                    turn: null,
+                    queued: [],
+                    ...(runtimeVersion === "current"
+                        ? { command: { state: "completed", stopReason: "end_turn" } as const }
+                        : {}),
+                }),
+            );
+            const body = await responseJson(await response, 200);
+            if (runtimeVersion === "current") {
+                expect(body).toMatchObject({ command: { state: "completed", stopReason: "end_turn" } });
+            } else {
+                expect(body).not.toHaveProperty("command");
+            }
+        }
+        // A client released before delivery reads names no command, and the Runtime is asked nothing new.
+        const response = runtime.readSessionExecution();
+        const query = decodeServiceToDaemonMessage(await runtime.daemonMessages.next());
+        if (query.kind !== "native.session.request" || query.action !== "active-turn") {
+            throw new Error("Expected the Session execution read to reach the daemon");
+        }
+        expect(query).not.toHaveProperty("deliveryCommandId");
+        runtime.daemon.send(
+            encodeNativeSessionResult({
+                kind: "native.session.result",
+                action: "active-turn",
+                requestId: query.requestId,
+                sessionId: runtime.sessionId,
+                targetSessionId: runtime.sessionId,
+                turn: null,
+                queued: [],
+            }),
+        );
+        expect(await responseJson(await response, 200)).not.toHaveProperty("command");
+    } finally {
+        runtime.daemon.close(1000, "Test complete");
+    }
+});
 
 describe.sequential("Platform Turn submission", () => {
     // @no-uc: Compatibility; trusted backends must control a Runtime Session without delegated Session access.

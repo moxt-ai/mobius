@@ -379,6 +379,7 @@ export {
 
 export type {
     ActiveTurnSnapshot,
+    CommandDelivery,
     NativeSessionCancel,
     NativeSessionCommand,
     NativeSessionEntry,

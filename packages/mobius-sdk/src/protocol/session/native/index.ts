@@ -35,6 +35,23 @@ export const activeTurnSnapshotSchema = z
     .readonly();
 export type ActiveTurnSnapshot = z.infer<typeof activeTurnSnapshotSchema>;
 
+/**
+ * Where one submitted command stands in the Runtime's execution receipts. Only the
+ * Runtime that receives a command can say whether it arrived, so a client recovers an
+ * unconfirmed submission from this rather than from Agent message identities.
+ */
+export const commandDeliverySchema = z.discriminatedUnion("state", [
+    // No receipt: the command has not arrived. A delayed submission may still arrive later.
+    z.object({ state: z.literal("unknown") }).readonly(),
+    // The Runtime holds the command and has not finished it; it may be waiting or running.
+    z.object({ state: z.literal("accepted") }).readonly(),
+    z.object({ state: z.literal("completed"), stopReason: z.string().max(2_048) }).readonly(),
+    z.object({ code: identifier, state: z.literal("failed") }).readonly(),
+    // The command started, but the Runtime no longer retains its result.
+    z.object({ state: z.literal("expired") }).readonly(),
+]);
+export type CommandDelivery = z.infer<typeof commandDeliverySchema>;
+
 const identity = {
     ...envelope,
     kind: z.literal(NATIVE_SESSION_REQUEST_KIND),
@@ -45,7 +62,16 @@ const identity = {
 };
 
 const nativeSessionRequestSchema = z.discriminatedUnion("action", [
-    z.object({ ...identity, action: z.literal("active-turn"), targetSessionId: identifier }).readonly(),
+    z
+        .object({
+            ...identity,
+            action: z.literal("active-turn"),
+            // Asks the Runtime for this command's delivery alongside the execution snapshot. It is not
+            // named `commandId`, which routes a request as the command it names.
+            deliveryCommandId: identifier.optional(),
+            targetSessionId: identifier,
+        })
+        .readonly(),
     z.object({ ...identity, action: z.literal("find"), nativeSessionId: identifier }).readonly(),
     z
         .object({
@@ -65,7 +91,16 @@ const nativeSessionRequestSchema = z.discriminatedUnion("action", [
 ]);
 export type NativeSessionRequest = z.infer<typeof nativeSessionRequestSchema>;
 const nativeSessionCommandSchema = z.discriminatedUnion("action", [
-    z.object({ ...identity, action: z.literal("active-turn"), targetSessionId: identifier }).readonly(),
+    z
+        .object({
+            ...identity,
+            action: z.literal("active-turn"),
+            // Asks the Runtime for this command's delivery alongside the execution snapshot. It is not
+            // named `commandId`, which routes a request as the command it names.
+            deliveryCommandId: identifier.optional(),
+            targetSessionId: identifier,
+        })
+        .readonly(),
     z.object({ ...identity, action: z.literal("find"), nativeSessionId: identifier }).readonly(),
     z
         .object({
@@ -124,6 +159,9 @@ const nativeSessionResultSchema = z.discriminatedUnion("action", [
                 )
                 .readonly(),
             turn: activeTurnSnapshotSchema.nullable(),
+            // Present only when the request named a command and every hop understands it. An
+            // unrecognized delivery from a newer peer reads as absent instead of failing the snapshot.
+            command: commandDeliverySchema.optional().catch(undefined),
         })
         .readonly(),
     z

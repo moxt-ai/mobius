@@ -2,7 +2,7 @@ import { createServer, request } from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
 import { listen, port } from "./websocket.ts";
 
-/** A real network proxy: forwards requests unchanged, then loses one turn admission response. */
+/** A real network proxy: forwards requests unchanged, then loses one turn admission response or delays one request. */
 export async function createResponseLossProxy(upstream: string) {
     let forkResponse: ((status: number) => void) | null = null;
     const server = createServer((incoming, outgoing) => {
@@ -37,7 +37,9 @@ export async function createResponseLossProxy(upstream: string) {
     });
     const sockets = new Set<WebSocket>();
     const webSockets = new WebSocketServer({ server });
-    let armed: "before-acceptance" | "after-acceptance" | null = null;
+    let armed: "before-acceptance" | "after-acceptance" | "held" | null = null;
+    // A held submission reaches the service only when the scenario releases it, as a slow network would deliver it.
+    const held: { readonly remote: WebSocket; readonly data: Buffer; readonly binary: boolean }[] = [];
     let reconnectsBlocked = false;
     const submissions: string[] = [];
     webSockets.on("connection", (client, incoming) => {
@@ -78,6 +80,11 @@ export async function createResponseLossProxy(upstream: string) {
                     typeof frame.body === "string"
                 ) {
                     submissions.push(frame.body);
+                    if (armed === "held") {
+                        armed = null;
+                        held.push({ remote, data: bytes, binary });
+                        return;
+                    }
                     if (armed !== null) {
                         const delivery = armed;
                         armed = null;
@@ -145,6 +152,15 @@ export async function createResponseLossProxy(upstream: string) {
             }),
         interruptNextTurn: (delivery: "before-acceptance" | "after-acceptance") => {
             armed = delivery;
+        },
+        /** Delays the next turn submission on the network until released; the browser cannot tell it was sent. */
+        holdNextTurn: () => {
+            armed = "held";
+        },
+        releaseHeldTurn: () => {
+            for (const request of held.splice(0)) {
+                request.remote.send(request.data, { binary: request.binary });
+            }
         },
         reconnect: () => {
             reconnectsBlocked = false;
