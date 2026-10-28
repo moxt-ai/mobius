@@ -366,6 +366,34 @@ it("Given a rotated AppCredential with a stale cache record, When the overlap en
     expect((await app.authenticateApp(replacement.credential)).status).toBe(201);
 });
 
+it("Given a rotated AppCredential, When its overlap ends, Then the credential list reports it inactive exactly when authentication rejects it", async () => {
+    const app = await application();
+    const replacement = await app.rotate();
+    const listedActivity = async () =>
+        Object.fromEntries(
+            v
+                .parse(
+                    v.object({ credentials: v.array(v.object({ credentialId: v.string(), active: v.boolean() })) }),
+                    await app.listCredentials(),
+                )
+                .credentials.map((credential) => [credential.credentialId, credential.active]),
+        );
+
+    vi.setSystemTime(new Date(Date.parse(replacement.overlapEndsAt) - 1));
+    expect((await app.authenticateApp()).status).toBe(201);
+    expect(await listedActivity()).toEqual({
+        [app.defaultCredential.credentialId]: true,
+        [replacement.credentialId]: true,
+    });
+
+    vi.setSystemTime(new Date(replacement.overlapEndsAt));
+    await expectRejected(await app.authenticateApp(), "credential_revoked");
+    expect(await listedActivity()).toEqual({
+        [app.defaultCredential.credentialId]: false,
+        [replacement.credentialId]: true,
+    });
+});
+
 it("Given previously valid App and Session credentials, When directory storage is unavailable, Then neither can authorize from an old cache record", async () => {
     const app = await application();
     await app.publishOldCache();

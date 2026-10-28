@@ -41,7 +41,10 @@ import type {
     TenantRow,
 } from "../entity/platform-records.ts";
 import type { PlatformControlPlaneStorage } from "../storage/platform-control-plane-storage.ts";
-import type { AppCredentialAuthenticationService } from "./app-credential-authentication-service.ts";
+import {
+    type AppCredentialAuthenticationService,
+    appCredentialActive,
+} from "./app-credential-authentication-service.ts";
 
 const MAXIMUM_CREDENTIAL_OVERLAP_MILLISECONDS = 60 * 60 * 1_000;
 
@@ -967,8 +970,10 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
             throw new PlatformControlPlaneError("app_access_denied", "The App is unavailable", 403);
         }
         const rows = await this.#storage.listAppCredentials(app.app_id, signal);
+        const now = Date.now();
         const credentials = await Promise.all(
             rows.map(async (row) => ({
+                active: appCredentialActive(row, now),
                 allProjects: row.all_projects === 1,
                 appId: row.app_id,
                 credentialId: row.credential_id,
