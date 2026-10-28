@@ -482,7 +482,7 @@ export class FakeOpenAiProvider implements AsyncDisposable {
             readonly fallbackPrompt?: string;
             readonly commentary?: string;
             readonly patch?: string;
-            readonly readPath?: string;
+            readonly readPath?: string | ((prompt: string) => string);
             readonly mcpImage?: boolean;
             readonly toolPrompt?: string;
             readonly toolSequence?: readonly RequestedTool[];
@@ -559,7 +559,7 @@ export class FakeOpenAiProvider implements AsyncDisposable {
                             scenario,
                             completedToolCalls,
                             options.patch,
-                            options.readPath,
+                            typeof options.readPath === "function" ? options.readPath(userPrompt) : options.readPath,
                             options.mcpImage,
                         )
                       : undefined;

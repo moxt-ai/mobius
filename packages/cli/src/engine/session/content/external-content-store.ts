@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { extname, join } from "node:path";
 import { z } from "zod";
 import { ScratchDirectory } from "../../storage/files/scratch-directory.ts";
 
@@ -15,6 +15,11 @@ const metadataSchema = z.strictObject({
     name: z.string().min(1).max(500),
 });
 
+function contentFileName(key: string, name: string): string {
+    const extension = extname(name).toLowerCase();
+    return /^\.[a-z0-9]{1,16}$/u.test(extension) ? `${key}${extension}` : key;
+}
+
 export type ExternalContentKind = "image" | "audio" | "resource";
 
 export interface ExternalContentReference {
@@ -26,6 +31,10 @@ export interface ResolvedExternalContent {
     readonly mediaType: string;
     readonly name: string;
     readonly path: string;
+}
+
+export interface ReadExternalContent extends ResolvedExternalContent {
+    readonly bytes: Uint8Array;
 }
 
 export interface ExternalContentStore {
@@ -42,7 +51,7 @@ export interface ExternalContentStore {
         request: string,
         signal: AbortSignal,
     ) => Promise<ResolvedExternalContent | null>;
-    readonly read: (sessionId: string, request: string, signal: AbortSignal) => Promise<Uint8Array | null>;
+    readonly read: (sessionId: string, request: string, signal: AbortSignal) => Promise<ReadExternalContent | null>;
 }
 
 interface CachedContent extends ResolvedExternalContent {
@@ -117,7 +126,7 @@ export class LocalExternalContentStore implements ExternalContentStore, AsyncDis
         }
         await this.#expire();
         active.throwIfAborted();
-        const path = await this.#scratch.write(kind, key, bytes, active);
+        const path = await this.#scratch.write(kind, contentFileName(key, metadata.name), bytes, active);
         active.throwIfAborted();
         const retained = this.#entries.get(request);
         this.#entries.set(request, {
@@ -158,7 +167,11 @@ export class LocalExternalContentStore implements ExternalContentStore, AsyncDis
         this.#track(async () => {
             const active = AbortSignal.any([signal, this.#lifetime.signal]);
             const resolved = await this.#resolve(sessionId, request, active);
-            return resolved === null ? null : this.#scratch.read(resolved.path, active);
+            if (resolved === null) {
+                return null;
+            }
+            const bytes = await this.#scratch.read(resolved.path, active);
+            return bytes === null ? null : { ...resolved, bytes };
         });
 
     readonly [Symbol.asyncDispose] = async (): Promise<void> => {
