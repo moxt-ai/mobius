@@ -10,6 +10,7 @@ import type {
 import { SESSION_CLOSED_ERROR_CODE } from "@moxt-ai/mobius-sdk/protocol";
 import type { SessionEventSink } from "../api/session-api.ts";
 import type { ExecutionReceipts } from "../turn/execution-receipts.ts";
+import { isTextPromptResourceMediaType } from "./prompt-artifacts.ts";
 
 interface QueuedPromptRequest {
     readonly commandId: string;
@@ -46,7 +47,7 @@ function promptContent(command: SessionPromptCommand): readonly ContentBlock[] {
                   }
                 : {
                       byteLength: attachment.byteLength,
-                      encoding: "text",
+                      encoding: isTextPromptResourceMediaType(attachment.mimeType) ? "text" : "binary",
                       mimeType: attachment.mimeType,
                       resourceKey: attachment.contentKey,
                       type: "external_resource",

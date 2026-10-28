@@ -14,7 +14,7 @@ import { WebSocketServer } from "ws";
 import { AcpAgentDefinition } from "../../../src/engine/acp/agent/agent-definition.ts";
 import type { InProcessAcpEndpoint } from "../../../src/engine/acp/agent/in-process-endpoint.ts";
 import { RuntimeLocalContext } from "../../../src/engine/runtime/config.ts";
-import { MobiusRuntimeEngine } from "../../../src/exports/engine.ts";
+import { RuntimeLoop } from "../../../src/engine/runtime/runtime-loop.ts";
 import { ControlledEndpointConnection } from "../../support/agents/controlled-endpoint-connection.ts";
 import { createControlledRuntimeConfig as createRuntimeConfig } from "../../support/controlled-runtime-config.ts";
 
@@ -122,14 +122,14 @@ const config = createRuntimeConfig(
     new RuntimeLocalContext(directory, { PATH: process.env["PATH"] }),
 );
 try {
-    await new MobiusRuntimeEngine(config).run(controller.signal);
+    await new RuntimeLoop(async () => config).run(controller.signal);
     await new Promise<void>((resolve) => setImmediate(resolve));
     if (!endpointClosed) {
         throw new Error("The cancelled endpoint was not closed");
     }
     process.stdout.write("cancelled-request-settled\n");
     const healthy = new AbortController();
-    const runtime = new MobiusRuntimeEngine(config).run(healthy.signal);
+    const runtime = new RuntimeLoop(async () => config).run(healthy.signal);
     try {
         await settings.promise;
         process.stdout.write("subsequent-settings-succeeded\n");

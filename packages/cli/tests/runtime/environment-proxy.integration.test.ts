@@ -163,16 +163,18 @@ describe("daemon environment proxy", () => {
         Object.assign(process.env, codex.environment);
 
         try {
-            const { openRuntimeInstallationStore, pairMobiusRuntime } = await import("../../src/exports/engine.ts");
+            const { MobiusRuntimeEngine } = await import("../../src/exports/engine.ts");
             const { connectRelay } = await import("../../src/engine/runtime/relay/connect.ts");
             const { describeEnvironmentProxyRoute, environmentProxyDispatcher } = await import(
                 "../../src/engine/util/network/environment-proxy.ts"
             );
 
             const pairingPort = port(pairingServer);
-            const installation = await openRuntimeInstallationStore(stateDirectory, AbortSignal.timeout(2_000));
-            const paired = await pairMobiusRuntime(
-                installation,
+            const engine = new MobiusRuntimeEngine({
+                engineDataDir: stateDirectory,
+                agentLaunchEnvironment: process.env,
+            });
+            const paired = await engine.pair(
                 {
                     defaultWorkspace: process.cwd(),
                     pairingCode: "ABCD-EFGH-JKLM-NPQR-STUV",
@@ -181,11 +183,9 @@ describe("daemon environment proxy", () => {
                 },
                 AbortSignal.timeout(2_000),
             );
-            expect(paired.connectionPath).toBe(installation.connectionPath(paired.connectionId));
-            expect(paired.config.localContext.stateDirectory).toBe(installation.stateDirectory);
-            expect((await installation.readConnection(paired.connectionId, AbortSignal.timeout(2_000))).appId).toBe(
-                "app_proxy",
-            );
+            expect(
+                (await engine.getConnectionManager().read(paired.connectionId, AbortSignal.timeout(2_000))).appId,
+            ).toBe("app_proxy");
 
             const relayPort = port(relayServer);
             expect(describeEnvironmentProxyRoute(new URL(`ws://127.0.0.1:${relayPort}/daemon`))).toEqual({

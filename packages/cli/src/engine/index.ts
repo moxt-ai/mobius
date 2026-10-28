@@ -20,8 +20,6 @@ export {
     RuntimeLocalContext,
     RuntimeReconnectTarget,
 } from "./runtime/config.ts";
-export { openEngineInstallationStore } from "./runtime/connection/runtime-installation-store.ts";
 export * from "./runtime/engine.ts";
-export { MobiusRuntimeEngine, openRuntimeInstallationStore, RuntimeRelayRevokedError } from "./runtime/engine.ts";
 export * from "./util/filesystem/private-path.ts";
 export * from "./util/process/executable.ts";

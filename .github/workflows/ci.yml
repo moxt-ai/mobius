@@ -99,8 +99,6 @@ jobs:
         include:
           - name: Static checks
             command: pnpm lint && pnpm typecheck && pnpm --filter @moxt-ai/mobius build
-          - name: Client tests
-            command: pnpm test:ci:client
           - name: Hosting tests
             command: pnpm test:ci:hosting
     steps:
@@ -116,6 +114,57 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: ${{ matrix.command }}
+
+  client-tests:
+    name: Client tests (${{ matrix.shard }}/4)
+    needs: changes
+    if: needs.changes.outputs.docs-only == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    env:
+      TEST_SHARD: ${{ matrix.shard }}/4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      # setup-node caches package contents, but not pnpm's registry metadata and policy-verification receipts.
+      # pnpm still validates the lockfile hash and active policy before trusting a cached receipt.
+      - name: Cache pnpm verification metadata
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/pnpm-metadata
+          key: pnpm-metadata-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', '.nvmrc', '.npmrc', '.pnpmfile.cjs', 'pnpmfile.cjs') }}
+      - run: pnpm install --frozen-lockfile --cache-dir="$RUNNER_TEMP/pnpm-metadata"
+      # Bound concurrent process/Worker startup on the hosted runner's two vCPUs.
+      - name: Run controlled daemon scenarios
+        run: pnpm test:ci:client:daemon --shard="$TEST_SHARD" --maxWorkers=2
+      - name: Run SDK and client scenarios
+        if: ${{ !cancelled() }}
+        run: pnpm test:ci:client:sdk --shard="$TEST_SHARD" --maxWorkers=2
+
+  client-check:
+    # Keep the existing required check name; success requires every shard, not just the SDK phase.
+    name: Client tests
+    needs: [changes, client-tests]
+    if: always() && needs.changes.outputs.docs-only == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every client shard to succeed
+        env:
+          CLIENT_TESTS_RESULT: ${{ needs.client-tests.result }}
+        run: test "$CLIENT_TESTS_RESULT" = success
 
   real-agents:
     name: Real Agent compatibility (${{ matrix.shard }}/4)
@@ -177,15 +226,19 @@ jobs:
   npm-compatibility:
     # The daemon finds and installs its own upgrades through the user's npm, so its
     # upgrade journeys run against every supported npm major, not only the bundled one.
-    name: npm compatibility (npm ${{ matrix.npm }})
+    name: npm compatibility (npm ${{ matrix.npm }}${{ matrix.os == 'windows-latest' && ', Windows' || '' }})
     needs: changes
     if: needs.changes.outputs.docs-only == 'false'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         npm: ["10", "11", "12"]
+        include:
+          - os: windows-latest
+            npm: "12"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -199,9 +252,15 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Install npm ${{ matrix.npm }}
+        if: runner.os != 'Windows'
         env:
           NPM_MAJOR: ${{ matrix.npm }}
         run: npm install --global "npm@$NPM_MAJOR" && npm --version
+      - name: Install npm ${{ matrix.npm }} on Windows
+        if: runner.os == 'Windows'
+        env:
+          NPM_MAJOR: ${{ matrix.npm }}
+        run: npm install --global "npm@$env:NPM_MAJOR" && npm --version
       - run: pnpm test:npm-compatibility
 
   cli-compatibility:
@@ -211,7 +270,7 @@ jobs:
 
   validate:
     if: always()
-    needs: [changes, checks, real-agents, npm-compatibility, package-versions, cli-compatibility]
+    needs: [changes, checks, client-check, real-agents, npm-compatibility, package-versions, cli-compatibility]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -220,6 +279,7 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
           DOCS_ONLY: ${{ needs.changes.outputs.docs-only }}
           CHECKS_RESULT: ${{ needs.checks.result }}
+          CLIENT_TESTS_RESULT: ${{ needs.client-check.result }}
           REAL_AGENTS_RESULT: ${{ needs.real-agents.result }}
           NPM_COMPATIBILITY_RESULT: ${{ needs.npm-compatibility.result }}
           PACKAGE_VERSIONS_RESULT: ${{ needs.package-versions.result }}
@@ -228,9 +288,11 @@ jobs:
         run: |
           [[ "$CHANGES_RESULT" == "success" ]]
           if [[ "$DOCS_ONLY" == "true" ]]; then
+            [[ "$CLIENT_TESTS_RESULT" == "skipped" ]]
             [[ "$CLI_COMPATIBILITY_RESULT" == "skipped" ]]
             [[ "$CHECKS_RESULT" == "skipped" && "$REAL_AGENTS_RESULT" == "skipped" && "$NPM_COMPATIBILITY_RESULT" == "skipped" && "$PACKAGE_VERSIONS_RESULT" == "skipped" ]]
           else
+            [[ "$CLIENT_TESTS_RESULT" == "success" ]]
             [[ "$CLI_COMPATIBILITY_RESULT" == "success" ]]
             [[ "$DOCS_ONLY" == "false" && "$CHECKS_RESULT" == "success" && "$REAL_AGENTS_RESULT" == "success" && "$NPM_COMPATIBILITY_RESULT" == "success" ]]
             # Pushes and manual runs have no pull request whose version bump to check.

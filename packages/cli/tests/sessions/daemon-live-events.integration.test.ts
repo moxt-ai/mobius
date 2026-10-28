@@ -856,11 +856,9 @@ describe("daemon V2 live delivery", () => {
                     expect(userMessages[1]).toMatchObject({
                         payload: {
                             content: {
-                                byteLength: new TextEncoder().encode("attached context").byteLength,
-                                encoding: "text",
                                 mimeType: "text/plain",
-                                type: "external_resource",
-                                uri: "attachment:///context.txt",
+                                type: "resource_link",
+                                uri: expect.stringMatching(/^file:\/\/\/.*\.txt$/u),
                             },
                             messageId: "user-1",
                             sessionUpdate: "user_message_chunk",

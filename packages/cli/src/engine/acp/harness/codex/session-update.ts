@@ -17,6 +17,7 @@ export interface CodexEndpointOptions extends Omit<InProcessAcpEndpointOptions, 
 }
 
 import { type PromptResponse, RequestError } from "@agentclientprotocol/sdk";
+import { OperationError } from "../../../infra/operation-error.ts";
 
 export async function promptResultWithMessageId(
     result: Promise<PromptResponse>,
@@ -31,7 +32,10 @@ export async function promptResultWithMessageId(
             cause.data = { ...data, messageId };
             throw cause;
         }
-        const failure = RequestError.internalError({ messageId }, "The prompt could not be completed");
+        // An OperationError carries a message written for clients (for example Codex's own turn failure
+        // reason or why the app-server stopped); any other error may quote internals and stays opaque.
+        const detail = cause instanceof OperationError ? cause.message : "The prompt could not be completed";
+        const failure = RequestError.internalError({ messageId }, detail);
         Object.defineProperty(failure, "cause", { value: cause });
         throw failure;
     }

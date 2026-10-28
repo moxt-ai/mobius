@@ -4,6 +4,7 @@ export default defineConfig({
     resolve: { conditions: ["mobius-source"] },
     test: {
         fileParallelism: true,
+        maxWorkers: 4,
         include: [
             "tests/{sessions,runtime,manual}/**/*.{contract,integration}.test.ts",
             "tests/agents/**/*.integration.test.ts",

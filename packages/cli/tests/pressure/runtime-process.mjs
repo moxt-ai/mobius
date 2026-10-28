@@ -6,8 +6,11 @@ const [state, channelId, relay, control, sourceRoot] = process.argv.slice(2);
 const { AcpAgentDefinition } = await import(
     pathToFileURL(join(sourceRoot, "packages/cli/src/engine/acp/agent/agent-definition.ts"))
 );
-const { createRuntimeConfig, MobiusRuntimeEngine, RuntimeLocalContext } = await import(
-    pathToFileURL(join(sourceRoot, "packages/cli/src/engine/runtime/engine.ts"))
+const { createRuntimeConfig, RuntimeLocalContext } = await import(
+    pathToFileURL(join(sourceRoot, "packages/cli/src/engine/runtime/config.ts"))
+);
+const { RuntimeLoop } = await import(
+    pathToFileURL(join(sourceRoot, "packages/cli/src/engine/runtime/runtime-loop.ts"))
 );
 const { ControlledAcpConnection } = await import(
     pathToFileURL(join(sourceRoot, "packages/cli/tests/support/agents/controlled-acp-connection.ts"))
@@ -47,7 +50,7 @@ process.on("message", (message) => {
 });
 process.on("disconnect", () => cancellation.abort());
 try {
-    await new MobiusRuntimeEngine(config, {
+    await new RuntimeLoop(async () => config, {
         onConnectionStatus: (status) => process.send?.({ kind: "connection", status }),
     }).run(cancellation.signal);
 } finally {

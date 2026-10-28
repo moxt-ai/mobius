@@ -1,16 +1,17 @@
 import { setTimeout } from "node:timers/promises";
 import { refreshAgentCatalog } from "../../engine/runtime/catalog/refresh-agent-catalog.ts";
 import type { RuntimeConfig } from "../../engine/runtime/config.ts";
-import { openEngineInstallationStore } from "../../engine/runtime/connection/runtime-installation-store.ts";
-import { MobiusRuntimeEngine } from "../../engine/runtime/engine.ts";
+import { RuntimeInstallationStore } from "../../engine/runtime/connection/runtime-installation-store.ts";
+import { prepareRuntimeConnection } from "../../engine/runtime/pairing.ts";
+import { RuntimeLoop } from "../../engine/runtime/runtime-loop.ts";
 import { RuntimeTurnActivity } from "../../engine/session/turn/runtime-turn-activity.ts";
 import type { InstallationDirectory } from "../../engine/storage/installation/installation-files.ts";
 import { isNodeError } from "../../engine/util/node-error.ts";
 import { acquireManagerLock } from "../../storage/daemon/manager-lock.ts";
-import { prepareMobiusEngineDataDir } from "../config.ts";
+import { prepareMobiusEngineDataDir, resolveMaxAcpProcesses } from "../config.ts";
 import { sendLocalRequest } from "../control/local-client.ts";
 import { serveLocalControl } from "../control/local-server.ts";
-import { openMobiusControlInstallation, resumeMobiusRuntime } from "../pairing/pair-local-machine.ts";
+import { openMobiusControlInstallation } from "../pairing/pair-local-machine.ts";
 import { prepareUpgradeData, recordCurrentData } from "../upgrades/data.ts";
 import { reportDaemonUpgradeAvailability, runDaemonReleaseUpgrades } from "../upgrades/upgrade.ts";
 import { surviveUnhandledRejections, type UnhandledRejectionGuard } from "./unhandled-rejection.ts";
@@ -72,7 +73,7 @@ async function runWorkerRuntime(
     const control = await openMobiusControlInstallation(combined, process.env);
     await prepareUpgradeData(control.stateDirectory, version, combined);
     const engineDataDir = await prepareMobiusEngineDataDir(version, combined, process.env);
-    const installation = await openEngineInstallationStore(engineDataDir, combined);
+    const installation = await RuntimeInstallationStore.open(engineDataDir, combined);
     const deadline = AbortSignal.any([combined, AbortSignal.timeout(15_000)]);
     let release: (() => Promise<void>) | null = null;
     while (release === null) {
@@ -118,17 +119,23 @@ async function runWorkerRuntime(
                 continue;
             }
             try {
-                const paired = await resumeMobiusRuntime(installation, connection.connectionId, combined);
+                const config = await prepareRuntimeConnection(
+                    installation,
+                    connection,
+                    combined,
+                    process.env,
+                    resolveMaxAcpProcesses(process.env),
+                );
                 const controller = new AbortController();
                 // The manager writes the worker lifecycle and rejection logs beside
                 // the control directory, not beside this Runtime's own state, so a
                 // bug report taken through this Runtime reads them from there.
-                const engine = new MobiusRuntimeEngine(paired.config, {
+                const loop = new RuntimeLoop(async () => config, {
                     processLogsDirectory: control.stateDirectory,
                     turnActivity,
                     reportUpgradeAvailability: reportDaemonUpgradeAvailability,
                 });
-                const completion = engine
+                const completion = loop
                     .run(AbortSignal.any([combined, controller.signal]))
                     .then(
                         () => {
@@ -143,7 +150,7 @@ async function runWorkerRuntime(
                         },
                     )
                     .finally(() => active.delete(connection.connectionId));
-                active.set(connection.connectionId, { config: paired.config, controller, completion });
+                active.set(connection.connectionId, { config, controller, completion });
             } catch (cause) {
                 combined.throwIfAborted();
                 fail(connection.connectionId, cause);

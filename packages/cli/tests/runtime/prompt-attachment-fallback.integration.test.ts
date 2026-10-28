@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
     decodeSessionEventEnvelope,
     encodeSessionPromptCommand,
+    PROMPT_IMAGE_MAX_BYTES,
     type PromptAttachment,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
@@ -81,19 +82,19 @@ test("Given unsupported attachments, When a prompt has text, Then the daemon del
                 };
                 for (const input of [
                     {
-                        bytes: new TextEncoder().encode("%PDF-1.4\nHello PDF"),
-                        mediaType: "application/pdf",
-                        name: "document.pdf",
+                        bytes: new Uint8Array(PROMPT_IMAGE_MAX_BYTES + 1),
+                        mediaType: "image/png",
+                        name: "large.png",
                     },
                     {
-                        bytes: new TextEncoder().encode(`<svg>${" ".repeat(1_000_001)}</svg>`),
-                        mediaType: "image/svg+xml",
-                        name: "large.svg",
+                        bytes: new Uint8Array(PROMPT_IMAGE_MAX_BYTES + 2),
+                        mediaType: "image/jpeg",
+                        name: "large.jpg",
                     },
                 ]) {
                     const attachment = await uploadPromptContent(peer, {
                         ...input,
-                        kind: "resource",
+                        kind: "image",
                         uri: `attachment:///${input.name}`,
                     });
                     const outcome = await send([attachment], "Read attached file");
@@ -110,11 +111,11 @@ test("Given unsupported attachments, When a prompt has text, Then the daemon del
                 expect((await peer.readDiagnostics()).match(/"event":"prompt_attachments_skipped"/gu)).toHaveLength(1);
                 vi.setSystemTime(new Date("2026-10-28T08:01:00Z"));
                 const attachment = await uploadPromptContent(peer, {
-                    bytes: new TextEncoder().encode("%PDF-more"),
-                    kind: "resource",
-                    mediaType: "application/pdf",
-                    name: "again.pdf",
-                    uri: "attachment:///again.pdf",
+                    bytes: new Uint8Array(PROMPT_IMAGE_MAX_BYTES + 3),
+                    kind: "image",
+                    mediaType: "image/png",
+                    name: "again.png",
+                    uri: "attachment:///again.png",
                 });
                 await send([attachment], "Continue after the log interval");
                 const logs = await peer.readDiagnostics();

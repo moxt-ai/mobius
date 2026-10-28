@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import {
     decodeSessionLiveEvent,
     encodeSessionPermissionRespondCommand,
@@ -13,8 +14,16 @@ import { uploadPromptContent } from "../support/agents/upload-prompt-content.ts"
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 import { fakeProviderPrompts } from "../support/llm/scenarios.ts";
 
-test("Given real Pi receives an embedded text attachment, When the turn runs, Then the attachment text reaches the model and the turn completes", async () => {
-    await using provider = await FakeOpenAiProvider.start("gpt-4.1", "PI_ATTACHMENT_REPLY");
+test("Given real Pi receives a file attachment, When the Agent reads its local link, Then the attachment text is returned by the tool and the turn completes", async () => {
+    await using provider = await FakeOpenAiProvider.start("gpt-4.1", "PI_ATTACHMENT_REPLY", {
+        readPath: (prompt) => {
+            const uri = /\[Context\] (file:\/\/\/[^\n]+)/u.exec(prompt)?.[1];
+            if (uri === undefined) {
+                throw new Error("No local attachment link reached Pi");
+            }
+            return fileURLToPath(uri);
+        },
+    });
     await using agent = await PiFixture.create(provider);
     await withRealDaemon(new PiAgentSpecification(), agent.environment, async (peer) => {
         const commandId = randomUUID();
@@ -35,15 +44,18 @@ test("Given real Pi receives an embedded text attachment, When the turn runs, Th
                 disposition: SessionPromptDisposition.Reject,
                 attachments: [attachment],
                 kind: "session.prompt",
-                // The visible prompt carries no tool trigger words; only the attachment does.
-                prompt: "Follow the attached instructions",
+                prompt: "Use the read tool to inspect the attached file, then reply",
                 sessionId: peer.sessionId,
                 targetCommandId: "",
             }),
         );
         let text = "";
+        let attachmentRead = false;
         for (;;) {
             const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
+            if (event.type === "acp" && event.payload.sessionUpdate === "tool_call_update") {
+                attachmentRead ||= JSON.stringify(event.payload).includes(fakeProviderPrompts.successfulTool);
+            }
             if (event.type === "lifecycle-metadata" && event.payload.kind === "session.permission.requested") {
                 const option = event.payload.event.options.find((entry) => entry.kind === "allow_once");
                 if (option === undefined) {
@@ -78,8 +90,7 @@ test("Given real Pi receives an embedded text attachment, When the turn runs, Th
                 break;
             }
         }
-        // "tool result observed" is only produced when the model saw the attachment's
-        // tool instructions, and the second request only happens after the tool ran.
+        expect(attachmentRead).toBe(true);
         expect(text).toContain("PI_ATTACHMENT_REPLY");
         expect(text).toContain("tool result observed");
         expect(provider.diagnostics()).toHaveLength(2);

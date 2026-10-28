@@ -6,8 +6,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { VerifiedRuntimeConnection } from "../../src/engine/runtime/connection/runtime-connection.ts";
 import {
-    openEngineInstallationStore,
-    openRuntimeInstallationStore,
+    RuntimeInstallationStore,
     type RuntimeInstallationStoreError,
 } from "../../src/engine/runtime/connection/runtime-installation-store.ts";
 
@@ -16,7 +15,7 @@ describe("Runtime installation storage", () => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-engine-directory-"));
         const signal = new AbortController().signal;
         try {
-            const installation = await openEngineInstallationStore(join(directory, "data"), signal);
+            const installation = await RuntimeInstallationStore.open(join(directory, "data"), signal);
             const connection = await installation.saveConnection(
                 {
                     appId: "platform_app",
@@ -55,7 +54,7 @@ describe("Runtime installation storage", () => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-retained-pairing-"));
         const signal = new AbortController().signal;
         try {
-            const installation = await openEngineInstallationStore(join(directory, "data"), signal);
+            const installation = await RuntimeInstallationStore.open(join(directory, "data"), signal);
             const connectionId = `mcn_${"a".repeat(32)}`;
             const channelId = "retained_channel";
             await mkdir(join(installation.stateDirectory, "connections"), { recursive: true });
@@ -135,7 +134,7 @@ describe("Runtime installation storage", () => {
         const stateRoot = await mkdtemp(join(tmpdir(), "mobius-engine-context-"));
         const signal = new AbortController().signal;
         try {
-            const original = await openRuntimeInstallationStore(
+            const original = await RuntimeInstallationStore.open(
                 join(stateRoot, "installations", "dev.mobius.cli"),
                 signal,
             );
@@ -153,7 +152,7 @@ describe("Runtime installation storage", () => {
             );
             const relocated = join(stateRoot, "renamed-data");
             await rename(join(stateRoot, "installations", "dev.mobius.cli"), relocated);
-            const engine = await openEngineInstallationStore(relocated, signal);
+            const engine = await RuntimeInstallationStore.open(relocated, signal);
             expect(engine.installationId).toBe(original.installationId);
             expect(engine.stateDirectory).toBe(join(relocated, original.installationId));
             await expect(engine.readConnection(connection.connectionId, signal)).resolves.toEqual(connection);
@@ -180,7 +179,7 @@ describe("Runtime installation storage", () => {
         const stateRoot = await mkdtemp(join(tmpdir(), "mobius-obsolete-pairing-"));
         const signal = new AbortController().signal;
         try {
-            const installation = await openRuntimeInstallationStore(
+            const installation = await RuntimeInstallationStore.open(
                 join(stateRoot, "installations", "dev.mobius.cli"),
                 signal,
             );
@@ -218,8 +217,8 @@ describe("Runtime installation storage", () => {
         const signal = new AbortController().signal;
         const channelId = "shared:channel";
         try {
-            const mobius = await openRuntimeInstallationStore(join(stateRoot, "mobius-data"), signal);
-            const moxt = await openRuntimeInstallationStore(join(stateRoot, "moxt-data"), signal);
+            const mobius = await RuntimeInstallationStore.open(join(stateRoot, "mobius-data"), signal);
+            const moxt = await RuntimeInstallationStore.open(join(stateRoot, "moxt-data"), signal);
             const mobiusConnection = await mobius.saveConnection(
                 {
                     appId: "app_mobius",

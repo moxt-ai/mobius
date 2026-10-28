@@ -20,9 +20,50 @@ export async function packedRelease(
         await cp(resolve(import.meta.dirname, "../../src"), join(source, "src"), { recursive: true });
         await writeFile(join(source, "package.json"), JSON.stringify({ ...cliPackage, version }));
         await symlink(resolve(import.meta.dirname, "../../node_modules"), join(source, "node_modules"), "junction");
+        // Stamp and bundle each release once, rather than transpiling its source graph on every CLI/daemon restart.
+        const diagnostic = join(source, "bundle-error.txt");
+        const runtimeDependencies = {
+            "@agentclientprotocol/sdk": import.meta.resolve("@agentclientprotocol/sdk"),
+            undici: import.meta.resolve("undici"),
+        };
+        await runBoundedProcess({
+            command: process.execPath,
+            arguments: [
+                "--input-type=module",
+                "--eval",
+                // esbuild's extensionless bin entry can be JavaScript or a native binary. Its JS API is portable;
+                // running it in a child keeps bundling bounded and cancellable without depending on PATH shims.
+                `import { writeFile } from "node:fs/promises"; try { const { build } = await import(${JSON.stringify(import.meta.resolve("esbuild"))}); await build(JSON.parse(process.argv[1])); } catch (error) { await writeFile(process.argv[2], String(error).slice(0, 4000)); process.exitCode = 1; }`,
+                JSON.stringify({
+                    entryPoints: [join(source, "src/cli/entrypoint.ts")],
+                    outfile: join(source, "dist/cli.js"),
+                    // Windows fixtures can be on a different drive from the workspace's pnpm dependency junctions.
+                    nodePaths: [resolve(import.meta.dirname, "../../node_modules")],
+                    bundle: true,
+                    platform: "node",
+                    target: "node22.19.0",
+                    format: "esm",
+                    // Keep these dependencies external, but do not resolve them through a temporary junction at runtime.
+                    alias: runtimeDependencies,
+                    external: Object.values(runtimeDependencies),
+                    logLevel: "silent",
+                }),
+                diagnostic,
+            ],
+            cwd: source,
+            environment: process.env,
+            signal,
+            timeoutMilliseconds: 30_000,
+        }).catch(async (cause: unknown) => {
+            if (!signal.aborted) {
+                const detail = await readFile(diagnostic, "utf8").catch(() => "No bundle diagnostic was written.");
+                console.error(`Fixture release ${version} bundling failed: ${detail}`);
+            }
+            throw cause;
+        });
         await writeFile(
             join(root, "dist/cli.js"),
-            `import ${JSON.stringify(pathToFileURL(join(source, "src/cli/entrypoint.ts")).href)};`,
+            `import ${JSON.stringify(pathToFileURL(join(source, "dist/cli.js")).href)};`,
         );
     } else {
         await writeFile(

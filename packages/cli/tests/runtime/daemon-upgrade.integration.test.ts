@@ -32,7 +32,7 @@ describe("Daemon hourly npm upgrade", () => {
         const cli = async (
             args: readonly string[],
             deadline = signal,
-            entry = resolve(import.meta.dirname, "../../src/cli/entrypoint.ts"),
+            entry = resolve(import.meta.dirname, "../../dist/cli.js"),
         ): Promise<void> => {
             const child = spawn(process.execPath, [entry, ...args], {
                 cwd: directory,
@@ -180,7 +180,9 @@ describe("Daemon hourly npm upgrade", () => {
                 "dist",
                 "cli.js",
             );
-            expect(await readFile(managedEntry, "utf8")).toContain("entrypoint.ts");
+            expect(await readFile(managedEntry, "utf8")).toBe(
+                `import ${JSON.stringify(pathToFileURL(join(directory, `source-${cliPackage.version}`, "dist/cli.js")).href)};`,
+            );
             const control = await openMobiusControlInstallation(signal, environment);
             const manager = await readFile(join(control.stateDirectory, "manager.lock"), "utf8");
             const originalWorker = await readFile(join(control.stateDirectory, "worker.lock"), "utf8");
@@ -299,7 +301,7 @@ describe("Daemon hourly npm upgrade", () => {
                 code: "ENOENT",
             });
             await cli(["quit"]);
-            await cli(["start"], signal, join(directory, `source-${reuse}`, "src/cli/entrypoint.ts"));
+            await cli(["start"], signal, join(directory, `source-${reuse}`, "dist/cli.js"));
             expect(
                 await sendLocalRequest(
                     control.stateDirectory,
