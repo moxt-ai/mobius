@@ -780,6 +780,45 @@ describe("Recording incremental reads", () => {
         }
     });
 
+    it("Given batches recorded before their bounds were stored, When a caller follows page cursors through them, Then every event arrives once in order", async () => {
+        const [first, ...later] = numberedEvents(6, 1);
+        expect(
+            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: [first] }), env)).status,
+        ).toBe(201);
+        // Rows written before the position and generation columns existed carry only their envelope.
+        await runInDurableObject(
+            env.SESSION_RECORDING.getByName(JSON.stringify([projectId, "live-session"])),
+            (_instance, state) => {
+                for (const events of [later.slice(0, 3), later.slice(3)]) {
+                    state.storage.sql.exec(
+                        "INSERT INTO recorded_session_events_v2 (envelope_json, recorded_at) VALUES (?, 0)",
+                        JSON.stringify({ kind: "session.event.v2", events }),
+                    );
+                }
+            },
+        );
+
+        for (const limit of [1, 2, 10]) {
+            const received: string[] = [];
+            let cursor = "v2:1:1";
+            let tailCursor = "";
+            for (let attempt = 0; attempt < 10; attempt += 1) {
+                const page = decodeSessionRecordingHistoryPage(
+                    await (await worker.fetch(read(`?after=${cursor}&limit=${limit}`), env)).text(),
+                );
+                received.push(...page.events.map((candidate) => candidate.eventId));
+                tailCursor = page.tailCursor;
+                if (page.nextCursor === null) {
+                    break;
+                }
+                cursor = page.nextCursor;
+            }
+            expect(received, `limit ${limit}`).toEqual(later.map((candidate) => candidate.eventId));
+            const caughtUp = await worker.fetch(read(`?after=${tailCursor}&limit=${limit}`), env);
+            expect(decodeSessionRecordingHistoryPage(await caughtUp.text()).events).toEqual([]);
+        }
+    });
+
     it("Given one generation that later restarts, When a caller pages from the start, Then only a page carrying the new generation asks it to reset", async () => {
         expect(
             (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: numberedEvents(2, 1) }), env))
