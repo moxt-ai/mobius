@@ -10,6 +10,8 @@ export const recordedTurnItem = sqliteTable(
         // Item fields without answer or thought text, which lives in `text` so chunks append in place.
         itemJson: text("item_json").notNull(),
         text: text("text").notNull().default(""),
+        // Characters folded into this item after `text` reached its stored size, which reads report as omitted.
+        droppedCharacters: integer("dropped_characters").notNull().default(0),
         // The bounded tool item that pages list; text items are bounded from `text` when read.
         listingJson: text("listing_json"),
     },

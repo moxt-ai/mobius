@@ -143,6 +143,13 @@ export interface ProjectedEventIdentity {
 export const projectedEventKey = (event: ProjectedEventIdentity): string =>
     JSON.stringify([event.generationId, event.eventId]);
 
+/**
+ * UTF-8 bytes an item's stored text or encoded fields may take. Durable Object SQLite rejects a string
+ * or row larger than 2 MB, and a fold that cannot write an item blocks every later Turn of its Session,
+ * so stored items stay well inside that limit.
+ */
+export const storedTurnItemBytes = 1_000_000;
+
 /** A stored item as a read sees it: its fields, its bounded listing, and a prefix of its text. */
 export interface StoredTurnItemRead {
     readonly item: StoredTurnItem;
@@ -150,4 +157,6 @@ export interface StoredTurnItemRead {
     // Characters of stored text, counted as SQLite counts them.
     readonly textLength: number;
     readonly textPrefix: string;
+    // Characters folded into the item after its stored text was full; no read can return them.
+    readonly droppedCharacters: number;
 }

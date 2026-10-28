@@ -12,6 +12,7 @@ import type {
 } from "@moxt-ai/mobius-sdk/protocol";
 import {
     decodeSessionLiveEvent,
+    ProtocolMessageError,
     type SessionWireEvent,
     sessionRecordingTurnItemCursor,
 } from "@moxt-ai/mobius-sdk/protocol";
@@ -28,6 +29,7 @@ import {
     type StoredTurn,
     type StoredTurnItem,
     type StoredTurnItemRead,
+    storedTurnItemBytes,
     type TurnItemWrite,
 } from "../entity/session-turn-history.ts";
 import type { SessionRecordingStorage } from "../storage/session-recording-storage.ts";
@@ -112,11 +114,7 @@ function isInterruptible(attempt: SessionRecordingTurnAttempt): boolean {
 }
 
 /** Bounds a tool item for a page: oversized detail is omitted first, then oversized labels are cut. */
-function toolListing(item: StoredTurnItem): StoredTurnItem | null {
-    // Text items are bounded from their stored text when read; only tool items carry a listing.
-    if (item.kind !== "tool" || JSON.stringify(item).length <= listedToolCharacters) {
-        return null;
-    }
+function boundedTool(item: Extract<StoredTurnItem, { readonly kind: "tool" }>): StoredTurnItem {
     const omitted: StoredTurnItem = { ...item, detail: { kind: "omitted" } };
     if (JSON.stringify(omitted).length <= listedToolCharacters) {
         return omitted;
@@ -129,6 +127,53 @@ function toolListing(item: StoredTurnItem): StoredTurnItem | null {
         name: omitted.name?.slice(0, listedToolLabelCharacters) ?? null,
         title: omitted.title.slice(0, listedToolLabelCharacters),
     };
+}
+
+/**
+ * The item a fold stores and the bounded tool item pages list for it. Text items are bounded where their
+ * text is stored, so only a tool carries a listing. A tool whose merged fields do not fit a stored item
+ * keeps only what a page lists, and reads report its detail as omitted, so one oversized call cannot
+ * block every later Turn.
+ */
+function storedItem(item: StoredTurnItem): { readonly item: StoredTurnItem; readonly listing: StoredTurnItem | null } {
+    if (item.kind !== "tool") {
+        return { item, listing: null };
+    }
+    const encoded = JSON.stringify(item);
+    if (encoded.length <= listedToolCharacters) {
+        return { item, listing: null };
+    }
+    const fits =
+        encoded.length * 3 <= storedTurnItemBytes ||
+        new TextEncoder().encode(encoded).byteLength <= storedTurnItemBytes;
+    return fits ? { item, listing: boundedTool(item) } : { item: boundedTool(item), listing: null };
+}
+
+/**
+ * The events of a batch this deployment can fold. One it has no schema for, such as an update kind from
+ * a newer Runtime, is left out of Turn history rather than blocking every later Turn of the Session; the
+ * raw Recording keeps it.
+ */
+function readableEvents(wireEvents: readonly SessionWireEvent[]): readonly SessionLiveEvent[] {
+    const events: SessionLiveEvent[] = [];
+    let unreadable = 0;
+    for (const wireEvent of wireEvents) {
+        try {
+            events.push(decodeSessionLiveEvent(wireEvent));
+        } catch (cause) {
+            if (!(cause instanceof ProtocolMessageError)) {
+                throw cause;
+            }
+            unreadable += 1;
+        }
+    }
+    if (unreadable > 0) {
+        console.warn("Recording Turn history left out events it cannot read", {
+            code: "recording_event_unreadable",
+            events: unreadable,
+        });
+    }
+    return events;
 }
 
 interface CachedItem {
@@ -162,8 +207,7 @@ class ProjectionFold {
     }
 
     readonly fold = (wireEvents: readonly SessionWireEvent[]): void => {
-        // Unknown content leaves this projection retryable while raw history remains available.
-        const events = wireEvents.map(decodeSessionLiveEvent);
+        const events = readableEvents(wireEvents);
         const identities = events.map((event) => ({ eventId: event.eventId, generationId: event.sessionGenerationId }));
         const storedEvents = new Set(this.#storage.projectedEvents(identities).map(projectedEventKey));
         for (const event of events) {
@@ -207,16 +251,10 @@ class ProjectionFold {
         // Listings are derived once per committed item, not on every update the batch folds into it.
         const items = [...this.#dirtyItems].flatMap((key): TurnItemWrite[] => {
             const cached = this.#items.get(key);
-            return cached === undefined
-                ? []
-                : [
-                      {
-                          commandId: cached.commandId,
-                          item: cached.item,
-                          listing: toolListing(cached.item),
-                          text: cached.text,
-                      },
-                  ];
+            if (cached === undefined) {
+                return [];
+            }
+            return [{ commandId: cached.commandId, ...storedItem(cached.item), text: cached.text }];
         });
         const interactions = [...this.#dirtyInteractions].flatMap((interactionId) => {
             const record = this.#interactions.get(interactionId);
@@ -693,7 +731,7 @@ function listedItem(read: StoredTurnItemRead, textCharacters: number): SessionRe
         case "thought":
             return {
                 ...read.item,
-                omittedCharacters: Math.max(0, read.textLength - textCharacters),
+                omittedCharacters: Math.max(0, read.textLength - textCharacters) + read.droppedCharacters,
                 text: read.textPrefix,
             };
         case "tool":
