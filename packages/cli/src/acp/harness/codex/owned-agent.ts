@@ -27,6 +27,29 @@ import { userMessageUpdates } from "./user-message.ts";
 
 const APPROVAL_REASON_CHARACTER_LIMIT = 500;
 const APPROVAL_TIMEOUT_MILLISECONDS = 3_600_000;
+
+function savedAttachmentPath(meta: unknown): string | null {
+    if (typeof meta !== "object" || meta === null) {
+        return null;
+    }
+    const mobius = Reflect.get(meta, "mobius");
+    if (typeof mobius !== "object" || mobius === null) {
+        return null;
+    }
+    const savedPath = Reflect.get(mobius, "savedPath");
+    return typeof savedPath === "string" && savedPath.length > 0 ? savedPath : null;
+}
+
+function attachmentInputText(uri: string, mimeType: unknown, meta: unknown, text: unknown): string {
+    if (typeof text === "string" && text.length > 0) {
+        return text;
+    }
+    const type = typeof mimeType === "string" ? ` (${mimeType})` : "";
+    const savedPath = savedAttachmentPath(meta);
+    return savedPath === null
+        ? `Attached file ${uri}${type}.`
+        : `Attached file ${uri}${type} is saved at ${savedPath}.`;
+}
 // Compaction summarizes the thread with one model call; generous but finite.
 const COMPACT_TIMEOUT_MILLISECONDS = 3_600_000;
 // How long a manual /compact keeps its turn open for the contextCompaction item
@@ -83,6 +106,17 @@ function steeringPrompt(prompt: readonly unknown[]): readonly SteeringPromptBloc
             if (typeof data !== "string" || typeof mimeType !== "string") {
                 throw new AcpExecutionError("Codex received an invalid steering prompt", {}, "invalid_request");
             }
+            if (mimeType === "image/svg+xml") {
+                blocks.push({
+                    content: { data, mimeType, type: "image" },
+                    input: {
+                        text: `Attached SVG:\n${Buffer.from(data, "base64").toString("utf8")}`,
+                        text_elements: [],
+                        type: "text",
+                    },
+                });
+                continue;
+            }
             blocks.push({
                 content: { data, mimeType, type: "image" },
                 input: { type: "image", url: `data:${mimeType};base64,${data}` },
@@ -118,7 +152,11 @@ function steeringPrompt(prompt: readonly unknown[]): readonly SteeringPromptBloc
                               resource: { blob, uri, ...(typeof mimeType === "string" ? { mimeType } : {}) },
                               type: "resource",
                           },
-                input: { text: text ?? "", text_elements: [], type: "text" },
+                input: {
+                    text: attachmentInputText(uri, mimeType, Reflect.get(block, "_meta"), text),
+                    text_elements: [],
+                    type: "text",
+                },
             });
             continue;
         }

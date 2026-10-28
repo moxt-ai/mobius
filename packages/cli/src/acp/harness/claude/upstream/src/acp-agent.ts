@@ -7750,6 +7750,18 @@ function formatUriAsLink(uri: string): string {
     }
 }
 
+function savedAttachmentPath(meta: unknown): string | null {
+    if (typeof meta !== "object" || meta === null) {
+        return null;
+    }
+    const mobius = Reflect.get(meta, "mobius");
+    if (typeof mobius !== "object" || mobius === null) {
+        return null;
+    }
+    const savedPath = Reflect.get(mobius, "savedPath");
+    return typeof savedPath === "string" && savedPath.length > 0 ? savedPath : null;
+}
+
 export function promptToClaude(prompt: PromptRequest): SDKUserMessage {
     const content: any[] = [];
     const context: any[] = [];
@@ -7786,11 +7798,43 @@ export function promptToClaude(prompt: PromptRequest): SDKUserMessage {
                         type: "text",
                         text: `\n<context ref="${chunk.resource.uri}">\n${chunk.resource.text}\n</context>`,
                     });
+                } else if (chunk.resource.mimeType === "application/pdf" && chunk.resource.blob) {
+                    content.push({
+                        type: "document",
+                        source: {
+                            type: "base64",
+                            media_type: "application/pdf",
+                            data: chunk.resource.blob,
+                        },
+                    });
+                    const savedPath = savedAttachmentPath(chunk._meta);
+                    if (savedPath !== null) {
+                        content.push({
+                            type: "text",
+                            text: `Attached file ${chunk.resource.uri} (${chunk.resource.mimeType}) is saved at ${savedPath}.`,
+                        });
+                    }
+                } else if (typeof chunk.resource.blob === "string") {
+                    const savedPath = savedAttachmentPath(chunk._meta);
+                    const mimeType = chunk.resource.mimeType ?? "application/octet-stream";
+                    content.push({
+                        type: "text",
+                        text:
+                            savedPath === null
+                                ? `Attached file ${chunk.resource.uri} (${mimeType}).`
+                                : `Attached file ${chunk.resource.uri} (${mimeType}) is saved at ${savedPath}.`,
+                    });
                 }
-                // Ignore blob resources (unsupported)
                 break;
             }
             case "image":
+                if (chunk.mimeType === "image/svg+xml" && chunk.data) {
+                    content.push({
+                        type: "text",
+                        text: `Attached SVG:\n${Buffer.from(chunk.data, "base64").toString("utf8")}`,
+                    });
+                    break;
+                }
                 if (chunk.data) {
                     content.push({
                         type: "image",

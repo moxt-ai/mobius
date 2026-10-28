@@ -1,4 +1,5 @@
 import type { ContentBlock, SessionUpdate, ToolCallContent } from "@agentclientprotocol/sdk";
+import { isSvgDocument, PROMPT_SVG_MEDIA_TYPE } from "@moxt-ai/mobius-sdk/protocol";
 import { z } from "zod";
 /** One blob pulled out of an Agent update. The caller stores it and keeps the returned key. */
 export interface ExtractedContent {
@@ -80,6 +81,17 @@ const toolImageSchema = z.union([
         .transform(({ file }) => ({ type: "image" as const, data: file.base64, mimeType: file.type })),
 ]);
 
+function acceptedPromptImage(bytes: Uint8Array, mimeType: string): boolean {
+    if (mimeType === PROMPT_SVG_MEDIA_TYPE) {
+        try {
+            return isSvgDocument(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+        } catch {
+            return false;
+        }
+    }
+    return sniffRasterMime(bytes) === mimeType;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -103,7 +115,7 @@ export class AcpContentExternalizer {
                 }
                 try {
                     const bytes = decodeBase64(content.data);
-                    if (sniffRasterMime(bytes) !== content.mimeType) {
+                    if (!acceptedPromptImage(bytes, content.mimeType)) {
                         throw new Error("Embedded image bytes do not match a supported image MIME type");
                     }
                     const stored = await this.#store(

@@ -15,7 +15,8 @@ import {
     applyCompleteSessionConfiguration,
     assertAppliedSessionConfiguration,
 } from "./apply-session-configuration.ts";
-import { type ReadPromptArtifact, resolvePromptArtifacts } from "./prompt-artifacts.ts";
+import { type ReadPromptArtifact, ResolvedPromptArtifacts, resolvePromptArtifacts } from "./prompt-artifacts.ts";
+import { exposePromptDocuments } from "./prompt-documents.ts";
 import type { PromptLifecycle } from "./prompt-lifecycle.ts";
 
 export interface ExecutePromptOptions {
@@ -138,7 +139,9 @@ export async function executePrompt({
             stream.epoch,
             availability.disposition,
         );
-        const attachments = await resolvePromptArtifacts(readArtifact, command.attachments, signal);
+        const artifacts = await resolvePromptArtifacts(readArtifact, command.attachments, signal);
+        const resources = await exposePromptDocuments(resolved.cwd, artifacts.resources, signal);
+        const attachments = new ResolvedPromptArtifacts(artifacts.images, resources);
         let stopReason: string;
         if (availability.disposition === SessionPromptDisposition.Steer) {
             await sessions.steerPrompt({

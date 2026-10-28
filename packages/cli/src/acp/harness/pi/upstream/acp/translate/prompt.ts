@@ -6,6 +6,18 @@ export type PiImage = {
     data: string;
 };
 
+function savedAttachmentPath(meta: unknown): string | null {
+    if (typeof meta !== "object" || meta === null) {
+        return null;
+    }
+    const mobius = Reflect.get(meta, "mobius");
+    if (typeof mobius !== "object" || mobius === null) {
+        return null;
+    }
+    const savedPath = Reflect.get(mobius, "savedPath");
+    return typeof savedPath === "string" && savedPath.length > 0 ? savedPath : null;
+}
+
 export function promptToPiMessage(blocks: readonly ContentBlock[]): {
     message: string;
     images: PiImage[];
@@ -25,6 +37,10 @@ export function promptToPiMessage(blocks: readonly ContentBlock[]): {
                 break;
 
             case "image": {
+                if (b.mimeType === "image/svg+xml") {
+                    message += `\n[Attached SVG]\n${Buffer.from(b.data, "base64").toString("utf8")}`;
+                    break;
+                }
                 // pi expects base64 image bytes in `data` without a data-url prefix.
                 images.push({
                     type: "image",
@@ -46,8 +62,13 @@ export function promptToPiMessage(blocks: readonly ContentBlock[]): {
                 } else if (typeof r?.blob === "string") {
                     // BlobResourceContents
                     const mime = typeof r?.mimeType === "string" ? r.mimeType : "application/octet-stream";
-                    const bytes = Buffer.byteLength(r.blob, "base64");
-                    message += `\n[Embedded Context] ${uri} (${mime}, ${bytes} bytes)`;
+                    const savedPath = savedAttachmentPath(b._meta);
+                    if (savedPath !== null) {
+                        message += `\n[Attached file] ${uri} (${mime}) is saved at ${savedPath}`;
+                    } else {
+                        const bytes = Buffer.byteLength(r.blob, "base64");
+                        message += `\n[Embedded Context] ${uri} (${mime}, ${bytes} bytes)`;
+                    }
                 } else {
                     message += `\n[Embedded Context] ${uri}`;
                 }

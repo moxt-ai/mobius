@@ -15,6 +15,65 @@ export const CONTENT_AVAILABLE_KIND = "content.available";
 export const CONTENT_CHUNK_MAX_BYTES = 192 * 1024;
 export const CONTENT_WRITE_MAX_BYTES = 32 * 1024 * 1024;
 export const PROMPT_IMAGE_MAX_BYTES = 5_000_000;
+export const PROMPT_TEXT_RESOURCE_MAX_BYTES = 1_000_000;
+export const PROMPT_DOCUMENT_MAX_BYTES = 5_000_000;
+export const PROMPT_SVG_MEDIA_TYPE = "image/svg+xml";
+
+const RASTER_PROMPT_IMAGE_TYPES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
+const BINARY_PROMPT_DOCUMENT_TYPES = new Set([
+    "application/msword",
+    "application/pdf",
+    "application/rtf",
+    "application/vnd.ms-excel",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.oasis.opendocument.presentation",
+    "application/vnd.oasis.opendocument.spreadsheet",
+    "application/vnd.oasis.opendocument.text",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+]);
+const SVG_ELEMENT = /<svg[\s>/]/iu;
+
+/** Drops parameters such as `;charset=utf-8` so comparisons use the media type itself. */
+export function normalizePromptMediaType(mediaType: string): string {
+    const separator = mediaType.indexOf(";");
+    return (separator === -1 ? mediaType : mediaType.slice(0, separator)).trim().toLowerCase();
+}
+
+export function isRasterPromptImage(mediaType: string): boolean {
+    return RASTER_PROMPT_IMAGE_TYPES.has(normalizePromptMediaType(mediaType));
+}
+
+export function isPromptSvg(mediaType: string): boolean {
+    return normalizePromptMediaType(mediaType) === PROMPT_SVG_MEDIA_TYPE;
+}
+
+/** True when the text contains an SVG root element. Display still belongs in an image context. */
+export function isSvgDocument(text: string): boolean {
+    return SVG_ELEMENT.test(text);
+}
+
+export function isPromptBinaryDocument(mediaType: string): boolean {
+    return BINARY_PROMPT_DOCUMENT_TYPES.has(normalizePromptMediaType(mediaType));
+}
+
+export function isPromptTextMediaType(mediaType: string): boolean {
+    const type = normalizePromptMediaType(mediaType);
+    return (
+        type.startsWith("text/") ||
+        type === "application/javascript" ||
+        type === "application/json" ||
+        type.endsWith("+json") ||
+        type === "application/toml" ||
+        type === "application/typescript" ||
+        type === "application/x-sh" ||
+        type === "application/x-yaml" ||
+        type === "application/xml" ||
+        type.endsWith("+xml") ||
+        type === "application/yaml"
+    );
+}
 const CONTENT_CHUNK_MAGIC = new Uint8Array([0x4d, 0x42, 0x43, 0x31]);
 const CONTENT_CHUNK_HEADER_BYTES = CONTENT_CHUNK_MAGIC.byteLength + 1 + 4;
 

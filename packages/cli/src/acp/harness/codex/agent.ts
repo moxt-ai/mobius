@@ -33,6 +33,18 @@ const CODEX_AGENT_VERSION = "0.154.0";
 // Listing a directory must answer promptly: it is an interactive browser request, not a turn.
 const SESSION_LIST_TIMEOUT_MILLISECONDS = 30_000;
 
+function savedAttachmentPath(meta: unknown): string | null {
+    if (typeof meta !== "object" || meta === null) {
+        return null;
+    }
+    const mobius = Reflect.get(meta, "mobius");
+    if (typeof mobius !== "object" || mobius === null) {
+        return null;
+    }
+    const savedPath = Reflect.get(mobius, "savedPath");
+    return typeof savedPath === "string" && savedPath.length > 0 ? savedPath : null;
+}
+
 /** Converts ACP prompt content into the app-server's `UserInput` list. */
 function promptInput(prompt: readonly ContentBlock[]): readonly unknown[] {
     const input: unknown[] = [];
@@ -42,16 +54,36 @@ function promptInput(prompt: readonly ContentBlock[]): readonly unknown[] {
             continue;
         }
         if (block.type === "image") {
+            if (block.mimeType === "image/svg+xml") {
+                input.push({
+                    text: `Attached SVG:\n${Buffer.from(block.data, "base64").toString("utf8")}`,
+                    text_elements: [],
+                    type: "text",
+                });
+                continue;
+            }
             input.push({ type: "image", url: `data:${block.mimeType};base64,${block.data}` });
             continue;
         }
         if (block.type === "resource") {
             const resource = block.resource;
-            input.push({
-                text: "text" in resource ? (resource.text ?? "") : "",
-                text_elements: [],
-                type: "text",
-            });
+            const text = "text" in resource ? (resource.text ?? "") : "";
+            if (text.length > 0) {
+                input.push({ text, text_elements: [], type: "text" });
+                continue;
+            }
+            if ("blob" in resource && typeof resource.blob === "string") {
+                const savedPath = savedAttachmentPath(block._meta);
+                const mimeType = resource.mimeType ?? "application/octet-stream";
+                input.push({
+                    text:
+                        savedPath === null
+                            ? `Attached file ${resource.uri} (${mimeType}).`
+                            : `Attached file ${resource.uri} (${mimeType}) is saved at ${savedPath}.`,
+                    text_elements: [],
+                    type: "text",
+                });
+            }
             continue;
         }
         if (block.type === "resource_link") {

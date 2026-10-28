@@ -1,13 +1,14 @@
-import type {
-    ContentBlock,
-    PromptExecutionContext,
-    QueuedPromptRequestEventLog,
-    SessionCancelCommand,
-    SessionEventPayload,
-    SessionLiveEvent,
-    SessionPromptCommand,
+import {
+    type ContentBlock,
+    isPromptTextMediaType,
+    type PromptExecutionContext,
+    type QueuedPromptRequestEventLog,
+    SESSION_CLOSED_ERROR_CODE,
+    type SessionCancelCommand,
+    type SessionEventPayload,
+    type SessionLiveEvent,
+    type SessionPromptCommand,
 } from "@moxt-ai/mobius-sdk/protocol";
-import { SESSION_CLOSED_ERROR_CODE } from "@moxt-ai/mobius-sdk/protocol";
 import type { SessionEventSink } from "../api/session-api.ts";
 import type { ExecutionReceipts } from "../turn/execution-receipts.ts";
 
@@ -46,7 +47,7 @@ function promptContent(command: SessionPromptCommand): readonly ContentBlock[] {
                   }
                 : {
                       byteLength: attachment.byteLength,
-                      encoding: "text",
+                      encoding: isPromptTextMediaType(attachment.mimeType) ? "text" : "binary",
                       mimeType: attachment.mimeType,
                       resourceKey: attachment.contentKey,
                       type: "external_resource",

@@ -1,9 +1,16 @@
 import { createHash } from "node:crypto";
-import { PROMPT_IMAGE_MAX_BYTES, type PromptAttachment } from "@moxt-ai/mobius-sdk/protocol";
+import {
+    isPromptBinaryDocument,
+    isPromptSvg,
+    isPromptTextMediaType,
+    isSvgDocument,
+    PROMPT_DOCUMENT_MAX_BYTES,
+    PROMPT_IMAGE_MAX_BYTES,
+    PROMPT_TEXT_RESOURCE_MAX_BYTES,
+    type PromptAttachment,
+} from "@moxt-ai/mobius-sdk/protocol";
 import type { PromptImageInput, PromptResourceInput } from "../../acp/client/prompt-content.ts";
 import { OperationError } from "../../infra/operation-error.ts";
-
-const MAX_AGENT_RESOURCE_BYTE_LENGTH = 1_000_000;
 
 export class PromptArtifactError extends OperationError {
     constructor(code: string, message: string, options: ErrorOptions = {}) {
@@ -24,14 +31,8 @@ export class ResolvedPromptArtifacts {
 
 export type ReadPromptArtifact = (attachment: PromptAttachment, signal: AbortSignal) => Promise<Uint8Array>;
 
-function isTextMediaType(mediaType: string): boolean {
-    return (
-        mediaType.startsWith("text/") ||
-        mediaType === "application/json" ||
-        mediaType.endsWith("+json") ||
-        mediaType === "application/xml" ||
-        mediaType.endsWith("+xml")
-    );
+function decodeUtf8(bytes: Uint8Array): string {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 
 export async function resolvePromptArtifacts(
@@ -54,7 +55,30 @@ export async function resolvePromptArtifacts(
             );
         }
         if (attachment.kind === "image") {
-            if (bytes.byteLength > PROMPT_IMAGE_MAX_BYTES || images.length >= 8) {
+            if (isPromptSvg(attachment.mimeType)) {
+                if (bytes.byteLength > PROMPT_TEXT_RESOURCE_MAX_BYTES || images.length >= 8) {
+                    throw new PromptArtifactError(
+                        "artifact_too_large_for_agent",
+                        "The prompt attachment exceeds the Agent image limit",
+                    );
+                }
+                let text: string;
+                try {
+                    text = decodeUtf8(bytes);
+                } catch (cause) {
+                    throw new PromptArtifactError(
+                        "artifact_encoding_invalid",
+                        "The prompt attachment is not valid UTF-8 text",
+                        { cause },
+                    );
+                }
+                if (!isSvgDocument(text)) {
+                    throw new PromptArtifactError(
+                        "artifact_media_type_unsupported",
+                        "The Agent cannot consume this prompt attachment media type",
+                    );
+                }
+            } else if (bytes.byteLength > PROMPT_IMAGE_MAX_BYTES || images.length >= 8) {
                 throw new PromptArtifactError(
                     "artifact_too_large_for_agent",
                     "The prompt attachment exceeds the Agent image limit",
@@ -64,16 +88,33 @@ export async function resolvePromptArtifacts(
                 data: Buffer.from(bytes).toString("base64"),
                 mimeType: attachment.mimeType,
                 name: attachment.name,
+                uri: attachment.uri,
             });
             continue;
         }
-        if (!isTextMediaType(attachment.mimeType)) {
+        if (isPromptBinaryDocument(attachment.mimeType)) {
+            if (bytes.byteLength > PROMPT_DOCUMENT_MAX_BYTES || resources.length >= 16) {
+                throw new PromptArtifactError(
+                    "artifact_too_large_for_agent",
+                    "The prompt attachment exceeds the Agent resource limit",
+                );
+            }
+            resources.push({
+                data: Buffer.from(bytes).toString("base64"),
+                mimeType: attachment.mimeType,
+                name: attachment.name,
+                type: "blob",
+                uri: attachment.uri,
+            });
+            continue;
+        }
+        if (!isPromptTextMediaType(attachment.mimeType)) {
             throw new PromptArtifactError(
                 "artifact_media_type_unsupported",
                 "The Agent cannot consume this prompt attachment media type",
             );
         }
-        if (bytes.byteLength > MAX_AGENT_RESOURCE_BYTE_LENGTH || resources.length >= 16) {
+        if (bytes.byteLength > PROMPT_TEXT_RESOURCE_MAX_BYTES || resources.length >= 16) {
             throw new PromptArtifactError(
                 "artifact_too_large_for_agent",
                 "The prompt attachment exceeds the Agent resource limit",
@@ -81,7 +122,7 @@ export async function resolvePromptArtifacts(
         }
         let text: string;
         try {
-            text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+            text = decodeUtf8(bytes);
         } catch (cause) {
             throw new PromptArtifactError(
                 "artifact_encoding_invalid",

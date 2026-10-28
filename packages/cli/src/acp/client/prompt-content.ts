@@ -7,11 +7,21 @@ export interface PromptImageInput {
     readonly data: string;
     readonly mimeType: string;
     readonly name: string;
+    readonly uri: string;
 }
 
-/** One resource attachment of a prompt, either embedded text or a link. */
+/** One resource attachment of a prompt: embedded text, a binary document, or a link. */
 export type PromptResourceInput =
     | { readonly type: "embedded"; readonly mimeType: string; readonly text: string; readonly uri: string }
+    | {
+          readonly data: string;
+          readonly mimeType: string;
+          readonly name: string;
+          /** Workspace path where the document bytes were saved for the Agent. */
+          readonly savedPath?: string;
+          readonly type: "blob";
+          readonly uri: string;
+      }
     | { readonly type: "link"; readonly mimeType: string; readonly name: string; readonly uri: string };
 
 /** The prompt inputs that become ACP content blocks. */
@@ -25,6 +35,10 @@ export interface PromptContent {
  * Builds the ACP content blocks of a prompt: text, images, and linked or embedded resources.
  * Capability gates reject what the selected Agent cannot accept before anything is sent.
  */
+function deliversEmbeddedContext(resource: PromptResourceInput): boolean {
+    return resource.type === "embedded" || resource.type === "blob";
+}
+
 export function validatePromptContent(options: PromptContent, capabilities: SessionCapabilities): void {
     if (options.images.length > 0 && !capabilities.imagePrompt) {
         throw new AcpExecutionError(
@@ -33,7 +47,7 @@ export function validatePromptContent(options: PromptContent, capabilities: Sess
             "unsupported_prompt_content",
         );
     }
-    if (options.resources.some((resource) => resource.type === "embedded") && !capabilities.embeddedContextPrompt) {
+    if (options.resources.some(deliversEmbeddedContext) && !capabilities.embeddedContextPrompt) {
         throw new AcpExecutionError(
             "The selected agent does not accept embedded context",
             {},
@@ -60,22 +74,46 @@ export function buildPromptContent(options: PromptContent, capabilities: Session
         });
     }
     for (const resource of options.resources) {
-        if (resource.type === "embedded") {
-            prompt.push({
-                resource: {
+        switch (resource.type) {
+            case "embedded":
+                prompt.push({
+                    resource: {
+                        mimeType: resource.mimeType,
+                        text: resource.text,
+                        uri: resource.uri,
+                    },
+                    type: "resource",
+                });
+                break;
+            case "blob":
+                prompt.push({
+                    ...(resource.savedPath === undefined
+                        ? {}
+                        : { _meta: { mobius: { savedPath: resource.savedPath } } }),
+                    resource: {
+                        blob: resource.data,
+                        mimeType: resource.mimeType,
+                        uri: resource.uri,
+                    },
+                    type: "resource",
+                });
+                break;
+            case "link":
+                prompt.push({
                     mimeType: resource.mimeType,
-                    text: resource.text,
+                    name: resource.name,
+                    type: "resource_link",
                     uri: resource.uri,
-                },
-                type: "resource",
-            });
-        } else {
-            prompt.push({
-                mimeType: resource.mimeType,
-                name: resource.name,
-                type: "resource_link",
-                uri: resource.uri,
-            });
+                });
+                break;
+            default: {
+                const unexpected: never = resource;
+                throw new AcpExecutionError(
+                    "A prompt attachment has an unknown kind",
+                    { cause: unexpected },
+                    "unsupported_prompt_content",
+                );
+            }
         }
     }
     return prompt;
