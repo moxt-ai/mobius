@@ -5,6 +5,7 @@ import {
     decodeSessionRecordingTurnItemDetail,
     decodeSessionRecordingTurnItemPage,
     decodeSessionRecordingTurnPage,
+    type SessionRecordingTurnItem,
     type SessionRecordingTurnPage,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -101,6 +102,19 @@ async function turnPage(query = ""): Promise<SessionRecordingTurnPage> {
     const response = await worker.fetch(new Request(sessionPath(`turns${query}`)), env);
     expect(response.status).toBe(200);
     return decodeSessionRecordingTurnPage(await response.text());
+}
+
+async function itemDetail(commandId: string, itemId: string): Promise<SessionRecordingTurnItem> {
+    const response = await worker.fetch(
+        new Request(sessionPath(`turns/${commandId}/items/${encodeURIComponent(itemId)}`)),
+        env,
+    );
+    expect(response.status).toBe(200);
+    const item = decodeSessionRecordingTurnItemDetail(await response.text())?.item;
+    if (item === undefined) {
+        throw new Error("expected a known Turn item");
+    }
+    return item;
 }
 
 function promptText(page: SessionRecordingTurnPage): readonly string[] {
@@ -675,6 +689,85 @@ describe("Recording Turn history", () => {
         }
         expect(full).toMatchObject({ kind: "answer", omittedCharacters: 0 });
         expect(full.kind === "answer" ? full.text : "").toBe(chunk.repeat(10));
+    });
+
+    it("Given an answer longer than a stored Turn item holds, When a client reads it, Then the stored text keeps its order and the rest is counted as omitted", async () => {
+        await record([requested("command-1", "Write a lot"), started("command-1")]);
+        const chunk = "abcdefghij".repeat(30_000);
+        for (let index = 0; index < 4; index += 1) {
+            await record([answer(chunk)]);
+        }
+        // Text arriving once the stored part is full is never placed after it out of order.
+        await record([answer("tail"), completed("command-1")]);
+
+        const [turn] = (await turnPage()).turns;
+        expect(turn?.answerLength).toBe(1_200_004);
+        const [item] = turn?.items ?? [];
+        expect(item).toMatchObject({ kind: "answer", omittedCharacters: 1_100_004 });
+        const full = await itemDetail("command-1", item?.itemId ?? "");
+        expect(full).toMatchObject({ kind: "answer", omittedCharacters: 300_004 });
+        expect(full.kind === "answer" ? full.text : "").toBe(chunk.repeat(3));
+    });
+
+    it("Given one reasoning chunk larger than a stored Turn item holds, When a client reads it, Then whole characters are stored and the rest is counted as omitted", async () => {
+        await record([
+            requested("command-1", "Think"),
+            started("command-1"),
+            thought("€".repeat(400_000)),
+            completed("command-1"),
+        ]);
+
+        const [item] = (await turnPage()).turns[0]?.items ?? [];
+        const full = await itemDetail("command-1", item?.itemId ?? "");
+        // Each of these characters takes three bytes, so the stored part ends on a whole character.
+        expect(full).toMatchObject({ kind: "thought", omittedCharacters: 66_667 });
+        expect(full.kind === "thought" ? full.text : "").toBe("€".repeat(333_333));
+    });
+
+    it("Given a tool call whose merged detail is larger than a stored Turn item holds, When a client reads it, Then the tool keeps its labels and reports its detail as omitted", async () => {
+        await record([
+            requested("command-1", "Rewrite the notes"),
+            started("command-1"),
+            acp({
+                rawInput: { content: "x".repeat(600_000), path: "notes.txt" },
+                sessionUpdate: "tool_call",
+                status: "in_progress",
+                title: "Write notes.txt",
+                toolCallId: "tool-1",
+            }),
+        ]);
+        await record([
+            acp({
+                rawOutput: "y".repeat(600_000),
+                sessionUpdate: "tool_call_update",
+                status: "completed",
+                toolCallId: "tool-1",
+            }),
+            completed("command-1"),
+        ]);
+
+        expect((await turnPage()).turns[0]?.attempt.kind).toBe("succeeded");
+        expect(await itemDetail("command-1", "tool:tool-1")).toMatchObject({
+            detail: { kind: "omitted" },
+            kind: "tool",
+            status: "completed",
+            title: "Write notes.txt",
+        });
+    });
+
+    it("Given an Agent update this Recording cannot read, When later work is recorded, Then Turn history stays readable and keeps the work around it", async () => {
+        await record([requested("command-1", "Say hello"), started("command-1"), answer("Hel")]);
+        // A newer Runtime may forward an update kind this deployment has no schema for yet.
+        await record([acp({ sessionUpdate: "future_update", value: 1 }), answer("lo")]);
+        await record([completed("command-1")]);
+        await completedTurn("command-2", "Again", "Hi");
+
+        const page = await turnPage();
+        expect(page.turns.map((turn) => turn.commandId)).toEqual(["command-2", "command-1"]);
+        expect(page.turns[1]).toMatchObject({
+            attempt: { kind: "succeeded" },
+            items: [{ kind: "answer", text: "Hello" }],
+        });
     });
 
     it("Given a request waiting when a new attempt of its Turn starts, When a client reads Turns, Then the request is no longer pending", async () => {

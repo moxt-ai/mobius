@@ -13,6 +13,7 @@ import {
     storedInteractionSchema,
     storedProjectionFailureSchema,
     storedProjectionStateSchema,
+    storedTurnItemBytes,
     storedTurnItemSchema,
     storedTurnSchema,
 } from "../entity/session-turn-history.ts";
@@ -164,18 +165,22 @@ export class SessionTurnHistoryStorage {
             turnJson: JSON.stringify(storedTurnSchema.parse(turn)),
             turnOrder: turn.order,
         }));
-        const itemRows = writes.items.map((write) => ({
-            change: write.text,
-            values: {
-                commandId: write.commandId,
-                itemId: write.item.itemId,
-                itemJson: JSON.stringify(storedTurnItemSchema.parse(write.item)),
-                // A listing only narrows the item validated above, so it is encoded without parsing it again.
-                listingJson: write.listing === null ? null : JSON.stringify(write.listing),
-                sequence: write.item.sequence,
-                text: write.text.text,
-            },
-        }));
+        const itemRows = writes.items.map((write) => {
+            const text = storedText(write.text.text);
+            return {
+                appended: write.text.kind === "append" ? appendedText(write.text.text) : null,
+                values: {
+                    commandId: write.commandId,
+                    droppedCharacters: characterCount(write.text.text.slice(text.length)),
+                    itemId: write.item.itemId,
+                    itemJson: JSON.stringify(storedTurnItemSchema.parse(write.item)),
+                    // A listing only narrows the item validated above, so it is encoded without parsing it again.
+                    listingJson: write.listing === null ? null : JSON.stringify(write.listing),
+                    sequence: write.item.sequence,
+                    text,
+                },
+            };
+        });
         const interactionRows = writes.interactions.map((record) => ({
             commandId: record.interaction.commandId,
             interactionId: record.interaction.interactionId,
@@ -191,7 +196,7 @@ export class SessionTurnHistoryStorage {
                 .onConflictDoUpdate({ target: recordedTurn.commandId, set: values })
                 .run();
         }
-        for (const { change, values } of itemRows) {
+        for (const { appended, values } of itemRows) {
             this.#database
                 .insert(recordedTurnItem)
                 .values(values)
@@ -201,8 +206,7 @@ export class SessionTurnHistoryStorage {
                         itemJson: values.itemJson,
                         listingJson: values.listingJson,
                         sequence: values.sequence,
-                        // Appending in SQL keeps a growing answer from being read back and rewritten per batch.
-                        text: change.kind === "append" ? sql`${recordedTurnItem.text} || ${change.text}` : change.text,
+                        ...(appended ?? { droppedCharacters: values.droppedCharacters, text: values.text }),
                     },
                 })
                 .run();
@@ -413,8 +417,45 @@ export class SessionTurnHistoryStorage {
             .map(decodeInteractionRecord);
 }
 
+/** The longest prefix of `text` whose UTF-8 encoding fits a stored item, ending on a whole character. */
+function storedText(text: string): string {
+    if (text.length * 3 <= storedTurnItemBytes) {
+        return text;
+    }
+    const { read } = new TextEncoder().encodeInto(text, new Uint8Array(storedTurnItemBytes));
+    return text.slice(0, read);
+}
+
+/** Characters as SQLite counts them in stored text: a surrogate pair is one character. */
+function characterCount(text: string): number {
+    let pairs = 0;
+    for (let index = 0; index + 1 < text.length; index += 1) {
+        const unit = text.charCodeAt(index);
+        const next = text.charCodeAt(index + 1);
+        if (unit >= 0xd800 && unit <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
+            pairs += 1;
+            index += 1;
+        }
+    }
+    return text.length - pairs;
+}
+
+/**
+ * Appends in SQL, so a growing answer is never read back and rewritten per batch, while its stored text
+ * has room for all of it. Once text does not fit, it and everything after it only count as dropped, so
+ * the stored text never skips ahead of what it left out.
+ */
+function appendedText(text: string) {
+    const fits = sql`${recordedTurnItem.droppedCharacters} = 0 AND length(CAST(${recordedTurnItem.text} AS BLOB)) + ${new TextEncoder().encode(text).byteLength} <= ${storedTurnItemBytes}`;
+    return {
+        droppedCharacters: sql`CASE WHEN ${fits} THEN ${recordedTurnItem.droppedCharacters} ELSE ${recordedTurnItem.droppedCharacters} + ${characterCount(text)} END`,
+        text: sql`CASE WHEN ${fits} THEN ${recordedTurnItem.text} || ${text} ELSE ${recordedTurnItem.text} END`,
+    };
+}
+
 function itemReadColumns(textCharacters: number) {
     return {
+        droppedCharacters: recordedTurnItem.droppedCharacters,
         itemJson: recordedTurnItem.itemJson,
         listingJson: recordedTurnItem.listingJson,
         textLength: sql<number>`length(${recordedTurnItem.text})`,
@@ -423,12 +464,14 @@ function itemReadColumns(textCharacters: number) {
 }
 
 function decodeItemRead(row: {
+    readonly droppedCharacters: number;
     readonly itemJson: string;
     readonly listingJson: string | null;
     readonly textLength: number;
     readonly textPrefix: string;
 }): StoredTurnItemRead {
     return {
+        droppedCharacters: row.droppedCharacters,
         item: decodeItem(row.itemJson),
         listing: row.listingJson === null ? null : decodeItem(row.listingJson),
         textLength: row.textLength,
