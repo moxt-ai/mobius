@@ -27,6 +27,7 @@ export function createTestMobiusPlatformApp(
         readonly bindings?: PlatformRelayBindings;
     },
     gateways: (environment: PlatformRelayBindings) => WorkerRuntimeGateways,
+    organizations?: Parameters<typeof createPlatformApplication>[2],
 ): Hono<{ Bindings: PlatformRelayBindings }> {
     const application = createPlatformApplication(
         new PlatformAuthenticationConfiguration(
@@ -35,6 +36,7 @@ export function createTestMobiusPlatformApp(
             options.allowedOrigins,
         ),
         gateways,
+        organizations,
     );
     return options.bindings === undefined ? application : new TestApplication(application, options.bindings);
 }

@@ -72,6 +72,7 @@ import {
 } from "./middleware/session-access-target.ts";
 import { AppCredentialAuthenticationService } from "./service/app-credential-authentication-service.ts";
 import { AppSessionStatusWebhookService } from "./service/app-session-status-webhook-service.ts";
+import { OrganizationAdministrators } from "./service/organization-administrators.ts";
 import { OrganizationInviteService } from "./service/organization-invite-service.ts";
 import { PlatformControlPlaneService } from "./service/platform-control-plane-service.ts";
 import { RecordingPolicyService } from "./service/recording-policy-service.ts";
@@ -227,6 +228,7 @@ export function createPlatformApplication(
             invites: new OrganizationInviteService(
                 new OrganizationInviteStorage(context.env.PLATFORM_DIRECTORY_DATABASE),
                 organizations(context.env),
+                new OrganizationAdministrators(organizations(context.env)),
             ),
             recordingPolicies: context.var.recordingPolicies,
             appSessionStatusWebhooks: context.var.appSessionStatusWebhooks,
@@ -982,6 +984,7 @@ export function createPlatformApplication(
                 authentication,
                 storageRegistry,
                 appAuthentication,
+                new OrganizationAdministrators(organizations(environment)),
             );
             context.set("control", control);
             context.set("appAuthentication", appAuthentication);

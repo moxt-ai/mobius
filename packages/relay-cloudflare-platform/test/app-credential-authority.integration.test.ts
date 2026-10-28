@@ -54,6 +54,7 @@ async function application() {
     const worker = createTestMobiusPlatformApp(
         new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
         createPlatformGateways,
+        () => clerk.organizationGateway,
     );
     const developerHeaders = {
         authorization: `Bearer ${clerk.session("developer-1", clerk.defaultOrganizationId)}`,
@@ -311,6 +312,36 @@ async function expectRejected(response: Response, code: string, status = 401): P
     expect.soft(response.status).toBe(status);
     expect.soft(await response.json()).toMatchObject({ error: { code } });
 }
+
+it("Given independently issued and rotated credentials with the same legacy revision, When one is revoked by ID, Then the other remains listed and authorized", async () => {
+    const app = await application();
+    const signal = new AbortController().signal;
+    const issued = await app.developer.issueAppCredential(
+        app.appId,
+        { permissions: ["session:read", "session:write"], projectIds: [app.projectId] },
+        signal,
+    );
+    const rotated = await app.rotate();
+
+    // Preserve the v1 values without treating them as identity, ordering or authorization state.
+    expect(issued.revision).toBe(2);
+    expect(rotated.revision).toBe(2);
+    expect(issued.credentialId).not.toBe(rotated.credentialId);
+    expect(rotated.replacedCredentialId).toBe(app.defaultCredential.credentialId);
+    expect((await app.authenticateApp(issued.credential)).status).toBe(201);
+    expect((await app.authenticateApp(rotated.credential)).status).toBe(201);
+
+    await app.developer.revokeAppCredential(issued.credentialId, signal);
+
+    await expectRejected(await app.authenticateApp(issued.credential), "credential_revoked");
+    expect((await app.authenticateApp(rotated.credential)).status).toBe(201);
+    expect(await app.developer.listAppCredentials(app.appId, signal)).toEqual(
+        expect.arrayContaining([
+            expect.objectContaining({ active: false, credentialId: issued.credentialId, revision: 2 }),
+            expect.objectContaining({ active: true, credentialId: rotated.credentialId, revision: 2 }),
+        ]),
+    );
+});
 
 it.each(["rotated", "revoked"] as const)(
     "Given a %s AppCredential, When rotation is retried, Then it returns the existing conflict without creating a credential or success audit",

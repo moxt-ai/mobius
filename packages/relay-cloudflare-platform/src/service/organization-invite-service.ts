@@ -4,6 +4,7 @@ import { type OrganizationInviteRow, organizationInviteTokenSchema } from "../en
 import { PlatformControlPlaneError } from "../entity/platform-control-plane.ts";
 import type { OrganizationMembershipGateway } from "../infra/organization-membership-gateway.ts";
 import type { OrganizationInviteStorage } from "../storage/organization-invite-storage.ts";
+import type { OrganizationAdministrators } from "./organization-administrators.ts";
 
 function hex(bytes: Uint8Array): string {
     return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -18,9 +19,15 @@ function resource(row: OrganizationInviteRow) {
 export class OrganizationInviteService {
     private readonly storage: OrganizationInviteStorage;
     private readonly clerk: OrganizationMembershipGateway;
-    constructor(storage: OrganizationInviteStorage, clerk: OrganizationMembershipGateway) {
+    private readonly administrators: OrganizationAdministrators;
+    constructor(
+        storage: OrganizationInviteStorage,
+        clerk: OrganizationMembershipGateway,
+        administrators: OrganizationAdministrators,
+    ) {
         this.storage = storage;
         this.clerk = clerk;
+        this.administrators = administrators;
     }
 
     private readonly user = (identity: VerifiedExternalIdentity): string => {
@@ -39,11 +46,7 @@ export class OrganizationInviteService {
         if (!/^org_[a-zA-Z0-9]+$/.test(organizationId)) {
             throw new PlatformControlPlaneError("invalid_request", "Invalid organization", 400);
         }
-        if (
-            identity.organization.kind !== "organization" ||
-            identity.organization.id !== organizationId ||
-            (await this.clerk.role(organizationId, userId, signal)) !== "org:admin"
-        ) {
+        if ((await this.administrators.administrator(identity, organizationId, signal)) === null) {
             throw new PlatformControlPlaneError(
                 "organization_admin_required",
                 "An organization admin is required",
@@ -85,8 +88,8 @@ export class OrganizationInviteService {
         if (!/^[a-f0-9-]{36}$/.test(id)) {
             throw new PlatformControlPlaneError("invalid_request", "Invalid invitation", 400);
         }
-        await this.storage.revoke(organizationId, id, actor, Date.now(), signal);
-        return { revoked: true };
+        const revoked = await this.storage.revoke(organizationId, id, actor, Date.now(), signal);
+        return { revoked };
     };
 
     private readonly resolve = async (token: string, signal: AbortSignal) => {

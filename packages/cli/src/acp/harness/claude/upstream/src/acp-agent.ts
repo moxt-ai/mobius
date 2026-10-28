@@ -3514,10 +3514,13 @@ export class ClaudeAcpAgent {
                                         ),
                                     });
                                 }
-                                backgroundTasks.delete(message.task_id);
+                                // A foreground task also notifies, but its output already
+                                // reached the model through the tool result, so no
+                                // task-notification result will ever drain it.
                                 if (message.skip_transcript) {
+                                    backgroundTasks.delete(message.task_id);
                                     awaitingBackgroundResults.delete(message.task_id);
-                                } else {
+                                } else if (backgroundTasks.delete(message.task_id)) {
                                     awaitingBackgroundResults.add(message.task_id);
                                 }
                                 reportBackgroundActivity();
@@ -3531,6 +3534,11 @@ export class ClaudeAcpAgent {
                                 // guaranteed per transition — prune on it too so the registry
                                 // can't grow for the session's lifetime if a notification is
                                 // skipped.
+                                if (!hasBackgroundLevel && message.patch.is_backgrounded === true) {
+                                    // A foreground task moved to the background now owes a result.
+                                    backgroundTasks.add(message.task_id);
+                                    reportBackgroundActivity();
+                                }
                                 if (
                                     message.patch.status === "completed" ||
                                     message.patch.status === "failed" ||

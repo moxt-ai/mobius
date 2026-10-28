@@ -271,6 +271,7 @@ describe.sequential("Platform Recording read route", () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
+            () => clerk.organizationGateway,
         );
         const environment = bindings();
 
@@ -363,6 +364,7 @@ describe.sequential("Platform Recording read route", () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
+            () => clerk.organizationGateway,
         );
         const environment = bindings();
 
@@ -480,6 +482,7 @@ describe.sequential("Platform Recording read route", () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
+            () => clerk.organizationGateway,
         );
         const environment = bindings();
 
@@ -605,6 +608,7 @@ describe.sequential("Platform Recording read route", () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
+            () => clerk.organizationGateway,
         );
         const environment = bindings();
         const tenants = await responseJson(
@@ -724,6 +728,7 @@ describe.sequential("App Session status webhook", () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
+            () => clerk.organizationGateway,
         );
         const environment = bindings();
         const tenants = await responseJson(

@@ -1,70 +1,93 @@
 import type { ActiveRuntimeTurn } from "./active-turn.ts";
 
-type UpgradeAdmission =
-    | { readonly kind: "open" }
-    | { readonly kind: "waiting"; readonly reserve: () => void }
-    | { readonly kind: "reserved" };
-
 /** Worker upgrade admission: foreground turns, queued input, and live native background work. */
 export class RuntimeTurnActivity {
     readonly #turns = new Set<ActiveRuntimeTurn>();
     readonly #backgroundSources = new Set<object>();
-    #admission: UpgradeAdmission = { kind: "open" };
+    readonly #idleWaiters = new Set<() => void>();
+    // When work last started or stopped; the quiet period is measured from here.
+    #changedAt = Date.now();
+    #reserved = false;
 
-    readonly acceptsPrompts = (): boolean => this.#admission.kind !== "reserved";
+    readonly acceptsPrompts = (): boolean => !this.#reserved;
 
     readonly count = (): number => this.#turns.size + this.#backgroundSources.size;
 
+    readonly describe = (): { readonly turns: number; readonly backgroundSources: number } => ({
+        turns: this.#turns.size,
+        backgroundSources: this.#backgroundSources.size,
+    });
+
     readonly setBackgroundActivity = (source: object, active: boolean): void => {
+        // Agents repeat unchanged reports; only a transition counts as activity.
+        if (active === this.#backgroundSources.has(source)) {
+            return;
+        }
         if (active) {
             this.#backgroundSources.add(source);
         } else {
             this.#backgroundSources.delete(source);
         }
-        this.#reserveIfIdle();
+        this.#changed();
     };
-
-    #reserveIfIdle(): void {
-        if (this.count() === 0 && this.#admission.kind === "waiting") {
-            this.#admission.reserve();
-        }
-    }
 
     readonly start = (turn: ActiveRuntimeTurn): void => {
         this.#turns.add(turn);
+        this.#changed();
     };
 
     readonly finish = (turn: ActiveRuntimeTurn): void => {
         this.#turns.delete(turn);
-        // Close admission synchronously with the last completion.
-        this.#reserveIfIdle();
+        this.#changed();
     };
 
-    readonly reserveWhenIdle = (signal: AbortSignal): Promise<Disposable> => {
-        signal.throwIfAborted();
-        if (this.#admission.kind !== "open") {
-            throw new Error("A daemon upgrade already owns admission");
+    #changed(): void {
+        this.#changedAt = Date.now();
+        if (this.count() === 0) {
+            for (const resolve of this.#idleWaiters) {
+                resolve();
+            }
+            this.#idleWaiters.clear();
         }
-        return new Promise<Disposable>((resolve, reject) => {
+    }
+
+    readonly whenIdle = (signal: AbortSignal): Promise<void> => {
+        signal.throwIfAborted();
+        if (this.count() === 0) {
+            return Promise.resolve();
+        }
+        return new Promise<void>((resolve, reject) => {
             const abort = (): void => {
-                this.#admission = { kind: "open" };
-                signal.removeEventListener("abort", abort);
+                this.#idleWaiters.delete(idle);
                 reject(signal.reason);
             };
-            const reserve = (): void => {
-                this.#admission = { kind: "reserved" };
+            const idle = (): void => {
                 signal.removeEventListener("abort", abort);
-                resolve({
-                    [Symbol.dispose]: () => {
-                        this.#admission = { kind: "open" };
-                    },
-                });
+                resolve();
             };
-            this.#admission = { kind: "waiting", reserve };
+            this.#idleWaiters.add(idle);
             signal.addEventListener("abort", abort, { once: true });
-            if (this.count() === 0) {
-                reserve();
-            }
         });
+    };
+
+    /**
+     * Close admission only after the Runtime has had no work for `quietMilliseconds`.
+     * The moment a reply finishes is when a user is most likely to continue, so idle
+     * alone is not an upgrade window. Checking and reserving happen synchronously, so
+     * no prompt can be admitted between them.
+     */
+    readonly reserveIfQuiet = (quietMilliseconds: number): Disposable | null => {
+        if (this.#reserved) {
+            throw new Error("A daemon upgrade already owns admission");
+        }
+        if (this.count() > 0 || Date.now() - this.#changedAt < quietMilliseconds) {
+            return null;
+        }
+        this.#reserved = true;
+        return {
+            [Symbol.dispose]: () => {
+                this.#reserved = false;
+            },
+        };
     };
 }
