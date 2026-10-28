@@ -40,17 +40,25 @@ function button(name: string): HTMLButtonElement {
     return result;
 }
 
-/** Forward real HTTP requests and lose the next credential-list response after it completes upstream. */
-async function credentialListLossProxy(upstream: string) {
+/**
+ * Forward real HTTP requests. Once armed, lose the first list response under `collection` that follows a create there,
+ * after it completes upstream, and capture the secret that create returned.
+ */
+async function listLossProxy(upstream: string, collection: string, secretOf: (value: unknown) => unknown) {
     let loseNextList = false;
+    let createdSinceArmed = false;
     const listWaiting = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     const issuedSecret = Promise.withResolvers<string>();
     const server = createServer((incoming, outgoing) => {
-        const credentials = incoming.url?.endsWith("/credentials") === true;
-        const loseResponse = credentials && incoming.method === "GET" && loseNextList;
+        const listed = incoming.url?.endsWith(collection) === true;
+        if (listed && incoming.method === "POST" && loseNextList) {
+            createdSinceArmed = true;
+        }
+        const loseResponse = listed && incoming.method === "GET" && createdSinceArmed;
         if (loseResponse) {
             loseNextList = false;
+            createdSinceArmed = false;
         }
         const forwarded = request(
             new URL(incoming.url ?? "/", upstream),
@@ -67,18 +75,13 @@ async function credentialListLossProxy(upstream: string) {
                     });
                     return;
                 }
-                if (credentials && incoming.method === "POST") {
+                if (listed && incoming.method === "POST") {
                     const chunks: Buffer[] = [];
                     response.on("data", (chunk: Buffer) => chunks.push(chunk));
                     response.on("end", () => {
-                        const value: unknown = JSON.parse(Buffer.concat(chunks).toString());
-                        if (
-                            typeof value === "object" &&
-                            value !== null &&
-                            "credential" in value &&
-                            typeof value.credential === "string"
-                        ) {
-                            issuedSecret.resolve(value.credential);
+                        const secret = secretOf(JSON.parse(Buffer.concat(chunks).toString()));
+                        if (typeof secret === "string") {
+                            issuedSecret.resolve(secret);
                         } else {
                             issuedSecret.reject(new Error("No issued credential in the service response"));
                         }
@@ -121,7 +124,9 @@ afterEach(() => {
 test("Given a successful key issuance, when the following list refresh fails, the user can still reveal and copy that one key", async () => {
     vi.useFakeTimers({ now: new Date("2026-10-27T12:00:00Z"), toFake: ["Date"] });
     await using platform = await createTestMobiusPlatformBindings(new Set([window.location.origin]));
-    await using proxy = await credentialListLossProxy(platform.origin);
+    await using proxy = await listLossProxy(platform.origin, "/credentials", (value) =>
+        typeof value === "object" && value !== null && "credential" in value ? value.credential : undefined,
+    );
     if (!("happyDOM" in window) || !(window.happyDOM instanceof DetachedWindowAPI)) {
         throw new Error("Expected the browser test environment");
     }
@@ -176,6 +181,87 @@ test("Given a successful key issuance, when the following list refresh fails, th
             "The key was created, but the key list could not be refreshed.",
         );
         expect(await developer.listAppCredentials(app.appId, signal)).toHaveLength(2);
+    } finally {
+        proxy.release();
+        await act(async () => root.unmount());
+    }
+});
+
+test("Given a successful App creation, when the following App list refresh fails, the user can still reveal and copy its first key", async () => {
+    await using platform = await createTestMobiusPlatformBindings(new Set([window.location.origin]));
+    await using proxy = await listLossProxy(platform.origin, "/apps", (value) =>
+        typeof value === "object" &&
+        value !== null &&
+        "defaultCredential" in value &&
+        typeof value.defaultCredential === "object" &&
+        value.defaultCredential !== null &&
+        "credential" in value.defaultCredential
+            ? value.defaultCredential.credential
+            : undefined,
+    );
+    if (!("happyDOM" in window) || !(window.happyDOM instanceof DetachedWindowAPI)) {
+        throw new Error("Expected the browser test environment");
+    }
+    window.happyDOM.setURL(proxy.endpoint);
+    const signal = AbortSignal.timeout(10_000);
+    const token = "local-platform-developer";
+    const developer = new MobiusPlatformDeveloperClient({
+        endpoint: platform.origin,
+        authenticationProviderId: "clerk",
+        credentialProvider: new MobiusOidcCredentialProvider(token),
+        transport: { fetch: platform.request },
+    });
+    const tenant = (await developer.listTenants(signal))[0];
+    if (tenant === undefined) {
+        throw new Error("No test organization");
+    }
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    try {
+        await act(async () => {
+            root.render(
+                createElement(PlatformApp, {
+                    endpoint: proxy.endpoint,
+                    getToken: async () => token,
+                    organization: { id: tenant.tenantId, name: tenant.displayName },
+                    organizationControl: null,
+                    userControl: null,
+                }),
+            );
+        });
+        await act(async () => button("Create app").click());
+        const name = await visibleElement('[role="dialog"] input');
+        if (!(name instanceof HTMLInputElement)) {
+            throw new Error("Expected the App name input");
+        }
+        proxy.loseNextList();
+        await act(async () => {
+            const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+            setValue?.call(name, "Created app recovery");
+            name.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+        await act(async () => {
+            name.form?.requestSubmit();
+            await proxy.listWaiting;
+        });
+        const dialogs = () =>
+            [...document.querySelectorAll('[role="dialog"]')].map((dialog) => dialog.textContent).join();
+        expect.soft(dialogs(), "Show the secret before the refresh finishes").toContain("Save your app secret");
+        proxy.release();
+        await visibleElement('[role="alert"]');
+        await act(async () => button("Show secret").click());
+        const secret = await proxy.issuedSecret;
+        expect(dialogs()).toContain(secret);
+        await act(async () => button("Copy App secret").click());
+        expect(await navigator.clipboard.readText()).toBe(secret);
+        await act(async () => button("I’ve saved the secret").click());
+        expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+            "The app was created, but the app list could not be refreshed.",
+        );
+        expect((await developer.listApps(tenant.tenantId, signal)).map((app) => app.displayName)).toContain(
+            "Created app recovery",
+        );
     } finally {
         proxy.release();
         await act(async () => root.unmount());

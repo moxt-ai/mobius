@@ -63,6 +63,7 @@ export function PlatformAppView({
         setAppRecording,
         failAppRecording,
         credentials,
+        createApp: createPlatformApp,
         issueCredential,
         setCredentials,
         failCredentials,
@@ -231,20 +232,7 @@ export function PlatformAppView({
 
     const selectedApp = apps.find((app) => app.appId === selectedAppId);
 
-    const createApp = async (name: string): Promise<boolean> => {
-        return perform("create-app", async () => {
-            const created = await client().createApp(selectedTenant.tenantId, name, AbortSignal.timeout(20_000));
-            const listed = await client().listApps(selectedTenant.tenantId, AbortSignal.timeout(20_000));
-            setApps(listed);
-            setSelectedAppId(created.appId);
-            setSecret({
-                kind: "app-credential",
-                appId: created.appId,
-                secret: created.defaultCredential.credential,
-            });
-            setSecretVisible(false);
-        });
-    };
+    const createApp = (name: string): Promise<boolean> => createPlatformApp(client(), selectedTenant.tenantId, name);
 
     const writeAppRecording = (mode: MobiusRecordingPolicyMode): void => {
         if (selectedApp === undefined) {

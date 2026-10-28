@@ -1,4 +1,5 @@
 import type {
+    MobiusCreatedPlatformApp,
     MobiusPlatformApp,
     MobiusPlatformAppCredential,
     MobiusPlatformAppCredentialMetadata,
@@ -24,6 +25,7 @@ const APP_PERMISSIONS = Object.freeze([
 ]);
 
 type CredentialClient = Pick<MobiusPlatformDeveloperClient, "issueAppCredential" | "listAppCredentials">;
+type AppClient = Pick<MobiusPlatformDeveloperClient, "createApp" | "listApps">;
 
 type RenameState = { readonly kind: "idle" } | { readonly kind: "app"; readonly name: string };
 
@@ -54,6 +56,7 @@ export type WebhookState =
     | { readonly kind: "ready"; readonly webhook: MobiusPlatformAppSessionStatusWebhook };
 
 interface PlatformStore {
+    readonly createApp: (client: AppClient, tenantId: string, name: string, signal?: AbortSignal) => Promise<boolean>;
     readonly issueCredential: (client: CredentialClient, signal?: AbortSignal) => Promise<void>;
     readonly appRecording: RecordingState;
     readonly appTab: "api-keys" | "recording";
@@ -100,6 +103,47 @@ export function credentialStatus(credential: MobiusPlatformAppCredentialMetadata
 
 export function createPlatformStore() {
     return createStore<PlatformStore>()((set, get) => ({
+        createApp: async (client, tenantId, name, signal = new AbortController().signal) => {
+            if (get().busy.length > 0) {
+                return false;
+            }
+            set({ busy: "create-app", error: "", notice: null });
+            try {
+                let created: MobiusCreatedPlatformApp;
+                try {
+                    created = await client.createApp(
+                        tenantId,
+                        name,
+                        AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
+                    );
+                } catch (cause) {
+                    signal.throwIfAborted();
+                    set({ error: cause instanceof Error ? cause.message : "The app could not be created." });
+                    return false;
+                }
+                // This one-time result is already committed; a later read cannot undo or recover it.
+                get().setSelectedAppId(created.appId);
+                set({
+                    secret: {
+                        kind: "app-credential",
+                        appId: created.appId,
+                        secret: created.defaultCredential.credential,
+                    },
+                    secretVisible: false,
+                });
+                try {
+                    get().setApps(
+                        await client.listApps(tenantId, AbortSignal.any([signal, AbortSignal.timeout(20_000)])),
+                    );
+                } catch {
+                    signal.throwIfAborted();
+                    set({ error: "The app was created, but the app list could not be refreshed." });
+                }
+                return true;
+            } finally {
+                set({ busy: "" });
+            }
+        },
         issueCredential: async (client, signal = new AbortController().signal) => {
             const { apps, busy, selectedAppId } = get();
             if (busy.length > 0 || !apps.some((app) => app.appId === selectedAppId)) {
