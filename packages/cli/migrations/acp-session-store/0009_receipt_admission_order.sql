@@ -1,0 +1,1 @@
+ALTER TABLE `execution_receipt` ADD `admission_order` integer;

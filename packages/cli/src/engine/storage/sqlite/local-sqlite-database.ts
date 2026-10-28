@@ -7,6 +7,8 @@ import { z } from "zod";
 export interface LocalSqliteMigration {
     readonly name: string;
     readonly sql: string;
+    /** A single optional column that old readers can ignore, without raising their version floor. */
+    readonly compatibleColumn?: { readonly table: string; readonly column: string };
 }
 
 export class LocalSqliteDatabase {
@@ -47,6 +49,17 @@ export class LocalSqliteDatabase {
                 throw new Error(`The ${label} migration is unavailable`);
             }
             this.transaction(() => {
+                if (migration.compatibleColumn !== undefined) {
+                    const { table, column } = migration.compatibleColumn;
+                    if (
+                        this.#sqlite
+                            .prepare("SELECT name FROM pragma_table_info(?) WHERE name = ?")
+                            .get(table, column) === undefined
+                    ) {
+                        this.#sqlite.exec(migration.sql);
+                    }
+                    return;
+                }
                 this.#sqlite.exec(migration.sql);
                 this.#sqlite.exec(`PRAGMA user_version = ${index + 1}`);
             });
