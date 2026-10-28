@@ -359,19 +359,22 @@ test.each([
     {
         label: "a single reasoning block above the wire string limit",
         chunks: ["r".repeat(1_000_001)],
-        expected: "r".repeat(24 * 1024),
+        live: [`${"r".repeat(999_963)}... [omit 38 characters since 999963]`],
+        expected: `${"r".repeat(24 * 1024 - 37)}... [omit 38 characters since 999963]`,
         meta: { truncated: true },
     },
     {
-        label: "an oversized reasoning block with a surrogate pair at the split boundary",
+        label: "an oversized reasoning block with a surrogate pair beyond the wire bound",
         chunks: [`${"r".repeat(999_999)}\u{1f600}${"z".repeat(24 * 1024 - 4)}`],
-        expected: `\u{1f600}${"z".repeat(24 * 1024 - 4)}`,
+        live: [`${"r".repeat(999_960)}... [omit 24613 characters since 999960]`],
+        expected: `${"r".repeat(24 * 1024 - 40)}... [omit 24613 characters since 999960]`,
         meta: { truncated: true },
     },
     {
         label: "a multibyte reasoning block above the wire string limit",
         chunks: ["\u601d".repeat(1_000_001)],
-        expected: "\u601d".repeat(8_192),
+        live: [`${"\u601d".repeat(999_963)}... [omit 38 characters since 999963]`],
+        expected: `${"\u601d".repeat(8_179)}... [omit 38 characters since 999963]`,
         meta: { truncated: true },
     },
     {
@@ -411,8 +414,8 @@ test.each([
         meta: undefined,
     },
 ])(
-    "Given $label, When a client loads history, Then projected reasoning retains only its last 24 KiB without changing live output or answers",
-    async ({ chunks, expected, meta }) => {
+    "Given $label, When a client loads history, Then projected reasoning retains only its last 24 KiB after wire bounding without changing answers",
+    async ({ chunks, live, expected, meta }) => {
         await using runtime = await startRuntime();
         const turn = await runtime.prompt(runtime.initial, "reasoning-history");
         for (const chunk of chunks) {
@@ -467,7 +470,7 @@ test.each([
             );
             expect(
                 liveThoughts.map((thought) => (thought.content.type === "text" ? thought.content.text : "")).join(""),
-            ).toBe(chunks.join(""));
+            ).toBe((live ?? chunks).join(""));
             for (const thought of liveThoughts) {
                 expect(thought.meta).toBeUndefined();
                 if (thought.content.type !== "text") {

@@ -7,6 +7,7 @@ type ToolCall = Extract<AcpSessionUpdate, { readonly sessionUpdate: "tool_call" 
 type Reasoning = Extract<AcpSessionUpdate, { readonly sessionUpdate: "agent_thought_chunk" }>;
 
 const MAXIMUM_PROJECTED_REASONING_BYTES = 24 * 1024;
+const MAXIMUM_PROJECTED_MESSAGE_CHARACTERS = 1_000_000;
 
 function boundReasoning(payload: Reasoning): Reasoning {
     if (
@@ -135,6 +136,14 @@ function mergeTextChunk(previous: AcpSessionUpdate, incoming: AcpSessionUpdate):
         previous.messageId !== incoming.messageId ||
         previous.content.type !== "text" ||
         incoming.content.type !== "text"
+    ) {
+        return null;
+    }
+    // Keep complete, individually valid chunks when merging would exceed the wire's
+    // UTF-16 string bound. Their message identity still groups them for the viewer.
+    if (
+        previous.sessionUpdate !== "agent_thought_chunk" &&
+        previous.content.text.length + incoming.content.text.length > MAXIMUM_PROJECTED_MESSAGE_CHARACTERS
     ) {
         return null;
     }

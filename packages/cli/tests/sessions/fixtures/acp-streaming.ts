@@ -12,6 +12,50 @@ export async function runStreamingScenario(
     state: ControlledSessionState,
     transcript: NonNullable<ReturnType<typeof nativeHistory.get>>,
 ): Promise<acp.PromptResponse | undefined> {
+    if (prompt.startsWith("stream merged text ")) {
+        const sessionUpdate = prompt.slice("stream merged text ".length);
+        if (sessionUpdate !== "user_message_chunk" && sessionUpdate !== "agent_message_chunk") {
+            throw new Error("Unknown merged text scenario");
+        }
+        for (const text of [
+            "a".repeat(500_000),
+            "b".repeat(500_000),
+            `\u{1f600}${"c".repeat(499_999)}`,
+            "d".repeat(500_000),
+        ]) {
+            await context.client.notify(acp.methods.client.session.update, {
+                sessionId: context.params.sessionId,
+                update: { sessionUpdate, messageId: "merged-message", content: { type: "text", text } },
+            });
+        }
+        return { stopReason: "end_turn" };
+    }
+    if (prompt.startsWith("stream bounded text ")) {
+        const sessionUpdate = prompt.slice("stream bounded text ".length);
+        if (
+            sessionUpdate !== "user_message_chunk" &&
+            sessionUpdate !== "agent_message_chunk" &&
+            sessionUpdate !== "agent_thought_chunk" &&
+            sessionUpdate !== "compaction_summary_chunk"
+        ) {
+            throw new Error("Unknown bounded text scenario");
+        }
+        const samples: readonly (readonly [string, string])[] = [
+            ["at-limit", "a".repeat(1_000_000)],
+            ["over-limit", "b".repeat(1_000_100)],
+            ["unicode-limit", `${"c".repeat(999_961)}\u{1f600}${"d".repeat(137)}`],
+        ];
+        for (const [messageId, text] of samples) {
+            await context.client.notify(acp.methods.client.session.update, {
+                sessionId: context.params.sessionId,
+                update:
+                    sessionUpdate === "compaction_summary_chunk"
+                        ? { sessionUpdate, compactionId: messageId, content: { type: "text", text } }
+                        : { sessionUpdate, messageId, content: { type: "text", text } },
+            });
+        }
+        return { stopReason: "end_turn" };
+    }
     if (prompt === "release before first delta") {
         const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
         if (directory === undefined) {
