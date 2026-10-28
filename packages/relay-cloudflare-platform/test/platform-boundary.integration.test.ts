@@ -987,9 +987,14 @@ describe.sequential("Platform Session-only boundary", () => {
             });
             expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "session.event.v2" });
             vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
-            // A newer Runtime may publish an event this Relay does not understand yet. The event is
-            // observational, so skipping it must not disconnect the Runtime or block supported work.
+            // Unknown Runtime output keeps its explicit Session route and payload.
             daemon.send(JSON.stringify({ kind: "session.future.changed", sessionId, value: "future" }));
+            expect(JSON.parse(await hostMessages.next())).toEqual({
+                kind: "session.future.changed",
+                sessionId,
+                value: "future",
+            });
+            // Unknown client commands still cannot bypass Relay authorization.
             host.send(JSON.stringify({ kind: "session.future.request", sessionId, value: "future" }));
             host.send(
                 encodeSessionConfigureCommand({
