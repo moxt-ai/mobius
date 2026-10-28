@@ -13,3 +13,8 @@ export interface AppSessionStatusWebhookSecret {
     readonly plaintext: string;
     readonly secretId: string;
 }
+
+export type AppSessionStatusWebhookWriteResult =
+    | { readonly kind: "stored"; readonly webhook: StoredAppSessionStatusWebhook }
+    | { readonly kind: "app-unavailable" }
+    | { readonly kind: "conflict" };
