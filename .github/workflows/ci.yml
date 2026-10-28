@@ -252,6 +252,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Install npm ${{ matrix.npm }}
+        shell: bash
         env:
           NPM_MAJOR: ${{ matrix.npm }}
         run: npm install --global "npm@$NPM_MAJOR" && npm --version
