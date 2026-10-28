@@ -1,4 +1,4 @@
-import { runInDurableObject } from "cloudflare:test";
+import { createExecutionContext, runInDurableObject, waitOnExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
     decodeSessionRecordingDirectory,
@@ -167,6 +167,61 @@ describe("Recording multi-Session batches", () => {
             env,
         );
         expect(await old.json()).toMatchObject({ events: [requested("owned-session")] });
+    });
+
+    it("Given a directory that cannot index a Session, When its batch is recorded, Then the Session reports its own durable write", async () => {
+        const projectId = "unindexed-project";
+        const runtimeId = "unindexed-runtime";
+        // Corrupt the derived index through its real storage boundary; the Session history is separate.
+        await runInDurableObject(
+            env.RECORDING_DIRECTORY.getByName(JSON.stringify([projectId, runtimeId])),
+            (_instance, state) => {
+                state.storage.sql.exec(
+                    "INSERT INTO recording_session_summaries (session_id, runtime_id, agent_id, directory_id, additional_directory_ids_json, title, prompted, updated_at) VALUES ('unindexed-session', ?, 'pressure', 'default', 'not-json', 'Unreadable', 1, 0)",
+                    runtimeId,
+                );
+            },
+        );
+        const events = [requested("unindexed-session"), chunk("unindexed-session", 2)];
+
+        const response = await write(projectId, runtimeId, events);
+
+        expect(response.status).toBe(201);
+        expect(await response.json()).toEqual({ results: [{ sessionId: "unindexed-session", kind: "recorded" }] });
+        const history = await worker.fetch(
+            new Request(
+                `https://recording.test/v1/projects/${projectId}/runtimes/${runtimeId}/sessions/unindexed-session/events`,
+            ),
+            env,
+        );
+        expect(await history.json()).toMatchObject({ events });
+    });
+
+    it("Given a recorded Session, When later output is recorded with an execution context, Then its activity is indexed once that context settles", async () => {
+        const projectId = "deferred-project";
+        const runtimeId = "deferred-runtime";
+        expect((await write(projectId, runtimeId, [requested("deferred-session")])).status).toBe(201);
+        const later = { ...chunk("deferred-session", 2), recordedAt: "2026-10-21T00:00:05.000Z" };
+
+        const execution = createExecutionContext();
+        const response = await worker.fetch(
+            new Request("https://recording.test/v1/session-event-batches", {
+                method: "POST",
+                body: encodeSessionRecordingWrite({
+                    projectId,
+                    runtimeId,
+                    envelope: { kind: "session.event.v2", events: [later] },
+                }),
+            }),
+            env,
+            execution,
+        );
+        expect(await response.json()).toEqual({ results: [{ sessionId: "deferred-session", kind: "recorded" }] });
+        await waitOnExecutionContext(execution);
+
+        expect(await directory(projectId, runtimeId)).toMatchObject({
+            sessions: [{ sessionId: "deferred-session", updatedAt: "2026-10-21T00:00:05.000Z" }],
+        });
     });
 
     it("Given completion followed by a new request and title reset, When a batch is folded, Then its ordered status, context and fallback title survive", async () => {

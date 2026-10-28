@@ -182,6 +182,18 @@ it("Given the retained old server response, When the new SDK reads it, Then miss
     });
 });
 
+it("Given a credential whose use was just recorded, When it is used again within a minute, Then the recorded use stays until a minute has passed", async () => {
+    const app = await application();
+    await app.use();
+    vi.setSystemTime(Date.parse(issuedAt) + 59_000);
+    await app.use();
+    expect((await app.list())[0]?.lastObservedUsedAt).toBe(issuedAt);
+    const minuteLater = new Date(Date.parse(issuedAt) + 60_000).toISOString();
+    vi.setSystemTime(Date.parse(minuteLater));
+    await app.use();
+    expect((await app.list())[0]?.lastObservedUsedAt).toBe(minuteLater);
+});
+
 it("Given a failed background usage write, When authentication succeeds, Then usage remains unknown and can be recorded on a later request", async () => {
     const app = await application();
     await env.PLATFORM_DIRECTORY_DATABASE.exec(

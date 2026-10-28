@@ -43,7 +43,11 @@ export interface RecordingWorkerBindings {
     readonly SESSION_RECORDING: DurableObjectNamespace<SessionRecordingDurableObject>;
 }
 export interface RecordingWorker {
-    readonly fetch: (request: Request, environment: RecordingWorkerBindings) => Promise<Response>;
+    readonly fetch: (
+        request: Request,
+        environment: RecordingWorkerBindings,
+        executionContext?: ExecutionContext,
+    ) => Promise<Response>;
 }
 
 type RecordingEnvironment = { readonly Bindings: RecordingWorkerBindings };
@@ -56,6 +60,8 @@ const jsonHeaders = { "content-type": "application/json" } as const;
 // Each invocation stays below the Durable Object subrequest budget. A full 100k-entry
 // legacy directory needs fewer than 800 batch requests from the outer Worker.
 const legacySummaryBatchSize = 128;
+// Activity indexed after a batch is answered is abandoned after this long; later activity moves the same time.
+const directoryIndexTimeoutMilliseconds = 10_000;
 const legacySummaryHeaders = {
     ...jsonHeaders,
     "cache-control": "no-store",
@@ -89,6 +95,15 @@ function internalErrorResponse(cause: unknown, request: Request): Response {
     const url = new URL(request.url);
     console.error(`Recording ${request.method} ${url.pathname}${url.search} failed`, cause);
     return errorResponse("internal_error", 500);
+}
+
+/** The invocation's execution context; a direct caller, such as a test, may not provide one. */
+function optionalExecutionContext(context: Pick<Context, "executionCtx">): Context["executionCtx"] | undefined {
+    try {
+        return context.executionCtx;
+    } catch {
+        return undefined;
+    }
 }
 
 function decodedIdentifier(value: string | undefined): string | null {
@@ -742,6 +757,7 @@ async function recordSessionBatch(
     environment: RecordingWorkerBindings,
     write: SessionRecordingWireWrite,
     signal: AbortSignal,
+    background: ((task: Promise<void>) => void) | undefined,
 ): Promise<readonly BatchResult[]> {
     const startedAt = Date.now();
     const monotonicStartedAt = performance.now();
@@ -760,39 +776,64 @@ async function recordSessionBatch(
     let directoryBodyBytes = 0;
     let pending: typeof entries = [];
     let indexed = Promise.resolve();
+    let deferred = Promise.resolve();
+    const deferredSignal = background === undefined ? signal : AbortSignal.timeout(directoryIndexTimeoutMilliseconds);
+    // The directory is an index derived from Session histories, so its outcome never changes a Session's result.
+    const index = async (body: string, requestSignal: AbortSignal): Promise<void> => {
+        try {
+            const response = await durableObjectFetch(
+                environment.RECORDING_DIRECTORY,
+                JSON.stringify([write.projectId, write.runtimeId]),
+                new Request("https://directory.internal/updates", { method: "POST", body, signal: requestSignal }),
+            );
+            await response.body?.cancel();
+            if (!response.ok) {
+                console.warn("Recording directory update failed", {
+                    code: "recording_directory_update_failed",
+                    status: response.status,
+                });
+            }
+        } catch (cause) {
+            requestSignal.throwIfAborted();
+            console.warn("Recording directory update failed", { code: "recording_directory_update_failed", cause });
+        }
+    };
     const flush = (): Promise<void> => {
         const batch = pending;
         pending = [];
         if (batch.length === 0) {
             return indexed;
         }
-        indexed = indexed.then(async () => {
-            const update = projectDirectoryUpdate({
-                ...write,
-                envelope: { kind: "session.event.v2", events: batch.flatMap(([, events]) => events) },
-            });
-            const body = JSON.stringify(update);
-            directoryBodyBytes += new TextEncoder().encode(body).byteLength;
-            directoryRequests += 1;
-            let succeeded = false;
-            try {
-                const response = await durableObjectFetch(
-                    environment.RECORDING_DIRECTORY,
-                    JSON.stringify([write.projectId, write.runtimeId]),
-                    new Request("https://directory.internal/updates", { method: "POST", body, signal }),
-                );
-                succeeded = response.ok;
-                await response.body?.cancel();
-            } catch {
-                signal.throwIfAborted();
-            }
-            for (const [sessionId] of batch) {
-                results.set(
-                    sessionId,
-                    succeeded ? { sessionId, kind: "recorded" } : { sessionId, kind: "failed", code: "write_failed" },
-                );
-            }
+        const eventCounts = new Map(batch.map(([sessionId, events]) => [sessionId, events.length]));
+        const { updates } = projectDirectoryUpdate({
+            ...write,
+            envelope: { kind: "session.event.v2", events: batch.flatMap(([, events]) => events) },
         });
+        const body = (selected: typeof updates): string | null => {
+            if (selected.length === 0) {
+                return null;
+            }
+            const events = selected.reduce((count, { sessionId }) => count + (eventCounts.get(sessionId) ?? 0), 0);
+            const encoded = JSON.stringify({
+                projectId: write.projectId,
+                runtimeId: write.runtimeId,
+                events,
+                updates: selected,
+            });
+            directoryBodyBytes += new TextEncoder().encode(encoded).byteLength;
+            directoryRequests += 1;
+            return encoded;
+        };
+        // A new Session or title is indexed before the batch is answered, so a Session's next batch can never
+        // overtake it. Activity only moves an update time forward, so it is indexed after the answer.
+        const ordered = body(updates.filter(({ operations }) => operations.some(({ kind }) => kind !== "activity")));
+        const activity = body(updates.filter(({ operations }) => operations.every(({ kind }) => kind === "activity")));
+        if (ordered !== null) {
+            indexed = indexed.then(() => index(ordered, signal));
+        }
+        if (activity !== null) {
+            deferred = deferred.then(() => index(activity, deferredSignal));
+        }
         return indexed;
     };
     await Promise.all(
@@ -823,10 +864,12 @@ async function recordSessionBatch(
                 } catch {
                     signal.throwIfAborted();
                 }
+                results.set(
+                    sessionId,
+                    succeeded ? { sessionId, kind: "recorded" } : { sessionId, kind: "failed", code: "write_failed" },
+                );
                 if (succeeded) {
                     pending.push(item);
-                } else {
-                    results.set(sessionId, { sessionId, kind: "failed", code: "write_failed" });
                 }
                 // Bound indexing delay by a cohort, and flush the tail without waiting for other in-flight Sessions.
                 if (pending.length >= 32 || next >= entries.length) {
@@ -836,6 +879,18 @@ async function recordSessionBatch(
         }),
     );
     await flush();
+    if (background === undefined) {
+        await deferred;
+    } else {
+        background(
+            deferred.catch((cause: unknown) => {
+                console.warn("Recording directory activity was not indexed", {
+                    code: "recording_directory_update_failed",
+                    cause,
+                });
+            }),
+        );
+    }
     console.info(
         JSON.stringify({
             event: "recording_ingest",
@@ -871,7 +926,12 @@ export function createRecordingWorker(): RecordingWorker {
             if (new Set(write.envelope.events.map((event) => event.sessionId)).size > 256) {
                 return errorResponse("invalid_envelope", 400);
             }
-            return context.json({ results: await recordSessionBatch(context.env, write, context.req.raw.signal) }, 201);
+            const execution = optionalExecutionContext(context);
+            const background = execution === undefined ? undefined : (task: Promise<void>) => execution.waitUntil(task);
+            return context.json(
+                { results: await recordSessionBatch(context.env, write, context.req.raw.signal, background) },
+                201,
+            );
         })
         .post("/v1/session-events", async (context): Promise<Response> => {
             let write: SessionRecordingWireWrite;
@@ -1007,7 +1067,8 @@ export function createRecordingWorker(): RecordingWorker {
         )
         .all("*", (): Response => errorResponse("not_found", 404));
     return {
-        fetch: async (request, environment) => await application.fetch(request, environment),
+        fetch: async (request, environment, executionContext) =>
+            await application.fetch(request, environment, executionContext),
     };
 }
 
