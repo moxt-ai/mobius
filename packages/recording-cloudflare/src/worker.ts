@@ -35,7 +35,7 @@ import { projectDirectoryUpdate } from "./service/recording-directory-update.ts"
 import { RecordingEventWaiters } from "./service/recording-event-waiters.ts";
 import { SessionTurnHistory, type TurnHistoryRead } from "./service/session-turn-history.ts";
 import { RecordingDirectoryStorage } from "./storage/recording-directory-storage.ts";
-import { SessionRecordingStorage } from "./storage/session-recording-storage.ts";
+import { type AppendOutcome, type PageRead, SessionRecordingStorage } from "./storage/session-recording-storage.ts";
 import { SessionTurnHistoryStorage } from "./storage/session-turn-history-storage.ts";
 
 export interface RecordingWorkerBindings {
@@ -129,17 +129,28 @@ function sessionRecordingRoutes(
             }
             const before = metrics.snapshot();
             let projected = true;
-            let recorded: boolean;
+            let appended: AppendOutcome;
             try {
                 // Folding never throws out of `project`, so an error here is the envelope itself.
-                recorded = storage.append(write, (ordinal, events) => {
-                    projected = history.project(ordinal, events);
+                appended = storage.append(write, (ordinal, events) => {
+                    // Every stored batch is folded in order; one left for backfill leaves the rest to it too.
+                    const folded = history.project(ordinal, events);
+                    projected = projected && folded;
                 });
             } catch (cause) {
                 return envelopeError(cause);
             }
-            if (!recorded) {
-                return errorResponse("recording_identity_conflict", 409);
+            switch (appended.kind) {
+                case "identity_conflict":
+                    return errorResponse("recording_identity_conflict", 409);
+                case "event_too_large":
+                    console.warn("Recording event exceeds a stored batch", {
+                        code: "recording_event_too_large",
+                        events: write.envelope.events.length,
+                    });
+                    return errorResponse("recording_event_too_large", 413);
+                case "recorded":
+                    break;
             }
             waiters.changed();
             if (!projected) {
@@ -283,14 +294,18 @@ function sessionRecordingRoutes(
                     readMilliseconds += performance.now() - readStartedAt;
                 }
             };
-            let page = readPage();
-            if (waitMilliseconds > 0 && (page === null || page.events.length === 0)) {
+            let read = readPage();
+            // A caught-up reader, or one ahead of the first write, waits; an expired cursor never resolves.
+            if (
+                waitMilliseconds > 0 &&
+                (read.kind === "not_found" || (read.kind === "page" && read.page.events.length === 0))
+            ) {
                 const waitStartedAt = performance.now();
                 await waiters.wait(waitMilliseconds, context.req.raw.signal);
                 waitedMilliseconds = performance.now() - waitStartedAt;
-                page = readPage();
+                read = readPage();
             }
-            const response = historyResponse(page);
+            const response = pageResponse(read);
             response.headers.set(
                 "Server-Timing",
                 [
@@ -540,6 +555,18 @@ async function turnHistoryResponse<T>(
 
 function historyResponse<T>(value: T | null): Response {
     return value === null ? errorResponse("not_found", 404) : Response.json(value);
+}
+
+function pageResponse(read: PageRead): Response {
+    switch (read.kind) {
+        case "page":
+            return Response.json(read.page);
+        case "not_found":
+            return errorResponse("not_found", 404);
+        // The cursor names nothing recorded here, so the caller has to read again from a snapshot.
+        case "cursor_expired":
+            return errorResponse("cursor_expired", 410);
+    }
 }
 
 const maximumPageEvents = 10_000;
