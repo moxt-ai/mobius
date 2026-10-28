@@ -15,6 +15,10 @@ import { DaemonReleaseUpgradeError, findNewDaemonReleaseVersion, installDaemonRe
 // A switch may consume the new worker's startup budget and the rollback restart.
 const SWITCH_COMPLETION_MILLISECONDS = 300_000;
 const SWITCH_POLL_MILLISECONDS = 200;
+// An automatic switch disconnects every client for tens of seconds. Wait until the
+// Runtime has been idle long enough that the user has likely stepped away.
+const UPGRADE_QUIET_MILLISECONDS = 30 * 60_000;
+const UPGRADE_QUIET_CHECK_MILLISECONDS = 60_000;
 
 export async function reportDaemonUpgradeAvailability(
     send: (result: RuntimeUpgradeResult) => void,
@@ -153,6 +157,23 @@ export async function awaitDaemonReleaseSwitch(
     return outcome;
 }
 
+async function reserveWhenQuiet(activity: RuntimeTurnActivity, signal: AbortSignal): Promise<Disposable> {
+    for (;;) {
+        await activity.whenIdle(signal);
+        // Idle has begun; check until it has lasted the quiet period or work resumes.
+        for await (const _tick of setInterval(UPGRADE_QUIET_CHECK_MILLISECONDS, undefined, { signal })) {
+            const reservation = activity.reserveIfQuiet(UPGRADE_QUIET_MILLISECONDS);
+            if (reservation !== null) {
+                return reservation;
+            }
+            if (activity.count() > 0) {
+                break;
+            }
+        }
+        signal.throwIfAborted();
+    }
+}
+
 async function checkDaemonReleaseUpgrade(signal: AbortSignal, activity: RuntimeTurnActivity): Promise<void> {
     const control = await openMobiusControlInstallation(signal, process.env);
     const transition = await readSwitchStatus(control.stateDirectory, signal);
@@ -167,17 +188,20 @@ async function checkDaemonReleaseUpgrade(signal: AbortSignal, activity: RuntimeT
         return;
     }
     const launch = await installDaemonReleaseVersion(version, signal);
-    if (activity.count() > 0) {
+    let reservation = activity.reserveIfQuiet(UPGRADE_QUIET_MILLISECONDS);
+    if (reservation === null) {
         new RuntimeDiagnosticLog(control.stateDirectory).record(
             `Mobius daemon diagnostic ${JSON.stringify({
                 timestamp: new Date().toISOString(),
                 event: "daemon_upgrade_deferred",
                 version,
                 activeWork: activity.count(),
+                ...activity.describe(),
             })}`,
         );
+        reservation = await reserveWhenQuiet(activity, signal);
     }
-    using _reservation = await activity.reserveWhenIdle(signal);
+    using _reservation = reservation;
     signal.throwIfAborted();
     await requestInstalledDaemonReleaseSwitch(control.stateDirectory, launch, signal);
     // The manager now owns the switch. Hold admission until it stops this worker;
