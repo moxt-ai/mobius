@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import {
     decodeSessionRecordingDirectory,
     decodeSessionRecordingDirectoryV2,
+    decodeSessionRecordingStatus,
     decodeSessionRecordingSummaryV2,
     decodeSessionRecordingWireWrite,
     encodeSessionRecordingDirectory,
@@ -24,7 +25,6 @@ import {
     type SessionRecordingSummaryV2,
     type SessionRecordingTurnItemCursorDirection,
     type SessionRecordingWireWrite,
-    sessionRecordingStatusSchema,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { type Context, Hono } from "hono";
 import { decodeKnownDirectoryUpdate } from "./entity/recording-directory-update.ts";
@@ -416,7 +416,7 @@ async function legacySummaryBatch(
                         await response.body?.cancel();
                         return null;
                     }
-                    const status = sessionRecordingStatusSchema.parse(await response.json<unknown>());
+                    const status = decodeSessionRecordingStatus(await response.json<unknown>());
                     return { ...summary, status };
                 }),
             );

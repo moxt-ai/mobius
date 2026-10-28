@@ -239,6 +239,17 @@ export const sessionRecordingInteractionSchema = z.discriminatedUnion("kind", [
         .readonly(),
 ]);
 
+export const decodeSessionRecordingTurnAttempt = (value: unknown): SessionRecordingTurnAttempt =>
+    sessionRecordingTurnAttemptSchema.parse(value);
+export const decodeSessionRecordingTurnItem = (value: unknown): SessionRecordingTurnItem =>
+    sessionRecordingTurnItemSchema.parse(value);
+export const decodeSessionRecordingTurnPrompt = (value: unknown): SessionRecordingTurnPrompt =>
+    sessionRecordingTurnPromptSchema.parse(value);
+export const decodeSessionRecordingTurnPreceding = (value: unknown): SessionRecordingTurnPreceding =>
+    sessionRecordingTurnPrecedingSchema.parse(value);
+export const decodeSessionRecordingInteraction = (value: unknown): SessionRecordingInteraction =>
+    sessionRecordingInteractionSchema.parse(value);
+
 export const SESSION_RECORDING_EXECUTION_COMMAND_MAX_LIMIT = 100;
 
 const recordingActiveCommandsSchema = z
@@ -325,6 +336,7 @@ const sessionRecordingTurnItemDetailSchema = z
 
 export type SessionRecordingTurnAttempt = z.infer<typeof sessionRecordingTurnAttemptSchema>;
 export type SessionRecordingTurnPrompt = z.infer<typeof sessionRecordingTurnPromptSchema>;
+export type SessionRecordingTurnPreceding = z.infer<typeof sessionRecordingTurnPrecedingSchema>;
 export type SessionRecordingTurnItem = z.infer<typeof sessionRecordingTurnItemSchema>;
 export type SessionRecordingTurn = z.infer<typeof sessionRecordingTurnSchema>;
 export type SessionRecordingInteraction = z.infer<typeof sessionRecordingInteractionSchema>;

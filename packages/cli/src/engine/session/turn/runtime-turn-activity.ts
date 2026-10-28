@@ -1,9 +1,10 @@
+import type { BackgroundActivity } from "../../acp/agent/in-process-endpoint.ts";
 import type { ActiveRuntimeTurn } from "./active-turn.ts";
 
 /** Worker upgrade admission: foreground turns, queued input, and live native background work. */
 export class RuntimeTurnActivity {
     readonly #turns = new Set<ActiveRuntimeTurn>();
-    readonly #backgroundSources = new Set<object>();
+    readonly #backgroundSources = new Map<object, Exclude<BackgroundActivity, "none">>();
     readonly #idleWaiters = new Set<() => void>();
     // When work last started or stopped; the quiet period is measured from here.
     #changedAt = Date.now();
@@ -13,20 +14,29 @@ export class RuntimeTurnActivity {
 
     readonly count = (): number => this.#turns.size + this.#backgroundSources.size;
 
-    readonly describe = (): { readonly turns: number; readonly backgroundSources: number } => ({
-        turns: this.#turns.size,
-        backgroundSources: this.#backgroundSources.size,
-    });
+    /** Why admission is held: prompts running or queued, native tasks running, results not yet handled. */
+    readonly describe = (): {
+        readonly turns: number;
+        readonly backgroundRunning: number;
+        readonly backgroundAwaitingResults: number;
+    } => {
+        const activities = [...this.#backgroundSources.values()];
+        return {
+            turns: this.#turns.size,
+            backgroundRunning: activities.filter((activity) => activity === "running").length,
+            backgroundAwaitingResults: activities.filter((activity) => activity === "awaiting-results").length,
+        };
+    };
 
-    readonly setBackgroundActivity = (source: object, active: boolean): void => {
+    readonly setBackgroundActivity = (source: object, activity: BackgroundActivity): void => {
         // Agents repeat unchanged reports; only a transition counts as activity.
-        if (active === this.#backgroundSources.has(source)) {
+        if (activity === (this.#backgroundSources.get(source) ?? "none")) {
             return;
         }
-        if (active) {
-            this.#backgroundSources.add(source);
-        } else {
+        if (activity === "none") {
             this.#backgroundSources.delete(source);
+        } else {
+            this.#backgroundSources.set(source, activity);
         }
         this.#changed();
     };

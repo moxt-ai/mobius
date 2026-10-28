@@ -185,7 +185,7 @@ export class AgentSession implements AgentSessionRestore {
             ...scope,
             additionalDirectories: this.#additionalDirectories,
             capabilities: () => this.#capabilities,
-            onBackgroundActivity: (active) => this.#getObserver().onBackgroundActivity?.(this, active),
+            onBackgroundActivity: (activity) => this.#getObserver().onBackgroundActivity?.(this, activity),
             interactions: {
                 onPermission: this.#interactions.onPermission,
                 onElicitation: this.#interactions.onElicitation,

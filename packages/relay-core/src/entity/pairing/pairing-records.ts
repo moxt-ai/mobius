@@ -21,6 +21,10 @@ export interface PairingChannelRow extends RuntimeDirectoryRow {
     readonly expires_at: number;
 }
 
+export interface PairingClaimRow extends PairingChannelRow {
+    readonly poll_token_hash: string;
+}
+
 export interface RuntimePairingRow extends PairingScopeRow {
     readonly pairing_id: string;
     readonly pairing_code_hash: string;

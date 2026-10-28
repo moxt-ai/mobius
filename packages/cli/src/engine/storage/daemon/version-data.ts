@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { cp, lstat, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
-import { runtimeUpgradeVersionSchema } from "@moxt-ai/mobius-sdk/protocol";
+import { decodeRuntimeUpgradeVersion } from "@moxt-ai/mobius-sdk/protocol";
 import { validateLocalPath } from "../../util/filesystem/private-path.ts";
 import { isNodeError } from "../../util/node-error.ts";
 import type { StateRoot } from "../state-directory.ts";
@@ -24,7 +24,7 @@ export async function readCurrentDataVersion(root: StateRoot, signal: AbortSigna
         if (!value.startsWith("versions/")) {
             throw new DataInheritanceError("The current data pointer must name a version directory");
         }
-        return runtimeUpgradeVersionSchema.parse(value.slice("versions/".length));
+        return decodeRuntimeUpgradeVersion(value.slice("versions/".length));
     } catch (cause) {
         if (isNodeError(cause, "ENOENT")) {
             return null;

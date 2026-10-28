@@ -56,6 +56,7 @@ export const boundedJsonSchema = z.unknown().superRefine((value, context) => {
         context.addIssue({ code: "custom", message: issue });
     }
 });
+export const isBoundedJson = (value: unknown): boolean => boundedJsonIssue(value) === null;
 export const toolCallLocationSchema = z
     .object({
         line: z.number().int().nonnegative().safe().nullable().optional(),

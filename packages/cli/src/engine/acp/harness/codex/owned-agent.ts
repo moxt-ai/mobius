@@ -3,7 +3,11 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { AgentConnection, ContentBlock, PermissionOption, PromptResponse } from "@agentclientprotocol/sdk";
 import { methods } from "@agentclientprotocol/sdk";
 import { AcpExecutionError } from "../../acp-error.ts";
-import { type AcpEndpointTermination, acpEndpointTerminationError } from "../../agent/in-process-endpoint.ts";
+import {
+    type AcpEndpointTermination,
+    acpEndpointTerminationError,
+    type BackgroundActivity,
+} from "../../agent/in-process-endpoint.ts";
 import type { CodexAppServerClient, CodexAppServerServerRequest } from "./app-server-client.ts";
 import {
     commandApprovalParamsSchema,
@@ -34,7 +38,7 @@ const COMPACT_TIMEOUT_MILLISECONDS = 3_600_000;
 const COMPACT_ITEM_WAIT_MILLISECONDS = 600_000;
 
 interface OwnedAgentContext {
-    readonly onBackgroundActivity?: (active: boolean) => void;
+    readonly onBackgroundActivity?: (activity: BackgroundActivity) => void;
     readonly client: CodexAppServerClient;
     readonly settings: CodexSettings;
     readonly threadId: () => string;
@@ -605,7 +609,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
             await this.#enqueue(async () => {
                 if (item.type === "commandExecution" && method === "item/started") {
                     this.#runningCommands.set(item.id, "foreground");
-                    this.#context.onBackgroundActivity?.(true);
+                    this.#context.onBackgroundActivity?.("running");
                 }
                 if (method === "item/started") {
                     await this.#context.emit({ ...update, sessionUpdate: "tool_call" });
@@ -628,7 +632,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
                 }
                 if (item.type === "commandExecution" && method === "item/completed") {
                     this.#runningCommands.delete(item.id);
-                    this.#context.onBackgroundActivity?.(this.#runningCommands.size > 0);
+                    this.#context.onBackgroundActivity?.(this.#runningCommands.size > 0 ? "running" : "none");
                 }
             });
         }

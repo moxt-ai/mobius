@@ -32,7 +32,7 @@ export class ClaudeAcpEndpoint implements InProcessAcpEndpoint {
                 CLAUDE_CODE_EXECUTABLE: options.command,
             }),
             onSessionUpdate: options.onSessionUpdate,
-            onBackgroundActivity: (active) => options.onBackgroundActivity?.(active),
+            onBackgroundActivity: (activity) => options.onBackgroundActivity?.(activity),
             onConnect: (connection) => {
                 this.#connection = connection;
             },

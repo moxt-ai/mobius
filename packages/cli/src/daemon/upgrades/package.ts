@@ -1,5 +1,5 @@
 import { isAbsolute, join, relative } from "node:path";
-import { runtimeUpgradeVersionSchema } from "@moxt-ai/mobius-sdk/protocol";
+import { decodeRuntimeUpgradeVersion } from "@moxt-ai/mobius-sdk/protocol";
 import { gt, satisfies, validRange } from "semver";
 import { z } from "zod";
 import {
@@ -23,7 +23,7 @@ export class DaemonReleaseUpgradeError extends Error {
 }
 
 export async function prepareDaemonReleaseVersion(version: string, signal: AbortSignal): Promise<WorkerLaunch> {
-    runtimeUpgradeVersionSchema.parse(version);
+    decodeRuntimeUpgradeVersion(version);
     signal.throwIfAborted();
     const prefix = releasePrefix(version);
     let installed: InstalledRelease;
@@ -54,7 +54,7 @@ export async function prepareDaemonReleaseVersion(version: string, signal: Abort
 }
 
 export async function installDaemonReleaseVersion(version: string, signal: AbortSignal): Promise<WorkerLaunch> {
-    runtimeUpgradeVersionSchema.parse(version);
+    decodeRuntimeUpgradeVersion(version);
     const npm = await findExecutableOnPath("npm", process.env);
     if (npm === null) {
         throw new DaemonReleaseUpgradeError("npm_unavailable", "npm is required to download the new daemon");
@@ -153,7 +153,7 @@ async function verifyInstalledDaemonRelease(
 // a one-element array from npm 12. Accept exactly those shapes; anything else is
 // not a version npm reported.
 const npmViewVersionSchema = z
-    .union([runtimeUpgradeVersionSchema, z.tuple([runtimeUpgradeVersionSchema])])
+    .union([z.string(), z.tuple([z.string()])])
     .transform((value) => (typeof value === "string" ? value : value[0]));
 
 export async function findNewDaemonReleaseVersion(currentVersion: string, signal: AbortSignal): Promise<string | null> {
@@ -171,7 +171,7 @@ export async function findNewDaemonReleaseVersion(currentVersion: string, signal
             timeoutMilliseconds: 30_000,
             outputLimitBytes: 4096,
         });
-        const version = npmViewVersionSchema.parse(JSON.parse(result.stdout));
+        const version = decodeRuntimeUpgradeVersion(npmViewVersionSchema.parse(JSON.parse(result.stdout)));
         return gt(version, currentVersion) ? version : null;
     } catch (cause) {
         signal.throwIfAborted();

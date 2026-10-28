@@ -190,16 +190,14 @@ async function checkDaemonReleaseUpgrade(signal: AbortSignal, activity: RuntimeT
     const launch = await installDaemonReleaseVersion(version, signal);
     let reservation = activity.reserveIfQuiet(UPGRADE_QUIET_MILLISECONDS);
     if (reservation === null) {
-        new RuntimeDiagnosticLog(control.stateDirectory).record(
-            `Mobius daemon diagnostic ${JSON.stringify({
-                timestamp: new Date().toISOString(),
-                event: "daemon_upgrade_deferred",
-                version,
-                activeWork: activity.count(),
-                ...activity.describe(),
-            })}`,
-        );
+        const diagnostics = new RuntimeDiagnosticLog(control.stateDirectory);
+        const record = (event: string, details: object = {}): void =>
+            diagnostics.record(
+                `Mobius daemon diagnostic ${JSON.stringify({ timestamp: new Date().toISOString(), event, version, ...details })}`,
+            );
+        record("daemon_upgrade_deferred", { activeWork: activity.count(), ...activity.describe() });
         reservation = await reserveWhenQuiet(activity, signal);
+        record("daemon_upgrade_released");
     }
     using _reservation = reservation;
     signal.throwIfAborted();
