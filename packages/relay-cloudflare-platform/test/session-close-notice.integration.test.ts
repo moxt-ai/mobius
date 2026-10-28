@@ -125,13 +125,14 @@ it("Given hosts watching every Session and a single Session, When the Runtime re
     });
 });
 
-it("Given a Relay that does not recognize a Runtime message kind, as an older Relay does not recognize the close notice, When the Runtime sends it, Then the Relay skips it and keeps the connection open", async () => {
+it("Given an unknown Runtime notice with a Session route, When the Runtime sends it, Then the Relay forwards it and keeps the connection open", async () => {
     await withRuntimeRelay(async (connect) => {
         const daemon = await connect("daemon");
         const host = await connect("host");
         expect(await host.inbox.next()).toMatchObject({ kind: "runtime.status", online: true });
 
         daemon.socket.send(JSON.stringify({ kind: "session.future.notice", sessionId: "session-7" }));
+        expect(await host.inbox.next()).toEqual({ kind: "session.future.notice", sessionId: "session-7" });
         // The host receives the next notice only if the Relay kept the connection open after the unknown message.
         daemon.socket.send(
             encodeSessionCloseNoticeEvent({
