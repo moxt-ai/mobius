@@ -2,6 +2,7 @@ import {
     decodeSessionWireEnvelope,
     encodeSessionWireEnvelope,
     type SessionRecordingWireWrite,
+    type SessionWireEnvelope,
     type SessionWireEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { and, asc, desc, eq, gt, gte, lt } from "drizzle-orm";
@@ -46,6 +47,68 @@ interface BatchBounds {
 
 /** Batches decoded per query while paging; small enough that one read stays far below Durable Object memory. */
 const batchReadChunk = 32;
+/** UTF-8 bytes one stored batch may take. Durable Object SQLite rejects a string or row larger than 2 MB. */
+const storedBatchBytes = 1_900_000;
+
+export type AppendOutcome =
+    | { readonly kind: "recorded" }
+    // Another Project, Runtime, or Session already owns this Recording, or the write names several Sessions.
+    | { readonly kind: "identity_conflict" }
+    // One event alone is larger than a stored batch, so nothing of the write was recorded.
+    | { readonly kind: "event_too_large" };
+
+export type PageRead =
+    | { readonly kind: "page"; readonly page: RecordedSessionHistoryPage }
+    | { readonly kind: "not_found" }
+    // The cursor is well formed but names no recorded event here; the caller has to start over.
+    | { readonly kind: "cursor_expired" };
+
+interface StoredBatch {
+    readonly encoded: string;
+    readonly events: readonly SessionWireEvent[];
+}
+
+/**
+ * Runs of events that one stored batch holds: one Session generation with increasing positions, so a
+ * cursor's position names exactly one event of its batch even when a frame is repeated or a restarted
+ * Runtime numbers its events again.
+ */
+function addressableRuns(events: readonly SessionWireEvent[]): readonly (readonly SessionWireEvent[])[] {
+    const runs: SessionWireEvent[][] = [];
+    for (const event of events) {
+        const run = runs.at(-1);
+        const previous = run?.at(-1);
+        if (
+            run === undefined ||
+            previous === undefined ||
+            previous.sessionGenerationId !== event.sessionGenerationId ||
+            Number(event.position) <= Number(previous.position)
+        ) {
+            runs.push([event]);
+        } else {
+            run.push(event);
+        }
+    }
+    return runs;
+}
+
+/** Encodes a run as stored batches that each fit one row, or null when one event alone does not fit. */
+function storedBatches(
+    envelope: SessionWireEnvelope,
+    events: readonly SessionWireEvent[],
+): readonly StoredBatch[] | null {
+    const encoded = encodeSessionWireEnvelope({ ...envelope, events });
+    if (encoded.length * 3 <= storedBatchBytes || new TextEncoder().encode(encoded).byteLength <= storedBatchBytes) {
+        return [{ encoded, events }];
+    }
+    if (events.length === 1) {
+        return null;
+    }
+    const middle = Math.ceil(events.length / 2);
+    const head = storedBatches(envelope, events.slice(0, middle));
+    const tail = storedBatches(envelope, events.slice(middle));
+    return head === null || tail === null ? null : [...head, ...tail];
+}
 
 interface RecordedSessionHistory {
     readonly events: readonly SessionWireEvent[];
@@ -180,19 +243,18 @@ export class SessionRecordingStorage {
         `v2:${batch.ordinal}:${batch.events[index]?.position ?? "0"}`;
 
     /**
-     * Appends one batch. `project` runs inside the same transaction with the new batch ordinal, so a
-     * projection derived from the batch commits or rolls back together with it.
+     * Appends one write as one or more stored batches. `project` runs inside the same transaction with each
+     * new batch ordinal in order, so a projection derived from a batch commits or rolls back together with it.
      */
     readonly append = (
         write: SessionRecordingWireWrite,
         project: (ordinal: number, events: readonly SessionWireEvent[]) => void = () => undefined,
-    ): boolean =>
-        this.#storage.transactionSync(() => {
+    ): AppendOutcome =>
+        this.#storage.transactionSync((): AppendOutcome => {
             const [event, ...remainingEvents] = write.envelope.events;
             if (event === undefined || remainingEvents.some((candidate) => candidate.sessionId !== event.sessionId)) {
-                return false;
+                return { kind: "identity_conflict" };
             }
-            const finalEvent = write.envelope.events.at(-1);
             const metadata = this.#database
                 .select()
                 .from(recordingMetadata)
@@ -204,7 +266,15 @@ export class SessionRecordingStorage {
                     metadata.runtimeId !== write.runtimeId ||
                     metadata.sessionId !== event.sessionId)
             ) {
-                return false;
+                return { kind: "identity_conflict" };
+            }
+            const batches: StoredBatch[] = [];
+            for (const run of addressableRuns(write.envelope.events)) {
+                const stored = storedBatches(write.envelope, run);
+                if (stored === null) {
+                    return { kind: "event_too_large" };
+                }
+                batches.push(...stored);
             }
             if (metadata === undefined) {
                 this.#database
@@ -218,22 +288,29 @@ export class SessionRecordingStorage {
                     })
                     .run();
             }
-            const inserted = this.#database
-                .insert(recordedSessionEvent)
-                .values({
-                    envelopeJson: encodeSessionWireEnvelope(write.envelope),
-                    firstPosition: Number(event.position),
-                    lastPosition: finalEvent === undefined ? Number(event.position) : Number(finalEvent.position),
-                    recordedAt: Date.parse(event.recordedAt),
-                    sessionGenerationId: event.sessionGenerationId,
-                })
-                .returning({ ordinal: recordedSessionEvent.ordinal })
-                .all()[0];
-            if (inserted === undefined) {
-                throw new Error("The recorded batch did not return an append ordinal");
+            for (const batch of batches) {
+                const [first] = batch.events;
+                const last = batch.events.at(-1);
+                if (first === undefined || last === undefined) {
+                    throw new Error("A stored batch holds no events");
+                }
+                const inserted = this.#database
+                    .insert(recordedSessionEvent)
+                    .values({
+                        envelopeJson: batch.encoded,
+                        firstPosition: Number(first.position),
+                        lastPosition: Number(last.position),
+                        recordedAt: Date.parse(first.recordedAt),
+                        sessionGenerationId: first.sessionGenerationId,
+                    })
+                    .returning({ ordinal: recordedSessionEvent.ordinal })
+                    .all()[0];
+                if (inserted === undefined) {
+                    throw new Error("The recorded batch did not return an append ordinal");
+                }
+                project(inserted.ordinal, batch.events);
             }
-            project(inserted.ordinal, write.envelope.events);
-            return true;
+            return { kind: "recorded" };
         });
 
     /** True when this Durable Object holds the Recording of exactly this Session. */
@@ -298,14 +375,14 @@ export class SessionRecordingStorage {
         sessionId: string,
         after: string,
         limit: number,
-    ): RecordedSessionHistoryPage | null => {
+    ): PageRead => {
         const metadata = this.#metadata(projectId, runtimeId, sessionId);
         if (metadata === undefined) {
-            return null;
+            return { kind: "not_found" };
         }
         const cursor = this.#resolveCursor(after);
         if (cursor === null) {
-            throw new Error("The Recording cursor is invalid");
+            return { kind: "cursor_expired" };
         }
         const tailCursor = this.#tailCursor();
         // Position-only legacy cursors have no generation scope. Once a generation switch exists,
@@ -314,11 +391,7 @@ export class SessionRecordingStorage {
         const start: ResolvedCursor = replay ? { generation: "", index: -1, legacy: true, ordinal: 0 } : cursor;
         const selected: SelectedEvent[] = [];
         let truncated = false;
-        let generationReset = replay;
         for (const batch of this.#batchesFrom(start.ordinal)) {
-            if (!replay && batch.generation !== start.generation) {
-                generationReset = true;
-            }
             for (const [index, event] of batch.events.entries()) {
                 if (batch.ordinal === start.ordinal && index <= start.index) {
                     continue;
@@ -334,14 +407,21 @@ export class SessionRecordingStorage {
             }
         }
         const last = selected.at(-1);
+        // A caller replaces its state only when this page carries events of a generation other than the one
+        // its cursor was in. The start of the Recording names no generation, so it never asks for one.
+        const generationReset =
+            replay || (start.generation !== "" && selected.some(({ batch }) => batch.generation !== start.generation));
         return {
-            events: selected.map(({ event }) => event),
-            nextCursor: last === undefined ? null : this.#cursor(last.batch, last.index),
-            sessionId,
-            tailCursor,
-            truncated,
-            generationReset,
-            version: 2,
+            kind: "page",
+            page: {
+                events: selected.map(({ event }) => event),
+                nextCursor: last === undefined ? null : this.#cursor(last.batch, last.index),
+                sessionId,
+                tailCursor,
+                truncated,
+                generationReset,
+                version: 2,
+            },
         };
     };
 
@@ -353,7 +433,9 @@ export class SessionRecordingStorage {
             if (batch === undefined) {
                 return null;
             }
-            const index = batch.events.findIndex((event) => Number(event.position) === Number(positionToken));
+            // A batch recorded before positions were kept increasing per batch can repeat a frame. Its cursor
+            // names the last copy, so a caller never receives the repeat again; skipping a repeat loses nothing.
+            const index = batch.events.findLastIndex((event) => Number(event.position) === Number(positionToken));
             return index === -1 ? null : { generation: batch.generation, index, legacy: false, ordinal };
         }
         if (!/^(?:0|[1-9][0-9]*)$/.test(after)) {
