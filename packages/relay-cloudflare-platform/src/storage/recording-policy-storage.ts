@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, exists, sql } from "drizzle-orm";
 import type { PlatformAuditRecord } from "../entity/platform-records.ts";
 import type {
     EffectiveRecordingMode,
@@ -10,10 +10,10 @@ import type {
 import {
     platformApp,
     platformAppRecordingPolicy,
-    platformDashboardAuditEvent,
     platformProject,
     platformProjectRecordingPolicy,
 } from "../schema/d1/index.ts";
+import { activeAppConfigurationTarget, appConfigurationAudit } from "./app-configuration-write.ts";
 import { type PlatformDrizzleDatabase, platformDrizzle } from "./platform-drizzle-database.ts";
 
 type StoredRecordingMode = EffectiveRecordingMode;
@@ -92,17 +92,31 @@ export class RecordingPolicyStorage {
         now: number,
         audit: PlatformAuditRecord,
         signal: AbortSignal,
-    ): Promise<void> => {
+    ): Promise<boolean> => {
         signal.throwIfAborted();
-        await this.#database.batch([
+        const target = activeAppConfigurationTarget(this.#database, appId).as("active_app");
+        const active = exists(this.#database.select().from(target));
+        const [, auditRows] = await this.#database.batch([
             mode === "inherit"
-                ? this.#database.delete(platformAppRecordingPolicy).where(eq(platformAppRecordingPolicy.appId, appId))
+                ? this.#database
+                      .delete(platformAppRecordingPolicy)
+                      .where(and(eq(platformAppRecordingPolicy.appId, appId), active))
                 : this.#database
                       .insert(platformAppRecordingPolicy)
-                      .values({ appId, mode, updatedAt: now })
+                      .select(
+                          this.#database
+                              .select({
+                                  appId: target.appId,
+                                  mode: sql<StoredRecordingMode>`${mode}`.as("mode"),
+                                  updatedAt: sql<number>`${now}`.as("updatedAt"),
+                              })
+                              .from(target)
+                              .where(eq(target.appId, appId)),
+                      )
                       .onConflictDoUpdate({ target: platformAppRecordingPolicy.appId, set: { mode, updatedAt: now } }),
-            this.#auditInsert(audit),
+            appConfigurationAudit(this.#database, audit),
         ]);
+        return auditRows.length === 1;
     };
 
     readonly writeProject = async (
@@ -111,27 +125,43 @@ export class RecordingPolicyStorage {
         now: number,
         audit: PlatformAuditRecord,
         signal: AbortSignal,
-    ): Promise<void> => {
+    ): Promise<boolean> => {
         signal.throwIfAborted();
-        await this.#database.batch([
+        const target = this.#database
+            .select({ projectId: platformProject.projectId })
+            .from(platformProject)
+            .where(
+                and(
+                    eq(platformProject.projectId, projectId),
+                    eq(platformProject.lifecycle, "active"),
+                    exists(activeAppConfigurationTarget(this.#database, platformProject.appId)),
+                ),
+            )
+            .as("active_project");
+        const active = exists(this.#database.select().from(target));
+        const [, auditRows] = await this.#database.batch([
             mode === "inherit"
                 ? this.#database
                       .delete(platformProjectRecordingPolicy)
-                      .where(eq(platformProjectRecordingPolicy.projectId, projectId))
+                      .where(and(eq(platformProjectRecordingPolicy.projectId, projectId), active))
                 : this.#database
                       .insert(platformProjectRecordingPolicy)
-                      .values({ mode, projectId, updatedAt: now })
+                      .select(
+                          this.#database
+                              .select({
+                                  projectId: target.projectId,
+                                  mode: sql<StoredRecordingMode>`${mode}`.as("mode"),
+                                  updatedAt: sql<number>`${now}`.as("updatedAt"),
+                              })
+                              .from(target)
+                              .where(eq(target.projectId, projectId)),
+                      )
                       .onConflictDoUpdate({
                           target: platformProjectRecordingPolicy.projectId,
                           set: { mode, updatedAt: now },
                       }),
-            this.#auditInsert(audit),
+            appConfigurationAudit(this.#database, audit, active),
         ]);
+        return auditRows.length === 1;
     };
-
-    /** The policy change and its audit event commit together or not at all. */
-    readonly #auditInsert = (audit: PlatformAuditRecord) =>
-        this.#database
-            .insert(platformDashboardAuditEvent)
-            .values({ ...audit, outcome: audit.outcome === "denied" ? "denied" : "succeeded" });
 }

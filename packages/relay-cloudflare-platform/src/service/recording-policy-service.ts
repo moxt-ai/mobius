@@ -46,13 +46,16 @@ export class RecordingPolicyService {
         await this.#control.requireAdministrator(access, signal);
         this.requireProvider(mode);
         const now = Date.now();
-        await this.#storage.writeApp(
+        const written = await this.#storage.writeApp(
             appId,
             mode,
             now,
             this.#control.developerAuditRecord(access, appId, appId, "app.recording-policy.updated", { mode }, now),
             signal,
         );
+        if (!written) {
+            throw recordingTargetUnavailable();
+        }
         return this.resource(await this.requirePolicy(this.#storage.readApp(appId, signal)));
     };
 
@@ -66,7 +69,7 @@ export class RecordingPolicyService {
         await this.#control.requireAdministrator(access, signal);
         this.requireProvider(mode);
         const now = Date.now();
-        await this.#storage.writeProject(
+        const written = await this.#storage.writeProject(
             projectId,
             mode,
             now,
@@ -80,6 +83,9 @@ export class RecordingPolicyService {
             ),
             signal,
         );
+        if (!written) {
+            throw recordingTargetUnavailable();
+        }
         return this.resource(await this.requirePolicy(this.#storage.readProject(projectId, signal)));
     };
 
@@ -101,11 +107,7 @@ export class RecordingPolicyService {
     ): Promise<ResolvedRecordingPolicy> => {
         const resolved = await policy;
         if (resolved === null) {
-            throw new PlatformControlPlaneError(
-                "recording_target_not_found",
-                "The Recording policy target is unavailable",
-                404,
-            );
+            throw recordingTargetUnavailable();
         }
         return resolved;
     };
@@ -124,4 +126,12 @@ export class RecordingPolicyService {
         ...policy,
         providerAvailable: this.#providerAvailable,
     });
+}
+
+function recordingTargetUnavailable(): PlatformControlPlaneError {
+    return new PlatformControlPlaneError(
+        "recording_target_not_found",
+        "The Recording policy target is unavailable",
+        404,
+    );
 }
