@@ -11,6 +11,7 @@ export type ActiveCountRow = Readonly<v.InferOutput<typeof ActiveCountRowSchema>
 export const AppRowSchema = v.object({
     app_id: v.string(),
     created_at: nonNegativeInteger,
+    // Legacy column name for the credential issued at App creation, unchanged by rotation or revocation.
     default_credential_id: v.nullable(v.string()),
     deleted_at: v.nullable(nonNegativeInteger),
     display_name: v.string(),

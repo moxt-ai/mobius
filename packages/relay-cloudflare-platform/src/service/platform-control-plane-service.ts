@@ -272,12 +272,15 @@ function auditResource(row: AuditRow): object {
 }
 
 function appResource(row: AppRow): object {
+    const initialCredentialId = row.default_credential_id ?? "";
     return {
         appId: row.app_id,
         createdAt: iso(row.created_at),
-        defaultCredentialId: typeof row.default_credential_id === "string" ? row.default_credential_id : "",
+        // Keep the v1 alias for existing clients; neither field denotes an active credential.
+        defaultCredentialId: initialCredentialId,
         deletedAt: typeof row.deleted_at === "number" ? iso(row.deleted_at) : "",
         displayName: row.display_name,
+        initialCredentialId,
         lifecycle: row.lifecycle,
         suspendedAt: typeof row.suspended_at === "number" ? iso(row.suspended_at) : "",
         tenantId: row.tenant_id,
