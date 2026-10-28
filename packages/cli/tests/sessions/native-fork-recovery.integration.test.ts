@@ -2,8 +2,98 @@ import { createServer, request } from "node:http";
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { afterEach, expect, test, vi } from "vitest";
 import { startTestPlatform } from "../support/platform.ts";
+import { createFakeAgentHarnessRuntime } from "../support/platform-agent-harness.ts";
+import { createForkLossProxy } from "./fixtures/fork-loss-proxy.ts";
 
 afterEach(() => vi.useRealTimers());
+
+test.each(["request", "result"] as const)(
+    "Given the Runtime Fork %s is lost, When the operation is retried after reconnect, Then only a committed target is recovered",
+    async (loss) => {
+        vi.useFakeTimers({ now: new Date("2026-10-28T02:00:00Z"), toFake: ["Date"] });
+        await using platform = await startTestPlatform();
+        const signal = new AbortController().signal;
+        const project = await platform.developer.createProject(
+            platform.appId,
+            {
+                clientReference: crypto.randomUUID(),
+                displayName: "Runtime Fork loss",
+                idempotencyKey: crypto.randomUUID(),
+                locationHint: "wnam",
+            },
+            signal,
+        );
+        await using proxy = await createForkLossProxy(platform.baseUrl, loss);
+        const disconnected = Promise.withResolvers<void>();
+        const connected = Promise.withResolvers<void>();
+        const reconnected = Promise.withResolvers<void>();
+        let wasDisconnected = false;
+        await using runtime = await createFakeAgentHarnessRuntime({
+            credential: platform.appCredential,
+            origin: platform.baseUrl,
+            relayOrigin: proxy.origin,
+            projectId: project.projectId,
+            server: platform.app,
+            signal,
+            nativeSessionIds: new Set(["native-fork-source"]),
+            runtimeOptions: {
+                onConnectionStatus: (status) => {
+                    if (status === "reconnecting") {
+                        wasDisconnected = true;
+                        disconnected.resolve();
+                    } else {
+                        connected.resolve();
+                        if (wasDisconnected) {
+                            reconnected.resolve();
+                        }
+                    }
+                },
+            },
+        });
+        await connected.promise;
+        await runtime.client.runtimes.nativeSessions(
+            runtime.runtimeId,
+            {
+                action: "list",
+                agentId: "claude",
+                directoryId: "default",
+                additionalDirectoryIds: [],
+                cursor: null,
+                discoveryId: null,
+            },
+            signal,
+        );
+        vi.useFakeTimers({ now: new Date("2026-10-28T02:00:00Z"), toFake: ["Date", "setTimeout", "clearTimeout"] });
+        const operationId = crypto.randomUUID();
+        const input = {
+            agentId: "claude",
+            directoryId: "default",
+            additionalDirectoryIds: [],
+            nativeSessionId: "native-fork-source",
+        };
+        const fork = () => runtime.client.runtimes.forkNativeSession(runtime.runtimeId, operationId, input, signal);
+        await expect(fork()).rejects.toMatchObject({ code: "native_fork_outcome_unknown" });
+        const targetSessionId = await proxy.lost;
+        await disconnected.promise;
+        await vi.advanceTimersByTimeAsync(500);
+        await reconnected.promise;
+        if (loss === "request") {
+            await expect(fork()).rejects.toMatchObject({ code: "native_fork_outcome_unknown" });
+            await expect(fork()).rejects.toMatchObject({ code: "native_fork_outcome_unknown" });
+            expect(await runtime.client.runtimes.listSessions(runtime.runtimeId, 100, signal)).toEqual([]);
+        } else {
+            const [first, concurrent] = await Promise.all([fork(), fork()]);
+            expect(concurrent).toEqual(first);
+            expect(first.result.targetSessionId).toBe(targetSessionId);
+            expect(first.result.ready).toMatchObject({ sessionId: targetSessionId, agentId: "claude", restored: true });
+            expect(first.entry.nativeSessionId).toBe(input.nativeSessionId);
+            expect(await fork()).toEqual(first);
+            const sessions = await runtime.client.runtimes.listSessions(runtime.runtimeId, 100, signal);
+            expect(sessions).toHaveLength(1);
+            expect(sessions[0]?.sessionId).toBe(targetSessionId);
+        }
+    },
+);
 
 test("Given a Fork succeeds but its response is lost, When the same operation is retried, Then its original Session is returned", async () => {
     vi.useFakeTimers({ now: new Date("2026-10-27T12:00:00Z"), toFake: ["Date"] });
