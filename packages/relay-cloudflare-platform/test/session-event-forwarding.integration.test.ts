@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { registerRuntimeFixture } from "./registered-runtime.ts";
 
 beforeEach(() => {
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -52,11 +53,13 @@ interface RuntimeConnection {
 
 async function withRuntimeRelay(scenario: (connect: (path: string) => Promise<RuntimeConnection>) => Promise<void>) {
     const runtimeId = `wire-events-${crypto.randomUUID()}`;
+    const projectId = `prj_ap_01_${crypto.randomUUID().replaceAll("-", "").slice(0, 24)}`;
+    await registerRuntimeFixture(projectId, runtimeId);
     const relay = env.RUNTIME_RELAY.getByName(runtimeId);
     const sockets: WebSocket[] = [];
     const connect = async (path: string): Promise<RuntimeConnection> => {
         // This is the verified, Worker-to-Durable-Object HTTP boundary, not a public unauthenticated route.
-        const response = await relay.fetch(`https://runtime.internal/projects/wire-events-project/${path}`, {
+        const response = await relay.fetch(`https://runtime.internal/projects/${projectId}/${path}`, {
             headers: {
                 Upgrade: "websocket",
                 "x-mobius-channel-id": "wire-events-channel",

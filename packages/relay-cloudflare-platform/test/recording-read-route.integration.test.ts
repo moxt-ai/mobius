@@ -18,6 +18,7 @@ import {
     PlatformAuthenticationConfiguration,
     type PlatformRelayBindings,
 } from "../src/worker.ts";
+import { registerRuntimeFixture } from "./registered-runtime.ts";
 
 const relayOrigin = "https://platform.test";
 const clerk = new FakeClerk();
@@ -130,6 +131,7 @@ async function readAfterCancelledWaits(
 }
 
 async function recordThroughRelay(projectId: string, sessionId: string, textContent: string) {
+    await registerRuntimeFixture(projectId, projectId);
     return await runInDurableObject(env.RUNTIME_RELAY.getByName(projectId), async (_instance, state) => {
         const pending: Promise<void>[] = [];
         const database = new DurableObjectSqlDatabase(state.storage);
@@ -197,6 +199,7 @@ async function recordSessionEvents(
     generationId: string,
     events: readonly { readonly position: string; readonly text: string }[],
 ): Promise<void> {
+    await registerRuntimeFixture(projectId, projectId);
     await runInDurableObject(env.RUNTIME_RELAY.getByName(projectId), async (_instance, state) => {
         const pending: Promise<void>[] = [];
         const database = new DurableObjectSqlDatabase(state.storage);

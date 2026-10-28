@@ -43,6 +43,7 @@ import {
     PlatformAuthenticationConfiguration,
     type PlatformRelayBindings,
 } from "../src/worker.ts";
+import { registerRuntimeFixture } from "./registered-runtime.ts";
 
 class ControlledRecording implements SessionRecording {
     readonly started = Promise.withResolvers<void>();
@@ -245,55 +246,47 @@ afterAll(async () => {
 
 describe.sequential("Platform Session-only boundary", () => {
     it("Given no viewers are connected, When the daemon broadcasts and Recording first fails, Then later events are still recorded without redelivery", async () => {
-        await runInDurableObject(env.RUNTIME_RELAY.getByName("unwatched-runtime"), async (_instance, state) => {
-            const recording = new ControlledRecording();
-            const pending: Promise<void>[] = [];
-            const database = new DurableObjectSqlDatabase(state.storage);
-            const context = createPlatformDurableObjectContext(state, bindings(), { database });
-            const relay = new RuntimeRelay(
-                createDurableObjectDependencies({
-                    doDatabase: database,
-                    storages: context.storages,
-                    gateways: { ...context.gateways, recording },
-                    utilities: {
-                        waitUntil: (operation) => {
-                            pending.push(operation);
+        const runtime = await connectRuntimeDaemon("unwatched-runtime");
+        try {
+            await runInDurableObject(env.RUNTIME_RELAY.getByName(runtime.runtimeId), async (_instance, state) => {
+                const recording = new ControlledRecording();
+                const pending: Promise<void>[] = [];
+                const database = new DurableObjectSqlDatabase(state.storage);
+                const context = createPlatformDurableObjectContext(state, bindings(), { database });
+                const relay = new RuntimeRelay(
+                    createDurableObjectDependencies({
+                        doDatabase: database,
+                        storages: context.storages,
+                        gateways: { ...context.gateways, recording },
+                        utilities: {
+                            waitUntil: (operation) => {
+                                pending.push(operation);
+                            },
                         },
-                    },
-                }),
-            );
-            const response = await relay.fetch(
-                new Request("https://runtime.internal/projects/unwatched-project/daemon", {
-                    headers: {
-                        Upgrade: "websocket",
-                        "x-mobius-runtime-id": "unwatched-runtime",
-                        "x-mobius-channel-id": "unwatched-channel",
-                    },
-                }),
-            );
-            expect(response.status).toBe(101);
-            const client = response.webSocket;
-            const daemon = state.getWebSockets("daemon")[0];
-            if (client === null || daemon === undefined) {
-                throw new Error("Expected a connected daemon");
-            }
-            client.accept();
-            const event = (text: string) => liveEvent("unwatched-session", text);
-            try {
-                await relay.webSocketMessage(daemon, event("first"));
-                await recording.started.promise;
-                await relay.webSocketMessage(daemon, event("second"));
-                recording.release.resolve();
-                await Promise.all(pending);
-                expect(recording.contents.map((payload) => JSON.parse(payload).payload.content.text)).toEqual([
-                    "second",
-                ]);
-            } finally {
-                recording.release.resolve();
-                await Promise.all(pending);
-                client.close(1000, "Test complete");
-            }
-        });
+                    }),
+                );
+                const daemon = state.getWebSockets("daemon")[0];
+                if (daemon === undefined) {
+                    throw new Error("Expected a connected daemon");
+                }
+                const event = (text: string) => liveEvent(runtime.sessionId, text);
+                try {
+                    await relay.webSocketMessage(daemon, event("first"));
+                    await recording.started.promise;
+                    await relay.webSocketMessage(daemon, event("second"));
+                    recording.release.resolve();
+                    await Promise.all(pending);
+                    expect(recording.contents.map((payload) => JSON.parse(payload).payload.content.text)).toEqual([
+                        "second",
+                    ]);
+                } finally {
+                    recording.release.resolve();
+                    await Promise.all(pending);
+                }
+            });
+        } finally {
+            runtime.daemon.close(1000, "Test complete");
+        }
     });
 
     it("Given an allowed Chat origin, When the browser preflights a Session file read, Then Platform permits the request", async () => {
@@ -1668,6 +1661,7 @@ describe.sequential("Platform Recording policy configuration", () => {
     }
 
     async function recordThroughRelay(projectId: string, sessionId: string, textContent: string) {
+        await registerRuntimeFixture(projectId, projectId);
         return await runInDurableObject(env.RUNTIME_RELAY.getByName(projectId), async (_instance, state) => {
             const pending: Promise<void>[] = [];
             const database = new DurableObjectSqlDatabase(state.storage);
@@ -1973,6 +1967,31 @@ async function connectRuntimeDaemon(slug: string, options: { readonly anchorCloc
     return {
         projectId,
         sessionId,
+        revoke: () =>
+            worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}`, {
+                    method: "DELETE",
+                    headers: credentialHeaders(appCredential),
+                }),
+                environment,
+            ),
+        reconnect: () =>
+            worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?liveness=1`, {
+                    headers: { authorization: `Bearer ${text(claimed, "runtimeCredential")}`, Upgrade: "websocket" },
+                }),
+                environment,
+            ),
+        subscribe: () =>
+            worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/events-v2`,
+                    {
+                        headers: { authorization: `Bearer ${text(sessionAccess, "credential")}`, Upgrade: "websocket" },
+                    },
+                ),
+                environment,
+            ),
         forkNative: (operationId: string, input: object) =>
             worker.fetch(
                 new Request(
@@ -2201,6 +2220,99 @@ async function connectRuntimeDaemon(slug: string, options: { readonly anchorCloc
             ),
     };
 }
+
+it.each(["text", "binary"])(
+    "Given a connected Runtime, When revocation commits but disconnect delivery fails and a %s message arrives, Then later events reach neither viewers nor Recording and the daemon is closed",
+    async (format) => {
+        const runtime = await connectRuntimeDaemon(`revoked-stream-${format}`);
+        const response = await runtime.subscribe();
+        expect(response.status).toBe(101);
+        const viewer = response.webSocket;
+        if (viewer === null) {
+            throw new Error("Expected a Session event subscription");
+        }
+        const messages = new SocketMessages(viewer);
+        const received: string[] = [];
+        viewer.addEventListener("message", (event) => {
+            received.push(String(event.data));
+        });
+        viewer.accept();
+        const deliver = (message: string | Uint8Array) =>
+            runInDurableObject(env.RUNTIME_RELAY.getByName(runtime.runtimeId), async (_instance, state) => {
+                const recorded: string[] = [];
+                const recording: SessionRecording = {
+                    deliverBatch: async (_target, envelope, signal) => {
+                        signal.throwIfAborted();
+                        recorded.push(...envelope.events.map((event) => JSON.stringify(event)));
+                        return [...new Set(envelope.events.map((event) => event.sessionId))].map((sessionId) => ({
+                            sessionId,
+                            kind: "recorded",
+                        }));
+                    },
+                };
+                const pending: Promise<void>[] = [];
+                const database = new DurableObjectSqlDatabase(state.storage);
+                const context = createPlatformDurableObjectContext(state, bindings(), { database });
+                const relay = new RuntimeRelay(
+                    createDurableObjectDependencies({
+                        doDatabase: database,
+                        storages: context.storages,
+                        gateways: { ...context.gateways, recording },
+                        utilities: {
+                            waitUntil: (operation) => {
+                                pending.push(operation);
+                            },
+                        },
+                    }),
+                );
+                const daemon = state.getWebSockets("daemon")[0];
+                if (daemon === undefined) {
+                    throw new Error("Expected the accepted Runtime connection");
+                }
+                await relay.webSocketMessage(
+                    daemon,
+                    typeof message === "string" ? message : new Uint8Array(message).buffer,
+                );
+                await Promise.all(pending);
+                return recorded;
+            });
+        try {
+            expect(await deliver(liveEvent(runtime.sessionId, "before revocation"))).toHaveLength(1);
+            expect(await messages.next()).toContain("before revocation");
+            await runInDurableObject(env.RUNTIME_RELAY.getByName(runtime.runtimeId), (_instance, state) => {
+                state.storage.sql.exec(`CREATE TRIGGER reject_runtime_disconnect BEFORE INSERT ON runtime_revocations
+                BEGIN SELECT RAISE(ABORT, 'Controlled disconnect failure'); END`);
+            });
+            try {
+                expect(await responseJson(await runtime.revoke(), 503)).toMatchObject({
+                    error: { code: "runtime_disconnect_failed" },
+                });
+                expect((await runtime.reconnect()).status).toBe(401);
+                expect(
+                    await deliver(
+                        format === "text"
+                            ? liveEvent(runtime.sessionId, "after revocation")
+                            : encodeContentChunkFrame({
+                                  bytes: new Uint8Array([1, 2]),
+                                  requestId: "revoked-file",
+                                  sequence: 0,
+                              }),
+                    ),
+                ).toEqual([]);
+            } finally {
+                await runInDurableObject(env.RUNTIME_RELAY.getByName(runtime.runtimeId), (_instance, state) => {
+                    state.storage.sql.exec("DROP TRIGGER reject_runtime_disconnect");
+                });
+            }
+            expect(await runtime.daemonClosed).toMatchObject({ code: 1008, reason: "Runtime revoked" });
+            expect(received).toHaveLength(1);
+            expect((await runtime.revoke()).status).toBe(204);
+        } finally {
+            runtime.daemon.close(1000, "Test complete");
+            viewer.close(1000, "Test complete");
+        }
+    },
+);
 
 describe.sequential("Platform Turn submission", () => {
     // @no-uc: Compatibility; trusted backends must control a Runtime Session without delegated Session access.

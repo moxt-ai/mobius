@@ -6,6 +6,7 @@ import {
     encodeSessionOperationFailedEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, it } from "vitest";
+import { registerRuntimeFixture } from "./registered-runtime.ts";
 
 class Inbox {
     readonly received: Record<string, unknown>[] = [];
@@ -34,11 +35,13 @@ class Inbox {
 // @no-uc: Runtime transport regression. HTTP native queries must not multiply live-event egress.
 it("isolates native query replies from live fanout across hibernation and daemon disconnect", async () => {
     const runtimeId = `fanout-${crypto.randomUUID()}`;
+    const projectId = `prj_ap_01_${crypto.randomUUID().replaceAll("-", "").slice(0, 24)}`;
+    await registerRuntimeFixture(projectId, runtimeId);
     const relay = env.RUNTIME_RELAY.getByName(runtimeId);
     const clients: WebSocket[] = [];
     const connect = async (path: string) => {
         // This is the verified, Worker-to-Durable-Object HTTP boundary, not a public unauthenticated route.
-        const response = await relay.fetch(`https://runtime.internal/projects/fanout-project/${path}`, {
+        const response = await relay.fetch(`https://runtime.internal/projects/${projectId}/${path}`, {
             headers: {
                 Upgrade: "websocket",
                 "x-mobius-channel-id": "fanout-channel",

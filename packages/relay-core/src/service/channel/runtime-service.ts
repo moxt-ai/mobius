@@ -88,7 +88,7 @@ type RuntimePeer = ReturnType<RuntimePeers["sockets"]>[number];
 interface RuntimeContext {
     readonly services: {
         readonly connections: RuntimeConnectionService;
-        readonly credentials: Pick<ChannelCredentialService, "isActive">;
+        readonly credentials: Pick<ChannelCredentialService, "isActive" | "isRuntimeActive">;
         readonly channel: (runtimeId: string, scope: ProjectScope) => ChannelActor;
     };
     readonly gateways: {
@@ -441,17 +441,13 @@ export class RuntimeService {
             try {
                 await this.#daemonMessages.run("runtime", signal, async () => {
                     signal.throwIfAborted();
-                    if (identity.role === "replaced-daemon") {
-                        socket.close(1012, "Daemon connection replaced");
-                        return;
-                    }
-                    if (!this.#cx.services.connections.isCurrent(identity)) {
-                        socket.replaceDaemon();
+                    if (!(await this.authorizeDaemonMessage(identity, socket, signal))) {
                         return;
                     }
                     this.channel(identity.runtimeId, scope).receiveDaemonChunk(socket, message);
                 });
             } catch (error) {
+                signal.throwIfAborted();
                 socket.close(
                     error instanceof RuntimeMessageSchedulerCapacityError ? 1013 : 1008,
                     "Invalid content chunk",
@@ -502,12 +498,7 @@ export class RuntimeService {
         try {
             await this.#daemonMessages.run(lane, signal, async () => {
                 signal.throwIfAborted();
-                if (identity.role === "replaced-daemon") {
-                    socket.close(1012, "Daemon connection replaced");
-                    return;
-                }
-                if (!this.#cx.services.connections.isCurrent(identity)) {
-                    socket.replaceDaemon();
+                if (!(await this.authorizeDaemonMessage(identity, socket, signal))) {
                     return;
                 }
                 const channel = this.channel(identity.runtimeId, scope);
@@ -524,6 +515,43 @@ export class RuntimeService {
             }
             throw error;
         }
+    };
+
+    private readonly authorizeDaemonMessage = async (
+        identity: Extract<RuntimeSocketIdentity, { readonly role: "daemon" | "replaced-daemon" }>,
+        socket: RuntimeSocket,
+        signal: AbortSignal,
+    ): Promise<boolean> => {
+        if (identity.role === "replaced-daemon") {
+            socket.close(1012, "Daemon connection replaced");
+            return false;
+        }
+        if (!this.#cx.services.connections.isCurrent(identity)) {
+            socket.replaceDaemon();
+            return false;
+        }
+        // Disconnect delivery can fail after revocation commits in Project storage. Read that
+        // authority before every business message; the local connection fence alone is insufficient.
+        try {
+            if (!(await this.#cx.services.credentials.isRuntimeActive(identity, signal))) {
+                socket.close(1008, "Runtime revoked");
+                return false;
+            }
+        } catch (error) {
+            signal.throwIfAborted();
+            logger.warn(
+                { ...identity, err: error, event: "runtime_authorization_failed", closeCode: 1011 },
+                "Runtime authorization unavailable",
+            );
+            socket.close(1011, "Runtime authorization unavailable");
+            return false;
+        }
+        // A replacement may have been accepted while the authoritative lookup was in flight.
+        if (!this.#cx.services.connections.isCurrent(identity)) {
+            socket.replaceDaemon();
+            return false;
+        }
+        return socket.isOpen();
     };
 
     private readonly daemonMessageLane = (message: DaemonToRelayMessage): string => {

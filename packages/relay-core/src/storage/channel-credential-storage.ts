@@ -17,6 +17,26 @@ export class ChannelCredentialStorage {
         this.#database = database;
     }
 
+    readonly readActiveRuntime = async (
+        identity: { readonly projectId: string; readonly runtimeId: string },
+        signal: AbortSignal,
+    ) => {
+        const database = relayDrizzle(this.#database, signal);
+        const runtimes = await database
+            .select({ runtimeId: runtimeIdentity.runtimeId })
+            .from(runtimeIdentity)
+            .innerJoin(runtimeRegistration, eq(runtimeRegistration.runtimeId, runtimeIdentity.runtimeId))
+            .where(
+                and(
+                    eq(runtimeIdentity.runtimeId, identity.runtimeId),
+                    eq(runtimeIdentity.projectId, identity.projectId),
+                    isNull(runtimeIdentity.revokedAt),
+                ),
+            )
+            .limit(1);
+        return runtimes.length === 0 ? null : { active: 1 };
+    };
+
     readonly readActive = async (identity: ChannelCredentialIdentity, signal: AbortSignal) => {
         const database = relayDrizzle(this.#database, signal);
         const channels = await database
