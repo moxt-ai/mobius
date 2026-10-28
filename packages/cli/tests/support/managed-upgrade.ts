@@ -32,10 +32,13 @@ import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 import { fakeProviderPrompts } from "../support/llm/scenarios.ts";
 import { packedRelease } from "../support/packed-daemon-release.ts";
 
+// The daemon switches only after this much idle time, checked once a minute.
+const UPGRADE_QUIET_MILLISECONDS = 31 * 60_000;
+
 export function registerManagedUpgradeScenarios(
     scenarios: readonly {
         readonly agentId: "claude" | "codex" | "pi";
-        readonly mode: "foreground" | "background" | "endpoint-exit";
+        readonly mode: "foreground" | "long-foreground" | "background" | "endpoint-exit";
         readonly exitCode: 0 | 1;
         readonly taskCount: 1 | 2;
     }[],
@@ -82,7 +85,9 @@ export function registerManagedUpgradeScenarios(
                 if (agentId === "claude") {
                     const provider = resources.use(
                         await FakeAnthropicProvider.start("claude-sonnet-4-6", "UPGRADE_PRESERVED_REPLY", {
-                            ...(mode === "background" ? { bash: { command, runInBackground: true } } : {}),
+                            ...(mode === "foreground"
+                                ? {}
+                                : { bash: { command, runInBackground: mode === "background" } }),
                             beforeFirstText: async (scenario) => {
                                 if (!holdAnswer || scenario.toolCalls === 0) {
                                     return;
@@ -218,6 +223,7 @@ export function registerManagedUpgradeScenarios(
             const nativeSessions = new Map<string, string>();
             const taskStatuses: string[] = [];
             const failures: string[] = [];
+            const progressed = Promise.withResolvers<void>();
             const failed = Promise.withResolvers<never>();
             void failed.promise.catch(() => undefined);
             const wait = <T>(pending: Promise<T>): Promise<T> => Promise.race([pending, failed.promise]);
@@ -264,6 +270,15 @@ export function registerManagedUpgradeScenarios(
                                         tasksCompleted.resolve();
                                     }
                                 }
+                            }
+                            // Claude registers a foreground command as a native task once it has
+                            // run for two seconds; its 30-second progress beat comes later.
+                            if (
+                                event.type === "acp" &&
+                                event.payload.sessionUpdate === "tool_call_update" &&
+                                event.payload.status === "in_progress"
+                            ) {
+                                progressed.resolve();
                             }
                             if (
                                 event.type === "acp" &&
@@ -367,6 +382,29 @@ export function registerManagedUpgradeScenarios(
                         () => undefined,
                     );
                 });
+                const advance = async (milliseconds: number): Promise<void> => {
+                    const clock = await readFile(join(directory, `${worker.trim()}.clock`), "utf8");
+                    await (await fetch(`http://127.0.0.1:${clock}/${milliseconds}`, { signal })).text();
+                };
+                const outcome = (): Promise<string> =>
+                    wait(
+                        Promise.race([
+                            deferred.promise.then(() => "deferred"),
+                            upgraded.promise.then(() => "upgraded"),
+                        ]),
+                    );
+                if (mode === "long-foreground") {
+                    const command = prompt(fakeProviderPrompts.successfulTool);
+                    await wait(taskStarted.promise);
+                    await wait(progressed.promise);
+                    releaseTask.resolve();
+                    await wait(completions.get(command)?.promise ?? Promise.reject(new Error("Missing completion")));
+                    await advance(3_600_000);
+                    expect(await outcome()).toBe("upgraded");
+                    expect((await wait(upgraded.promise)).outcome.status).toBe("succeeded");
+                    expect(failures).toEqual([]);
+                    return;
+                }
                 const first = prompt(
                     taskCount === 2 ? fakeProviderPrompts.twoTools : fakeProviderPrompts.successfulTool,
                 );
@@ -391,16 +429,8 @@ export function registerManagedUpgradeScenarios(
                         await wait(completions.get(first)?.promise ?? Promise.reject(new Error("Missing completion")));
                     }
                 }
-                const clock = await readFile(join(directory, `${worker.trim()}.clock`), "utf8");
-                await (await fetch(`http://127.0.0.1:${clock}/3600000`, { signal })).text();
-                expect(
-                    await wait(
-                        Promise.race([
-                            deferred.promise.then(() => "deferred"),
-                            upgraded.promise.then(() => "upgraded"),
-                        ]),
-                    ),
-                ).toBe("deferred");
+                await advance(3_600_000);
+                expect(await outcome()).toBe("deferred");
                 if (mode !== "foreground") {
                     expect(taskStatuses).toContain("running");
                     const sessionId = nativeSessions.get(first);
@@ -469,6 +499,14 @@ export function registerManagedUpgradeScenarios(
                         completions.get(second)?.promise ?? Promise.reject(new Error("Missing second completion")),
                     );
                 }
+                // The user just got a reply; a follow-up must reach the same worker. The
+                // endpoint-exit fault killed the first Session's Agent, so start another.
+                const settled = prompt("Say hello", mode === "endpoint-exit" ? undefined : nativeSessions.get(first));
+                await wait(
+                    completions.get(settled)?.promise ?? Promise.reject(new Error("Missing settled completion")),
+                );
+                expect(await readFile(join(control.stateDirectory, "worker.lock"), "utf8")).toBe(worker);
+                await advance(UPGRADE_QUIET_MILLISECONDS);
                 const upgrade = await wait(upgraded.promise);
                 expect(upgrade.outcome.status).toBe("succeeded");
                 expect(upgrade.version).toBe(version);
