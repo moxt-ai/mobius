@@ -18,6 +18,31 @@ export type StoreExtractedContent = (
 import { sniffRasterMime } from "./raster.ts";
 
 const MAXIMUM_ENCODED_CONTENT_CHARACTERS = 4_000_000;
+// Match the event wire's UTF-16 bound, including the omission marker.
+const MAXIMUM_TEXT_CHARACTERS = 1_000_000;
+
+function boundedText(text: string): string {
+    if (text.length <= MAXIMUM_TEXT_CHARACTERS) {
+        return text;
+    }
+    const marker = (start: number): string => `... [omit ${text.length - start} characters since ${start}]`;
+    let start = 0;
+    let upper = MAXIMUM_TEXT_CHARACTERS;
+    while (start < upper) {
+        const candidate = Math.ceil((start + upper) / 2);
+        if (candidate + marker(candidate).length <= MAXIMUM_TEXT_CHARACTERS) {
+            start = candidate;
+        } else {
+            upper = candidate - 1;
+        }
+    }
+    const last = text.charCodeAt(start - 1);
+    const next = text.charCodeAt(start);
+    if (last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
+        start -= 1;
+    }
+    return text.slice(0, start) + marker(start);
+}
 
 function decodeBase64(data: string): Uint8Array {
     if (
@@ -95,6 +120,7 @@ export class AcpContentExternalizer {
     async #content(sessionId: string, content: ContentBlock, signal: AbortSignal): Promise<PreparedContent> {
         switch (content.type) {
             case "text":
+                return { agent: content, event: { ...content, text: boundedText(content.text) } };
             case "resource_link":
                 return { agent: content, event: content };
             case "image": {

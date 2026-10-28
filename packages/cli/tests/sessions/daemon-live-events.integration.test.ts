@@ -470,6 +470,81 @@ async function activeTurn(fixture: Fixture, command: SessionPromptCommand) {
     }
 }
 describe("daemon V2 live delivery", () => {
+    it.each(["user_message_chunk", "agent_message_chunk", "agent_thought_chunk", "compaction_summary_chunk"])(
+        "Given oversized %s text, When the daemon publishes and replays it, Then text is bounded with an exact omission marker and the turn completes",
+        async (sessionUpdate) => {
+            const fixture = await startControlledDaemon();
+            try {
+                const command = prompt(fixture, `stream bounded text ${sessionUpdate}`);
+                sendText(fixture.socket, encodeSessionPromptCommand(command));
+                const chunks: SessionLiveEvent[] = [];
+                for (;;) {
+                    const event = await nextLive(fixture);
+                    if (
+                        event.type === "acp" &&
+                        event.payload.sessionUpdate === sessionUpdate &&
+                        (("messageId" in event.payload &&
+                            ["at-limit", "over-limit", "unicode-limit"].includes(event.payload.messageId ?? "")) ||
+                            "compactionId" in event.payload)
+                    ) {
+                        chunks.push(event);
+                    }
+                    if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
+                        break;
+                    }
+                }
+                expect(chunks.map((event) => event.payload)).toEqual([
+                    {
+                        sessionUpdate,
+                        ...(sessionUpdate === "compaction_summary_chunk"
+                            ? { compactionId: "at-limit" }
+                            : { messageId: "at-limit" }),
+                        content: { type: "text", text: "a".repeat(1_000_000) },
+                    },
+                    {
+                        sessionUpdate,
+                        ...(sessionUpdate === "compaction_summary_chunk"
+                            ? { compactionId: "over-limit" }
+                            : { messageId: "over-limit" }),
+                        content: {
+                            type: "text",
+                            text: `${"b".repeat(999_962)}... [omit 138 characters since 999962]`,
+                        },
+                    },
+                    {
+                        sessionUpdate,
+                        ...(sessionUpdate === "compaction_summary_chunk"
+                            ? { compactionId: "unicode-limit" }
+                            : { messageId: "unicode-limit" }),
+                        content: {
+                            type: "text",
+                            text: `${"c".repeat(999_961)}... [omit 139 characters since 999961]`,
+                        },
+                    },
+                ]);
+                const page = await history(fixture, command);
+                const replay = page.events.filter((event) => chunks.some((chunk) => chunk.eventId === event.eventId));
+                expect(replay.map((event) => ({ eventId: event.eventId, payload: event.payload }))).toEqual(
+                    chunks.map((event) => ({
+                        eventId: event.eventId,
+                        payload:
+                            event.type === "acp" &&
+                            event.payload.sessionUpdate === "agent_thought_chunk" &&
+                            event.payload.content.type === "text"
+                                ? {
+                                      ...event.payload,
+                                      content: { type: "text", text: event.payload.content.text.slice(-24 * 1024) },
+                                      meta: { truncated: true },
+                                  }
+                                : event.payload,
+                    })),
+                );
+            } finally {
+                await fixture.close();
+            }
+        },
+    );
+
     it("Given a harness identifies a user message and fails its prompt, When the daemon publishes the failure, Then only the user chunk carries its identity", async () => {
         const fixture = await startControlledDaemon();
         try {
