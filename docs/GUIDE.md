@@ -100,6 +100,79 @@ entrypoints, transport ownership, and credential refresh. Agent catalogs and set
 are discovered from the selected Runtime rather than assumed to be identical across
 machines.
 
+## AppCredential issuance and recovery
+
+The Platform developer client's `createApp`, `issueAppCredential`, and
+`rotateAppCredential` operations return a new secret only in their successful
+response. "Returned once" describes secret delivery, not a single-use credential:
+the credential remains usable until revoked, its rotation overlap ends, or its App
+or Tenant becomes unavailable. The Platform stores a digest, so listing Apps or
+credentials cannot recover the secret.
+
+These operations do not provide idempotent result replay. The SDK does not retry
+them automatically; custom transports, proxies, and application retry policies must not blindly replay
+them either. `createProject` has its own idempotency contract, which does not extend
+to the App or credential operations around it.
+
+| Operation | Successful result | Repeating the same request |
+| --- | --- | --- |
+| `createApp` | Creates an App and its default credential, returning the secret. | The Tenant's unique display-name constraint rejects a same-name create while that name is occupied; it does not replay the first result. Renaming the existing App or using a different name can allow another App to be created. |
+| `issueAppCredential` | Creates a credential with the requested permissions and Project scope, returning the secret. | Can create another credential. The earlier credential is not automatically invalidated. |
+| `rotateAppCredential` | Creates a replacement with the source credential's permissions and scope and starts the source's requested overlap. | An already rotated or revoked source returns `409 app_credential_rotation_conflict`; it does not return the replacement secret. |
+
+A successful response means the operation committed. Save the secret and its
+credential ID to your secret store before starting unrelated work. If that local
+save fails but you still have the response, retry saving that same result. Creating
+another credential cannot recover the first secret.
+
+A connection failure, timeout, cancellation after dispatch, or unusable response
+can occur after the write committed. An error, including a server error, is not
+proof that nothing was written. Cancelling a request does not guarantee rollback.
+Inspect the stored result before deciding on another write; an immediate list
+without a new record also cannot prove an in-flight request will never commit.
+
+### Recovering an unknown outcome
+
+Use an authorized `MobiusPlatformDeveloperClient` for reconciliation. It can list
+and administer credentials without knowing their secrets. Coordinate App creation
+within a Tenant and credential administration within an App, retaining known
+resource IDs and the results you have already saved.
+
+For creation and issuance, there is no request identifier that reliably associates
+a lost response with a record. `listApps`, `listAppCredentials`, and
+`listAuditEvents` can help an operator identify committed work. An App name is unique
+within its Tenant, but is mutable and does not identify which caller created it;
+timestamps and matching credential scopes are not request identities either. If
+other writers or in-flight requests make ownership uncertain, stop automatic recovery and
+reconcile with the operators involved. Do not revoke or rotate an arbitrary new
+credential or assume a missing list entry makes a retry safe.
+
+- **Lost `createApp` response:** after confirming which App was created, use its
+  `defaultCredentialId` and `listAppCredentials` to locate the credential. Rotate
+  that credential to obtain and save a replacement secret. If it was already
+  rotated, inspect the replacement chain first. Changing the requested name to get
+  past a failed create can leave the original App and credential behind.
+- **Lost `issueAppCredential` response:** after identifying the issued credential,
+  rotate it and save the replacement secret. Rotation preserves its permissions and
+  Project scope. Alternatively, revoke a confirmed unused credential before
+  deliberately issuing a new one. Reissuing alone does not clean up the first one.
+- **Lost `rotateAppCredential` response:** list the App's credentials and inspect
+  the known source's `replacedByCredentialId`. A replacement link establishes that
+  rotation committed, but does not identify which concurrent caller won. If the
+  replacement secret was lost, coordinate with other administrators, follow any
+  further replacement links, and rotate the confirmed active replacement once to
+  obtain a new secret. A revoked credential has no recoverable secret. A conflict
+  without a replacement link is not proof of successful rotation; investigate
+  revocation or concurrent work before issuing a new credential.
+
+Use zero overlap when replacing a confirmed lost, unused secret so that credential
+immediately stops authorizing new requests. Earlier credentials in a rotation chain
+retain their own overlap deadlines; rotating the latest replacement does not
+shorten those deadlines. After saving the usable replacement, explicitly revoke
+earlier credentials if they should stop working sooner, coordinating any users
+still relying on them. If the recovery response is also lost, reconcile again
+instead of looping through blind writes.
+
 ## Live output and recovery
 
 Ongoing work should feel like a live broadcast. Multiple devices can watch the same
