@@ -73,12 +73,10 @@ export class PlatformDeveloperAccess {
 
 export class PlatformAppCredentialAccess {
     readonly appId: string;
-    readonly credentialRevision: number;
     readonly project: ProjectAccessContext;
 
-    constructor(appId: string, credentialRevision: number, project: ProjectAccessContext) {
+    constructor(appId: string, project: ProjectAccessContext) {
         this.appId = appId;
-        this.credentialRevision = credentialRevision;
         this.project = project;
     }
 }

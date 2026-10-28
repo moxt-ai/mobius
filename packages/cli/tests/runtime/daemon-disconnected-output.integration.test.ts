@@ -480,9 +480,7 @@ test.each([
             break;
         }
         turn.finish();
-        {
-            using _idle = await runtime.activity.reserveWhenIdle(runtime.cancellation.signal);
-        }
+        await runtime.activity.whenIdle(runtime.cancellation.signal);
         const nativeThought = runtime.initial.events.find(
             (event) => event.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk",
         );
@@ -542,7 +540,7 @@ test("Given oversized reasoning chunks, When the daemon streams them to the Rela
     await turn.writeThought(`prefix${"y".repeat(24 * 1024)}`);
     await turn.write(oversized);
     turn.finish();
-    using _idle = await runtime.activity.reserveWhenIdle(runtime.cancellation.signal);
+    await runtime.activity.whenIdle(runtime.cancellation.signal);
     (await runtime.timer.next(100)).run();
     await runtime.initial.barrier();
     const thoughts = runtime.initial.events.flatMap((event) =>
@@ -581,7 +579,7 @@ test.each([true, false])(
         }
         await turn.write("the final 161 characters remain available.");
         turn.finish();
-        using _idle = await runtime.activity.reserveWhenIdle(runtime.cancellation.signal);
+        await runtime.activity.whenIdle(runtime.cancellation.signal);
         const reconnect = runtime.nextPeer();
         retry.run();
         const resumed = await reconnect;
@@ -616,7 +614,7 @@ test("Given concurrent Sessions produce an offline burst, When the Runtime recon
     }
     first.finish();
     second.finish();
-    using _idle = await runtime.activity.reserveWhenIdle(runtime.cancellation.signal);
+    await runtime.activity.whenIdle(runtime.cancellation.signal);
     const reconnect = runtime.nextPeer();
     retry.run();
     const resumed = await reconnect;
@@ -659,7 +657,7 @@ test("Given an outage exhausts the bounded output buffer, When the Relay reconne
     expect(resumed.batches.reduce((bytes, batch) => bytes + batch.bytes, 0)).toBeLessThanOrEqual(32 * 1024 * 1024);
     await turn.write("streaming continues after the outage");
     turn.finish();
-    using _idle = await runtime.activity.reserveWhenIdle(runtime.cancellation.signal);
+    await runtime.activity.whenIdle(runtime.cancellation.signal);
     (await runtime.timer.next(100)).run();
     await resumed.barrier();
     expect(answer(resumed.events, "bounded-session")).toBe(`${offlineAnswer}streaming continues after the outage`);

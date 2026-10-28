@@ -256,6 +256,10 @@ export class MobiusPlatformAppCredential {
     readonly issuedAt: string;
     readonly permissions: readonly string[];
     readonly publicCredentialId: string;
+    /**
+     * @deprecated Legacy compatibility value; not unique or an App-wide sequence.
+     * Use credentialId for identity and rotation replacement IDs for lineage.
+     */
     readonly revision: number;
 
     constructor(value: Readonly<Record<string, unknown>>) {
@@ -285,6 +289,10 @@ export class MobiusPlatformAppCredentialMetadata {
     readonly projectIds: readonly string[];
     readonly publicCredentialId: string;
     readonly replacedByCredentialId: string;
+    /**
+     * @deprecated Legacy compatibility value; not unique or an App-wide sequence.
+     * Use credentialId for identity and replacedByCredentialId for the replacement.
+     */
     readonly revision: number;
     readonly revokedAt: string;
 
