@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,7 +11,32 @@ import {
 } from "../../src/engine/runtime/connection/runtime-installation-store.ts";
 
 describe("Runtime installation storage", () => {
-    it("Given an existing installation, When a host opens its explicit Engine data directory, Then old and new entrypoints retain the same identity and connections", async () => {
+    it("Given an ordinary data directory name, When a host saves a connection, Then local storage accepts the path without treating it as an application identity", async () => {
+        const directory = await mkdtemp(join(tmpdir(), "mobius-engine-directory-"));
+        const signal = new AbortController().signal;
+        try {
+            const installation = await openEngineInstallationStore(join(directory, "data"), signal);
+            const connection = await installation.saveConnection(
+                {
+                    appId: "platform_app",
+                    channelId: "channel_directory",
+                    defaultWorkspace: join(directory, "workspace"),
+                    pairingId: "pairing_directory",
+                    relayOrigin: new URL("https://relay.example.com/"),
+                    runtimeCredential: "a".repeat(43),
+                    runtimeId: "runtime_directory",
+                },
+                signal,
+            );
+            expect(connection.appId).toBe("platform_app");
+            expect(connection.applicationId).toBe("dev.mobius.cli");
+            await expect(installation.readConnection(connection.connectionId, signal)).resolves.toEqual(connection);
+        } finally {
+            await rm(directory, { recursive: true, force: true });
+        }
+    });
+
+    it("Given an existing installation moved to a differently named directory, When a host opens it explicitly, Then old and new entrypoints retain the same identity and connections", async () => {
         const stateRoot = await mkdtemp(join(tmpdir(), "mobius-engine-context-"));
         const signal = new AbortController().signal;
         try {
@@ -31,12 +56,11 @@ describe("Runtime installation storage", () => {
                 },
                 signal,
             );
-            const engine = await openEngineInstallationStore(
-                join(stateRoot, "installations", "dev.mobius.cli"),
-                signal,
-            );
+            const relocated = join(stateRoot, "renamed-data");
+            await rename(join(stateRoot, "installations", "dev.mobius.cli"), relocated);
+            const engine = await openEngineInstallationStore(relocated, signal);
             expect(engine.installationId).toBe(original.installationId);
-            expect(engine.stateDirectory).toBe(original.stateDirectory);
+            expect(engine.stateDirectory).toBe(join(relocated, original.installationId));
             await expect(engine.readConnection(connection.connectionId, signal)).resolves.toEqual(connection);
             const saved = await engine.saveConnection(
                 {
@@ -50,6 +74,7 @@ describe("Runtime installation storage", () => {
                 },
                 signal,
             );
+            await rename(relocated, join(stateRoot, "installations", "dev.mobius.cli"));
             await expect(original.readConnection(saved.connectionId, signal)).resolves.toEqual(saved);
         } finally {
             await rm(stateRoot, { recursive: true, force: true });

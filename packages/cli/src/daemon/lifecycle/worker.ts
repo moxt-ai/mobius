@@ -7,7 +7,7 @@ import { RuntimeTurnActivity } from "../../engine/session/turn/runtime-turn-acti
 import type { InstallationDirectory } from "../../engine/storage/installation/installation-files.ts";
 import { isNodeError } from "../../engine/util/node-error.ts";
 import { acquireManagerLock } from "../../storage/daemon/manager-lock.ts";
-import { mobiusEngineDataDir } from "../config.ts";
+import { prepareMobiusEngineDataDir } from "../config.ts";
 import { sendLocalRequest } from "../control/local-client.ts";
 import { serveLocalControl } from "../control/local-server.ts";
 import { openMobiusControlInstallation, resumeMobiusRuntime } from "../pairing/pair-local-machine.ts";
@@ -71,7 +71,7 @@ async function runWorkerRuntime(
 ): Promise<void> {
     const control = await openMobiusControlInstallation(combined, process.env);
     await prepareUpgradeData(control.stateDirectory, version, combined);
-    const engineDataDir = mobiusEngineDataDir(version, process.env);
+    const engineDataDir = await prepareMobiusEngineDataDir(version, combined, process.env);
     const installation = await openEngineInstallationStore(engineDataDir, combined);
     const deadline = AbortSignal.any([combined, AbortSignal.timeout(15_000)]);
     let release: (() => Promise<void>) | null = null;

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { basename, resolve } from "node:path";
+import { resolve } from "node:path";
 import { isIdentifier } from "@moxt-ai/mobius-sdk/protocol";
 import { ensurePrivateDirectory } from "../../storage/files/local-files.ts";
 import {
@@ -326,18 +326,17 @@ export class RuntimeInstallationStore {
         }
         return await RuntimeInstallationStore.openEngine(
             applicationDirectoryPath(dataDirectory, applicationId),
-            applicationId,
             signal,
+            applicationId,
         );
     };
 
     static readonly openEngine = async (
         engineDataDir: string,
-        applicationId: string,
         signal: AbortSignal,
+        applicationId = "dev.mobius.cli",
     ): Promise<RuntimeInstallationStore> => {
         signal.throwIfAborted();
-        validateApplicationId(applicationId);
         const applicationDirectory = resolve(engineDataDir);
         try {
             await ensurePrivateDirectory(applicationDirectory);
@@ -607,5 +606,5 @@ export async function openEngineInstallationStore(
     engineDataDir: string,
     signal: AbortSignal,
 ): Promise<RuntimeInstallationStore> {
-    return await RuntimeInstallationStore.openEngine(engineDataDir, basename(resolve(engineDataDir)), signal);
+    return await RuntimeInstallationStore.openEngine(engineDataDir, signal);
 }

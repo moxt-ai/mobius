@@ -28,7 +28,7 @@ import { environmentProxyDispatcher } from "../../engine/util/network/environmen
 import { isRecord } from "../../engine/util/value-utils.ts";
 import { readCurrentDataVersion } from "../../storage/daemon/version-data.ts";
 import { readStateDirectory } from "../../storage/state-directory.ts";
-import { mobiusEngineDataDir, resolveMaxAcpProcesses } from "../config.ts";
+import { prepareMobiusEngineDataDir, resolveMaxAcpProcesses } from "../config.ts";
 
 const PAIRING_TIMEOUT_MILLISECONDS = 20_000;
 const PAIRING_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}$/;
@@ -437,7 +437,8 @@ export async function openMobiusVersionInstallation(
     signal: AbortSignal,
     environment: Readonly<NodeJS.ProcessEnv>,
 ): Promise<RuntimeInstallationStore> {
-    return await openEngineInstallationStore(mobiusEngineDataDir(version, environment), signal);
+    const engineDataDir = await prepareMobiusEngineDataDir(version, signal, environment);
+    return await openEngineInstallationStore(engineDataDir, signal);
 }
 
 export async function pairLocalMachine(

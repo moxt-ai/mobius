@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { isIdentifier } from "@moxt-ai/mobius-sdk/protocol";
 import { MobiusRuntimeConfigurationError, type MobiusRuntimeConnection } from "../engine/runtime/engine.ts";
+import { prepareVersionDataDirectory } from "../storage/daemon/version-data.ts";
 import { readStateDirectory } from "../storage/state-directory.ts";
 
 export function resolveMaxAcpProcesses(environment: Readonly<NodeJS.ProcessEnv>): number {
@@ -15,8 +16,13 @@ export function resolveMaxAcpProcesses(environment: Readonly<NodeJS.ProcessEnv>)
     return parsed;
 }
 
-export function mobiusEngineDataDir(version: string, environment: Readonly<NodeJS.ProcessEnv>): string {
-    return join(readStateDirectory(environment), "versions", version, "installations", "dev.mobius.cli");
+export async function prepareMobiusEngineDataDir(
+    version: string,
+    signal: AbortSignal,
+    environment: Readonly<NodeJS.ProcessEnv>,
+): Promise<string> {
+    const directory = await prepareVersionDataDirectory(readStateDirectory(environment), version, signal);
+    return join(directory, "installations", "dev.mobius.cli");
 }
 
 function requiredEnvironmentValue(environment: Readonly<NodeJS.ProcessEnv>, name: string): string {
