@@ -252,10 +252,15 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Install npm ${{ matrix.npm }}
-        shell: bash
+        if: runner.os != 'Windows'
         env:
           NPM_MAJOR: ${{ matrix.npm }}
         run: npm install --global "npm@$NPM_MAJOR" && npm --version
+      - name: Install npm ${{ matrix.npm }} on Windows
+        if: runner.os == 'Windows'
+        env:
+          NPM_MAJOR: ${{ matrix.npm }}
+        run: npm install --global "npm@$env:NPM_MAJOR" && npm --version
       - run: pnpm test:npm-compatibility
 
   cli-compatibility:
