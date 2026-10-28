@@ -1,13 +1,10 @@
 import { isAbsolute, join } from "node:path";
 import { claudeDesktopExecutablePaths } from "./claude-desktop.ts";
 import type { PlatformSupport } from "./contracts.ts";
-import { posixOperations, processExists, readProcessTableWithPs } from "./posix.ts";
+import { posixOperations } from "./posix.ts";
 
 export const macosPlatform: PlatformSupport = {
     ...posixOperations,
-    readProcessTable: () => readProcessTableWithPs("/bin/ps"),
-    readProcessTableSynchronously: () => [],
-    processExists,
     claudeCodeExecutablePaths: (environment) => {
         const paths = ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"];
         const homeDirectory = environment["HOME"];

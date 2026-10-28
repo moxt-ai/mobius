@@ -17,7 +17,7 @@ import {
     openMobiusCliInstallation,
     openMobiusControlInstallation,
 } from "../../src/daemon/pairing/pair-local-machine.ts";
-import { platformSupportFor } from "../../src/util/platform/index.ts";
+import { processPlatformSupportFor } from "../../src/util/process/platform/index.ts";
 import { installWorkspaceDaemonRelease } from "../support/installed-daemon-release.ts";
 
 const temporaryDirectories: string[] = [];
@@ -93,7 +93,7 @@ describe("Mobius manager version compatibility", () => {
             const control = await openMobiusControlInstallation(AbortSignal.timeout(10_000), environment);
             const managerPid = Number(await readFile(join(control.stateDirectory, "manager.lock"), "utf8"));
             expect(
-                (await platformSupportFor(process.platform).readProcessTable()).filter(
+                (await processPlatformSupportFor(process.platform).readProcessTable()).filter(
                     (entry) => entry.parentProcessId === managerPid,
                 ),
             ).toHaveLength(1);
@@ -230,7 +230,7 @@ describe("Mobius manager version compatibility", () => {
             const replacement = await readFile(join(control.stateDirectory, "worker.lock"), "utf8");
             expect(replacement).not.toBe(worker);
             expect(
-                (await platformSupportFor(process.platform).readProcessTable()).filter(
+                (await processPlatformSupportFor(process.platform).readProcessTable()).filter(
                     (entry) => entry.parentProcessId === Number(manager),
                 ),
             ).toHaveLength(1);
@@ -393,7 +393,7 @@ describe("Mobius pairing lifecycle", () => {
             const managerPid = Number(await readFile(join(control.stateDirectory, "manager.lock"), "utf8"));
             const workerPid = await readFile(join(control.stateDirectory, "worker.lock"), "utf8");
             expect(
-                (await platformSupportFor(process.platform).readProcessTable()).filter(
+                (await processPlatformSupportFor(process.platform).readProcessTable()).filter(
                     (entry) => entry.parentProcessId === managerPid,
                 ),
             ).toHaveLength(1);
