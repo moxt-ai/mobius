@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, isNull } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import { type OrganizationInviteRow, organizationInviteRowSchema } from "../entity/organization-invite.ts";
 import { platformDashboardAuditEvent, platformOrganizationInviteLink } from "../schema/d1/index.ts";
 import { decodeOptionalStorageRecord, decodeStorageRecords } from "./decode-storage-record.ts";
@@ -87,9 +87,9 @@ export class OrganizationInviteStorage {
         actor: string,
         now: number,
         signal: AbortSignal,
-    ): Promise<void> => {
+    ): Promise<boolean> => {
         signal.throwIfAborted();
-        await this.database.batch([
+        const [updated] = await this.database.batch([
             this.database
                 .update(platformOrganizationInviteLink)
                 .set({ revokedAt: now })
@@ -100,9 +100,36 @@ export class OrganizationInviteStorage {
                         isNull(platformOrganizationInviteLink.revokedAt),
                     ),
                 ),
-            this.audit(organizationId, actor, id, "organization_invite.revoked", now),
+            // Keep this insert immediately after the update in the same atomic batch:
+            // changes() must refer to this attempt, including a zero-row no-op.
+            this.database.insert(platformDashboardAuditEvent).select(
+                this.database
+                    .select({
+                        auditId: sql<string>`${crypto.randomUUID()}`.as("auditId"),
+                        tenantId: platformOrganizationInviteLink.organizationId,
+                        appId: sql<string>`${""}`.as("appId"),
+                        projectId: sql<string>`${""}`.as("projectId"),
+                        actorKind: sql<string>`${"developer"}`.as("actorKind"),
+                        actorId: sql<string>`${actor}`.as("actorId"),
+                        actorRef: sql<string>`${""}`.as("actorRef"),
+                        action: sql<string>`${"organization_invite.revoked"}`.as("action"),
+                        subjectId: platformOrganizationInviteLink.id,
+                        outcome: sql<"succeeded">`${"succeeded"}`.as("outcome"),
+                        detailsJson: sql<string>`${"{}"}`.as("detailsJson"),
+                        recordedAt: sql<number>`${now}`.as("recordedAt"),
+                    })
+                    .from(platformOrganizationInviteLink)
+                    .where(
+                        and(
+                            eq(platformOrganizationInviteLink.organizationId, organizationId),
+                            eq(platformOrganizationInviteLink.id, id),
+                            eq(sql<number>`changes()`, 1),
+                        ),
+                    ),
+            ),
         ]);
         signal.throwIfAborted();
+        return updated.meta.changes === 1;
     };
 
     readonly accepted = async (

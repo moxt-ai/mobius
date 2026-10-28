@@ -38,7 +38,20 @@ function fixture() {
             }),
             env,
         );
-    return { request, admin, visitor, clerk };
+    const revocations = async (id: string) => {
+        const response = await request("tenants/org_invites/audit-events", admin);
+        expect(response.status).toBe(200);
+        const { events } = await response.json<{
+            events: readonly {
+                readonly action: string;
+                readonly subjectId: string;
+                readonly actorId: string;
+                readonly outcome: string;
+            }[];
+        }>();
+        return events.filter((event) => event.action === "organization_invite.revoked" && event.subjectId === id);
+    };
+    return { request, admin, visitor, clerk, revocations };
 }
 
 it("Given an admin's shareable link, When a user without an organization previews and accepts it twice, Then they join as a member and can open the organization", async () => {
@@ -84,4 +97,90 @@ it("Given a non-admin or an admin whose role was removed in Clerk, When they man
     clerk.setMembership("org_invites", "user_admin", "org:member");
     expect((await request("tenants/org_invites/invite-links", admin, "POST", {})).status).toBe(403);
     expect((await request("tenants/org_other/invite-links", admin)).status).toBe(403);
+});
+
+it("Given a revoked invite, When an admin retries revocation, Then only the first request reports a change and creates a success audit", async () => {
+    const { request, admin, revocations } = fixture();
+    const link = await (await request("tenants/org_invites/invite-links", admin, "POST", {})).json<{ id: string }>();
+    const revoke = () => request(`tenants/org_invites/invite-links/${link.id}`, admin, "DELETE");
+    const first = await revoke();
+    expect(first.status).toBe(200);
+    expect(await first.json()).toEqual({ revoked: true });
+    const audits = await revocations(link.id);
+    expect(audits).toMatchObject([{ actorId: "user_admin", outcome: "succeeded" }]);
+
+    const retry = await revoke();
+    expect(retry.status).toBe(200);
+    expect.soft(await retry.json()).toEqual({ revoked: false });
+    expect(await revocations(link.id)).toEqual(audits);
+});
+
+it("Given an unknown or another organization's invite, When an admin revokes it in their own organization, Then no revocation or success audit is reported", async () => {
+    const { request, admin, visitor, clerk, revocations } = fixture();
+    clerk.createOrganization("org_other", "Other team");
+    clerk.setMembership("org_other", "user_other", "org:admin");
+    const otherAdmin = clerk.session("user_other", "org_other");
+    const link = await (await request("tenants/org_other/invite-links", otherAdmin, "POST", {})).json<{
+        id: string;
+        token: string;
+    }>();
+    for (const id of [crypto.randomUUID(), link.id]) {
+        const response = await request(`tenants/org_invites/invite-links/${id}`, admin, "DELETE");
+        expect(response.status).toBe(200);
+        expect.soft(await response.json()).toEqual({ revoked: false });
+        expect.soft(await revocations(id)).toEqual([]);
+    }
+    expect((await request("invite-links/preview", visitor, "POST", { token: link.token })).status).toBe(200);
+});
+
+it("Given an active invite, When two admins revoke it concurrently, Then exactly one reports a change and is recorded as the revoker", async () => {
+    const { request, admin, visitor, clerk, revocations } = fixture();
+    clerk.setMembership("org_invites", "user_second", "org:admin");
+    const secondAdmin = clerk.session("user_second", "org_invites");
+    const link = await (await request("tenants/org_invites/invite-links", admin, "POST", {})).json<{
+        id: string;
+        token: string;
+    }>();
+    const results = await Promise.all(
+        [
+            { token: admin, actorId: "user_admin" },
+            { token: secondAdmin, actorId: "user_second" },
+        ].map(async ({ token, actorId }) => {
+            const response = await request(`tenants/org_invites/invite-links/${link.id}`, token, "DELETE");
+            expect(response.status).toBe(200);
+            const result = await response.json<{ revoked: boolean }>();
+            return { ...result, actorId };
+        }),
+    );
+    expect.soft(results.map((result) => result.revoked).sort()).toEqual([false, true]);
+    const winner = results.find((result) => result.revoked);
+    expect(await revocations(link.id)).toMatchObject([{ actorId: winner?.actorId, outcome: "succeeded" }]);
+    expect((await request("invite-links/preview", visitor, "POST", { token: link.token })).status).toBe(410);
+});
+
+it("Given an active invite, When its revocation audit cannot be stored, Then revocation rolls back and can be retried", async () => {
+    const { request, admin, visitor, revocations } = fixture();
+    const link = await (await request("tenants/org_invites/invite-links", admin, "POST", {})).json<{
+        id: string;
+        token: string;
+    }>();
+    await env.PLATFORM_DIRECTORY_DATABASE.prepare(
+        `CREATE TRIGGER reject_invite_revocation_audit BEFORE INSERT ON platform_dashboard_audit_events
+         WHEN NEW.action = 'organization_invite.revoked'
+         BEGIN SELECT RAISE(ABORT, 'Controlled revocation failure'); END`,
+    ).run();
+    try {
+        const response = await request(`tenants/org_invites/invite-links/${link.id}`, admin, "DELETE");
+        expect(response.status).toBe(500);
+        expect(await response.json()).toMatchObject({ error: { code: "internal_error" } });
+        expect(await revocations(link.id)).toEqual([]);
+        expect((await request("invite-links/preview", visitor, "POST", { token: link.token })).status).toBe(200);
+    } finally {
+        await env.PLATFORM_DIRECTORY_DATABASE.prepare("DROP TRIGGER reject_invite_revocation_audit").run();
+    }
+    const retry = await request(`tenants/org_invites/invite-links/${link.id}`, admin, "DELETE");
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toEqual({ revoked: true });
+    expect(await revocations(link.id)).toMatchObject([{ actorId: "user_admin", outcome: "succeeded" }]);
+    expect((await request("invite-links/preview", visitor, "POST", { token: link.token })).status).toBe(410);
 });

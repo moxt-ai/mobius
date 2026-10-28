@@ -85,8 +85,8 @@ export class OrganizationInviteService {
         if (!/^[a-f0-9-]{36}$/.test(id)) {
             throw new PlatformControlPlaneError("invalid_request", "Invalid invitation", 400);
         }
-        await this.storage.revoke(organizationId, id, actor, Date.now(), signal);
-        return { revoked: true };
+        const revoked = await this.storage.revoke(organizationId, id, actor, Date.now(), signal);
+        return { revoked };
     };
 
     private readonly resolve = async (token: string, signal: AbortSignal) => {
