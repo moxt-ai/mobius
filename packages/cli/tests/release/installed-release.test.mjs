@@ -33,25 +33,15 @@ test("Given an installed release, When an embedding host opens its storage, Then
     const dataDirectory = join(directory, "embedded-data");
     const requireInstalled = createRequire(join(root, "package.json"));
     const engine = await import(pathToFileURL(requireInstalled.resolve("@moxt-ai/mobius/engine")).href);
-    assert.deepEqual(
-        Object.keys(engine).sort(),
-        [
-            "MobiusRuntimeEngine",
-            "RuntimeRelayRevokedError",
-            "openRuntimeInstallationStore",
-            "pairMobiusRuntime",
-            "resumeMobiusRuntime",
-        ].sort(),
-    );
-    for (const name of [
-        "openRuntimeInstallationStore",
-        "pairMobiusRuntime",
-        "resumeMobiusRuntime",
-        "MobiusRuntimeEngine",
-        "RuntimeRelayRevokedError",
-    ]) {
+    assert.deepEqual(Object.keys(engine).sort(), ["MobiusRuntimeEngine", "RuntimeRelayRevokedError"].sort());
+    for (const name of ["MobiusRuntimeEngine", "RuntimeRelayRevokedError"]) {
         assert.equal(typeof engine[name], "function", name);
     }
+    const connectionsFor = (engineDataDir) =>
+        new engine.MobiusRuntimeEngine({
+            engineDataDir,
+            agentLaunchEnvironment: { PATH: "" },
+        }).getConnectionManager();
     const input = {
         appId: "platform_installed",
         channelId: "installed_channel",
@@ -65,12 +55,17 @@ test("Given an installed release, When an embedding host opens its storage, Then
         "cold initialization and connection write/read",
         { timeout: installationStageTimeout },
         async (stage) => {
-            const store = await engine.openRuntimeInstallationStore(dataDirectory, stage.signal);
-            const connection = await store.saveConnection(input, stage.signal);
+            const connections = connectionsFor(dataDirectory);
+            const connection = await connections.save(input, stage.signal);
             assert.equal(connection.appId, input.appId);
             assert.equal(Object.hasOwn(connection, "applicationId"), false);
-            assert.deepEqual(await store.readConnection(connection.connectionId, stage.signal), connection);
-            const record = JSON.parse(await readFile(store.connectionPath(connection.connectionId), "utf8"));
+            assert.deepEqual(await connections.read(connection.connectionId, stage.signal), connection);
+            const record = JSON.parse(
+                await readFile(
+                    join(dataDirectory, connection.installationId, "connections", `${connection.connectionId}.json`),
+                    "utf8",
+                ),
+            );
             assert.equal(record.version, 6);
             assert.equal(Object.hasOwn(record, "applicationId"), false);
         },
@@ -79,15 +74,16 @@ test("Given an installed release, When an embedding host opens its storage, Then
         "warm reopen and persisted connection read",
         { timeout: installationStageTimeout },
         async (stage) => {
-            const store = await engine.openRuntimeInstallationStore(dataDirectory, stage.signal);
-            const connections = await store.listConnections(stage.signal);
+            const manager = connectionsFor(dataDirectory);
+            const connections = await manager.list(stage.signal);
             assert.equal(connections.length, 1);
             const [connection] = connections;
             for (const [key, value] of Object.entries(input)) {
                 assert.deepEqual(connection[key], value, key);
             }
-            assert.equal(connection.installationId, store.installationId);
-            assert.deepEqual(await store.readConnectionForPairing(input.pairingId, stage.signal), connection);
+            const pointer = JSON.parse(await readFile(join(dataDirectory, "current.json"), "utf8"));
+            assert.equal(connection.installationId, pointer.installationId);
+            assert.deepEqual(await manager.read(connection.connectionId, stage.signal), connection);
         },
     );
     await context.test(
@@ -138,7 +134,7 @@ if ($rules.Count -ne 1 -or $rules[0].IdentityReference -ne $sid -or $rules[0].Ac
             const cancelledDirectory = join(directory, "cancelled");
             const reason = new Error("Host cancelled initialization");
             await assert.rejects(
-                engine.openRuntimeInstallationStore(cancelledDirectory, AbortSignal.abort(reason)),
+                connectionsFor(cancelledDirectory).list(AbortSignal.abort(reason)),
                 (error) => error === reason,
             );
             await assert.rejects(stat(cancelledDirectory), { code: "ENOENT" });
@@ -151,7 +147,7 @@ if ($rules.Count -ne 1 -or $rules[0].IdentityReference -ne $sid -or $rules[0].Ac
             const target = await mkdtemp(join(directory, "target-"));
             const redirected = join(directory, "redirected");
             await symlink(target, redirected, process.platform === "win32" ? "junction" : "dir");
-            await assert.rejects(engine.openRuntimeInstallationStore(redirected, stage.signal), {
+            await assert.rejects(connectionsFor(redirected).list(stage.signal), {
                 code: "installation_unavailable",
             });
             assert.deepEqual(await readdir(target), []);
@@ -197,7 +193,7 @@ test("Given an installed release, When a user starts the CLI, Then help, version
             [
                 "--input-type=module",
                 "--eval",
-                "import assert from 'node:assert/strict'; const engine = await import('@moxt-ai/mobius/engine'); assert.equal(typeof engine.openRuntimeInstallationStore, 'function');",
+                "import assert from 'node:assert/strict'; const engine = await import('@moxt-ai/mobius/engine'); assert.equal(typeof engine.MobiusRuntimeEngine, 'function');",
             ],
             45_000,
             stage.signal,

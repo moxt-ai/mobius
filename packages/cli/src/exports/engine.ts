@@ -1,4 +1,14 @@
-export { pairMobiusRuntime, resumeMobiusRuntime } from "../daemon/pairing/pair-local-machine.ts";
-export { openRuntimeInstallationStore } from "../engine/runtime/connection/runtime-installation-store.ts";
-export { MobiusRuntimeEngine } from "../engine/runtime/engine.ts";
-export { RuntimeRelayRevokedError } from "../engine/runtime/relay/runtime-revocation.ts";
+export type {
+    ConnectionManager,
+    EngineLoopConnection,
+    MobiusRuntimeConnection,
+    MobiusRuntimeEngineParams,
+    MobiusRuntimePairingOptions,
+    RunLoopParams,
+    RuntimeConnectionInput,
+    VerifiedRuntimeConnection,
+} from "../engine/runtime/engine.ts";
+export {
+    MobiusRuntimeEngine,
+    RuntimeRelayRevokedError,
+} from "../engine/runtime/engine.ts";

@@ -978,14 +978,16 @@ describe.sequential("Platform Session-only boundary", () => {
                     message: "Controlled discovery failure",
                 }),
             );
-            // The next frame is a barrier if discovery routing silently discarded the result.
-            daemon.send(liveEvent(sessionId, "settings response barrier"));
+            // Runtime and Session lanes can overtake each other. Keep this barrier
+            // on the settings response's Runtime lane to detect a dropped route.
+            const settingsBarrier = { ...rollback, requestId: "settings-response-barrier" };
+            daemon.send(JSON.stringify(settingsBarrier));
             expect(JSON.parse(await hostMessages.next())).toMatchObject({
                 kind: "agent.settings.discovery.failed",
                 requestId: "settings-before-wake",
                 code: "probe_failed",
             });
-            expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "session.event.v2" });
+            expect(JSON.parse(await hostMessages.next())).toEqual(settingsBarrier);
             vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
             // Unknown Runtime output keeps its explicit Session route and payload.
             daemon.send(JSON.stringify({ kind: "session.future.changed", sessionId, value: "future" }));
