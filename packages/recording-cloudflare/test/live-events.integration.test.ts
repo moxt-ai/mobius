@@ -60,6 +60,8 @@ describe("Recording live V2 events", () => {
             (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: [next] }), env)).status,
         ).toBe(201);
         const response = await waiting;
+        expect(response.headers.get("Server-Timing")).toMatch(/recording-read;dur=[0-9.]+/u);
+        expect(response.headers.get("Server-Timing")).toMatch(/recording-wait;dur=[0-9.]+/u);
         expect(response.status).toBe(200);
         expect(decodeSessionRecordingHistoryPage(await response.text()).events).toEqual([next]);
         expect(response.headers.get("Mobius-Recording-Wait-Supported")).toBe("1");
@@ -676,17 +678,154 @@ describe("Recording incremental reads", () => {
         expect((await worker.fetch(read("?after=0&limit=0"), env)).status).toBe(400);
         expect((await worker.fetch(read("?after=0&limit=99999"), env)).status).toBe(400);
     });
-    it("Given a well-formed cursor that no longer resolves, When a caller reads incrementally, Then the failure is reported as a structured error rather than opaque text", async () => {
+    it("Given a well-formed cursor that no longer resolves, When a caller reads incrementally, Then the read reports the cursor as expired so the caller can start over", async () => {
         expect(
             (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: numberedEvents(1, 0) }), env))
                 .status,
         ).toBe(201);
         // A cursor of valid shape whose batch is absent resolves to nothing inside the Durable Object.
-        const response = await worker.fetch(read("?after=v2:999:1&limit=10"), env);
-        expect(response.status).toBe(500);
-        expect(response.headers.get("content-type")).toContain("application/json");
+        for (const query of [
+            "?after=v2:999:1&limit=10",
+            "?after=v2:1:7&limit=10",
+            "?after=v2:999:1&limit=10&waitMs=1",
+        ]) {
+            const response = await worker.fetch(read(query), env);
+            expect(response.status).toBe(410);
+            expect(response.headers.get("content-type")).toContain("application/json");
+            expect(await response.json()).toEqual({
+                error: { code: "cursor_expired", message: "The Recording request could not be completed" },
+            });
+        }
+    });
+
+    it("Given a batch that repeats its last event, When a caller follows page cursors to the tail, Then it reaches an empty page", async () => {
+        const [first, second] = numberedEvents(2, 1);
+        expect(
+            (
+                await worker.fetch(
+                    write("runtime-live", { kind: "session.event.v2", events: [first, second, second] }),
+                    env,
+                )
+            ).status,
+        ).toBe(201);
+        const page = decodeSessionRecordingHistoryPage(
+            await (await worker.fetch(read("?after=0&limit=10"), env)).text(),
+        );
+        expect(page.events.map((candidate) => candidate.eventId)).toEqual(["event-1", "event-2", "event-2"]);
+
+        const next = await worker.fetch(read(`?after=${page.nextCursor}&limit=10`), env);
+        expect(decodeSessionRecordingHistoryPage(await next.text()).events).toEqual([]);
+    });
+
+    it("Given a stored batch that already repeats a position, When a caller continues from its tail, Then it reaches an empty page", async () => {
+        const [first, second] = numberedEvents(2, 1);
+        expect(
+            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: [first] }), env)).status,
+        ).toBe(201);
+        // A batch recorded by an earlier deployment kept a repeated frame inside one stored row.
+        await runInDurableObject(
+            env.SESSION_RECORDING.getByName(JSON.stringify([projectId, "live-session"])),
+            (_instance, state) => {
+                state.storage.sql.exec(
+                    "INSERT INTO recorded_session_events_v2 (envelope_json, first_position, last_position, recorded_at, session_generation_id) VALUES (?, 2, 2, 0, ?)",
+                    JSON.stringify({ kind: "session.event.v2", events: [second, second] }),
+                    event.sessionGenerationId,
+                );
+            },
+        );
+        const page = decodeSessionRecordingHistoryPage(
+            await (await worker.fetch(read("?after=v2:1:1&limit=10"), env)).text(),
+        );
+        expect(page.events.map((candidate) => candidate.eventId)).toEqual(["event-2", "event-2"]);
+        expect(page.nextCursor).toBe("v2:2:2");
+
+        const next = await worker.fetch(read(`?after=${page.nextCursor}&limit=10`), env);
+        expect(decodeSessionRecordingHistoryPage(await next.text()).events).toEqual([]);
+    });
+
+    it("Given one generation that later restarts, When a caller pages from the start, Then only a page carrying the new generation asks it to reset", async () => {
+        expect(
+            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: numberedEvents(2, 1) }), env))
+                .status,
+        ).toBe(201);
+        const first = decodeSessionRecordingHistoryPage(
+            await (await worker.fetch(read("?after=0&limit=1"), env)).text(),
+        );
+        expect(first).toMatchObject({ generationReset: false, truncated: true });
+
+        const restarted = numberedEvents(2, 1).map((candidate) => ({
+            ...candidate,
+            eventId: `reloaded-${candidate.eventId}`,
+            sessionGenerationId: "session-generation-reloaded",
+        }));
+        expect(
+            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: restarted }), env)).status,
+        ).toBe(201);
+        // This page stops before the restarted generation, so the caller still appends it.
+        const beforeRestart = decodeSessionRecordingHistoryPage(
+            await (await worker.fetch(read(`?after=${first.nextCursor}&limit=1`), env)).text(),
+        );
+        expect(beforeRestart.events.map((candidate) => candidate.eventId)).toEqual(["event-2"]);
+        expect(beforeRestart).toMatchObject({ generationReset: false, truncated: true });
+
+        const afterRestart = decodeSessionRecordingHistoryPage(
+            await (await worker.fetch(read(`?after=${beforeRestart.nextCursor}&limit=10`), env)).text(),
+        );
+        expect(afterRestart.events.map((candidate) => candidate.eventId)).toEqual([
+            "reloaded-event-1",
+            "reloaded-event-2",
+        ]);
+        expect(afterRestart.generationReset).toBe(true);
+    });
+
+    it("Given an event larger than a stored Recording batch holds, When it is recorded, Then it is rejected with a typed code and earlier history stays readable", async () => {
+        expect(
+            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: numberedEvents(1, 1) }), env))
+                .status,
+        ).toBe(201);
+        const [base] = numberedEvents(1, 2);
+        // Each of these characters takes three bytes, so the event is larger than one stored row allows.
+        const oversized = {
+            ...base,
+            payload: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "€".repeat(700_000) } },
+        };
+
+        const response = await worker.fetch(
+            write("runtime-live", { kind: "session.event.v2", events: [oversized] }),
+            env,
+        );
+
+        expect(response.status).toBe(413);
         expect(await response.json()).toEqual({
-            error: { code: "internal_error", message: "The Recording request could not be completed" },
+            error: { code: "recording_event_too_large", message: "The Recording request could not be completed" },
         });
+        const page = decodeSessionRecordingHistoryPage(
+            await (await worker.fetch(read("?after=0&limit=10"), env)).text(),
+        );
+        expect(page.events.map((candidate) => candidate.eventId)).toEqual(["event-1"]);
+    });
+
+    it("Given events that together exceed a stored Recording batch, When they are recorded in one batch, Then every event is readable in order", async () => {
+        const large = numberedEvents(2, 1).map((candidate) => ({
+            ...candidate,
+            payload: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "€".repeat(333_000) } },
+        }));
+        expect(
+            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: large }), env)).status,
+        ).toBe(201);
+
+        const received: string[] = [];
+        let cursor = "0";
+        for (;;) {
+            const page = decodeSessionRecordingHistoryPage(
+                await (await worker.fetch(read(`?after=${cursor}&limit=1`), env)).text(),
+            );
+            received.push(...page.events.map((candidate) => candidate.eventId));
+            if (page.nextCursor === null) {
+                break;
+            }
+            cursor = page.nextCursor;
+        }
+        expect(received).toEqual(["event-1", "event-2"]);
     });
 });

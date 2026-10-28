@@ -267,6 +267,10 @@ describe.sequential("Mini-client Recording integration", () => {
                     environment,
                 );
                 expect(response.status).toBe(200);
+                expect(response.headers.get("Server-Timing")).toMatch(/platform-authorize;dur=[0-9.]+/u);
+                if (paging !== "") {
+                    expect(response.headers.get("Server-Timing")).toMatch(/recording-read;dur=[0-9.]+/u);
+                }
                 expect(await response.json()).toMatchObject({ sessionId, events: [event] });
             }
         },

@@ -54,13 +54,18 @@ export class ExecutionReceipts {
             }
         }
     }
-    readonly #save = (commandId: string, receipt: StoredExecution): void => {
+    readonly #save = (
+        commandId: string,
+        receipt: StoredExecution,
+        liveOutcome: string | null = receipt.outcome,
+    ): void => {
         const evicted = this.#closing
             ? []
             : this.#table.save({ ...receipt, commandId, updatedAt: new Date().toISOString() }, MAX_TERMINAL_RECEIPTS);
         const previous = this.#executions.get(commandId);
         const wasActive = previous?.outcome === null;
-        this.#executions.set(commandId, receipt);
+        // Live failure detail may quote user input; only the durable receipt goes to the table.
+        this.#executions.set(commandId, { ...receipt, outcome: liveOutcome });
         for (const evictedCommandId of evicted) {
             this.#executions.delete(evictedCommandId);
             this.#recoveredCommands.delete(evictedCommandId);
@@ -195,10 +200,12 @@ export class ExecutionReceipts {
             payload.kind === "prompt.completed"
                 ? payload
                 : { ...payload, message: "The local Agent could not complete the request" };
-        this.#save(payload.commandId, {
-            ...receipt,
-            outcome: JSON.stringify({ type: "lifecycle-metadata", payload: sanitized, recordedAt: event.recordedAt }),
-        });
+        const outcome = { type: "lifecycle-metadata", payload, recordedAt: event.recordedAt };
+        this.#save(
+            payload.commandId,
+            { ...receipt, outcome: JSON.stringify({ ...outcome, payload: sanitized }) },
+            JSON.stringify(outcome),
+        );
     };
     readonly recover = (): readonly {
         readonly sessionId: string;
