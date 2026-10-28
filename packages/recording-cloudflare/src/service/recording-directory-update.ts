@@ -1,18 +1,17 @@
 import { conversationTitleFromText } from "@moxt-ai/mobius-sdk";
 import {
+    isSessionLiveEvent,
     type SessionRecordingWireWrite,
     type SessionWireEvent,
-    sessionLiveEventSchema,
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { DirectoryOperation, RecordingDirectoryUpdate } from "../entity/recording-directory-update.ts";
 
 function operation(wireEvent: SessionWireEvent): DirectoryOperation {
     const recordedAt = wireEvent.recordedAt;
-    const parsed = sessionLiveEventSchema.safeParse(wireEvent);
-    if (!parsed.success) {
+    if (!isSessionLiveEvent(wireEvent)) {
         return { kind: "activity", recordedAt };
     }
-    const event = parsed.data;
+    const event = wireEvent;
     if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.requested") {
         const payload = event.payload;
         if (payload.context !== undefined) {

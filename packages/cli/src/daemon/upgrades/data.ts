@@ -1,4 +1,4 @@
-import { runtimeUpgradeVersionSchema } from "@moxt-ai/mobius-sdk/protocol";
+import { decodeRuntimeUpgradeVersion } from "@moxt-ai/mobius-sdk/protocol";
 import {
     copyVersionData,
     discardVersionData,
@@ -20,7 +20,7 @@ export async function prepareVersionData(
 ): Promise<void> {
     signal.throwIfAborted();
     const root = readStateDirectory(environment);
-    const targetVersion = runtimeUpgradeVersionSchema.parse(version);
+    const targetVersion = decodeRuntimeUpgradeVersion(version);
     const current = await readCurrentDataVersion(root, signal);
     let previous: string;
     if (current !== null) {
@@ -37,7 +37,7 @@ export async function prepareVersionData(
         }
         previous = fallbackVersion;
     }
-    const leftBehind = await copyVersionData(root, runtimeUpgradeVersionSchema.parse(previous), targetVersion, signal);
+    const leftBehind = await copyVersionData(root, decodeRuntimeUpgradeVersion(previous), targetVersion, signal);
     for (const entry of leftBehind) {
         process.stderr.write(
             `Mobius did not carry ${entry} into version ${targetVersion}: an earlier Mobius ran with that installation as its state root.\n`,
@@ -48,11 +48,11 @@ export async function prepareVersionData(
 // A version whose switch rolled back never had the current data; once the previous version runs again, its copy is
 // stale, and its next attempt must inherit the current data rather than reuse that copy.
 export async function discardRolledBackData(version: string, signal: AbortSignal): Promise<void> {
-    await discardVersionData(readStateDirectory(), runtimeUpgradeVersionSchema.parse(version), signal);
+    await discardVersionData(readStateDirectory(), decodeRuntimeUpgradeVersion(version), signal);
 }
 
 export async function recordCurrentData(version: string, signal: AbortSignal): Promise<void> {
-    await writeCurrentDataVersion(readStateDirectory(), runtimeUpgradeVersionSchema.parse(version), signal);
+    await writeCurrentDataVersion(readStateDirectory(), decodeRuntimeUpgradeVersion(version), signal);
 }
 
 export async function prepareUpgradeData(

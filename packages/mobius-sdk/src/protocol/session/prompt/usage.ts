@@ -83,6 +83,9 @@ export const promptMetadataSchema = z
     })
     .readonly();
 
+export type PromptUsage = z.infer<typeof promptUsageSchema>;
+export type PromptMetadata = z.infer<typeof promptMetadataSchema>;
+
 const agentPromptResponseSchema = z
     .object({
         _meta: promptMetadataSchema.nullish(),
