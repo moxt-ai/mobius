@@ -101,6 +101,7 @@ import {
     isTaskNotificationOrigin,
     parseTaskNotifications,
 } from "./background-task-notifications.js";
+import { formatContextBlock, formatUriAsLink, replayContextResources } from "./context-resources.js";
 import {
     applyAskElicitationResponse,
     askUserQuestionsToCreateRequest,
@@ -7747,23 +7748,6 @@ function getAvailableSlashCommands(
         .filter((command: AvailableCommand) => !UNSUPPORTED_COMMANDS.includes(command.name));
 }
 
-function formatUriAsLink(uri: string): string {
-    try {
-        if (uri.startsWith("file://")) {
-            const path = uri.slice(7); // Remove "file://"
-            const name = path.split("/").pop() || path;
-            return `[@${name}](${uri})`;
-        } else if (uri.startsWith("zed://")) {
-            const parts = uri.split("/");
-            const name = parts[parts.length - 1] || uri;
-            return `[@${name}](${uri})`;
-        }
-        return uri;
-    } catch {
-        return uri;
-    }
-}
-
 export function promptToClaude(prompt: PromptRequest): SDKUserMessage {
     const content: any[] = [];
     const context: any[] = [];
@@ -7798,7 +7782,7 @@ export function promptToClaude(prompt: PromptRequest): SDKUserMessage {
                     });
                     context.push({
                         type: "text",
-                        text: `\n<context ref="${chunk.resource.uri}">\n${chunk.resource.text}\n</context>`,
+                        text: formatContextBlock(chunk.resource.uri, chunk.resource.text),
                     });
                 }
                 // Ignore blob resources (unsupported)
@@ -8116,9 +8100,14 @@ export function toAcpNotifications(
     const toolResultMeta = parseToolResultMeta(options?.toolResultMeta);
 
     const output = [];
+    const replayedResources = role === "user" && options.historical === true ? replayContextResources(content) : null;
     // Only handle the first chunk for streaming; extend as needed for batching
-    for (const chunk of content) {
+    for (const [index, chunk] of content.entries()) {
+        if (replayedResources !== null && index >= replayedResources.contextStart) {
+            break;
+        }
         let update: SessionNotification["update"] | null = null;
+        const resource = replayedResources?.resources.get(index);
         switch (chunk.type) {
             case "text":
             case "text_delta": {
@@ -8127,7 +8116,7 @@ export function toAcpNotifications(
                     update = {
                         sessionUpdate: role === "assistant" ? "agent_message_chunk" : "user_message_chunk",
                         messageId,
-                        content: {
+                        content: resource ?? {
                             type: "text",
                             text: chunk.text,
                         },
