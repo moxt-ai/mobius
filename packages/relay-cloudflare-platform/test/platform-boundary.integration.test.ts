@@ -2589,6 +2589,60 @@ it("Given Chat reads the Session execution naming an unconfirmed command, When t
     }
 });
 
+// @no-uc: Compatibility; Chat shows a missed turn's outcome from the Runtime, and older Runtimes keep the previous answer.
+it("Given Chat reads the Session execution after missing a turn's outcome, When the Runtime reports the last turn or predates that report, Then the Relay returns the outcome only when the Runtime supplied it", async () => {
+    const runtime = await connectRuntimeDaemon("last-turn");
+    try {
+        for (const runtimeVersion of ["current", "previous"] as const) {
+            const response = runtime.readSessionExecution();
+            const first = await Promise.race([
+                runtime.daemonMessages.next().then((message) => ({ kind: "command" as const, message })),
+                response.then((answered) => ({ kind: "response" as const, response: answered })),
+            ]);
+            if (first.kind === "response") {
+                throw new Error(
+                    `Expected a daemon request, received ${first.response.status}: ${await first.response.text()}`,
+                );
+            }
+            const query = decodeServiceToDaemonMessage(first.message);
+            if (query.kind !== "native.session.request" || query.action !== "active-turn") {
+                throw new Error("Expected the Session execution read to reach the daemon");
+            }
+            runtime.daemon.send(
+                encodeNativeSessionResult({
+                    kind: "native.session.result",
+                    action: "active-turn",
+                    requestId: query.requestId,
+                    sessionId: runtime.sessionId,
+                    targetSessionId: runtime.sessionId,
+                    turn: null,
+                    queued: [],
+                    ...(runtimeVersion === "current"
+                        ? {
+                              lastTurn: {
+                                  code: "model_unavailable",
+                                  commandId: "failed-command",
+                                  message: "The local Agent could not complete the request",
+                                  state: "failed",
+                              } as const,
+                          }
+                        : {}),
+                }),
+            );
+            const body = await responseJson(await response, 200);
+            if (runtimeVersion === "current") {
+                expect(body).toMatchObject({
+                    lastTurn: { commandId: "failed-command", state: "failed", code: "model_unavailable" },
+                });
+            } else {
+                expect(body).not.toHaveProperty("lastTurn");
+            }
+        }
+    } finally {
+        runtime.daemon.close(1000, "Test complete");
+    }
+});
+
 describe.sequential("Platform Turn submission", () => {
     // @no-uc: Compatibility; trusted backends must control a Runtime Session without delegated Session access.
     it.each([

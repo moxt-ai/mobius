@@ -1402,7 +1402,8 @@ export class MobiusSessionResources {
     /**
      * Reads the Session's execution. Naming a command also asks for that command's delivery;
      * `command` stays absent when the Relay or Runtime cannot report it, so the caller keeps
-     * whatever it already knew about the submission.
+     * whatever it already knew about the submission. `lastTurn` reports how the last started
+     * command ended when none runs, and is likewise absent from older peers.
      */
     readonly readSessionExecution = async (
         sessionId: string,
@@ -1414,7 +1415,10 @@ export class MobiusSessionResources {
         signal: AbortSignal,
         commandId?: string,
     ): Promise<
-        Pick<Extract<NativeSessionResult, { readonly action: "active-turn" }>, "turn" | "queued" | "command">
+        Pick<
+            Extract<NativeSessionResult, { readonly action: "active-turn" }>,
+            "turn" | "queued" | "command" | "lastTurn"
+        >
     > => {
         const path = requestUrl(
             new URL("https://mobius.invalid/"),
@@ -1438,6 +1442,7 @@ export class MobiusSessionResources {
             turn: result.turn,
             queued: result.queued,
             ...(result.command === undefined ? {} : { command: result.command }),
+            ...(result.lastTurn === undefined ? {} : { lastTurn: result.lastTurn }),
         };
     };
 
