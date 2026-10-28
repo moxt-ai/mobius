@@ -28,6 +28,10 @@ export interface ResolvedExternalContent {
     readonly path: string;
 }
 
+export interface ReadExternalContent extends ResolvedExternalContent {
+    readonly bytes: Uint8Array;
+}
+
 export interface ExternalContentStore {
     readonly put: (input: {
         readonly bytes: Uint8Array;
@@ -42,7 +46,7 @@ export interface ExternalContentStore {
         request: string,
         signal: AbortSignal,
     ) => Promise<ResolvedExternalContent | null>;
-    readonly read: (sessionId: string, request: string, signal: AbortSignal) => Promise<Uint8Array | null>;
+    readonly read: (sessionId: string, request: string, signal: AbortSignal) => Promise<ReadExternalContent | null>;
 }
 
 interface CachedContent extends ResolvedExternalContent {
@@ -158,7 +162,11 @@ export class LocalExternalContentStore implements ExternalContentStore, AsyncDis
         this.#track(async () => {
             const active = AbortSignal.any([signal, this.#lifetime.signal]);
             const resolved = await this.#resolve(sessionId, request, active);
-            return resolved === null ? null : this.#scratch.read(resolved.path, active);
+            if (resolved === null) {
+                return null;
+            }
+            const bytes = await this.#scratch.read(resolved.path, active);
+            return bytes === null ? null : { ...resolved, bytes };
         });
 
     readonly [Symbol.asyncDispose] = async (): Promise<void> => {

@@ -73,16 +73,16 @@ export const sessionPromptCommand: RuntimeCommand = {
             eventProjection: context.eventProjection,
             command: message,
             resolveAgent: context.resolveAgent,
-            readArtifact: async (artifact, signal) => {
-                const bytes = await context.externalContent.read(
+            readArtifact: async (attachment, signal) => {
+                const artifact = await context.externalContent.read(
                     message.sessionId,
-                    `mobius-content:${artifact.kind}:${artifact.contentKey}`,
+                    `mobius-content:${attachment.kind}:${attachment.contentKey}`,
                     signal,
                 );
-                if (bytes === null) {
+                if (artifact === null) {
                     throw new Error("The prompt attachment is unavailable");
                 }
-                return bytes;
+                return { bytes: artifact.bytes, path: artifact.path };
             },
             reportFailure: context.diagnostics.daemonDiagnostic,
             directories: context.directories,

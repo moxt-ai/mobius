@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { pathToFileURL } from "node:url";
 import { PROMPT_IMAGE_MAX_BYTES, type PromptAttachment } from "@moxt-ai/mobius-sdk/protocol";
 import type { PromptImageInput, PromptResourceInput } from "../../acp/client/prompt-content.ts";
 import { OperationError } from "../../infra/operation-error.ts";
@@ -22,7 +23,15 @@ export class ResolvedPromptArtifacts {
     }
 }
 
-export type ReadPromptArtifact = (attachment: PromptAttachment, signal: AbortSignal) => Promise<Uint8Array>;
+export interface ReadPromptArtifactResult {
+    readonly bytes: Uint8Array;
+    readonly path: string;
+}
+
+export type ReadPromptArtifact = (
+    attachment: PromptAttachment,
+    signal: AbortSignal,
+) => Promise<ReadPromptArtifactResult>;
 
 function isTextMediaType(mediaType: string): boolean {
     return (
@@ -43,7 +52,8 @@ export async function resolvePromptArtifacts(
     const resources: PromptResourceInput[] = [];
     for (const attachment of attachments) {
         signal.throwIfAborted();
-        const bytes = await read(attachment, signal);
+        const artifact = await read(attachment, signal);
+        const { bytes } = artifact;
         if (
             bytes.byteLength !== attachment.byteLength ||
             createHash("sha256").update(bytes).digest("hex") !== attachment.contentKey
@@ -64,6 +74,30 @@ export async function resolvePromptArtifacts(
                 data: Buffer.from(bytes).toString("base64"),
                 mimeType: attachment.mimeType,
                 name: attachment.name,
+            });
+            continue;
+        }
+        if (attachment.mimeType === "image/svg+xml") {
+            if (bytes.byteLength > MAX_AGENT_RESOURCE_BYTE_LENGTH || resources.length >= 16) {
+                throw new PromptArtifactError(
+                    "artifact_too_large_for_agent",
+                    "The prompt attachment exceeds the Agent resource limit",
+                );
+            }
+            try {
+                new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+            } catch (cause) {
+                throw new PromptArtifactError(
+                    "artifact_encoding_invalid",
+                    "The prompt attachment is not valid UTF-8 text",
+                    { cause },
+                );
+            }
+            resources.push({
+                mimeType: attachment.mimeType,
+                name: attachment.name,
+                type: "link",
+                uri: pathToFileURL(artifact.path).href,
             });
             continue;
         }

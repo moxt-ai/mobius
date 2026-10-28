@@ -46,7 +46,7 @@ function promptContent(command: SessionPromptCommand): readonly ContentBlock[] {
                   }
                 : {
                       byteLength: attachment.byteLength,
-                      encoding: "text",
+                      encoding: attachment.mimeType === "image/svg+xml" ? "binary" : "text",
                       mimeType: attachment.mimeType,
                       resourceKey: attachment.contentKey,
                       type: "external_resource",
