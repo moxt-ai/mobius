@@ -326,6 +326,7 @@ export class MobiusRotatedPlatformAppCredential extends MobiusPlatformAppCredent
 export class MobiusPlatformApp {
     readonly appId: string;
     readonly createdAt: string;
+    /** @deprecated Use initialCredentialId. This is the creation-time credential, which may no longer be valid. */
     readonly defaultCredentialId: string;
     readonly deletedAt: string;
     readonly displayName: string;
@@ -333,6 +334,12 @@ export class MobiusPlatformApp {
     readonly suspendedAt: string;
     readonly tenantId: string;
     readonly updatedAt: string;
+
+    /** The credential issued at App creation; rotation and revocation do not change this historical ID. */
+    get initialCredentialId(): string {
+        // The v1 field remains an own property for existing consumers and works with older Workers.
+        return this.defaultCredentialId;
+    }
 
     constructor(value: Readonly<Record<string, unknown>>) {
         this.appId = identifier(value, "appId");
