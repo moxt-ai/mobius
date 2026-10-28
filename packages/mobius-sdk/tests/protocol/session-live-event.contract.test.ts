@@ -1,6 +1,7 @@
 import {
     decodeDaemonToRelayMessage,
     decodeSessionEvent,
+    decodeSessionEventLogPage,
     decodeSessionLiveEvent,
     encodeSessionEvent,
     type SessionEvent,
@@ -23,6 +24,33 @@ const eventWithoutProvenance = {
 const sharedEvent = eventWithoutProvenance;
 
 describe("Session Event V2 contracts", () => {
+    it("Given an older Runtime history page with lifecycle entries, When a current client reads it, Then it receives ACP history without rejecting the page", () => {
+        const page = {
+            events: [
+                {
+                    ...sharedEvent,
+                    eventId: "legacy-lifecycle",
+                    type: "lifecycle-metadata",
+                    payload: { kind: "prompt.completed", commandId: "command-1", stopReason: "end_turn" },
+                },
+                sharedEvent,
+            ],
+            nextCursor: null,
+            sessionGenerationId: "generation-1",
+            tailCursor: sharedEvent.eventId,
+            truncated: false,
+            version: 2,
+        };
+
+        expect(decodeSessionEventLogPage(page)).toEqual({ ...page, events: [sharedEvent] });
+        expect(() =>
+            decodeSessionEventLogPage({
+                ...page,
+                events: [{ ...page.events[0], payload: { kind: "prompt.completed", commandId: 5 } }],
+            }),
+        ).toThrow();
+    });
+
     it("Given the lossless relay boundary, When routing metadata or batch bounds are invalid, Then it rejects the envelope", () => {
         const event = { ...sharedEvent, position: "1" };
         for (const events of [

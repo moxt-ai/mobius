@@ -535,9 +535,27 @@ export const sessionEventEnvelopeSchema = z
     .object({ events: sessionLiveEventBatchSchema, kind: z.literal(SESSION_EVENT_KIND) })
     .readonly();
 export type SessionEventEnvelope = z.infer<typeof sessionEventEnvelopeSchema>;
+// Older Runtimes included lifecycle observations in history pages. Validate the
+// legacy entries before projecting ACP-only history; live delivery is unchanged.
+const compatibleHistoryEventsSchema = z
+    .array(
+        z.discriminatedUnion("type", [
+            sessionEventSchema,
+            z
+                .object({
+                    ...sharedSessionEventFields,
+                    payload: lifecycleMetadataSchema,
+                    type: z.literal("lifecycle-metadata"),
+                })
+                .readonly(),
+        ]),
+    )
+    .max(MAX_EVENT_COUNT)
+    .transform((events) => events.filter((event) => event.type === "acp"))
+    .readonly();
 export const sessionEventLogPageSchema = z
     .object({
-        events: z.array(sessionEventSchema).max(MAX_EVENT_COUNT).readonly(),
+        events: compatibleHistoryEventsSchema,
         nextCursor: z.string().min(1).max(512).nullable(),
         sessionGenerationId: identifier,
         tailCursor: z.string().max(512),
