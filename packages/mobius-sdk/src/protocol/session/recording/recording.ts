@@ -3,11 +3,7 @@ import { DIRECTORY_IDENTIFIER } from "../../shared/directory.ts";
 
 import { identifierStringSchema } from "../../shared/identifier.ts";
 import { decodeZodMessage as decode, encodeZodMessage as encode } from "../../shared/message-codec.ts";
-import {
-    sessionEventEnvelopeSchema,
-    sessionLiveEventSchema,
-    sessionWireEnvelopeSchema,
-} from "../observability/event-log.ts";
+import { sessionEventEnvelopeSchema, sessionLiveEventSchema, sessionWireEnvelopeSchema } from "../events/index.ts";
 
 /** An optional event-read wait budget is bounded independently of the page's event budget. */
 export function parseSessionRecordingWaitMilliseconds(value: string): number | null {
