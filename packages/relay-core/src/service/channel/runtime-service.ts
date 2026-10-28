@@ -463,6 +463,7 @@ export class RuntimeService {
             daemonMessage = decodeDaemonToRelayMessage(message);
         } catch {
             // Reject this frame without disconnecting unrelated Sessions.
+            this.channel(identity.runtimeId, scope).recordSkipped("invalid_daemon_message");
             return;
         }
         // The host answers fixed-text heartbeats without the Relay. Daemons released before that send an

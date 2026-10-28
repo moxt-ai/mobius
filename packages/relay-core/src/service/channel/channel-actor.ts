@@ -95,6 +95,7 @@ import {
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { SessionRuntimeError } from "../../entity/do/session.ts";
+import { logger } from "../../infra/logger.ts";
 import type { SessionStatusNotifications } from "../../infra/session-status-notifications.ts";
 import type { BestEffortRecording } from "./best-effort-recording.ts";
 import { SessionLiveEventRelay } from "./session-live-event-relay.ts";
@@ -116,10 +117,11 @@ function copyBinaryFrame(value: unknown): ArrayBuffer {
     throw new ProtocolMessageError("Content chunk must be binary");
 }
 
-function knownChunk(value: unknown) {
+function knownChunk(value: unknown, skipped: () => void) {
     try {
         return decodeContentChunkFrame(value);
     } catch {
+        skipped();
         return null;
     }
 }
@@ -161,6 +163,28 @@ export interface ChannelPeers {
 }
 
 export class ChannelActor {
+    #lastSkippedLogAt = Number.NEGATIVE_INFINITY;
+    #skippedCount = 0;
+
+    readonly recordSkipped = (reason: string): void => {
+        this.#skippedCount += 1;
+        const now = Date.now();
+        if (now - this.#lastSkippedLogAt < 60_000) {
+            return;
+        }
+        logger.warn(
+            {
+                event: "relay_message_skipped",
+                reason,
+                skippedCount: this.#skippedCount,
+                runtimeId: this.#runtimeId,
+                projectId: this.#projectId,
+            },
+            "Relay skipped unsupported input",
+        );
+        this.#lastSkippedLogAt = now;
+        this.#skippedCount = 0;
+    };
     readonly #peers: ChannelPeers;
     readonly #projectId: string;
     readonly #runtimeId: string;
@@ -220,20 +244,24 @@ export class ChannelActor {
         try {
             if (message === null) {
                 if (encoded === undefined) {
+                    this.recordSkipped("missing_daemon_payload");
                     return;
                 }
                 let value: unknown;
                 try {
                     value = JSON.parse(encoded);
                 } catch {
+                    this.recordSkipped("invalid_daemon_json");
                     return;
                 }
                 if (typeof value !== "object" || value === null || Array.isArray(value)) {
+                    this.recordSkipped("unsupported_daemon_envelope");
                     return;
                 }
                 const sessionId: unknown = Reflect.get(value, "sessionId");
                 const kind: unknown = Reflect.get(value, "kind");
                 if (typeof kind !== "string" || kind.length === 0 || kind.length > 64 || !isIdentifier(sessionId)) {
+                    this.recordSkipped("unroutable_daemon_message");
                     return;
                 }
                 // The authenticated daemon owns its output. Unknown payloads can
@@ -328,7 +356,7 @@ export class ChannelActor {
     };
 
     readonly receiveDaemonChunk = (_socket: ChannelSocket, message: unknown): void => {
-        const chunk = knownChunk(message);
+        const chunk = knownChunk(message, () => this.recordSkipped("unsupported_daemon_frame"));
         if (chunk === null) {
             return;
         }
@@ -346,7 +374,7 @@ export class ChannelActor {
     };
 
     readonly receiveHostChunk = (socket: ChannelSocket, message: unknown): void => {
-        const chunk = knownChunk(message);
+        const chunk = knownChunk(message, () => this.recordSkipped("unsupported_host_frame"));
         if (chunk === null) {
             return;
         }
@@ -374,6 +402,7 @@ export class ChannelActor {
         }
         try {
             if (decodeKnownServiceToDaemonMessage(message) === null) {
+                this.recordSkipped("unsupported_host_message");
                 return;
             }
             const kind = decodeMessageKind(message);

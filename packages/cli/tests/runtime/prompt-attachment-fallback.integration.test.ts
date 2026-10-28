@@ -8,13 +8,17 @@ import {
     type PromptAttachment,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
-import { expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { ControlledAcpAgentSpecification } from "../support/agents/controlled-acp.ts";
 import { withControlledDaemon } from "../support/agents/real-daemon.ts";
 import { uploadPromptContent } from "../support/agents/upload-prompt-content.ts";
 import { writeControlledAcpExecutable } from "../support/controlled-acp-executable.ts";
 
+afterEach(() => vi.useRealTimers());
+
 test("Given unsupported attachments, When a prompt has text, Then the daemon delivers the original text without losing the connection", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-28T08:00:00Z"));
     const directory = await mkdtemp(join(tmpdir(), "old-pdf-peer-"));
     try {
         const executable = await writeControlledAcpExecutable(directory);
@@ -75,9 +79,6 @@ test("Given unsupported attachments, When a prompt has text, Then the daemon del
                     );
                     return finish(commandId);
                 };
-                peer.send(
-                    JSON.stringify({ kind: "session.future.read", requestId: randomUUID(), sessionId: peer.sessionId }),
-                );
                 for (const input of [
                     {
                         bytes: new TextEncoder().encode("%PDF-1.4\nHello PDF"),
@@ -106,6 +107,19 @@ test("Given unsupported attachments, When a prompt has text, Then the daemon del
                     const recovery = await send([], "Still connected after attachment rejection");
                     expect(recovery.payload.kind).toBe("prompt.completed");
                 }
+                expect((await peer.readDiagnostics()).match(/"event":"prompt_attachments_skipped"/gu)).toHaveLength(1);
+                vi.setSystemTime(new Date("2026-10-28T08:01:00Z"));
+                const attachment = await uploadPromptContent(peer, {
+                    bytes: new TextEncoder().encode("%PDF-more"),
+                    kind: "resource",
+                    mediaType: "application/pdf",
+                    name: "again.pdf",
+                    uri: "attachment:///again.pdf",
+                });
+                await send([attachment], "Continue after the log interval");
+                const logs = await peer.readDiagnostics();
+                expect(logs.match(/"event":"prompt_attachments_skipped"/gu)).toHaveLength(2);
+                expect(logs).toContain('"skippedCount":"4"');
             },
         );
     } finally {

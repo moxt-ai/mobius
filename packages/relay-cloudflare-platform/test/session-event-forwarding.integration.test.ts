@@ -171,6 +171,10 @@ it("Given future unroutable daemon variants, When the Relay receives them, Then 
         const status = { kind: "session.status.changed", sessionId: "session-1", status: { kind: "idle" } };
         daemon.socket.send(JSON.stringify(status));
         expect(await host.inbox.next()).toEqual(status);
+        vi.setSystemTime(new Date("2026-10-27T00:01:00.000Z"));
+        daemon.socket.send(JSON.stringify({ version: 4 }));
+        daemon.socket.send(JSON.stringify(status));
+        expect(await host.inbox.next()).toEqual(status);
     });
 });
 
