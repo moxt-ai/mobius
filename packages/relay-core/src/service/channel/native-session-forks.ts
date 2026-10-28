@@ -2,6 +2,7 @@ import type { ForkMobiusNativeSessionRequest } from "@moxt-ai/mobius-sdk";
 import {
     decodeNativeSessionRequest,
     decodeNativeSessionResult,
+    decodeSessionRestoreCommand,
     RUNTIME_WORKSPACE_BINDING_ID,
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { ProjectScope } from "../../entity/do/session.ts";
@@ -60,6 +61,67 @@ export class NativeSessionForks {
         this.#waitUntil = waitUntil;
     }
 
+    async #recover(
+        scope: ProjectScope,
+        runtimeId: string,
+        input: ForkMobiusNativeSessionRequest,
+        attemptJson: string,
+        request: SessionRuntimeOperations["requestProjectScopeControl"],
+        signal: AbortSignal,
+    ) {
+        try {
+            const encoded: unknown = JSON.parse(attemptJson);
+            if (
+                typeof encoded !== "object" ||
+                encoded === null ||
+                !("source" in encoded) ||
+                !("targetSessionId" in encoded)
+            ) {
+                throw unknownOutcome();
+            }
+            const source = decodeNativeSessionResult(JSON.stringify(encoded.source));
+            if (source.action !== "find" || source.entry.nativeSessionId !== input.nativeSessionId) {
+                throw unknownOutcome();
+            }
+            const restore = decodeSessionRestoreCommand(
+                JSON.stringify({
+                    kind: "session.restore",
+                    requestId: crypto.randomUUID(),
+                    sessionId: encoded.targetSessionId,
+                }),
+            );
+            // Restore only an existing committed Session. Unlike prepare, this cannot create a missing target.
+            const restored = await request(scope, runtimeId, restore, signal);
+            if (
+                restored.kind !== "session.restored" ||
+                restored.entry.sessionId !== restore.sessionId ||
+                !restored.entry.prompted ||
+                restored.ready.sessionId !== restore.sessionId ||
+                restored.ready.agentId !== input.agentId ||
+                restored.entry.agentId !== input.agentId ||
+                restored.ready.directoryId !== source.entry.directoryId ||
+                JSON.stringify(restored.ready.additionalDirectories.map((directory) => directory.directoryId)) !==
+                    JSON.stringify(source.entry.additionalDirectories.map((directory) => directory.directoryId))
+            ) {
+                throw unknownOutcome();
+            }
+            const result = forkResult(
+                JSON.stringify({
+                    kind: "native.session.result",
+                    action: "fork",
+                    requestId: restore.requestId,
+                    sessionId: source.sessionId,
+                    targetSessionId: restore.sessionId,
+                    ready: restored.ready,
+                    title: restored.entry.title,
+                }),
+            );
+            return { source, result };
+        } catch (cause) {
+            throw unknownOutcome(cause);
+        }
+    }
+
     readonly fork = async (
         scope: ProjectScope,
         runtimeId: string,
@@ -87,8 +149,8 @@ export class NativeSessionForks {
         if (running !== undefined) {
             return await waitForFork(running.completion, signal);
         }
-        if (prior !== undefined) {
-            // A restart or ambiguous Runtime failure must never turn a prior attempt into another Fork.
+        if (prior !== undefined && prior.attemptJson === null) {
+            // Legacy receipts cannot identify the target. Never turn an unknown attempt into another Fork.
             throw unknownOutcome();
         }
         // Share the whole bounded operation, including lookup. Disconnecting one HTTP waiter only cancels its wait.
@@ -96,6 +158,18 @@ export class NativeSessionForks {
         const timer = setTimeout(() => controller.abort(new DOMException("Fork timed out", "TimeoutError")), 120_000);
         const completion = Promise.resolve().then(async () => {
             try {
+                if (prior !== undefined) {
+                    const receipt = await this.#recover(
+                        scope,
+                        runtimeId,
+                        input,
+                        prior.attemptJson ?? "null",
+                        request,
+                        controller.signal,
+                    );
+                    this.#storage.complete(scope.projectId, operationId, JSON.stringify(receipt));
+                    return receipt;
+                }
                 // Resolve and authorize the native identity before recording any possible side effect.
                 const found = await request(
                     scope,
@@ -142,7 +216,15 @@ export class NativeSessionForks {
                 if (command.action !== "fork") {
                     throw new PairingDirectoryError("invalid_request", "The Fork request is invalid");
                 }
-                this.#storage.start(scope.projectId, operationId, requestHash);
+                this.#storage.start(
+                    scope.projectId,
+                    operationId,
+                    requestHash,
+                    JSON.stringify({
+                        source: found,
+                        targetSessionId: command.targetSessionId,
+                    }),
+                );
                 try {
                     const result = forkResult(
                         JSON.stringify(await request(scope, runtimeId, command, controller.signal)),

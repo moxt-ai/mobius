@@ -43,6 +43,13 @@
             "when": 1793107514996,
             "tag": "0005_glamorous_stick",
             "breakpoints": true
+        },
+        {
+            "idx": 6,
+            "version": "6",
+            "when": 1793155486157,
+            "tag": "0006_purple_lorna_dane",
+            "breakpoints": true
         }
     ]
 }

@@ -5,7 +5,7 @@ import { mobiusApiPath } from "@moxt-ai/mobius-sdk/protocol";
 import { MobiusClient, StaticMobiusCredentialProvider } from "@moxt-ai/mobius-sdk/server";
 import * as v from "valibot";
 import { RuntimeLocalContext } from "../../src/runtime/config.ts";
-import { runRuntime } from "../../src/runtime/run.ts";
+import { type RunRuntimeOptions, runRuntime } from "../../src/runtime/run.ts";
 import {
     defaultFakeAgentHarness,
     type FakeAgentHarnessDefinition,
@@ -42,6 +42,8 @@ export async function createFakeAgentHarnessRuntime(options: {
     readonly harnesses?: readonly FakeAgentHarnessDefinition[];
     readonly nativeSessionIds?: ReadonlySet<string>;
     readonly origin: string;
+    readonly relayOrigin?: string;
+    readonly runtimeOptions?: RunRuntimeOptions;
     readonly projectId: string;
     readonly server: TestServerApp;
     readonly signal: AbortSignal;
@@ -107,7 +109,7 @@ export async function createFakeAgentHarnessRuntime(options: {
                 )
             ).json(),
         );
-        const relayUrl = new URL(mobiusApiPath("/v1/runtimes/connect"), options.origin);
+        const relayUrl = new URL(mobiusApiPath("/v1/runtimes/connect"), options.relayOrigin ?? options.origin);
         relayUrl.protocol = relayUrl.protocol === "https:" ? "wss:" : "ws:";
         relayUrl.searchParams.set("token", claim.runtimeCredential);
         const localContext = new RuntimeLocalContext(directory, process.env);
@@ -116,7 +118,7 @@ export async function createFakeAgentHarnessRuntime(options: {
             harnesses.map((definition) => fakeAgentHarness(definition, harnessState)),
             localContext,
         );
-        runtime = runRuntime(config, signal);
+        runtime = runRuntime(config, signal, undefined, options.runtimeOptions);
         void runtime.catch((error: unknown) => {
             if (!signal.aborted) {
                 console.error("Controlled Agent harness daemon failed", error);
