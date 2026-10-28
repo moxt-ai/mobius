@@ -1399,6 +1399,11 @@ export class MobiusSessionResources {
         );
     };
 
+    /**
+     * Reads the Session's execution. Naming a command also asks for that command's delivery;
+     * `command` stays absent when the Relay or Runtime cannot report it, so the caller keeps
+     * whatever it already knew about the submission.
+     */
     readonly readSessionExecution = async (
         sessionId: string,
         identity: {
@@ -1407,7 +1412,10 @@ export class MobiusSessionResources {
             readonly directoryId: string;
         },
         signal: AbortSignal,
-    ): Promise<Pick<Extract<NativeSessionResult, { readonly action: "active-turn" }>, "turn" | "queued">> => {
+        commandId?: string,
+    ): Promise<
+        Pick<Extract<NativeSessionResult, { readonly action: "active-turn" }>, "turn" | "queued" | "command">
+    > => {
         const path = requestUrl(
             new URL("https://mobius.invalid/"),
             sessionPath(this.#projectId, sessionId, "active-turn"),
@@ -1417,13 +1425,20 @@ export class MobiusSessionResources {
         for (const directoryId of identity.additionalDirectoryIds) {
             path.searchParams.append("additionalDirectoryId", directoryId);
         }
+        if (commandId !== undefined) {
+            path.searchParams.set("commandId", commandId);
+        }
         const result = decodeNativeSessionResult(
             JSON.stringify(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal)),
         );
         if (result.action !== "active-turn" || result.targetSessionId !== sessionId) {
             throw new MobiusProtocolError("The service returned an invalid active Turn");
         }
-        return { turn: result.turn, queued: result.queued };
+        return {
+            turn: result.turn,
+            queued: result.queued,
+            ...(result.command === undefined ? {} : { command: result.command }),
+        };
     };
 
     readonly readRuntimeSessionExecution = async (

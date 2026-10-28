@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+    type CommandDelivery,
     decodeKnownSessionEventPayload,
     encodeSessionCancelBeforeStartCommand,
     type SessionEventPayload,
@@ -74,6 +75,34 @@ export class ExecutionReceipts {
         return receipt?.outcome === null || receipt === undefined
             ? undefined
             : (decodeKnownSessionEventPayload(JSON.parse(receipt.outcome)) ?? undefined);
+    };
+    /** The command's delivery as these receipts know it; another Session's command reads as unknown. */
+    readonly delivery = (commandId: string, sessionId: string): CommandDelivery => {
+        const receipt = this.#executions.get(commandId);
+        if (receipt === undefined) {
+            return this.#table.identity(commandId)?.sessionId === sessionId
+                ? { state: "expired" }
+                : { state: "unknown" };
+        }
+        if (receipt.sessionId !== sessionId) {
+            return { state: "unknown" };
+        }
+        if (receipt.outcome === null) {
+            return { state: "accepted" };
+        }
+        const outcome = this.outcome(commandId);
+        if (outcome?.type !== "lifecycle-metadata") {
+            return { state: "expired" };
+        }
+        switch (outcome.payload.kind) {
+            case "prompt.completed":
+                return { state: "completed", stopReason: outcome.payload.stopReason };
+            case "prompt.failed":
+            case "prompt.failed-before-start":
+                return { code: outcome.payload.code, state: "failed" };
+            default:
+                return { state: "expired" };
+        }
     };
     /** Reserves an unseen command for cancellation before a delayed prompt can claim its identity. */
     readonly recordCancellationBeforeAdmission = (
