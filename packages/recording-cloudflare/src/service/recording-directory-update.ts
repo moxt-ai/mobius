@@ -1,37 +1,18 @@
-import type { SessionLiveEvent, SessionRecordingWrite } from "@moxt-ai/mobius-sdk/protocol";
+import { conversationTitleFromText } from "@moxt-ai/mobius-sdk";
+import {
+    type SessionRecordingWireWrite,
+    type SessionWireEvent,
+    sessionLiveEventSchema,
+} from "@moxt-ai/mobius-sdk/protocol";
 import type { DirectoryOperation, RecordingDirectoryUpdate } from "../entity/recording-directory-update.ts";
 
-const CONVERSATION_TITLE_CHARACTER_LIMIT = 42;
-
-function conversationTitleFromText(text: string): string {
-    let compact = "";
-    for (const line of text.split(/\r?\n/u)) {
-        const candidate = line.replaceAll(/\s+/g, " ").trim();
-        if (candidate.length === 0 || candidate.startsWith("```") || candidate.startsWith("~~~")) {
-            continue;
-        }
-        const readable = candidate
-            .replace(/^(?:>\s*)+/u, "")
-            .replace(/^#{1,6}(?:\s+|$)/u, "")
-            .replace(/^(?:[-*+]|\d+[.)])\s+/u, "")
-            .trim();
-        if (readable.length > 0) {
-            compact = readable;
-            break;
-        }
+function operation(wireEvent: SessionWireEvent): DirectoryOperation {
+    const recordedAt = wireEvent.recordedAt;
+    const parsed = sessionLiveEventSchema.safeParse(wireEvent);
+    if (!parsed.success) {
+        return { kind: "activity", recordedAt };
     }
-    if (compact.length === 0) {
-        compact = text.replaceAll(/\s+/g, " ").trim();
-    }
-    const characters = Array.from(compact);
-    if (characters.length <= CONVERSATION_TITLE_CHARACTER_LIMIT) {
-        return compact;
-    }
-    return `${characters.slice(0, CONVERSATION_TITLE_CHARACTER_LIMIT - 1).join("")}…`;
-}
-
-function operation(event: SessionLiveEvent): DirectoryOperation {
-    const recordedAt = event.recordedAt;
+    const event = parsed.data;
     if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.requested") {
         const payload = event.payload;
         if (payload.context !== undefined) {
@@ -55,7 +36,7 @@ function operation(event: SessionLiveEvent): DirectoryOperation {
 }
 
 /** Keeps ordered creation/title changes while replacing other events with activity times. */
-export function projectDirectoryUpdate(write: SessionRecordingWrite): RecordingDirectoryUpdate {
+export function projectDirectoryUpdate(write: SessionRecordingWireWrite): RecordingDirectoryUpdate {
     const sessions = new Map<string, DirectoryOperation[]>();
     for (const event of write.envelope.events) {
         const operations = sessions.get(event.sessionId) ?? [];

@@ -43,21 +43,30 @@ export class AppSessionStatusWebhookService {
     ): Promise<object> => {
         const current = await this.#authorized(identity, appId, signal);
         const normalizedEndpoint = httpsEndpoint(endpoint);
-        const secret = current === null ? await this.#newSecret() : undefined;
-        const previous = current;
-        const stored = await this.#storage.write(
-            {
-                appId,
-                enabled,
-                endpoint: normalizedEndpoint,
-                secretCiphertext: secret?.ciphertext ?? previous?.secretCiphertext ?? "",
-                secretId: secret?.secretId ?? previous?.secretId ?? "",
-                secretNonce: secret?.nonce ?? previous?.secretNonce ?? "",
-            },
-            Date.now(),
-        );
-        signal.throwIfAborted();
-        return { ...this.resource(stored), ...(secret === undefined ? {} : { secret: secret.plaintext }) };
+        const now = Date.now();
+        if (current === null) {
+            const secret = await this.#newSecret();
+            const created = await this.#storage.create(
+                {
+                    appId,
+                    enabled,
+                    endpoint: normalizedEndpoint,
+                    secretCiphertext: secret.ciphertext,
+                    secretId: secret.secretId,
+                    secretNonce: secret.nonce,
+                },
+                now,
+            );
+            // A committed secret is returned even if the request is cancelled now; it is shown only once.
+            if (created !== null) {
+                return { ...this.resource(created), secret: secret.plaintext };
+            }
+        }
+        const stored = await this.#storage.updateSettings(appId, enabled, normalizedEndpoint, now);
+        if (stored === null) {
+            throw new Error("The App Session status webhook could not be stored");
+        }
+        return this.resource(stored);
     };
 
     readonly rotate = async (
@@ -70,11 +79,20 @@ export class AppSessionStatusWebhookService {
             throw new PlatformControlPlaneError("webhook_not_found", "The App webhook is not configured", 404);
         }
         const secret = await this.#newSecret();
-        const stored = await this.#storage.write(
-            { ...current, secretCiphertext: secret.ciphertext, secretId: secret.secretId, secretNonce: secret.nonce },
+        const stored = await this.#storage.rotateSecret(
+            appId,
+            current.secretId,
+            { secretCiphertext: secret.ciphertext, secretId: secret.secretId, secretNonce: secret.nonce },
             Date.now(),
         );
-        signal.throwIfAborted();
+        if (stored === null) {
+            throw new PlatformControlPlaneError(
+                "webhook_rotation_conflict",
+                "The App webhook secret was rotated by another request",
+                409,
+            );
+        }
+        // A committed secret is returned even if the request is cancelled now; it is shown only once.
         return { ...this.resource(stored), secret: secret.plaintext };
     };
 

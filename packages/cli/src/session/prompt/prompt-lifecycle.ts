@@ -252,6 +252,5 @@ export async function settleAbandonedTurn(
         "agent_execution_abandoned",
         "The local Agent execution was abandoned before it completed",
     );
-    operations.transitionExecution(cancellation.commandId, "failed");
     projection.publishTerminal(cancellation.sessionId, cancellation.commandId);
 }

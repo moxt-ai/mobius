@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { StoredAppSessionStatusWebhook } from "../entity/app-session-status-webhook.ts";
 import { platformAppSessionStatusWebhook, platformProject } from "../schema/d1/index.ts";
 import { platformDrizzle } from "./platform-drizzle-database.ts";
@@ -32,31 +32,61 @@ export class AppSessionStatusWebhookStorage {
         return row[0] === undefined ? null : decode(row[0]);
     };
 
-    readonly write = async (
+    /** Stores the first webhook for an App. Null means another request already created it. */
+    readonly create = async (
         value: StoredAppSessionStatusWebhook,
         now: number,
-    ): Promise<StoredAppSessionStatusWebhook> => {
-        const row = {
-            appId: value.appId,
-            enabled: value.enabled ? 1 : 0,
-            endpoint: value.endpoint,
-            secretCiphertext: value.secretCiphertext,
-            secretId: value.secretId,
-            secretNonce: value.secretNonce,
-        };
+    ): Promise<StoredAppSessionStatusWebhook | null> => {
         const result = await this.#database
             .insert(platformAppSessionStatusWebhook)
-            .values({ ...row, createdAt: now, updatedAt: now })
-            .onConflictDoUpdate({
-                target: platformAppSessionStatusWebhook.appId,
-                set: { ...row, updatedAt: now },
+            .values({
+                appId: value.appId,
+                enabled: value.enabled ? 1 : 0,
+                endpoint: value.endpoint,
+                secretCiphertext: value.secretCiphertext,
+                secretId: value.secretId,
+                secretNonce: value.secretNonce,
+                createdAt: now,
+                updatedAt: now,
             })
+            .onConflictDoNothing({ target: platformAppSessionStatusWebhook.appId })
             .returning();
-        const stored = result[0];
-        if (stored === undefined) {
-            throw new Error("The App Session status webhook could not be stored");
-        }
-        return decode(stored);
+        return result[0] === undefined ? null : decode(result[0]);
+    };
+
+    /** Changes delivery settings only; the signing secret belongs to creation and rotation. */
+    readonly updateSettings = async (
+        appId: string,
+        enabled: boolean,
+        endpoint: string,
+        now: number,
+    ): Promise<StoredAppSessionStatusWebhook | null> => {
+        const result = await this.#database
+            .update(platformAppSessionStatusWebhook)
+            .set({ enabled: enabled ? 1 : 0, endpoint, updatedAt: now })
+            .where(eq(platformAppSessionStatusWebhook.appId, appId))
+            .returning();
+        return result[0] === undefined ? null : decode(result[0]);
+    };
+
+    /** Replaces the secret only if it is still the one the caller read. Null means another rotation won. */
+    readonly rotateSecret = async (
+        appId: string,
+        previousSecretId: string,
+        secret: Pick<StoredAppSessionStatusWebhook, "secretCiphertext" | "secretId" | "secretNonce">,
+        now: number,
+    ): Promise<StoredAppSessionStatusWebhook | null> => {
+        const result = await this.#database
+            .update(platformAppSessionStatusWebhook)
+            .set({ ...secret, updatedAt: now })
+            .where(
+                and(
+                    eq(platformAppSessionStatusWebhook.appId, appId),
+                    eq(platformAppSessionStatusWebhook.secretId, previousSecretId),
+                ),
+            )
+            .returning();
+        return result[0] === undefined ? null : decode(result[0]);
     };
 }
 

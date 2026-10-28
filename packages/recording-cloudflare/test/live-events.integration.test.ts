@@ -167,6 +167,7 @@ it("Given a recording exists, When a different Runtime reads it, Then its conten
 });
 it("Given prompt context and a later Agent title, When the Runtime loads its recorded directory, Then the Session identity and latest title are returned", async () => {
     const context = { agentId: "codex", directoryId: "default", additionalDirectoryIds: ["docs"] };
+    const firstPrompt = `\n> ## ${"\u{1f680}".repeat(45)}\nAdditional instructions`;
     const requested = {
         ...event,
         eventId: "requested",
@@ -174,18 +175,39 @@ it("Given prompt context and a later Agent title, When the Runtime loads its rec
         payload: {
             kind: "prompt.requested",
             commandId: "command",
-            content: [{ type: "text", text: "First prompt" }],
+            content: [{ type: "text", text: firstPrompt }],
             context,
         },
     };
     expect(
         (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: [requested] }), env)).status,
     ).toBe(201);
+    const summaryUrl = `https://recording.internal/v2/projects/${projectId}/runtimes/runtime-live/sessions/${event.sessionId}`;
+    expect(await (await worker.fetch(new Request(summaryUrl), env)).json()).toMatchObject({
+        title: `${"\u{1f680}".repeat(41)}\u2026`,
+    });
+    const followUp = {
+        ...requested,
+        eventId: "follow-up",
+        position: "1",
+        payload: {
+            ...requested.payload,
+            commandId: "follow-up",
+            content: [{ type: "text", text: "Continue with a different request" }],
+        },
+    };
+    expect(
+        (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: [followUp] }), env)).status,
+    ).toBe(201);
+    expect(await (await worker.fetch(new Request(summaryUrl), env)).json()).toMatchObject({
+        title: `${"\u{1f680}".repeat(41)}\u2026`,
+    });
+    const agentTitle = "Agent title that intentionally exceeds the fallback title limit";
     const titled = {
         ...event,
         eventId: "title",
         recordedAt: "2026-10-09T01:00:00.000Z",
-        payload: { sessionUpdate: "session_info_update", title: "Agent title" },
+        payload: { sessionUpdate: "session_info_update", title: agentTitle },
     };
     expect(
         (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: [titled] }), env)).status,
@@ -202,7 +224,7 @@ it("Given prompt context and a later Agent title, When the Runtime loads its rec
                 runtimeId: "runtime-live",
                 sessionId: event.sessionId,
                 status: "running",
-                title: "Agent title",
+                title: agentTitle,
                 updatedAt: titled.recordedAt,
             },
         ],

@@ -10,45 +10,32 @@ import type { ExecutionReceiptTable } from "../../storage/session/execution-rece
 
 const MAX_TERMINAL_RECEIPTS = 1_024;
 
-export type RuntimeExecutionState = "cancelled" | "dispatching" | "failed" | "running" | "succeeded";
-
 export type RuntimeExecutionReceipt =
     | Readonly<{
           attemptId: string;
           commandId: string;
           kind: "accepted";
-          state: "dispatching";
       }>
     | Readonly<{
           attemptId: string;
           commandId: string;
           kind: "duplicate";
-          state: RuntimeExecutionState;
           outcome: SessionEventPayload | undefined;
       }>
     | { readonly kind: "conflict" }
     | { readonly kind: "expired" };
 
-type TerminalExecutionState = "succeeded" | "failed" | "cancelled";
 type StoredExecution = Readonly<{
     attemptId: string;
     commandHash: string;
     sessionId: string;
-}> &
-    (
-        | Readonly<{ state: "dispatching"; started: false; outcome: null }>
-        | Readonly<{ state: "running"; started: true; outcome: string | null }>
-        | Readonly<{ state: TerminalExecutionState; started: boolean; outcome: string | null }>
-    );
-
-function isTerminal(state: RuntimeExecutionState): state is TerminalExecutionState {
-    return state === "succeeded" || state === "failed" || state === "cancelled";
-}
+    started: boolean;
+    outcome: string | null;
+}>;
 
 export class ExecutionReceipts {
     readonly #executions = new Map<string, StoredExecution>();
     readonly #recoveredCommands = new Set<string>();
-    readonly #terminalCountBySession = new Map<string, number>();
 
     readonly #table: ExecutionReceiptTable;
     #closing = false;
@@ -60,36 +47,24 @@ export class ExecutionReceipts {
         for (const row of table.list()) {
             this.#executions.set(row.commandId, row);
             this.#recoveredCommands.add(row.commandId);
-            if (!isTerminal(row.state)) {
+            if (row.outcome === null) {
                 this.#activeCount += 1;
-            }
-            if (isTerminal(row.state)) {
-                this.#terminalCountBySession.set(
-                    row.sessionId,
-                    (this.#terminalCountBySession.get(row.sessionId) ?? 0) + 1,
-                );
             }
         }
     }
     readonly #save = (commandId: string, receipt: StoredExecution): void => {
-        if (!this.#closing) {
-            this.#table.save({ ...receipt, commandId, updatedAt: new Date().toISOString() });
-        }
+        const evicted = this.#closing
+            ? []
+            : this.#table.save({ ...receipt, commandId, updatedAt: new Date().toISOString() }, MAX_TERMINAL_RECEIPTS);
         const previous = this.#executions.get(commandId);
-        const wasActive = previous !== undefined && !isTerminal(previous.state);
-        if (isTerminal(receipt.state)) {
-            this.#executions.delete(commandId);
-        }
+        const wasActive = previous?.outcome === null;
         this.#executions.set(commandId, receipt);
-        this.#activeCount += Number(!isTerminal(receipt.state)) - Number(wasActive);
-        this.#onCount(this.#activeCount);
-        if (isTerminal(receipt.state) && (previous === undefined || !isTerminal(previous.state))) {
-            this.#terminalCountBySession.set(
-                receipt.sessionId,
-                (this.#terminalCountBySession.get(receipt.sessionId) ?? 0) + 1,
-            );
-            this.pruneTerminalReceipts(receipt.sessionId);
+        for (const evictedCommandId of evicted) {
+            this.#executions.delete(evictedCommandId);
+            this.#recoveredCommands.delete(evictedCommandId);
         }
+        this.#activeCount += Number(receipt.outcome === null) - Number(wasActive);
+        this.#onCount(this.#activeCount);
     };
     readonly beginShutdown = (): void => {
         this.#closing = true;
@@ -107,7 +82,7 @@ export class ExecutionReceipts {
     ): SessionEventPayload | undefined => {
         const existing = this.#executions.get(commandId);
         if (existing !== undefined) {
-            return existing.sessionId === sessionId && isTerminal(existing.state) ? this.outcome(commandId) : undefined;
+            return existing.sessionId === sessionId ? this.outcome(commandId) : undefined;
         }
         const outcome: SessionEventPayload = {
             type: "lifecycle-metadata",
@@ -127,7 +102,6 @@ export class ExecutionReceipts {
             attemptId: randomUUID(),
             commandHash,
             sessionId,
-            state: "cancelled",
             started: false,
             outcome: JSON.stringify({ ...outcome, recordedAt: new Date().toISOString() }),
         });
@@ -155,12 +129,6 @@ export class ExecutionReceipts {
                 : { ...payload, message: "The local Agent could not complete the request" };
         this.#save(payload.commandId, {
             ...receipt,
-            state:
-                payload.kind === "prompt.completed"
-                    ? payload.stopReason === "cancelled"
-                        ? "cancelled"
-                        : "succeeded"
-                    : "failed",
             outcome: JSON.stringify({ type: "lifecycle-metadata", payload: sanitized, recordedAt: event.recordedAt }),
         });
     };
@@ -196,14 +164,8 @@ export class ExecutionReceipts {
                     ? new Date().toISOString()
                     : z.object({ recordedAt: z.string() }).parse(JSON.parse(receipt.outcome)).recordedAt;
             recovered.push({ sessionId: receipt.sessionId, event, recordedAt });
-            if (!isTerminal(receipt.state)) {
-                const state =
-                    event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed"
-                        ? event.payload.stopReason === "cancelled"
-                            ? "cancelled"
-                            : "succeeded"
-                        : "failed";
-                this.#save(commandId, { ...receipt, state, outcome: JSON.stringify({ ...event, recordedAt }) });
+            if (receipt.outcome === null) {
+                this.#save(commandId, { ...receipt, outcome: JSON.stringify({ ...event, recordedAt }) });
             }
         }
         return recovered;
@@ -223,10 +185,6 @@ export class ExecutionReceipts {
             this.#table.remove(commandId);
             this.#executions.delete(commandId);
             this.#recoveredCommands.delete(commandId);
-            this.#terminalCountBySession.set(
-                sessionId,
-                Math.max(0, (this.#terminalCountBySession.get(sessionId) ?? 1) - 1),
-            );
             existing = undefined;
         }
         if (existing !== undefined) {
@@ -237,7 +195,6 @@ export class ExecutionReceipts {
                 attemptId: existing.attemptId,
                 commandId,
                 kind: "duplicate",
-                state: existing.state,
                 outcome: this.#recoveredCommands.has(commandId) ? this.outcome(commandId) : undefined,
             };
         }
@@ -252,71 +209,39 @@ export class ExecutionReceipts {
             attemptId,
             commandHash,
             sessionId,
-            state: "dispatching",
             started: false,
             outcome: null,
         });
-        return { attemptId, commandId, kind: "accepted", state: "dispatching" };
+        return { attemptId, commandId, kind: "accepted" };
     };
 
-    readonly transitionExecution = (commandId: string, state: RuntimeExecutionState): void => {
+    readonly markExecutionStarted = (commandId: string): void => {
         const current = this.#executions.get(commandId);
         if (current === undefined) {
             throw new Error("The runtime execution receipt does not exist");
         }
-        if (current.state === state) {
-            return;
-        }
-        const allowed =
-            (current.state === "dispatching" && (state === "running" || state === "failed" || state === "cancelled")) ||
-            (current.state === "running" && isTerminal(state));
-        if (!allowed) {
+        if (current.outcome !== null) {
             throw new Error("The runtime execution transition is invalid");
         }
-        if (state === "running") {
-            this.#save(commandId, { ...current, state, started: true });
-        } else if (isTerminal(state)) {
-            this.#save(commandId, { ...current, state });
+        if (!current.started) {
+            this.#save(commandId, { ...current, started: true });
         }
     };
 
     /** Only commands without a terminal result can still be cancelled. */
     readonly findUnsettledAttemptId = (commandId: string, sessionId: string): string | null => {
         const receipt = this.#executions.get(commandId);
-        return receipt?.sessionId === sessionId && !isTerminal(receipt.state) ? receipt.attemptId : null;
+        return receipt?.sessionId === sessionId && receipt.outcome === null ? receipt.attemptId : null;
     };
 
     readonly isTerminalExecution = (commandId: string, sessionId: string): boolean => {
         const receipt = this.#executions.get(commandId);
-        return receipt?.sessionId === sessionId && isTerminal(receipt.state);
+        return receipt?.sessionId === sessionId && receipt.outcome !== null;
     };
 
     readonly close = (): void => {
         this.#executions.clear();
         this.#recoveredCommands.clear();
-        this.#terminalCountBySession.clear();
         this.#activeCount = 0;
-    };
-
-    private readonly pruneTerminalReceipts = (sessionId: string): void => {
-        if ((this.#terminalCountBySession.get(sessionId) ?? 0) <= MAX_TERMINAL_RECEIPTS) {
-            return;
-        }
-        for (const [commandId, receipt] of this.#executions) {
-            if (receipt.sessionId === sessionId && isTerminal(receipt.state)) {
-                this.#table.remove(commandId);
-                this.#executions.delete(commandId);
-                this.#recoveredCommands.delete(commandId);
-                const remaining = (this.#terminalCountBySession.get(sessionId) ?? 1) - 1;
-                if (remaining > 0) {
-                    this.#terminalCountBySession.set(sessionId, remaining);
-                } else {
-                    this.#terminalCountBySession.delete(sessionId);
-                }
-                if ((this.#terminalCountBySession.get(sessionId) ?? 0) <= MAX_TERMINAL_RECEIPTS) {
-                    return;
-                }
-            }
-        }
     };
 }

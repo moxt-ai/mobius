@@ -1,4 +1,5 @@
 import {
+    decodeDaemonToRelayMessage,
     decodeSessionEvent,
     decodeSessionLiveEvent,
     encodeSessionEvent,
@@ -22,6 +23,23 @@ const eventWithoutProvenance = {
 const sharedEvent = eventWithoutProvenance;
 
 describe("Session Event V2 contracts", () => {
+    it("Given the lossless relay boundary, When routing metadata or batch bounds are invalid, Then it rejects the envelope", () => {
+        const event = { ...sharedEvent, position: "1" };
+        for (const events of [
+            [],
+            Array.from({ length: 1001 }, () => event),
+            [{ ...event, sessionId: "" }],
+            [{ ...event, eventId: "" }],
+            [{ ...event, sessionGenerationId: "" }],
+            [{ ...event, position: "-1" }],
+            [{ ...event, recordedAt: "not-a-date" }],
+            [{ ...event, payload: null }],
+            [{ ...event, type: "lifecycle-metadata", payload: { kind: "prompt.completed", commandId: 5 } }],
+        ]) {
+            expect(() => decodeDaemonToRelayMessage(JSON.stringify({ kind: "session.event.v2", events }))).toThrow();
+        }
+    });
+
     it("Given a large legacy inline image, When its recorded event crosses the protocol boundary, Then it is accepted", () => {
         const event = {
             ...sharedEvent,

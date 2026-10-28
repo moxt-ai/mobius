@@ -4,6 +4,7 @@ import {
     lastRecordedLifecycleStatus,
     type SessionEvent,
     type SessionStatusWebhookCommand,
+    sessionLiveEventSchema,
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { AppSessionStatusWebhookService } from "../service/app-session-status-webhook-service.ts";
 import type { AppSessionStatusWebhookStorage } from "../storage/app-session-status-webhook-storage.ts";
@@ -42,10 +43,15 @@ export class PlatformSessionStatusNotifications implements SessionStatusNotifica
 
     readonly publish: SessionStatusNotifications["publish"] = (scope, envelope) => {
         const eventsBySession = new Map<string, SessionEvent[]>();
-        for (const event of envelope.events) {
-            if (event.type !== "lifecycle-metadata") {
+        for (const wireEvent of envelope.events) {
+            if (wireEvent.type !== "lifecycle-metadata") {
                 continue;
             }
+            const parsed = sessionLiveEventSchema.safeParse(wireEvent);
+            if (!parsed.success) {
+                continue;
+            }
+            const event = parsed.data;
             const events = eventsBySession.get(event.sessionId) ?? [];
             events.push(event);
             eventsBySession.set(event.sessionId, events);

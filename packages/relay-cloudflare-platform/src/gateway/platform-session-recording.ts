@@ -1,5 +1,5 @@
 import type { SessionRecording, SessionRecordingBatchResult, SessionRecordingScope } from "@moxt-ai/mobius-relay-core";
-import { encodeSessionRecordingWrite, isIdentifier, type SessionEventEnvelope } from "@moxt-ai/mobius-sdk/protocol";
+import { encodeSessionRecordingWireWrite, isIdentifier, type SessionWireEnvelope } from "@moxt-ai/mobius-sdk/protocol";
 import * as v from "valibot";
 import type { RecordingPolicyStorage } from "../storage/recording-policy-storage.ts";
 
@@ -48,7 +48,7 @@ export class PlatformSessionRecording implements SessionRecording {
 
     readonly deliverBatch = async (
         target: SessionRecordingScope,
-        envelope: SessionEventEnvelope,
+        envelope: SessionWireEnvelope,
         signal: AbortSignal,
     ): Promise<readonly SessionRecordingBatchResult[]> => {
         const sessions = [...new Set(envelope.events.map((event) => event.sessionId))];
@@ -69,7 +69,7 @@ export class PlatformSessionRecording implements SessionRecording {
         try {
             const response = await this.#provider.fetcher.fetch(
                 new Request("https://recording.internal/v1/session-event-batches", {
-                    body: encodeSessionRecordingWrite({
+                    body: encodeSessionRecordingWireWrite({
                         envelope,
                         projectId: target.projectId,
                         runtimeId: target.runtimeId,
@@ -111,14 +111,14 @@ export class PlatformSessionRecording implements SessionRecording {
 
     async #deliverLegacy(
         target: SessionRecordingScope,
-        envelope: SessionEventEnvelope,
+        envelope: SessionWireEnvelope,
         signal: AbortSignal,
     ): Promise<readonly SessionRecordingBatchResult[]> {
         if (this.#provider.kind !== "available") {
             throw new Error("The Recording provider is unavailable");
         }
         const provider = this.#provider.fetcher;
-        const grouped = new Map<string, SessionEventEnvelope["events"][number][]>();
+        const grouped = new Map<string, SessionWireEnvelope["events"][number][]>();
         for (const event of envelope.events) {
             const events = grouped.get(event.sessionId) ?? [];
             events.push(event);
@@ -141,7 +141,7 @@ export class PlatformSessionRecording implements SessionRecording {
                             new Request("https://recording.internal/v1/session-events", {
                                 method: "POST",
                                 headers: { "content-type": "application/json" },
-                                body: encodeSessionRecordingWrite({
+                                body: encodeSessionRecordingWireWrite({
                                     ...target,
                                     envelope: { kind: envelope.kind, events },
                                 }),

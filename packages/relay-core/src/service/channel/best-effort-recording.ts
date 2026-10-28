@@ -1,8 +1,8 @@
 import {
     SESSION_EVENT_BATCH_MAX_SIZE,
     SESSION_EVENT_KIND,
-    type SessionEventEnvelope,
-    type SessionLiveEvent,
+    type SessionWireEnvelope,
+    type SessionWireEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 import type {
     SessionRecording,
@@ -18,7 +18,7 @@ const MAX_DELIVERY_BYTES = 1024 * 1024;
 const MAX_DELIVERY_SESSIONS = 256;
 
 interface BufferedEvent {
-    readonly event: SessionLiveEvent;
+    readonly event: SessionWireEvent;
     readonly bytes: number;
 }
 interface SessionLane {
@@ -30,7 +30,7 @@ interface SessionLane {
 }
 interface Delivery {
     readonly lane: SessionLane;
-    readonly events: readonly SessionLiveEvent[];
+    readonly events: readonly SessionWireEvent[];
     readonly bytes: number;
 }
 
@@ -48,7 +48,7 @@ export class BestEffortRecording {
         this.#waitUntil = waitUntil;
     }
 
-    readonly publish = (scope: SessionRecordingScope, envelope: SessionEventEnvelope): void => {
+    readonly publish = (scope: SessionRecordingScope, envelope: SessionWireEnvelope): void => {
         const grouped = new Map<string, BufferedEvent[]>();
         for (const event of envelope.events) {
             const events = grouped.get(event.sessionId) ?? [];
@@ -124,8 +124,10 @@ export class BestEffortRecording {
                 }
                 const batch = lane.events.splice(0, length).map((item) => item.event);
                 const [head, ...tail] = lane.gap ? batch : [];
-                const events: readonly SessionLiveEvent[] =
-                    head === undefined ? batch : [{ ...head, mobiusMetadata: { omitted: true } }, ...tail];
+                const events: readonly SessionWireEvent[] =
+                    head === undefined
+                        ? batch
+                        : [{ ...head, mobiusMetadata: { ...head.mobiusMetadata, omitted: true } }, ...tail];
                 lane.gap = false;
                 lane.state = "delivering";
                 this.#ready.delete(lane);
@@ -169,7 +171,7 @@ export class BestEffortRecording {
 
     async #deliver(
         scope: SessionRecordingScope,
-        events: readonly SessionLiveEvent[],
+        events: readonly SessionWireEvent[],
     ): Promise<readonly SessionRecordingBatchResult[]> {
         const controller = new AbortController();
         const timer = setTimeout(

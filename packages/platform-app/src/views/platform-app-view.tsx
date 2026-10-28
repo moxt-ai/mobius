@@ -10,7 +10,7 @@ import { SessionStatusWebhookPanel } from "../components/session-status-webhook-
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.tsx";
 import { platformDataTestId } from "../data-testid.ts";
 import { createPlatformClient } from "../services/platform-client.ts";
-import type { createPlatformStore } from "../view-models/platform-app-view-model.ts";
+import { type createPlatformStore, credentialStatus } from "../view-models/platform-app-view-model.ts";
 
 export interface PlatformAppProps {
     readonly endpoint: string;
@@ -63,6 +63,7 @@ export function PlatformAppView({
         setAppRecording,
         failAppRecording,
         credentials,
+        createApp: createPlatformApp,
         issueCredential,
         setCredentials,
         failCredentials,
@@ -231,20 +232,7 @@ export function PlatformAppView({
 
     const selectedApp = apps.find((app) => app.appId === selectedAppId);
 
-    const createApp = async (name: string): Promise<boolean> => {
-        return perform("create-app", async () => {
-            const created = await client().createApp(selectedTenant.tenantId, name, AbortSignal.timeout(20_000));
-            const listed = await client().listApps(selectedTenant.tenantId, AbortSignal.timeout(20_000));
-            setApps(listed);
-            setSelectedAppId(created.appId);
-            setSecret({
-                kind: "app-credential",
-                appId: created.appId,
-                secret: created.defaultCredential.credential,
-            });
-            setSecretVisible(false);
-        });
-    };
+    const createApp = (name: string): Promise<boolean> => createPlatformApp(client(), selectedTenant.tenantId, name);
 
     const writeAppRecording = (mode: MobiusRecordingPolicyMode): void => {
         if (selectedApp === undefined) {
@@ -576,19 +564,27 @@ export function PlatformAppView({
                                                     <span>{new Date(credential.issuedAt).toLocaleDateString()}</span>
                                                     <span
                                                         className={
-                                                            credential.revokedAt.length > 0
+                                                            credentialStatus(credential) !== "active"
                                                                 ? "w-fit rounded-full bg-[#f5e9e9] px-2 py-1 text-[10px] font-bold uppercase text-[#8b5555]"
                                                                 : "w-fit rounded-full bg-[#e5f3e9] px-2 py-1 text-[10px] font-bold uppercase text-[#168247]"
                                                         }
                                                     >
-                                                        {credential.revokedAt.length > 0 ? "Revoked" : "Active"}
+                                                        {
+                                                            {
+                                                                active: "Active",
+                                                                inactive: "Inactive",
+                                                                revoked: "Revoked",
+                                                            }[credentialStatus(credential)]
+                                                        }
                                                     </span>
                                                     <button
                                                         type="button"
                                                         className="grid size-[30px] place-items-center rounded-lg border-0 bg-transparent text-[#718078] hover:bg-[#eaf3ed] hover:text-[#168247] disabled:opacity-50"
                                                         aria-label={`Revoke key ${index + 1}`}
                                                         data-testid={platformDataTestId.revokeCredential}
-                                                        disabled={credential.revokedAt.length > 0 || busy.length > 0}
+                                                        disabled={
+                                                            credentialStatus(credential) !== "active" || busy.length > 0
+                                                        }
                                                         onClick={() =>
                                                             void perform(
                                                                 `revoke-${credential.credentialId}`,

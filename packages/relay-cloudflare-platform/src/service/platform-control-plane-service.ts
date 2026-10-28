@@ -41,7 +41,10 @@ import type {
     TenantRow,
 } from "../entity/platform-records.ts";
 import type { PlatformControlPlaneStorage } from "../storage/platform-control-plane-storage.ts";
-import type { AppCredentialAuthenticationService } from "./app-credential-authentication-service.ts";
+import {
+    type AppCredentialAuthenticationService,
+    appCredentialActive,
+} from "./app-credential-authentication-service.ts";
 
 const MAXIMUM_CREDENTIAL_OVERLAP_MILLISECONDS = 60 * 60 * 1_000;
 
@@ -272,12 +275,15 @@ function auditResource(row: AuditRow): object {
 }
 
 function appResource(row: AppRow): object {
+    const initialCredentialId = row.default_credential_id ?? "";
     return {
         appId: row.app_id,
         createdAt: iso(row.created_at),
-        defaultCredentialId: typeof row.default_credential_id === "string" ? row.default_credential_id : "",
+        // Keep the v1 alias for existing clients; neither field denotes an active credential.
+        defaultCredentialId: initialCredentialId,
         deletedAt: typeof row.deleted_at === "number" ? iso(row.deleted_at) : "",
         displayName: row.display_name,
+        initialCredentialId,
         lifecycle: row.lifecycle,
         suspendedAt: typeof row.suspended_at === "number" ? iso(row.suspended_at) : "",
         tenantId: row.tenant_id,
@@ -587,7 +593,8 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
 
     readonly deleteApp = async (access: PlatformDeveloperAccess, app: AppRow, signal: AbortSignal): Promise<object> => {
         this.requireOwner(access);
-        if (access.tenantId !== app.tenant_id || app.lifecycle !== "active") {
+        // Suspension blocks use of the App, but its owner can still delete it.
+        if (access.tenantId !== app.tenant_id || app.lifecycle === "deleted") {
             throw new PlatformControlPlaneError("app_access_denied", "The App is unavailable", 403);
         }
         const now = Date.now();
@@ -967,8 +974,10 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
             throw new PlatformControlPlaneError("app_access_denied", "The App is unavailable", 403);
         }
         const rows = await this.#storage.listAppCredentials(app.app_id, signal);
+        const now = Date.now();
         const credentials = await Promise.all(
             rows.map(async (row) => ({
+                active: appCredentialActive(row, now),
                 allProjects: row.all_projects === 1,
                 appId: row.app_id,
                 credentialId: row.credential_id,
@@ -976,10 +985,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
                 lastUsedAt: iso(row.last_used_at),
                 overlapEndsAt: typeof row.overlap_ends_at === "number" ? iso(row.overlap_ends_at) : "",
                 permissions: permissionValues(permissions(row.permissions_json)),
-                projectIds:
-                    row.all_projects === 1
-                        ? []
-                        : await this.#storage.listCredentialProjectIds(row.credential_id, signal),
+                projectIds: await this.#storage.credentialProjectIds(row, signal),
                 publicCredentialId: row.public_credential_id,
                 replacedByCredentialId: row.replaced_by_credential_id ?? "",
                 revision: row.revision,
@@ -1011,6 +1017,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         const rotated = await this.#storage.rotateAppCredential(
             created.storageRecord(source.all_projects === 1),
             source.credential_id,
+            await this.#storage.credentialProjectIds(source, signal),
             overlapEndsAt,
             this.auditRecord(
                 app.tenant_id,
@@ -1177,7 +1184,8 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
             );
         }
         if (row.all_projects !== 1) {
-            const hasProject = await this.#storage.credentialHasProject(row.credential_id, projectId, signal);
+            const hasProject =
+                (await this.#storage.scopedProjects(row.credential_id, [projectId], signal)).length === 1;
             if (!hasProject) {
                 throw new ProjectAuthenticationError(
                     "project_access_denied",
@@ -1213,13 +1221,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         if (row.all_projects === 1) {
             return Object.freeze(projects);
         }
-        const scoped: string[] = [];
-        for (const projectId of projects) {
-            if (await this.#storage.credentialHasProject(row.credential_id, projectId, signal)) {
-                scoped.push(projectId);
-            }
-        }
-        return Object.freeze(scoped);
+        return Object.freeze(await this.#storage.scopedProjects(row.credential_id, projects, signal));
     };
 
     private readonly createCredential = async (

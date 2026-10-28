@@ -1,4 +1,5 @@
 import { methods } from "@agentclientprotocol/sdk";
+import { conversationTitleFromText } from "@moxt-ai/mobius-sdk";
 import {
     SESSION_COMMANDS_UPDATED_KIND,
     SESSION_CONFIG_UPDATED_KIND,
@@ -576,7 +577,7 @@ export class AgentSession implements AgentSessionRestore {
         }
         validatePromptContent(options, this.#capabilities);
         if (this.#sessionTitle === null || this.#sessionTitle.length === 0) {
-            this.#sessionTitle = truncate(options.prompt, 500);
+            this.#sessionTitle = conversationTitleFromText(options.prompt);
         }
         this.#prompted = true;
         this.writeStoredSession(new Date().toISOString());

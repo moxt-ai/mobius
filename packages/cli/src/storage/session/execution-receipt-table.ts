@@ -1,29 +1,36 @@
-import { and, asc, desc, eq, inArray, notInArray, type SQL } from "drizzle-orm";
+import { sessionEventPayloadSchema } from "@moxt-ai/mobius-sdk/protocol";
+import { and, asc, desc, eq, isNotNull, notInArray, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { executionIdentity, executionReceipt } from "../../schema/acp-session-store/index.ts";
 import type { LocalSqliteDatabase } from "../sqlite/local-sqlite-database.ts";
 
-const receiptFields = z.object({
-    commandId: z.string(),
-    sessionId: z.string(),
-    commandHash: z.string(),
-    attemptId: z.string(),
-    updatedAt: z.string(),
-});
 const receiptSchema = z
-    .discriminatedUnion("state", [
-        receiptFields.extend({ state: z.literal("dispatching"), started: z.literal(false), outcome: z.null() }),
-        receiptFields.extend({ state: z.literal("running"), started: z.literal(true), outcome: z.string().nullable() }),
-        receiptFields.extend({
-            state: z.enum(["succeeded", "failed", "cancelled"]),
-            started: z.boolean(),
-            outcome: z.string().nullable(),
-        }),
-    ])
+    .object({
+        commandId: z.string(),
+        sessionId: z.string(),
+        commandHash: z.string(),
+        attemptId: z.string(),
+        updatedAt: z.string(),
+        started: z.boolean(),
+        outcome: z.string().nullable(),
+    })
     .readonly();
 export type PersistedExecutionReceipt = z.infer<typeof receiptSchema>;
 
 const identitySchema = z.object({ sessionId: z.string(), commandHash: z.string() }).readonly();
+
+/** Keep rollback readers working without treating their state column as an independent fact. */
+function legacyState(receipt: PersistedExecutionReceipt): string {
+    if (receipt.outcome === null) {
+        return receipt.started ? "running" : "dispatching";
+    }
+    const event = sessionEventPayloadSchema.parse(JSON.parse(receipt.outcome));
+    return event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed"
+        ? event.payload.stopReason === "cancelled"
+            ? "cancelled"
+            : "succeeded"
+        : "failed";
+}
 
 /** Prompt bodies and Agent error text never enter the execution ledger. */
 export class ExecutionReceiptTable {
@@ -49,33 +56,29 @@ export class ExecutionReceiptTable {
                     .orderBy(asc(executionReceipt.updatedAt), asc(executionReceipt.commandId))
                     .all(),
             );
-    readonly save = (receipt: PersistedExecutionReceipt): void => {
+    readonly save = (receipt: PersistedExecutionReceipt, terminalLimit: number): readonly string[] =>
         this.#database.transaction(() => {
+            const row = { ...receipt, state: legacyState(receipt) };
             this.#database.orm
                 .insert(executionReceipt)
-                .values(receipt)
-                .onConflictDoUpdate({ target: executionReceipt.commandId, set: receipt })
+                .values(row)
+                .onConflictDoUpdate({ target: executionReceipt.commandId, set: row })
                 .run();
-            if (receipt.state === "dispatching" || receipt.state === "running") {
-                return;
+            if (receipt.outcome === null) {
+                return [];
             }
             const retained = this.#database.orm
                 .select({ commandId: executionReceipt.commandId })
                 .from(executionReceipt)
-                .where(
-                    and(
-                        eq(executionReceipt.sessionId, receipt.sessionId),
-                        inArray(executionReceipt.state, ["succeeded", "failed", "cancelled"]),
-                    ),
-                )
+                .where(and(eq(executionReceipt.sessionId, receipt.sessionId), isNotNull(executionReceipt.outcome)))
                 .orderBy(desc(executionReceipt.updatedAt), desc(executionReceipt.commandId))
-                .limit(1024)
+                .limit(terminalLimit)
                 .all();
-            if (retained.length === 1024) {
-                this.#remove(
+            if (retained.length === terminalLimit) {
+                return this.#remove(
                     and(
                         eq(executionReceipt.sessionId, receipt.sessionId),
-                        inArray(executionReceipt.state, ["succeeded", "failed", "cancelled"]),
+                        isNotNull(executionReceipt.outcome),
                         notInArray(
                             executionReceipt.commandId,
                             retained.map((row) => row.commandId),
@@ -83,12 +86,12 @@ export class ExecutionReceiptTable {
                     ),
                 );
             }
+            return [];
         });
-    };
     readonly remove = (commandId: string): void => {
         this.#database.transaction(() => this.#remove(eq(executionReceipt.commandId, commandId)));
     };
-    readonly #remove = (condition: SQL | undefined): void => {
+    readonly #remove = (condition: SQL | undefined): readonly string[] => {
         if (condition === undefined) {
             throw new Error("Execution receipt removal requires a scope");
         }
@@ -108,6 +111,11 @@ export class ExecutionReceiptTable {
             )
             .onConflictDoNothing()
             .run();
-        this.#database.orm.delete(executionReceipt).where(condition).run();
+        return this.#database.orm
+            .delete(executionReceipt)
+            .where(condition)
+            .returning({ commandId: executionReceipt.commandId })
+            .all()
+            .map((row) => row.commandId);
     };
 }

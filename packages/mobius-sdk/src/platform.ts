@@ -273,6 +273,8 @@ export class MobiusPlatformAppCredential {
 }
 
 export class MobiusPlatformAppCredentialMetadata {
+    /** Whether the Platform authenticates this credential now. Undefined from a Platform that predates it. */
+    readonly active: boolean | undefined;
     readonly allProjects: boolean;
     readonly appId: string;
     readonly credentialId: string;
@@ -290,6 +292,11 @@ export class MobiusPlatformAppCredentialMetadata {
         if (typeof value["allProjects"] !== "boolean") {
             throw new MobiusProtocolError("The Platform returned an invalid AppCredential scope");
         }
+        const active = value["active"];
+        if (active !== undefined && typeof active !== "boolean") {
+            throw new MobiusProtocolError("The Platform returned an invalid AppCredential state");
+        }
+        this.active = active;
         this.allProjects = value["allProjects"];
         this.appId = identifier(value, "appId");
         this.credentialId = identifier(value, "credentialId");
@@ -319,6 +326,7 @@ export class MobiusRotatedPlatformAppCredential extends MobiusPlatformAppCredent
 export class MobiusPlatformApp {
     readonly appId: string;
     readonly createdAt: string;
+    /** @deprecated Use initialCredentialId. This is the creation-time credential, which may no longer be valid. */
     readonly defaultCredentialId: string;
     readonly deletedAt: string;
     readonly displayName: string;
@@ -326,6 +334,12 @@ export class MobiusPlatformApp {
     readonly suspendedAt: string;
     readonly tenantId: string;
     readonly updatedAt: string;
+
+    /** The credential issued at App creation; rotation and revocation do not change this historical ID. */
+    get initialCredentialId(): string {
+        // The v1 field remains an own property for existing consumers and works with older Workers.
+        return this.defaultCredentialId;
+    }
 
     constructor(value: Readonly<Record<string, unknown>>) {
         this.appId = identifier(value, "appId");

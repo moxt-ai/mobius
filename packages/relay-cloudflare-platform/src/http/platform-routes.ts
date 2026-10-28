@@ -102,7 +102,7 @@ export function createPlatformControlApplication() {
                 (cause) =>
                     new PlatformControlPlaneError(
                         "platform_timeout",
-                        "The Platform request timed out. Please retry",
+                        "The Platform request timed out; its outcome may be unknown",
                         504,
                         { cause },
                     ),

@@ -3,7 +3,7 @@ import {
     decodeSessionRecordingDirectory,
     decodeSessionRecordingDirectoryV2,
     decodeSessionRecordingSummaryV2,
-    decodeSessionRecordingWrite,
+    decodeSessionRecordingWireWrite,
     encodeSessionRecordingDirectory,
     encodeSessionRecordingDirectoryV2,
     encodeSessionRecordingExecution,
@@ -23,7 +23,7 @@ import {
     type SessionRecordingSummary,
     type SessionRecordingSummaryV2,
     type SessionRecordingTurnItemCursorDirection,
-    type SessionRecordingWrite,
+    type SessionRecordingWireWrite,
     sessionRecordingStatusSchema,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { type Context, Hono } from "hono";
@@ -103,7 +103,7 @@ function decodedIdentifier(value: string | undefined): string | null {
     }
 }
 
-function requireSingleSession(write: SessionRecordingWrite): SessionRecordingWrite {
+function requireSingleSession(write: SessionRecordingWireWrite): SessionRecordingWireWrite {
     const [firstEvent] = write.envelope.events;
     if (firstEvent !== undefined && write.envelope.events.every((event) => event.sessionId === firstEvent.sessionId)) {
         return write;
@@ -121,7 +121,7 @@ function sessionRecordingRoutes(
     return new Hono<RecordingEnvironment>()
         .onError((cause, context): Response => internalErrorResponse(cause, context.req.raw))
         .post("/events", async (context): Promise<Response> => {
-            let write: SessionRecordingWrite;
+            let write: SessionRecordingWireWrite;
             try {
                 write = requireSingleSession(await decode(context.req.raw));
             } catch (cause) {
@@ -430,8 +430,8 @@ async function legacySummaryBatch(
     }
 }
 
-async function decode(request: Request): Promise<SessionRecordingWrite> {
-    return decodeSessionRecordingWrite(await request.text());
+async function decode(request: Request): Promise<SessionRecordingWireWrite> {
+    return decodeSessionRecordingWireWrite(await request.text());
 }
 
 function envelopeError(cause: unknown): Response {
@@ -715,10 +715,10 @@ type BatchResult =
 
 async function recordSessionBatch(
     environment: RecordingWorkerBindings,
-    write: SessionRecordingWrite,
+    write: SessionRecordingWireWrite,
     signal: AbortSignal,
 ): Promise<readonly BatchResult[]> {
-    const grouped = new Map<string, SessionRecordingWrite["envelope"]["events"][number][]>();
+    const grouped = new Map<string, SessionRecordingWireWrite["envelope"]["events"][number][]>();
     for (const event of write.envelope.events) {
         const events = grouped.get(event.sessionId) ?? [];
         events.push(event);
@@ -823,7 +823,7 @@ export function createRecordingWorker(): RecordingWorker {
         // passes a Durable Object response straight through, so the envelope has to be added here.
         .onError((cause, context): Response => internalErrorResponse(cause, context.req.raw))
         .post("/v1/session-event-batches", async (context): Promise<Response> => {
-            let write: SessionRecordingWrite;
+            let write: SessionRecordingWireWrite;
             try {
                 write = await decode(context.req.raw);
             } catch (cause) {
@@ -835,7 +835,7 @@ export function createRecordingWorker(): RecordingWorker {
             return context.json({ results: await recordSessionBatch(context.env, write, context.req.raw.signal) }, 201);
         })
         .post("/v1/session-events", async (context): Promise<Response> => {
-            let write: SessionRecordingWrite;
+            let write: SessionRecordingWireWrite;
             try {
                 write = requireSingleSession(await decode(context.req.raw));
             } catch (cause) {
