@@ -61,13 +61,11 @@ export class PlatformAuthenticationConfiguration {
 
 export class PlatformDeveloperAccess {
     readonly identity: VerifiedExternalIdentity;
-    readonly role: string;
     readonly tenantId: string;
 
-    constructor(identity: VerifiedExternalIdentity, tenantId: string, role: string) {
+    constructor(identity: VerifiedExternalIdentity, tenantId: string) {
         this.identity = identity;
         this.tenantId = tenantId;
-        this.role = role;
     }
 }
 

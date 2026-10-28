@@ -54,6 +54,7 @@ async function application() {
     const worker = createTestMobiusPlatformApp(
         new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
         createPlatformGateways,
+        () => clerk.organizationGateway,
     );
     const developerHeaders = {
         authorization: `Bearer ${clerk.session("developer-1", clerk.defaultOrganizationId)}`,

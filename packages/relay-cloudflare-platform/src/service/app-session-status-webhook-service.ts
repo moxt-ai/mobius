@@ -1,6 +1,7 @@
 import { createRandomToken, type VerifiedExternalIdentity } from "@moxt-ai/mobius-relay-core";
 import type { StoredAppSessionStatusWebhook } from "../entity/app-session-status-webhook.ts";
-import { PlatformControlPlaneError } from "../entity/platform-control-plane.ts";
+import { PlatformControlPlaneError, type PlatformDeveloperAccess } from "../entity/platform-control-plane.ts";
+import type { PlatformAuditRecord } from "../entity/platform-records.ts";
 import type { AppSessionStatusWebhookStorage } from "../storage/app-session-status-webhook-storage.ts";
 import {
     decryptWebhookSecret,
@@ -28,7 +29,7 @@ export class AppSessionStatusWebhookService {
     }
 
     readonly read = async (identity: VerifiedExternalIdentity, appId: string, signal: AbortSignal): Promise<object> => {
-        const current = await this.#authorized(identity, appId, signal);
+        const { current } = await this.#authorized(identity, appId, signal);
         return current === null
             ? { appId, configured: false, enabled: false, endpoint: "", secretId: "" }
             : this.resource(current);
@@ -41,9 +42,11 @@ export class AppSessionStatusWebhookService {
         endpoint: string,
         signal: AbortSignal,
     ): Promise<object> => {
-        const current = await this.#authorized(identity, appId, signal);
+        const { access, current } = await this.#authorized(identity, appId, signal);
         const normalizedEndpoint = httpsEndpoint(endpoint);
         const now = Date.now();
+        const configured = (created: boolean) =>
+            this.#audit(access, appId, "app.session-status-webhook.configured", { created, enabled }, now);
         if (current === null) {
             const secret = await this.#newSecret();
             const created = await this.#storage.create(
@@ -56,13 +59,14 @@ export class AppSessionStatusWebhookService {
                     secretNonce: secret.nonce,
                 },
                 now,
+                configured(true),
             );
             // A committed secret is returned even if the request is cancelled now; it is shown only once.
             if (created !== null) {
                 return { ...this.resource(created), secret: secret.plaintext };
             }
         }
-        const stored = await this.#storage.updateSettings(appId, enabled, normalizedEndpoint, now);
+        const stored = await this.#storage.updateSettings(appId, enabled, normalizedEndpoint, now, configured(false));
         if (stored === null) {
             throw new Error("The App Session status webhook could not be stored");
         }
@@ -74,16 +78,18 @@ export class AppSessionStatusWebhookService {
         appId: string,
         signal: AbortSignal,
     ): Promise<object> => {
-        const current = await this.#authorized(identity, appId, signal);
+        const { access, current } = await this.#authorized(identity, appId, signal);
         if (current === null) {
             throw new PlatformControlPlaneError("webhook_not_found", "The App webhook is not configured", 404);
         }
         const secret = await this.#newSecret();
+        const now = Date.now();
         const stored = await this.#storage.rotateSecret(
             appId,
             current.secretId,
             { secretCiphertext: secret.ciphertext, secretId: secret.secretId, secretNonce: secret.nonce },
-            Date.now(),
+            now,
+            this.#audit(access, appId, "app.session-status-webhook.secret-rotated", {}, now),
         );
         if (stored === null) {
             throw new PlatformControlPlaneError(
@@ -103,13 +109,29 @@ export class AppSessionStatusWebhookService {
         identity: VerifiedExternalIdentity,
         appId: string,
         signal: AbortSignal,
-    ): Promise<StoredAppSessionStatusWebhook | null> => {
+    ): Promise<{
+        readonly access: PlatformDeveloperAccess;
+        readonly current: StoredAppSessionStatusWebhook | null;
+    }> => {
+        const { access } = await this.#controlPlane().requireAppDeveloper(identity, appId, signal);
+        return { access, current: await this.#storage.read(appId) };
+    };
+
+    readonly #controlPlane = (): PlatformControlPlaneService => {
         if (this.#control === null) {
             throw new Error("The App Session status webhook service is not configured for dashboard access");
         }
-        await this.#control.requireAppDeveloper(identity, appId, signal);
-        return await this.#storage.read(appId);
+        return this.#control;
     };
+
+    /** Endpoint URLs and secrets stay out of the audit trail; only safe change metadata is recorded. */
+    readonly #audit = (
+        access: PlatformDeveloperAccess,
+        appId: string,
+        action: string,
+        details: Readonly<Record<string, unknown>>,
+        now: number,
+    ): PlatformAuditRecord => this.#controlPlane().developerAuditRecord(access, appId, appId, action, details, now);
 
     readonly #newSecret = async () => {
         const secretId = createRandomToken(12);

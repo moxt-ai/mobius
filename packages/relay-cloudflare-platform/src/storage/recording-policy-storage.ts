@@ -1,4 +1,5 @@
 import { and, eq } from "drizzle-orm";
+import type { PlatformAuditRecord } from "../entity/platform-records.ts";
 import type {
     EffectiveRecordingMode,
     ProjectRecordingPolicyTarget,
@@ -9,6 +10,7 @@ import type {
 import {
     platformApp,
     platformAppRecordingPolicy,
+    platformDashboardAuditEvent,
     platformProject,
     platformProjectRecordingPolicy,
 } from "../schema/d1/index.ts";
@@ -88,40 +90,48 @@ export class RecordingPolicyStorage {
         appId: string,
         mode: RecordingPolicyMode,
         now: number,
+        audit: PlatformAuditRecord,
         signal: AbortSignal,
     ): Promise<void> => {
         signal.throwIfAborted();
-        if (mode === "inherit") {
-            await this.#database.delete(platformAppRecordingPolicy).where(eq(platformAppRecordingPolicy.appId, appId));
-        } else {
-            await this.#database
-                .insert(platformAppRecordingPolicy)
-                .values({ appId, mode, updatedAt: now })
-                .onConflictDoUpdate({ target: platformAppRecordingPolicy.appId, set: { mode, updatedAt: now } });
-        }
-        signal.throwIfAborted();
+        await this.#database.batch([
+            mode === "inherit"
+                ? this.#database.delete(platformAppRecordingPolicy).where(eq(platformAppRecordingPolicy.appId, appId))
+                : this.#database
+                      .insert(platformAppRecordingPolicy)
+                      .values({ appId, mode, updatedAt: now })
+                      .onConflictDoUpdate({ target: platformAppRecordingPolicy.appId, set: { mode, updatedAt: now } }),
+            this.#auditInsert(audit),
+        ]);
     };
 
     readonly writeProject = async (
         projectId: string,
         mode: RecordingPolicyMode,
         now: number,
+        audit: PlatformAuditRecord,
         signal: AbortSignal,
     ): Promise<void> => {
         signal.throwIfAborted();
-        if (mode === "inherit") {
-            await this.#database
-                .delete(platformProjectRecordingPolicy)
-                .where(eq(platformProjectRecordingPolicy.projectId, projectId));
-        } else {
-            await this.#database
-                .insert(platformProjectRecordingPolicy)
-                .values({ mode, projectId, updatedAt: now })
-                .onConflictDoUpdate({
-                    target: platformProjectRecordingPolicy.projectId,
-                    set: { mode, updatedAt: now },
-                });
-        }
-        signal.throwIfAborted();
+        await this.#database.batch([
+            mode === "inherit"
+                ? this.#database
+                      .delete(platformProjectRecordingPolicy)
+                      .where(eq(platformProjectRecordingPolicy.projectId, projectId))
+                : this.#database
+                      .insert(platformProjectRecordingPolicy)
+                      .values({ mode, projectId, updatedAt: now })
+                      .onConflictDoUpdate({
+                          target: platformProjectRecordingPolicy.projectId,
+                          set: { mode, updatedAt: now },
+                      }),
+            this.#auditInsert(audit),
+        ]);
     };
+
+    /** The policy change and its audit event commit together or not at all. */
+    readonly #auditInsert = (audit: PlatformAuditRecord) =>
+        this.#database
+            .insert(platformDashboardAuditEvent)
+            .values({ ...audit, outcome: audit.outcome === "denied" ? "denied" : "succeeded" });
 }
