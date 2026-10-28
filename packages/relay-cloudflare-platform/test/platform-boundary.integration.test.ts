@@ -1857,6 +1857,16 @@ describe.sequential("Platform Recording policy configuration", () => {
     });
 
     async function recordThroughRelay(projectId: string, sessionId: string, textContent: string) {
+        await withDaemonRelay(projectId, async (send) => await send(sessionId, `event-${sessionId}`, "1", textContent));
+    }
+
+    /** Connects one daemon to one Relay instance and lets `run` send Session output through it. */
+    async function withDaemonRelay(
+        projectId: string,
+        run: (
+            send: (sessionId: string, eventId: string, position: string, textContent: string) => Promise<void>,
+        ) => Promise<void>,
+    ) {
         await registerRuntimeFixture(projectId, projectId);
         return await runInDurableObject(env.RUNTIME_RELAY.getByName(projectId), async (_instance, state) => {
             const pending: Promise<void>[] = [];
@@ -1891,27 +1901,29 @@ describe.sequential("Platform Recording policy configuration", () => {
             }
             client.accept();
             try {
-                await relay.webSocketMessage(
-                    daemon,
-                    encodeSessionEventEnvelope({
-                        kind: "session.event.v2",
-                        events: [
-                            {
-                                eventId: `event-${sessionId}`,
-                                position: "1",
-                                recordedAt: "2026-09-18T00:00:00.000Z",
-                                sessionGenerationId: "session-generation-1",
-                                sessionId,
-                                type: "acp",
-                                payload: {
-                                    sessionUpdate: "agent_message_chunk",
-                                    content: { type: "text", text: textContent },
+                await run(async (sessionId, eventId, position, textContent) => {
+                    await relay.webSocketMessage(
+                        daemon,
+                        encodeSessionEventEnvelope({
+                            kind: "session.event.v2",
+                            events: [
+                                {
+                                    eventId,
+                                    position,
+                                    recordedAt: "2026-09-18T00:00:00.000Z",
+                                    sessionGenerationId: "session-generation-1",
+                                    sessionId,
+                                    type: "acp",
+                                    payload: {
+                                        sessionUpdate: "agent_message_chunk",
+                                        content: { type: "text", text: textContent },
+                                    },
                                 },
-                            },
-                        ],
-                    }),
-                );
-                await Promise.all(pending.splice(0));
+                            ],
+                        }),
+                    );
+                    await Promise.all(pending.splice(0));
+                });
             } finally {
                 client.close(1000, "Test complete");
                 await Promise.allSettled(pending);
@@ -2027,6 +2039,46 @@ describe.sequential("Platform Recording policy configuration", () => {
         const recorded = await readRecordedHistory(projectId, "disabled-session");
         expect(recorded.status).toBe(404);
         await recorded.body?.cancel();
+    });
+
+    it("Given a Runtime streaming into an enabled Project, When the Project disables Recording, Then output after the policy reuse window is not recorded", async () => {
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+            createPlatformGateways,
+            () => clerk.organizationGateway,
+        );
+        const environment = recordingBindings();
+        const { appId, projectId } = await createPolicyTarget(worker, environment);
+        const policy = async (path: string, mode: "disabled" | "enabled") =>
+            await responseJson(
+                await worker.fetch(
+                    new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/${path}/recording-policy`, {
+                        body: JSON.stringify({ mode }),
+                        headers: developerHeaders(),
+                        method: "PUT",
+                    }),
+                    environment,
+                ),
+                200,
+            );
+        await policy(`apps/${appId}`, "enabled");
+        const sessionId = "policy-change-session";
+
+        await withDaemonRelay(projectId, async (send) => {
+            await send(sessionId, "event-before-change", "1", "recorded while enabled");
+            await policy(`projects/${projectId}`, "disabled");
+            // Deliveries reuse a policy they resolved moments ago instead of reading it for every batch.
+            await send(sessionId, "event-inside-window", "2", "reused enabled policy");
+            vi.setSystemTime(Date.now() + 5_000);
+            await send(sessionId, "event-after-window", "3", "not recorded");
+        });
+
+        const recorded = await readRecordedHistory(projectId, sessionId);
+        expect(recorded.status).toBe(200);
+        expect(decodeSessionRecordingHistory(await recorded.text()).events.map((event) => event.eventId)).toEqual([
+            "event-before-change",
+            "event-inside-window",
+        ]);
     });
 });
 
