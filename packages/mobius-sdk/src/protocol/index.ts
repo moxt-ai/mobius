@@ -380,6 +380,7 @@ export {
 export type {
     ActiveTurnSnapshot,
     CommandDelivery,
+    LastTurnOutcome,
     NativeSessionCancel,
     NativeSessionCommand,
     NativeSessionEntry,

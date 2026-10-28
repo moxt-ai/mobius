@@ -146,10 +146,15 @@ export function buildSessionLayer(options: SessionLayerOptions) {
                     )
                 );
             });
-            // Read after the snapshot, so the delivery is never older than the execution beside it.
-            return request.deliveryCommandId === undefined
-                ? snapshot
-                : { ...snapshot, command: operations.delivery(request.deliveryCommandId, request.targetSessionId) };
+            // Read after the snapshot, so neither is older than the execution beside it.
+            const lastTurn = snapshot.turn === null ? operations.lastTurn(request.targetSessionId) : undefined;
+            return {
+                ...snapshot,
+                ...(request.deliveryCommandId === undefined
+                    ? {}
+                    : { command: operations.delivery(request.deliveryCommandId, request.targetSessionId) }),
+                ...(lastTurn === undefined ? {} : { lastTurn }),
+            };
         },
     );
     const recoveredEvents = operations

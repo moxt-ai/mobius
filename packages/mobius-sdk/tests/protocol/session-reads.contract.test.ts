@@ -65,6 +65,20 @@ describe("Session execution read contracts", () => {
         expect(decoded.action === "active-turn" ? decoded.command : null).toBeUndefined();
     });
 
+    // @no-uc: Compatibility; a last-turn outcome from a newer Runtime must not fail the execution read it rides on.
+    it("Given an execution whose last turn outcome this reader does not know, When it is decoded, Then the execution is kept and the outcome reads as absent", () => {
+        const decoded = decodeNativeSessionResult(
+            JSON.stringify({ ...execution, lastTurn: { commandId: "command-1", state: "abandoned" } }),
+        );
+        expect(decoded).toMatchObject({ action: "active-turn", turn: null, queued: [] });
+        expect(decoded.action === "active-turn" ? decoded.lastTurn : null).toBeUndefined();
+    });
+
+    it("Given an execution with a failed last turn, When it is decoded, Then the outcome is kept", () => {
+        const lastTurn = { code: "boom", commandId: "command-1", message: "The local Agent failed", state: "failed" };
+        expect(decodeNativeSessionResult(JSON.stringify({ ...execution, lastTurn }))).toMatchObject({ lastTurn });
+    });
+
     it("Given an execution with a known command delivery, When it is decoded, Then the delivery is kept", () => {
         expect(
             decodeNativeSessionResult(JSON.stringify({ ...execution, command: { state: "failed", code: "boom" } })),
