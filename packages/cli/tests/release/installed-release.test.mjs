@@ -100,11 +100,13 @@ test("Given an installed release, When an embedding host opens its storage, Then
             }
             // Observe the resulting ACL independently through Windows, without
             // replacing the production permission implementation or trusting chmod.
+            // Read .NET ACLs directly: a PowerShell 7 parent can expose modules
+            // that Windows PowerShell 5.1 cannot load through Get-Acl.
             const systemRoot = Object.entries(process.env).find(([key]) => key.toUpperCase() === "SYSTEMROOT")?.[1];
             assert.ok(systemRoot);
             const script = `
 $ErrorActionPreference = 'Stop'
-$acl = Get-Acl -LiteralPath $env:MOBIUS_TEST_PERMISSION_PATH
+$acl = [IO.Directory]::GetAccessControl($env:MOBIUS_TEST_PERMISSION_PATH)
 $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
 if ($acl.GetOwner([Security.Principal.SecurityIdentifier]) -ne $sid) { throw 'Unexpected owner' }
 if (-not $acl.AreAccessRulesProtected) { throw 'Inherited permissions remain enabled' }
