@@ -1,7 +1,9 @@
 import { and, asc, desc, eq, gt, inArray, lt, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/durable-sqlite";
 import {
+    characterCount,
     emptyProjection,
+    type ItemTextChange,
     type ProjectedEventIdentity,
     type ProjectionWrites,
     type StoredInteractionRecord,
@@ -168,10 +170,11 @@ export class SessionTurnHistoryStorage {
         const itemRows = writes.items.map((write) => {
             const text = storedText(write.text.text);
             return {
-                appended: write.text.kind === "append" ? appendedText(write.text.text) : null,
+                appended: write.text.kind === "append" ? appendedText(write.text) : null,
                 values: {
                     commandId: write.commandId,
-                    droppedCharacters: characterCount(write.text.text.slice(text.length)),
+                    droppedCharacters:
+                        characterCount(write.text.text.slice(text.length)) + write.text.droppedCharacters,
                     itemId: write.item.itemId,
                     itemJson: JSON.stringify(storedTurnItemSchema.parse(write.item)),
                     // A listing only narrows the item validated above, so it is encoded without parsing it again.
@@ -426,30 +429,17 @@ function storedText(text: string): string {
     return text.slice(0, read);
 }
 
-/** Characters as SQLite counts them in stored text: a surrogate pair is one character. */
-function characterCount(text: string): number {
-    let pairs = 0;
-    for (let index = 0; index + 1 < text.length; index += 1) {
-        const unit = text.charCodeAt(index);
-        const next = text.charCodeAt(index + 1);
-        if (unit >= 0xd800 && unit <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
-            pairs += 1;
-            index += 1;
-        }
-    }
-    return text.length - pairs;
-}
-
 /**
  * Appends in SQL, so a growing answer is never read back and rewritten per batch, while its stored text
  * has room for all of it. Once text does not fit, it and everything after it only count as dropped, so
  * the stored text never skips ahead of what it left out.
  */
-function appendedText(text: string) {
-    const fits = sql`${recordedTurnItem.droppedCharacters} = 0 AND length(CAST(${recordedTurnItem.text} AS BLOB)) + ${new TextEncoder().encode(text).byteLength} <= ${storedTurnItemBytes}`;
+function appendedText(change: ItemTextChange) {
+    const fits = sql`${recordedTurnItem.droppedCharacters} = 0 AND length(CAST(${recordedTurnItem.text} AS BLOB)) + ${new TextEncoder().encode(change.text).byteLength} <= ${storedTurnItemBytes}`;
+    const unstored = characterCount(change.text) + change.droppedCharacters;
     return {
-        droppedCharacters: sql`CASE WHEN ${fits} THEN ${recordedTurnItem.droppedCharacters} ELSE ${recordedTurnItem.droppedCharacters} + ${characterCount(text)} END`,
-        text: sql`CASE WHEN ${fits} THEN ${recordedTurnItem.text} || ${text} ELSE ${recordedTurnItem.text} END`,
+        droppedCharacters: sql`CASE WHEN ${fits} THEN ${recordedTurnItem.droppedCharacters} + ${change.droppedCharacters} ELSE ${recordedTurnItem.droppedCharacters} + ${unstored} END`,
+        text: sql`CASE WHEN ${fits} THEN ${recordedTurnItem.text} || ${change.text} ELSE ${recordedTurnItem.text} END`,
     };
 }
 
