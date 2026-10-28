@@ -552,17 +552,3 @@ async function readOrCreateInstallationId(engineDataDir: string, signal: AbortSi
             .installationId;
     }
 }
-
-export async function openRuntimeInstallationStore(
-    engineDataDir: string,
-    signal: AbortSignal,
-): Promise<RuntimeInstallationStore> {
-    return await RuntimeInstallationStore.open(engineDataDir, signal);
-}
-
-export async function openEngineInstallationStore(
-    engineDataDir: string,
-    signal: AbortSignal,
-): Promise<RuntimeInstallationStore> {
-    return await RuntimeInstallationStore.open(engineDataDir, signal);
-}

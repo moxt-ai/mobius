@@ -82,11 +82,13 @@ describe("pairing a machine without a local Agent", () => {
         const relay = await createPairingRelay();
 
         try {
-            const { openRuntimeInstallationStore, pairMobiusRuntime } = await import("../../src/exports/engine.ts");
-            const installation = await openRuntimeInstallationStore(stateDirectory, AbortSignal.timeout(5_000));
+            const { MobiusRuntimeEngine } = await import("../../src/exports/engine.ts");
+            const engine = new MobiusRuntimeEngine({
+                engineDataDir: stateDirectory,
+                agentLaunchEnvironment: agentlessEnvironment(stateDirectory),
+            });
 
-            const paired = await pairMobiusRuntime(
-                installation,
+            const paired = await engine.pair(
                 {
                     defaultWorkspace: join(stateDirectory, "workspace"),
                     pairingCode: "ABCD-EFGH-JKLM-NPQR-STUV",
@@ -94,12 +96,11 @@ describe("pairing a machine without a local Agent", () => {
                     relayOrigin: relay.origin,
                 },
                 AbortSignal.timeout(20_000),
-                agentlessEnvironment(stateDirectory),
             );
 
-            expect(paired.config.agents).toEqual([]);
-            expect(paired.config.catalog.read().agents).toEqual([]);
-            expect(await installation.readConnection(paired.connectionId, AbortSignal.timeout(5_000))).toMatchObject({
+            expect(
+                await engine.getConnectionManager().read(paired.connectionId, AbortSignal.timeout(5_000)),
+            ).toMatchObject({
                 appId: "app_unattended",
                 channelId: "unattended-channel",
                 runtimeId: "unattended-runtime",
@@ -115,18 +116,18 @@ describe("pairing a machine without a local Agent", () => {
         }
     });
 
-    it("Given an unattended machine is already paired, When it resumes its saved connection, Then it comes back with the same empty Agent directory", async () => {
+    it("Given an unattended machine is already paired, When another Engine reads its saved connection, Then pairing is retained without redeeming again", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-unattended-resume-"));
         const relay = await createPairingRelay();
         const environment = agentlessEnvironment(stateDirectory);
 
         try {
-            const { openRuntimeInstallationStore, pairMobiusRuntime, resumeMobiusRuntime } = await import(
-                "../../src/exports/engine.ts"
-            );
-            const installation = await openRuntimeInstallationStore(stateDirectory, AbortSignal.timeout(5_000));
-            const paired = await pairMobiusRuntime(
-                installation,
+            const { MobiusRuntimeEngine } = await import("../../src/exports/engine.ts");
+            const engine = new MobiusRuntimeEngine({
+                engineDataDir: stateDirectory,
+                agentLaunchEnvironment: environment,
+            });
+            const paired = await engine.pair(
                 {
                     defaultWorkspace: join(stateDirectory, "workspace"),
                     pairingCode: "ABCD-EFGH-JKLM-NPQR-STUV",
@@ -134,18 +135,17 @@ describe("pairing a machine without a local Agent", () => {
                     relayOrigin: relay.origin,
                 },
                 AbortSignal.timeout(20_000),
-                environment,
             );
 
-            const resumed = await resumeMobiusRuntime(
-                installation,
-                paired.connectionId,
-                AbortSignal.timeout(20_000),
-                environment,
-            );
+            const resumed = await new MobiusRuntimeEngine({
+                engineDataDir: stateDirectory,
+                agentLaunchEnvironment: environment,
+            })
+                .getConnectionManager()
+                .read(paired.connectionId, AbortSignal.timeout(20_000));
 
             expect(resumed.connectionId).toBe(paired.connectionId);
-            expect(resumed.config.catalog.read().agents).toEqual([]);
+            expect(resumed).toEqual(paired);
             expect(relay.claims).toHaveLength(1);
         } finally {
             await relay.dispose();

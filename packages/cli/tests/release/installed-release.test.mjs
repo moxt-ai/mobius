@@ -52,13 +52,17 @@ test("Given an installed release, When a user imports its APIs and starts the CL
         import { readFile } from 'node:fs/promises';
         import { join } from 'node:path';
         const engine = await import('@moxt-ai/mobius/engine');
-        assert.deepEqual(Object.keys(engine).sort(), ['MobiusRuntimeEngine', 'RuntimeRelayRevokedError', 'openRuntimeInstallationStore', 'pairMobiusRuntime', 'resumeMobiusRuntime'].sort());
-        for (const name of ['openRuntimeInstallationStore', 'pairMobiusRuntime', 'resumeMobiusRuntime', 'MobiusRuntimeEngine', 'RuntimeRelayRevokedError']) {
+        assert.deepEqual(Object.keys(engine).sort(), ['MobiusRuntimeEngine', 'RuntimeRelayRevokedError'].sort());
+        for (const name of ['MobiusRuntimeEngine', 'RuntimeRelayRevokedError']) {
             assert.equal(typeof engine[name], 'function', name);
         }
         const signal = AbortSignal.timeout(5000);
-        const store = await engine.openRuntimeInstallationStore(join(process.env.MOBIUS_STATE_DIRECTORY, 'embedded-data'), signal);
-        const connection = await store.saveConnection({
+        const embedded = new engine.MobiusRuntimeEngine({
+            engineDataDir: join(process.env.MOBIUS_STATE_DIRECTORY, 'embedded-data'),
+            agentLaunchEnvironment: { PATH: '' },
+        });
+        const connections = embedded.getConnectionManager();
+        const connection = await connections.save({
             appId: 'platform_installed',
             channelId: 'installed_channel',
             defaultWorkspace: join(process.env.MOBIUS_STATE_DIRECTORY, 'workspace'),
@@ -69,8 +73,8 @@ test("Given an installed release, When a user imports its APIs and starts the CL
         }, signal);
         assert.equal(connection.appId, 'platform_installed');
         assert.equal(Object.hasOwn(connection, 'applicationId'), false);
-        assert.deepEqual(await store.readConnection(connection.connectionId, signal), connection);
-        const record = JSON.parse(await readFile(store.connectionPath(connection.connectionId), 'utf8'));
+        assert.deepEqual(await connections.read(connection.connectionId, signal), connection);
+        const record = JSON.parse(await readFile(join(process.env.MOBIUS_STATE_DIRECTORY, 'embedded-data', connection.installationId, 'connections', connection.connectionId + '.json'), 'utf8'));
         assert.equal(record.version, 6);
         assert.equal(Object.hasOwn(record, 'applicationId'), false);`,
     ]);

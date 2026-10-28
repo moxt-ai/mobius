@@ -1,85 +1,25 @@
-import { hostname } from "node:os";
-import { basename, join, resolve } from "node:path";
-import { isIdentifier, mobiusApiUrl } from "@moxt-ai/mobius-sdk/protocol";
-import { fetch, type Response } from "undici";
+import { join } from "node:path";
 import packageMetadata from "../../../package.json" with { type: "json" };
-import type { CatalogAgent } from "../../engine/agent/catalog.ts";
-import {
-    discoverLocalAgentInventory,
-    type LocalAgentInventory,
-} from "../../engine/agent/discovery/discover-local-agents.ts";
-import { RuntimeAgentDependencies } from "../../engine/agent/runtime-agents.ts";
-import { publishAgentCatalog } from "../../engine/runtime/catalog/publish-agent-catalog.ts";
-import { createCatalogAgentResolver } from "../../engine/runtime/catalog/resolve-catalog-agent.ts";
-import {
-    createRuntimeConfig,
-    OpaqueRuntimeReconnectTarget,
-    type RuntimeConfig,
-    RuntimeLocalContext,
-} from "../../engine/runtime/config.ts";
 import type { VerifiedRuntimeConnection } from "../../engine/runtime/connection/runtime-connection.ts";
 import {
-    openEngineInstallationStore,
-    openRuntimeInstallationStore,
-    type RuntimeInstallationStore,
+    RuntimeInstallationStore,
     RuntimeInstallationStoreError,
 } from "../../engine/runtime/connection/runtime-installation-store.ts";
-import { ensureCanonicalDirectory, ensurePrivateDirectory } from "../../engine/storage/files/local-files.ts";
+import { MobiusRuntimeEngine } from "../../engine/runtime/engine.ts";
+import {
+    PairingClientError,
+    parsePairingCode,
+    parseRelayOrigin,
+    prepareRuntimeConnection,
+    validatePairingId,
+} from "../../engine/runtime/pairing.ts";
+import { ensurePrivateDirectory } from "../../engine/storage/files/local-files.ts";
 import { validateLocalPath } from "../../engine/util/filesystem/private-path.ts";
-import { environmentProxyDispatcher } from "../../engine/util/network/environment-proxy.ts";
-import { isRecord } from "../../engine/util/value-utils.ts";
 import { readCurrentDataVersion } from "../../storage/daemon/version-data.ts";
 import { readStateDirectory } from "../../storage/state-directory.ts";
 import { prepareMobiusEngineDataDir, resolveMaxAcpProcesses } from "../config.ts";
 
-const PAIRING_TIMEOUT_MILLISECONDS = 20_000;
-const PAIRING_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}$/;
-const TOKEN_PATTERN = /^[a-zA-Z0-9_-]{32,256}$/;
-const CLAIM_RESPONSE_KEYS: readonly string[] = ["appId", "channelId", "daemonToken", "runtimeId"];
-const REDEEM_RESPONSE_KEYS: readonly string[] = ["appId", "channelId", "runtimeCredential", "runtimeId"];
-
-interface PairCommandOptions {
-    readonly code: string;
-    readonly pairingId: string;
-    readonly relayOrigin: URL;
-    readonly workspace: string;
-}
-
-interface ClaimPairingResponse {
-    readonly appId: string;
-    readonly channelId: string;
-    readonly runtimeCredential: string;
-    readonly runtimeId: string;
-}
-
-export interface MobiusRuntimePairingOptions {
-    readonly defaultWorkspace: string;
-    readonly pairingCode: string;
-    readonly pairingId: string;
-    readonly relayOrigin: string;
-}
-
-export interface PairedRuntime {
-    readonly channelUrl: string;
-    readonly connectionId: string;
-    readonly config: RuntimeConfig;
-    readonly connectionPath: string;
-}
-
-export class PairingClientError extends Error {
-    readonly code: string;
-
-    constructor(code: string, message: string, options: ErrorOptions = {}) {
-        super(message, options);
-        this.code = code;
-        this.name = "PairingClientError";
-    }
-}
-
-function hasExactKeys(value: Readonly<Record<string, unknown>>, expectedKeys: readonly string[]): boolean {
-    const keys = Object.keys(value);
-    return keys.length === expectedKeys.length && expectedKeys.every((key) => Object.hasOwn(value, key));
-}
+export { PairingClientError };
 
 function readSingleOption(arguments_: readonly string[], option: string): string {
     const values: string[] = [];
@@ -100,312 +40,19 @@ function readSingleOption(arguments_: readonly string[], option: string): string
     return values[0] ?? "";
 }
 
-function assertKnownArguments(arguments_: readonly string[]): void {
+function parsePairCommand(arguments_: readonly string[], defaultWorkspace: string) {
     for (let index = 0; index < arguments_.length; index += 2) {
         const option = arguments_[index];
         if (option !== "--url" && option !== "--code" && option !== "--pairing" && option !== "--workspace") {
             throw new PairingClientError("invalid_arguments", `Unknown pairing option: ${option ?? "missing option"}`);
         }
     }
-}
-
-function parseRelayOrigin(value: string): URL {
-    let url: URL;
-    try {
-        url = new URL(value);
-    } catch (error) {
-        throw new PairingClientError("invalid_relay_url", "The relay URL is invalid", { cause: error });
-    }
-    if (url.protocol !== "https:" && url.protocol !== "http:") {
-        throw new PairingClientError("invalid_relay_url", "The relay URL must use http or https");
-    }
-    if (url.username.length > 0 || url.password.length > 0) {
-        throw new PairingClientError("invalid_relay_url", "The relay URL cannot contain credentials");
-    }
-    if (url.protocol === "http:" && url.hostname !== "127.0.0.1" && url.hostname !== "localhost") {
-        throw new PairingClientError("invalid_relay_url", "A remote relay must use https");
-    }
-    url.hash = "";
-    url.pathname = "/";
-    url.search = "";
-    return url;
-}
-
-function parsePairingCode(value: string): string {
-    const code = value.trim().toUpperCase();
-    if (!PAIRING_CODE_PATTERN.test(code)) {
-        throw new PairingClientError(
-            "invalid_pairing_code",
-            "The pairing code must match the code shown in the browser",
-        );
-    }
-    return code;
-}
-
-function parsePairCommand(arguments_: readonly string[], defaultWorkspace: string): PairCommandOptions {
-    assertKnownArguments(arguments_);
     return {
         code: parsePairingCode(readSingleOption(arguments_, "--code")),
         pairingId: arguments_.includes("--pairing") ? validatePairingId(readSingleOption(arguments_, "--pairing")) : "",
         relayOrigin: parseRelayOrigin(readSingleOption(arguments_, "--url")),
         workspace: arguments_.includes("--workspace") ? readSingleOption(arguments_, "--workspace") : defaultWorkspace,
     };
-}
-
-function validatePairingId(value: string): string {
-    if (!isIdentifier(value)) {
-        throw new PairingClientError("invalid_pairing_id", "The Runtime pairing ID is invalid");
-    }
-    return value;
-}
-
-async function resolveDefaultWorkspace(path: string): Promise<string> {
-    const requestedWorkspace = resolve(path);
-    let defaultWorkspace: string | null;
-    try {
-        defaultWorkspace = await ensureCanonicalDirectory(requestedWorkspace);
-    } catch (error) {
-        throw new PairingClientError("invalid_workspace", "The default workspace cannot be resolved", { cause: error });
-    }
-    if (defaultWorkspace === null) {
-        throw new PairingClientError("invalid_workspace", "The default workspace is not a directory");
-    }
-    return defaultWorkspace;
-}
-
-async function readJsonResponse(response: Response): Promise<unknown> {
-    if (response.headers.get("cf-mitigated") === "challenge") {
-        throw new PairingClientError(
-            "relay_challenge",
-            "Cloudflare is protecting this temporary preview. Claim the deployment or use an authenticated deployment, then pair again",
-        );
-    }
-    const encoded = await response.text();
-    try {
-        return JSON.parse(encoded);
-    } catch (error) {
-        throw new PairingClientError("invalid_relay_response", "The relay returned an invalid response", {
-            cause: error,
-        });
-    }
-}
-
-function readRelayError(value: unknown): PairingClientError {
-    if (isRecord(value)) {
-        const error = value["error"];
-        if (isRecord(error)) {
-            const code = error["code"];
-            const message = error["message"];
-            if (typeof code === "string" && typeof message === "string") {
-                return new PairingClientError(code, message);
-            }
-        }
-    }
-    return new PairingClientError("pairing_failed", "The relay could not pair this machine");
-}
-
-function decodePairingResponse(
-    value: unknown,
-    credentialField: string,
-    expectedKeys: readonly string[],
-): ClaimPairingResponse {
-    if (!isRecord(value) || !hasExactKeys(value, expectedKeys)) {
-        throw new PairingClientError("invalid_relay_response", "The relay returned an invalid pairing response");
-    }
-    const appId = value["appId"];
-    const channelId = value["channelId"];
-    const runtimeCredential = value[credentialField];
-    const runtimeId = value["runtimeId"];
-    if (
-        typeof appId !== "string" ||
-        !isIdentifier(appId) ||
-        typeof channelId !== "string" ||
-        !isIdentifier(channelId) ||
-        typeof runtimeCredential !== "string" ||
-        !TOKEN_PATTERN.test(runtimeCredential) ||
-        typeof runtimeId !== "string" ||
-        !isIdentifier(runtimeId)
-    ) {
-        throw new PairingClientError("invalid_relay_response", "The relay returned an invalid pairing response");
-    }
-    return { appId, channelId, runtimeCredential, runtimeId };
-}
-
-async function claimPairing(
-    options: PairCommandOptions,
-    defaultWorkspace: string,
-    localAgents: readonly CatalogAgent[],
-    signal: AbortSignal,
-): Promise<ClaimPairingResponse> {
-    const agents = localAgents.map((agent) => ({
-        agentPath: agent.agentIdentity.requestedPath,
-        agentVersion: agent.agentVersion,
-        agentSettingsDiscovery: true,
-        capabilities: agent.capabilities,
-        id: agent.id,
-        label: agent.label,
-        sessionTurnConfiguration: true,
-    }));
-    const endpoint =
-        options.pairingId.length > 0
-            ? mobiusApiUrl(options.relayOrigin, `/v1/runtime-pairings/${encodeURIComponent(options.pairingId)}/redeem`)
-            : mobiusApiUrl(options.relayOrigin, "/pairings/claim");
-    let response: Response;
-    try {
-        response = await fetch(endpoint, {
-            body: JSON.stringify({
-                agents,
-                machineName: hostname(),
-                pairingCode: options.code,
-                workspaceName: basename(defaultWorkspace) || "Local workspace",
-            }),
-            dispatcher: environmentProxyDispatcher,
-            headers: { "content-type": "application/json" },
-            method: "POST",
-            signal: AbortSignal.any([signal, AbortSignal.timeout(PAIRING_TIMEOUT_MILLISECONDS)]),
-        });
-    } catch (error) {
-        throw new PairingClientError("relay_unavailable", "The pairing relay could not be reached", { cause: error });
-    }
-
-    const value = await readJsonResponse(response);
-    if (!response.ok) {
-        throw readRelayError(value);
-    }
-    return options.pairingId.length > 0
-        ? decodePairingResponse(value, "runtimeCredential", REDEEM_RESPONSE_KEYS)
-        : decodePairingResponse(value, "daemonToken", CLAIM_RESPONSE_KEYS);
-}
-
-function buildPairedRuntime(
-    installation: RuntimeInstallationStore,
-    connection: VerifiedRuntimeConnection,
-    defaultWorkspace: string,
-    inventory: LocalAgentInventory,
-    localContext: RuntimeLocalContext,
-): PairedRuntime {
-    const relayUrl = mobiusApiUrl(connection.relayOrigin, "/v1/runtimes/connect");
-    relayUrl.protocol = relayUrl.protocol === "https:" ? "wss:" : "ws:";
-    relayUrl.searchParams.set("token", connection.runtimeCredential);
-
-    const config: RuntimeConfig = createRuntimeConfig(
-        {
-            defaultWorkspace,
-            channelId: connection.channelId,
-            relayUrl,
-        },
-        new RuntimeAgentDependencies(inventory.readyAgents()),
-        localContext,
-        new OpaqueRuntimeReconnectTarget(connection.connectionId),
-        createCatalogAgentResolver(
-            (refreshSignal) =>
-                discoverLocalAgentInventory({
-                    defaultWorkspace,
-                    dataDirectory: localContext.stateDirectory,
-                    environment: localContext.agentLaunchEnvironment,
-                    signal: refreshSignal,
-                }),
-            () => config,
-            publishAgentCatalog,
-        ),
-        (refreshSignal: AbortSignal) =>
-            discoverLocalAgentInventory({
-                defaultWorkspace,
-                dataDirectory: localContext.stateDirectory,
-                environment: localContext.agentLaunchEnvironment,
-                signal: refreshSignal,
-            }).then((inventory) => inventory.readyAgents()),
-    );
-    return {
-        channelUrl: new URL(`/channels/${encodeURIComponent(connection.channelId)}`, connection.relayOrigin).toString(),
-        connectionId: connection.connectionId,
-        config,
-        connectionPath: installation.connectionPath(connection.connectionId),
-    };
-}
-
-async function pairRuntime(
-    installation: RuntimeInstallationStore,
-    options: PairCommandOptions,
-    signal: AbortSignal,
-    environment: Readonly<NodeJS.ProcessEnv>,
-): Promise<PairedRuntime> {
-    const localContext = new RuntimeLocalContext(
-        installation.stateDirectory,
-        environment,
-        resolveMaxAcpProcesses(environment),
-    );
-    const defaultWorkspace = await resolveDefaultWorkspace(options.workspace);
-    const inventory = await discoverLocalAgentInventory({
-        defaultWorkspace,
-        dataDirectory: localContext.stateDirectory,
-        environment: localContext.agentLaunchEnvironment,
-        signal,
-    });
-    const claim = await claimPairing(options, defaultWorkspace, inventory.readyAgents(), signal);
-    const connection = await installation.saveConnection(
-        {
-            appId: claim.appId,
-            channelId: claim.channelId,
-            defaultWorkspace,
-            pairingId: options.pairingId,
-            relayOrigin: options.relayOrigin,
-            runtimeCredential: claim.runtimeCredential,
-            runtimeId: claim.runtimeId,
-        },
-        signal,
-    );
-    return buildPairedRuntime(installation, connection, defaultWorkspace, inventory, localContext);
-}
-
-export async function pairMobiusRuntime(
-    installation: RuntimeInstallationStore,
-    options: MobiusRuntimePairingOptions,
-    signal: AbortSignal,
-    environment: Readonly<NodeJS.ProcessEnv> = process.env,
-): Promise<PairedRuntime> {
-    return await pairRuntime(
-        installation,
-        {
-            code: parsePairingCode(options.pairingCode),
-            pairingId: validatePairingId(options.pairingId),
-            relayOrigin: parseRelayOrigin(options.relayOrigin),
-            workspace: options.defaultWorkspace,
-        },
-        signal,
-        environment,
-    );
-}
-
-async function resumeRuntimeConnection(
-    installation: RuntimeInstallationStore,
-    connection: VerifiedRuntimeConnection,
-    signal: AbortSignal,
-    environment: Readonly<NodeJS.ProcessEnv>,
-): Promise<PairedRuntime> {
-    const localContext = new RuntimeLocalContext(
-        installation.stateDirectory,
-        environment,
-        resolveMaxAcpProcesses(environment),
-    );
-    const defaultWorkspace = await resolveDefaultWorkspace(connection.defaultWorkspace);
-    const inventory = await discoverLocalAgentInventory({
-        defaultWorkspace,
-        dataDirectory: localContext.stateDirectory,
-        environment: localContext.agentLaunchEnvironment,
-        signal,
-    });
-    return buildPairedRuntime(installation, connection, defaultWorkspace, inventory, localContext);
-}
-
-export async function resumeMobiusRuntime(
-    installation: RuntimeInstallationStore,
-    connectionId: string,
-    signal: AbortSignal,
-    environment: Readonly<NodeJS.ProcessEnv> = process.env,
-): Promise<PairedRuntime> {
-    const connection = await installation.readConnection(connectionId, signal);
-    return await resumeRuntimeConnection(installation, connection, signal, environment);
 }
 
 export async function openMobiusControlInstallation(
@@ -424,11 +71,10 @@ export async function openMobiusControlInstallation(
             { cause },
         );
     }
-    return await openRuntimeInstallationStore(join(root, "installations", "dev.mobius.cli"), signal);
+    return await RuntimeInstallationStore.open(join(root, "installations", "dev.mobius.cli"), signal);
 }
 
-// CLI commands use the data the current data pointer names, which is the data the daemon uses. Only before any
-// daemon has recorded it does this CLI's own version directory start the data.
+// Commands follow the daemon's current data; before first startup they use this CLI version.
 export async function openMobiusCliInstallation(
     signal: AbortSignal,
     environment: Readonly<NodeJS.ProcessEnv>,
@@ -438,40 +84,45 @@ export async function openMobiusCliInstallation(
     return await openMobiusVersionInstallation(version, signal, environment);
 }
 
-// A worker uses its own version's data, which it prepared from the current data before it starts.
 export async function openMobiusVersionInstallation(
     version: string,
     signal: AbortSignal,
     environment: Readonly<NodeJS.ProcessEnv>,
 ): Promise<RuntimeInstallationStore> {
-    const engineDataDir = await prepareMobiusEngineDataDir(version, signal, environment);
-    return await openEngineInstallationStore(engineDataDir, signal);
+    return await RuntimeInstallationStore.open(await prepareMobiusEngineDataDir(version, signal, environment), signal);
 }
 
 export async function pairLocalMachine(
     arguments_: readonly string[],
     signal: AbortSignal = new AbortController().signal,
-): Promise<PairedRuntime> {
+): Promise<VerifiedRuntimeConnection> {
     const requested = parsePairCommand(arguments_, "");
-    const installation = await openMobiusCliInstallation(signal, process.env);
-    const localContext = new RuntimeLocalContext(installation.stateDirectory, process.env);
+    const version = (await readCurrentDataVersion(readStateDirectory(process.env), signal)) ?? packageMetadata.version;
+    const engineDataDir = await prepareMobiusEngineDataDir(version, signal, process.env);
+    const engine = new MobiusRuntimeEngine({ engineDataDir, agentLaunchEnvironment: process.env });
+    const installation = await openMobiusVersionInstallation(version, signal, process.env);
     if (requested.pairingId.length > 0) {
         const existing = await installation.readConnectionForPairing(requested.pairingId, signal);
         if (existing !== null) {
-            return await resumeRuntimeConnection(installation, existing, signal, process.env);
+            await prepareRuntimeConnection(
+                installation,
+                existing,
+                signal,
+                process.env,
+                resolveMaxAcpProcesses(process.env),
+            );
+            return existing;
         }
     }
-    return await pairRuntime(
-        installation,
+    return await engine.pair(
         {
-            code: requested.code,
+            pairingCode: requested.code,
             pairingId: requested.pairingId,
-            relayOrigin: requested.relayOrigin,
-            workspace: arguments_.includes("--workspace")
+            relayOrigin: requested.relayOrigin.toString(),
+            defaultWorkspace: arguments_.includes("--workspace")
                 ? requested.workspace
-                : join(localContext.stateDirectory, "workspace"),
+                : join(installation.stateDirectory, "workspace"),
         },
         signal,
-        process.env,
     );
 }
