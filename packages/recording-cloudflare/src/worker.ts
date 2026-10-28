@@ -272,12 +272,33 @@ function sessionRecordingRoutes(
             ) {
                 return errorResponse("invalid_target", 400);
             }
-            let page = storage.readPage(target.projectId, target.runtimeId, target.sessionId, after, Number(limit));
+            const startedAt = performance.now();
+            let readMilliseconds = 0;
+            let waitedMilliseconds = 0;
+            const readPage = () => {
+                const readStartedAt = performance.now();
+                try {
+                    return storage.readPage(target.projectId, target.runtimeId, target.sessionId, after, Number(limit));
+                } finally {
+                    readMilliseconds += performance.now() - readStartedAt;
+                }
+            };
+            let page = readPage();
             if (waitMilliseconds > 0 && (page === null || page.events.length === 0)) {
+                const waitStartedAt = performance.now();
                 await waiters.wait(waitMilliseconds, context.req.raw.signal);
-                page = storage.readPage(target.projectId, target.runtimeId, target.sessionId, after, Number(limit));
+                waitedMilliseconds = performance.now() - waitStartedAt;
+                page = readPage();
             }
             const response = historyResponse(page);
+            response.headers.set(
+                "Server-Timing",
+                [
+                    `recording-read;dur=${readMilliseconds.toFixed(1)}`,
+                    `recording-wait;dur=${waitedMilliseconds.toFixed(1)}`,
+                    `recording-total;dur=${(performance.now() - startedAt).toFixed(1)}`,
+                ].join(","),
+            );
             if (waitValue !== undefined) {
                 response.headers.set("Mobius-Recording-Wait-Supported", "1");
             }
@@ -722,6 +743,9 @@ async function recordSessionBatch(
     write: SessionRecordingWireWrite,
     signal: AbortSignal,
 ): Promise<readonly BatchResult[]> {
+    const startedAt = Date.now();
+    const monotonicStartedAt = performance.now();
+    let lastSessionAppendAt: number | null = null;
     const grouped = new Map<string, SessionRecordingWireWrite["envelope"]["events"][number][]>();
     for (const event of write.envelope.events) {
         const events = grouped.get(event.sessionId) ?? [];
@@ -792,6 +816,9 @@ async function recordSessionBatch(
                         }),
                     );
                     succeeded = response.ok;
+                    if (succeeded) {
+                        lastSessionAppendAt = Date.now();
+                    }
                     await response.body?.cancel();
                 } catch {
                     signal.throwIfAborted();
@@ -812,6 +839,14 @@ async function recordSessionBatch(
     console.info(
         JSON.stringify({
             event: "recording_ingest",
+            projectId: write.projectId,
+            runtimeId: write.runtimeId,
+            firstEventId: write.envelope.events.at(0)?.eventId,
+            lastEventId: write.envelope.events.at(-1)?.eventId,
+            startedAt,
+            lastSessionAppendAt,
+            completedAt: Date.now(),
+            durationMs: performance.now() - monotonicStartedAt,
             events: write.envelope.events.length,
             sessionRequests,
             directoryRequests,

@@ -106,6 +106,7 @@ async function readRecording(
         return errorResponse("project_access_denied", "The Project credential is invalid", 401);
     }
     try {
+        const startedAt = performance.now();
         await context.var.control.authorizeProject(
             projectId,
             credential,
@@ -113,7 +114,9 @@ async function readRecording(
             context.req.header("user-agent") ?? "moxt-server",
             context.req.raw.signal,
         );
+        const authorizedAt = performance.now();
         const policy = await context.var.recordingPolicies.readProjectPolicy(projectId, context.req.raw.signal);
+        const policyReadAt = performance.now();
         if (policy.effectiveMode !== "enabled") {
             return errorResponse("recording_disabled", "Recording is disabled", 404);
         }
@@ -122,9 +125,19 @@ async function readRecording(
         }
         const query = incrementalQuery.toString();
         const target = query.length === 0 ? recordingPath : `${recordingPath}?${query}`;
-        return await context.env.RECORDING.fetch(
+        const response = await context.env.RECORDING.fetch(
             new Request(`https://recording.internal${target}`, { signal: context.req.raw.signal }),
         );
+        const headers = new Headers(response.headers);
+        headers.append(
+            "Server-Timing",
+            [
+                `platform-authorize;dur=${(authorizedAt - startedAt).toFixed(1)}`,
+                `platform-policy;dur=${(policyReadAt - authorizedAt).toFixed(1)}`,
+                `platform-recording;dur=${(performance.now() - policyReadAt).toFixed(1)}`,
+            ].join(","),
+        );
+        return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
     } catch (cause) {
         if (cause instanceof PlatformControlPlaneError) {
             return errorResponse(cause.code, cause.message, cause.status);

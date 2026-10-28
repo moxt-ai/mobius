@@ -402,6 +402,8 @@ type Turn = {
     /** uuid stamped on the pushed `SDKUserMessage`; the SDK echoes it back so the
      *  consumer can match the replayed user message to this turn. */
     promptUuid: string;
+    readonly inputQueuedAt: number;
+    inputEchoObserved?: boolean;
     /** Local-only slash commands (e.g. `/clear`) return a result without an echo,
      *  so the consumer can't promote them via the replay; it falls back to
      *  promoting the queue head when the result arrives. */
@@ -2115,6 +2117,7 @@ export class ClaudeAcpAgent {
         // consumer is running, and awaits the deferred.
         const turn: Turn = {
             promptUuid,
+            inputQueuedAt: performance.now(),
             isLocalOnlyCommand,
             settled: false,
             resolve: () => {},
@@ -2992,6 +2995,17 @@ export class ClaudeAcpAgent {
                             // it seeds the right state (see Turn.commandStarted)...
                             const queued = findUnsettledTurn(frame.command_uuid);
                             if (queued) {
+                                if (!queued.commandStarted) {
+                                    this.logger.log(
+                                        JSON.stringify({
+                                            event: "claude-sdk-command-start-timing",
+                                            sessionId: params.sessionId,
+                                            promptUuid: queued.promptUuid,
+                                            observedAt: Date.now(),
+                                            queuedToCommandStartMs: performance.now() - queued.inputQueuedAt,
+                                        }),
+                                    );
+                                }
                                 queued.commandStarted = true;
                             }
                             // ...and promote an already-orphaned command: once dispatched,
@@ -4366,6 +4380,18 @@ export class ClaudeAcpAgent {
                             }
                             const queued = findUnsettledTurn(message.uuid);
                             if (queued) {
+                                if (!queued.inputEchoObserved) {
+                                    queued.inputEchoObserved = true;
+                                    this.logger.log(
+                                        JSON.stringify({
+                                            event: "claude-sdk-input-echo-timing",
+                                            sessionId: params.sessionId,
+                                            promptUuid: queued.promptUuid,
+                                            observedAt: Date.now(),
+                                            queuedToEchoMs: performance.now() - queued.inputQueuedAt,
+                                        }),
+                                    );
+                                }
                                 // Only (re)activate if this isn't already the active turn — a
                                 // turn promoted early (e.g. by a result that preceded its echo)
                                 // must not have its accumulated usage reset by its own echo.

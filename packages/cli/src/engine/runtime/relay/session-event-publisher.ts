@@ -28,6 +28,13 @@ type PublisherConnection =
 
 interface PendingBatch {
     readonly events: SessionLiveEvent[];
+    readonly firstAnswers: {
+        readonly sessionId: string;
+        readonly commandId: string;
+        readonly eventId: string;
+        readonly observedAt: number;
+        readonly publishedAt: number;
+    }[];
     bytes: number;
 }
 
@@ -136,13 +143,23 @@ export class RuntimeSessionEventPublisher implements SessionEventSink {
             return;
         }
         if (batch === undefined || newBatch) {
-            batch = { events: [], bytes: EMPTY_ENVELOPE_BYTES };
+            batch = { events: [], firstAnswers: [], bytes: EMPTY_ENVELOPE_BYTES };
             this.#pending.push(batch);
         }
         batch.events.push(event);
         batch.bytes += bytes;
         this.#pendingBytes += additionalBytes;
+        const awaiting = this.#awaitingFirstAnswer.get(event.sessionId);
         const firstAnswer = this.#consumeFirstAnswer(event);
+        if (firstAnswer && awaiting !== undefined) {
+            batch.firstAnswers.push({
+                sessionId: event.sessionId,
+                commandId: awaiting.commandId,
+                eventId: event.eventId,
+                observedAt: Date.now(),
+                publishedAt: performance.now(),
+            });
+        }
         const connection = this.#connection;
         if (connection.kind !== "connected" || connection.socket.readyState !== WebSocket.OPEN) {
             return;
@@ -218,6 +235,19 @@ export class RuntimeSessionEventPublisher implements SessionEventSink {
             this.#pendingBytes -= batch.bytes;
             try {
                 socket.send(encoded);
+                for (const answer of batch.firstAnswers) {
+                    console.info(
+                        JSON.stringify({
+                            event: "runtime-first-answer-handoff-timing",
+                            sessionId: answer.sessionId,
+                            commandId: answer.commandId,
+                            eventId: answer.eventId,
+                            observedAt: answer.observedAt,
+                            handedOffAt: Date.now(),
+                            publishToHandoffMs: performance.now() - answer.publishedAt,
+                        }),
+                    );
+                }
             } catch {
                 console.warn("Live Session output could not be sent", { code: "live_event_send_failed" });
                 break;

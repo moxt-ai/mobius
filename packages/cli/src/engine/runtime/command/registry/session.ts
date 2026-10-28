@@ -109,7 +109,15 @@ export async function executeWorkspaceList(
     signal: AbortSignal,
 ): Promise<void> {
     try {
-        const listing = await directories.list(command.bindingId, command.directoryId, signal);
+        const listing =
+            command.view === "metadata"
+                ? await directories.describe(command.bindingId, command.directoryId, signal).then((directory) => ({
+                      directoryId: command.directoryId,
+                      directoryLabel: directory.label,
+                      entries: [],
+                      parentDirectoryId: directory.parentDirectoryId,
+                  }))
+                : await directories.list(command.bindingId, command.directoryId, signal);
         send(socket, {
             bindingId: command.bindingId,
             directoryId: listing.directoryId,
