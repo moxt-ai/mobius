@@ -1,8 +1,8 @@
 import { methods, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import { expect, test } from "vitest";
-import { createAcpClient } from "../../src/acp/connection/create-client.ts";
-import { CodexAcpAgent } from "../../src/acp/harness/codex/agent.ts";
-import type { CodexSessionUpdate } from "../../src/acp/harness/codex/session-update.ts";
+import { createAcpClient } from "../../src/engine/acp/connection/create-client.ts";
+import { CodexAcpAgent } from "../../src/engine/acp/harness/codex/agent.ts";
+import type { CodexSessionUpdate } from "../../src/engine/acp/harness/codex/session-update.ts";
 import { ControlledCodexFixture } from "../support/agents/controlled-codex.ts";
 
 test("Given an embedded image prompt, When Codex emits its user item, Then the image chunk does not duplicate its bytes in the URI", async () => {

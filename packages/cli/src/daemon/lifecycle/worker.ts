@@ -1,11 +1,11 @@
 import { setTimeout } from "node:timers/promises";
-import { refreshAgentCatalog } from "../../runtime/catalog/refresh-agent-catalog.ts";
-import type { RuntimeConfig } from "../../runtime/config.ts";
-import { MobiusRuntimeEngine } from "../../runtime/engine.ts";
-import { RuntimeTurnActivity } from "../../session/turn/runtime-turn-activity.ts";
-import { acquireManagerLock } from "../../storage/daemon/manager-lock.ts";
-import type { InstallationDirectory } from "../../storage/installation/installation-files.ts";
-import { isNodeError } from "../../util/node-error.ts";
+import { refreshAgentCatalog } from "../../engine/runtime/catalog/refresh-agent-catalog.ts";
+import type { RuntimeConfig } from "../../engine/runtime/config.ts";
+import { MobiusRuntimeEngine } from "../../engine/runtime/engine.ts";
+import { RuntimeTurnActivity } from "../../engine/session/turn/runtime-turn-activity.ts";
+import { acquireManagerLock } from "../../engine/storage/daemon/manager-lock.ts";
+import type { InstallationDirectory } from "../../engine/storage/installation/installation-files.ts";
+import { isNodeError } from "../../engine/util/node-error.ts";
 import { sendLocalRequest } from "../control/local-client.ts";
 import { serveLocalControl } from "../control/local-server.ts";
 import {

@@ -9,10 +9,10 @@ import {
     encodeSessionPreviewHistoryPageLoad,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
-import { createAcpClient } from "../../src/acp/connection/create-client.ts";
-import { getEnvironmentSessionMessages } from "../../src/acp/harness/claude/upstream/dist/environment-session-messages.js";
-import { type ClaudeSessionUpdate, createClaudeAcpApp } from "../../src/acp/harness/claude/upstream/dist/lib.js";
-import { ClaudeCodeAgentSpecification } from "../../src/agent/specification/vendors/claude-code-agent.ts";
+import { createAcpClient } from "../../src/engine/acp/connection/create-client.ts";
+import { getEnvironmentSessionMessages } from "../../src/engine/acp/harness/claude/upstream/dist/environment-session-messages.js";
+import { type ClaudeSessionUpdate, createClaudeAcpApp } from "../../src/engine/acp/harness/claude/upstream/dist/lib.js";
+import { ClaudeCodeAgentSpecification } from "../../src/engine/agent/specification/vendors/claude-code-agent.ts";
 import { ClaudeFixture } from "../support/agents/claude.ts";
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeAnthropicProvider } from "../support/llm/anthropic.ts";

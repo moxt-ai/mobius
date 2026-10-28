@@ -1,9 +1,9 @@
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
-import { MemorySessionStore } from "../../src/session/record/session-store.ts";
-import { systemTimer } from "../../src/util/timer.ts";
+import { AcpContentExternalizer } from "../../src/engine/acp/content/content-externalizer.ts";
+import { MemorySessionStore } from "../../src/engine/session/record/session-store.ts";
+import { systemTimer } from "../../src/engine/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
 import { SessionRuntimeFixture as SessionManager } from "../support/session-runtime.ts";
 import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";

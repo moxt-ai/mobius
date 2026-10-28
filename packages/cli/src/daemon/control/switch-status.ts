@@ -1,4 +1,4 @@
-import type { InstallationDirectory } from "../../storage/installation/installation-files.ts";
+import type { InstallationDirectory } from "../../engine/storage/installation/installation-files.ts";
 import { sendLocalRequest } from "./local-client.ts";
 import { type DaemonReleaseSwitchState, decodeKnownLifecycleResponse } from "./protocol.ts";
 

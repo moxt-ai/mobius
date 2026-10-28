@@ -35,8 +35,8 @@
     "overrides": [
         {
             "includes": [
-                "packages/cli/src/acp/harness/claude/upstream/src/**/*.ts",
-                "packages/cli/src/acp/harness/pi/upstream/**/*.ts"
+                "packages/cli/src/engine/acp/harness/claude/upstream/src/**/*.ts",
+                "packages/cli/src/engine/acp/harness/pi/upstream/**/*.ts"
             ],
             "linter": {
                 "rules": {

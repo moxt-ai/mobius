@@ -1,5 +1,7 @@
 import type { SessionNotification } from "@agentclientprotocol/sdk";
-import { AcpAgentDefinition, type AgentConnectionOptions, EndpointAgentConnection } from "@moxt-ai/mobius/runtime";
+import { AcpAgentDefinition } from "../../../cli/src/engine/acp/agent/agent-definition.ts";
+import type { AgentConnectionOptions } from "../../../cli/src/engine/acp/connection/agent-connection.ts";
+import { EndpointAgentConnection } from "../../../cli/src/engine/acp/connection/endpoint-agent-connection.ts";
 import { createFakeHarness, fakeHarnessCapabilities } from "./fake-harness/index.ts";
 import type { FakeAgentHarnessOptions } from "./fake-harness/model.ts";
 

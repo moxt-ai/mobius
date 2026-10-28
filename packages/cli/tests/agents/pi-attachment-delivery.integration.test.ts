@@ -6,7 +6,7 @@ import {
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
-import { PiAgentSpecification } from "../../src/agent/specification/vendors/pi-agent.ts";
+import { PiAgentSpecification } from "../../src/engine/agent/specification/vendors/pi-agent.ts";
 import { PiFixture } from "../support/agents/pi.ts";
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { uploadPromptContent } from "../support/agents/upload-prompt-content.ts";

@@ -1,7 +1,7 @@
 import { join, relative, resolve } from "node:path";
 
-import { findLogDirectories, listLogFiles, readOwnedLogFile } from "../../../../storage/logs/log-files.ts";
-import { readStateDirectory } from "../../../../storage/state-directory.ts";
+import { findLogDirectories, listLogFiles, readOwnedLogFile } from "../../../../engine/storage/logs/log-files.ts";
+import { readStateDirectory } from "../../../../engine/storage/state-directory.ts";
 
 export interface LocalLogEntry {
     /** Path relative to the state root, so a report never leaks a home directory. */

@@ -10,7 +10,7 @@ import {
     encodeSessionPromptCommand,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
-import { ClaudeCodeAgentSpecification } from "../../src/agent/specification/vendors/claude-code-agent.ts";
+import { ClaudeCodeAgentSpecification } from "../../src/engine/agent/specification/vendors/claude-code-agent.ts";
 import { ClaudeFixture } from "../support/agents/claude.ts";
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { selectSubagentDispatchTool } from "../support/llm/scenarios.ts";

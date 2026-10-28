@@ -1,4 +1,4 @@
-import { type ScheduledTask, systemTimer, type Timer } from "../../src/util/timer.ts";
+import { type ScheduledTask, systemTimer, type Timer } from "../../src/engine/util/timer.ts";
 
 /** Advances long retention deadlines without expiring the real transport's heartbeats. */
 export class IdleTimeoutTimer implements Timer {

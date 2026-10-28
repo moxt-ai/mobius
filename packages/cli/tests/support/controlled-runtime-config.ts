@@ -1,12 +1,12 @@
-import type { CatalogAgent } from "../../src/agent/catalog.ts";
-import { RuntimeAgentDependencies } from "../../src/agent/runtime-agents.ts";
+import type { CatalogAgent } from "../../src/engine/agent/catalog.ts";
+import { RuntimeAgentDependencies } from "../../src/engine/agent/runtime-agents.ts";
 import {
     createRuntimeConfig,
     type RuntimeConfig,
     type RuntimeConnectionConfig,
     type RuntimeLocalContext,
     type RuntimeReconnectTarget,
-} from "../../src/runtime/config.ts";
+} from "../../src/engine/runtime/config.ts";
 import { acpAdapters } from "./acp-adapters.ts";
 
 /** Injects only the controlled Agent dependency; runtime services and transports remain production code. */

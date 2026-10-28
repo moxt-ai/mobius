@@ -1,11 +1,11 @@
 import { methods } from "@agentclientprotocol/sdk";
 import { SessionHistoryPolicy } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
-import { unmeasuredOperationMetrics } from "../../src/infra/operation-metrics.ts";
-import type { AgentSessionRestore } from "../../src/session/live/agent-session-restore.ts";
-import { restoreSession } from "../../src/session/live/session-restore.ts";
-import { executePrompt } from "../../src/session/prompt/execute-prompt.ts";
-import { MemorySessionStore, StoredSession } from "../../src/session/record/session-store.ts";
+import { unmeasuredOperationMetrics } from "../../src/engine/infra/operation-metrics.ts";
+import type { AgentSessionRestore } from "../../src/engine/session/live/agent-session-restore.ts";
+import { restoreSession } from "../../src/engine/session/live/session-restore.ts";
+import { executePrompt } from "../../src/engine/session/prompt/execute-prompt.ts";
+import { MemorySessionStore, StoredSession } from "../../src/engine/session/record/session-store.ts";
 
 function sessionFixture(options: { readonly resume: boolean }): {
     readonly calls: string[];

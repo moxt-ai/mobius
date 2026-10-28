@@ -8,9 +8,9 @@ import {
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
-import { CodexAppServerClient } from "../../src/acp/harness/codex/app-server-client.ts";
-import { CodexAgentSpecification } from "../../src/agent/specification/vendors/codex-agent.ts";
-import { stopProcessTree } from "../../src/util/process/executable.ts";
+import { CodexAppServerClient } from "../../src/engine/acp/harness/codex/app-server-client.ts";
+import { CodexAgentSpecification } from "../../src/engine/agent/specification/vendors/codex-agent.ts";
+import { stopProcessTree } from "../../src/engine/util/process/executable.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";

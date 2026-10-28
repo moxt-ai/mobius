@@ -19,11 +19,6 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { type WebSocket, WebSocketServer } from "ws";
-import { harnessAdapters } from "../../../src/acp/adapter/registry.ts";
-import type { AdapterResolver } from "../../../src/acp/native-history/preview-contract.ts";
-import { discoverLocalAgentInventory } from "../../../src/agent/discovery/discover-local-agents.ts";
-import { RuntimeAgentDependencies } from "../../../src/agent/runtime-agents.ts";
-import type { LocalAgentSpecification } from "../../../src/agent/specification/agent-specification.ts";
 import { collectLocalDaemonLogs } from "../../../src/cli/handler/logs/logic/collect-local-logs.ts";
 import { sendLocalRequest } from "../../../src/daemon/control/local-client.ts";
 import { lifecycleResponse } from "../../../src/daemon/control/protocol.ts";
@@ -31,9 +26,14 @@ import {
     openMobiusCliInstallation,
     openMobiusControlInstallation,
 } from "../../../src/daemon/pairing/pair-local-machine.ts";
-import { createRuntimeConfig, RuntimeLocalContext } from "../../../src/runtime/config.ts";
-import { runRuntime } from "../../../src/runtime/run.ts";
-import { systemTimer, type Timer } from "../../../src/util/timer.ts";
+import { harnessAdapters } from "../../../src/engine/acp/adapter/registry.ts";
+import type { AdapterResolver } from "../../../src/engine/acp/native-history/preview-contract.ts";
+import { discoverLocalAgentInventory } from "../../../src/engine/agent/discovery/discover-local-agents.ts";
+import { RuntimeAgentDependencies } from "../../../src/engine/agent/runtime-agents.ts";
+import type { LocalAgentSpecification } from "../../../src/engine/agent/specification/agent-specification.ts";
+import { createRuntimeConfig, RuntimeLocalContext } from "../../../src/engine/runtime/config.ts";
+import { runRuntime } from "../../../src/engine/runtime/run.ts";
+import { systemTimer, type Timer } from "../../../src/engine/util/timer.ts";
 import { acpAdapters } from "../acp-adapters.ts";
 import { installWorkspaceDaemonRelease } from "../installed-daemon-release.ts";
 

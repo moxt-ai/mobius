@@ -13,8 +13,8 @@ import {
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test, vi } from "vitest";
-import { PiAgentSpecification } from "../../src/agent/specification/vendors/pi-agent.ts";
-import type { Timer } from "../../src/util/timer.ts";
+import { PiAgentSpecification } from "../../src/engine/agent/specification/vendors/pi-agent.ts";
+import type { Timer } from "../../src/engine/util/timer.ts";
 import { PiFixture } from "../support/agents/pi.ts";
 import { prepareNewRealSession, type RealDaemonPeer, withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";

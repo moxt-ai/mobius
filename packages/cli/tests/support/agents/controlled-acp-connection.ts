@@ -1,17 +1,17 @@
 import { spawn } from "node:child_process";
 import { type ClientConnection, methods, ndJsonStream, type SessionNotification } from "@agentclientprotocol/sdk";
-import { AcpExecutionError } from "../../../src/acp/acp-error.ts";
-import type { AcpEndpointTermination } from "../../../src/acp/agent/in-process-endpoint.ts";
-import type { AgentConnection, AgentConnectionOptions } from "../../../src/acp/connection/agent-connection.ts";
-import { raceAgentOperation } from "../../../src/acp/connection/agent-operation.ts";
-import { createAcpClient } from "../../../src/acp/connection/create-client.ts";
-import type { IdentifiedSessionNotification } from "../../../src/acp/connection/session-notification.ts";
+import { AcpExecutionError } from "../../../src/engine/acp/acp-error.ts";
+import type { AcpEndpointTermination } from "../../../src/engine/acp/agent/in-process-endpoint.ts";
+import type { AgentConnection, AgentConnectionOptions } from "../../../src/engine/acp/connection/agent-connection.ts";
+import { raceAgentOperation } from "../../../src/engine/acp/connection/agent-operation.ts";
+import { createAcpClient } from "../../../src/engine/acp/connection/create-client.ts";
+import type { IdentifiedSessionNotification } from "../../../src/engine/acp/connection/session-notification.ts";
 import {
     captureProcessTree,
     executableLaunch,
     platformSpawnOptions,
     stopProcessTree,
-} from "../../../src/util/process/executable.ts";
+} from "../../../src/engine/util/process/executable.ts";
 import { createWritableAcpStream, readableAcpStream } from "./acp-stream.ts";
 
 interface ControlledAcpLaunch {

@@ -3,28 +3,31 @@ import { basename, join, resolve } from "node:path";
 import { isIdentifier, mobiusApiUrl } from "@moxt-ai/mobius-sdk/protocol";
 import { fetch, type Response } from "undici";
 import packageMetadata from "../../../package.json" with { type: "json" };
-import type { CatalogAgent } from "../../agent/catalog.ts";
-import { discoverLocalAgentInventory, type LocalAgentInventory } from "../../agent/discovery/discover-local-agents.ts";
-import { RuntimeAgentDependencies } from "../../agent/runtime-agents.ts";
-import { publishAgentCatalog } from "../../runtime/catalog/publish-agent-catalog.ts";
-import { createCatalogAgentResolver } from "../../runtime/catalog/resolve-catalog-agent.ts";
+import type { CatalogAgent } from "../../engine/agent/catalog.ts";
+import {
+    discoverLocalAgentInventory,
+    type LocalAgentInventory,
+} from "../../engine/agent/discovery/discover-local-agents.ts";
+import { RuntimeAgentDependencies } from "../../engine/agent/runtime-agents.ts";
+import { publishAgentCatalog } from "../../engine/runtime/catalog/publish-agent-catalog.ts";
+import { createCatalogAgentResolver } from "../../engine/runtime/catalog/resolve-catalog-agent.ts";
 import {
     createRuntimeConfig,
     loadDefaultWorkspace,
     OpaqueRuntimeReconnectTarget,
     type RuntimeConfig,
     RuntimeLocalContext,
-} from "../../runtime/config.ts";
-import type { VerifiedRuntimeConnection } from "../../runtime/connection/runtime-connection.ts";
+} from "../../engine/runtime/config.ts";
+import type { VerifiedRuntimeConnection } from "../../engine/runtime/connection/runtime-connection.ts";
 import {
     openRuntimeInstallationStore,
     type RuntimeInstallationStore,
-} from "../../runtime/connection/runtime-installation-store.ts";
-import { readCurrentDataVersion } from "../../storage/daemon/version-data.ts";
-import { ensureCanonicalDirectory } from "../../storage/files/local-files.ts";
-import { readStateDirectory } from "../../storage/state-directory.ts";
-import { environmentProxyDispatcher } from "../../util/network/environment-proxy.ts";
-import { isRecord } from "../../util/value-utils.ts";
+} from "../../engine/runtime/connection/runtime-installation-store.ts";
+import { readCurrentDataVersion } from "../../engine/storage/daemon/version-data.ts";
+import { ensureCanonicalDirectory } from "../../engine/storage/files/local-files.ts";
+import { readStateDirectory } from "../../engine/storage/state-directory.ts";
+import { environmentProxyDispatcher } from "../../engine/util/network/environment-proxy.ts";
+import { isRecord } from "../../engine/util/value-utils.ts";
 
 const PAIRING_TIMEOUT_MILLISECONDS = 20_000;
 const PAIRING_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}$/;

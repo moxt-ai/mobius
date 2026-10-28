@@ -5,16 +5,16 @@ import { join } from "node:path";
 import { methods, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import { expect, test } from "vitest";
 import { z } from "zod";
-import { createAcpClient } from "../../src/acp/connection/create-client.ts";
-import { CodexAcpAgent } from "../../src/acp/harness/codex/agent.ts";
-import { CodexAppServerClient } from "../../src/acp/harness/codex/app-server-client.ts";
+import { createAcpClient } from "../../src/engine/acp/connection/create-client.ts";
+import { CodexAcpAgent } from "../../src/engine/acp/harness/codex/agent.ts";
+import { CodexAppServerClient } from "../../src/engine/acp/harness/codex/app-server-client.ts";
 import {
     threadResumeResponseSchema,
     threadStartResponseSchema,
-} from "../../src/acp/harness/codex/app-server-protocol.ts";
-import { decodeThreadItem } from "../../src/acp/harness/codex/items.ts";
-import type { CodexSessionUpdate } from "../../src/acp/harness/codex/session-update.ts";
-import { stopProcessTree } from "../../src/util/process/executable.ts";
+} from "../../src/engine/acp/harness/codex/app-server-protocol.ts";
+import { decodeThreadItem } from "../../src/engine/acp/harness/codex/items.ts";
+import type { CodexSessionUpdate } from "../../src/engine/acp/harness/codex/session-update.ts";
+import { stopProcessTree } from "../../src/engine/util/process/executable.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 

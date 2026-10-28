@@ -6,9 +6,9 @@ import { join } from "node:path";
 import { methods, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import { expect, test } from "vitest";
 import { z } from "zod";
-import { createAcpClient } from "../../src/acp/connection/create-client.ts";
-import { getEnvironmentSessionMessages } from "../../src/acp/harness/claude/upstream/dist/environment-session-messages.js";
-import { type ClaudeSessionUpdate, createClaudeAcpApp } from "../../src/acp/harness/claude/upstream/dist/lib.js";
+import { createAcpClient } from "../../src/engine/acp/connection/create-client.ts";
+import { getEnvironmentSessionMessages } from "../../src/engine/acp/harness/claude/upstream/dist/environment-session-messages.js";
+import { type ClaudeSessionUpdate, createClaudeAcpApp } from "../../src/engine/acp/harness/claude/upstream/dist/lib.js";
 import { ClaudeFixture } from "../support/agents/claude.ts";
 import { FakeAnthropicProvider } from "../support/llm/anthropic.ts";
 

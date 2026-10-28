@@ -1,9 +1,9 @@
 import { resolve } from "node:path";
 import type { Command } from "commander";
-import { discoverLocalAgentInventory } from "../../../agent/discovery/discover-local-agents.ts";
 import { openMobiusCliInstallation } from "../../../daemon/pairing/pair-local-machine.ts";
-import { loadDefaultWorkspace, RuntimeLocalContext } from "../../../runtime/config.ts";
-import { ensurePrivateDirectory } from "../../../storage/files/local-files.ts";
+import { discoverLocalAgentInventory } from "../../../engine/agent/discovery/discover-local-agents.ts";
+import { loadDefaultWorkspace, RuntimeLocalContext } from "../../../engine/runtime/config.ts";
+import { ensurePrivateDirectory } from "../../../engine/storage/files/local-files.ts";
 import type { CliContext } from "../../context.ts";
 import { valueOption } from "../../util/options.ts";
 import { formatAgentDiagnostics, writeAgentDiagnostics } from "./logic/agent-diagnostics.ts";

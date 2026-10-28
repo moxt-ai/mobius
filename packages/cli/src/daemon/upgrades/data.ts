@@ -5,9 +5,9 @@ import {
     readCurrentDataVersion,
     versionDataExists,
     writeCurrentDataVersion,
-} from "../../storage/daemon/version-data.ts";
-import type { InstallationDirectory } from "../../storage/installation/installation-files.ts";
-import { readStateDirectory } from "../../storage/state-directory.ts";
+} from "../../engine/storage/daemon/version-data.ts";
+import type { InstallationDirectory } from "../../engine/storage/installation/installation-files.ts";
+import { readStateDirectory } from "../../engine/storage/state-directory.ts";
 import { readSwitchStatus } from "../control/switch-status.ts";
 
 // A version whose data is not current inherits the current data. Without a current data pointer, a version that has

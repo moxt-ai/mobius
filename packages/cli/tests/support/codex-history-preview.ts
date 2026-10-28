@@ -1,11 +1,11 @@
 import { methods } from "@agentclientprotocol/sdk";
-import { initializeAgentConnection, validateAgentRuntime } from "../../src/acp/adapter/agent-initialization.ts";
-import { CodexAdapter } from "../../src/acp/adapter/codex/adapter.ts";
-import type { AcpAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
-import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
-import { unsupportedSessionCapabilities } from "../../src/acp/protocol/session-capabilities.ts";
-import { MemorySessionEventStore } from "../../src/session/history/session-event-store.ts";
-import { AgentProcessPool } from "../../src/session/process/agent-process-pool.ts";
+import { initializeAgentConnection, validateAgentRuntime } from "../../src/engine/acp/adapter/agent-initialization.ts";
+import { CodexAdapter } from "../../src/engine/acp/adapter/codex/adapter.ts";
+import type { AcpAgentDefinition } from "../../src/engine/acp/agent/agent-definition.ts";
+import { AcpContentExternalizer } from "../../src/engine/acp/content/content-externalizer.ts";
+import { unsupportedSessionCapabilities } from "../../src/engine/acp/protocol/session-capabilities.ts";
+import { MemorySessionEventStore } from "../../src/engine/session/history/session-event-store.ts";
+import { AgentProcessPool } from "../../src/engine/session/process/agent-process-pool.ts";
 import { UnretainedExternalContentStore } from "./unretained-external-content-store.ts";
 
 function historyAdapter() {

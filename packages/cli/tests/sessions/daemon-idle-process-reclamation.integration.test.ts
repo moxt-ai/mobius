@@ -20,7 +20,7 @@ import {
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { afterEach, expect, test, vi } from "vitest";
-import { InProcessAcpAgentSpecification } from "../../src/agent/specification/agent-specification.ts";
+import { InProcessAcpAgentSpecification } from "../../src/engine/agent/specification/agent-specification.ts";
 import { ControlledAcpSpecification } from "../support/agents/controlled-acp-specification.ts";
 import { ControlledSessionAgent } from "../support/agents/controlled-session-agent.ts";
 import { waitForAgentFile } from "../support/agents/observed-process.ts";

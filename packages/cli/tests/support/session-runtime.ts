@@ -1,16 +1,16 @@
-import { AdapterRegistry } from "../../src/acp/adapter/adapter-registry.ts";
-import type { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
-import type { AdapterResolver } from "../../src/acp/native-history/preview-contract.ts";
-import type { OperationMetrics } from "../../src/infra/operation-metrics.ts";
+import { AdapterRegistry } from "../../src/engine/acp/adapter/adapter-registry.ts";
+import type { AcpContentExternalizer } from "../../src/engine/acp/content/content-externalizer.ts";
+import type { AdapterResolver } from "../../src/engine/acp/native-history/preview-contract.ts";
+import type { OperationMetrics } from "../../src/engine/infra/operation-metrics.ts";
 import type {
     AgentSettingsInspectionOptions,
     SessionConfigureOptions,
     SessionPrepareOptions,
     SessionSteerOptions,
     SessionTurnOptions,
-} from "../../src/session/api/session-api.ts";
-import { type ClosedSessionHandling, SessionManager } from "../../src/session/manager/session-manager.ts";
-import { AgentProcessPool } from "../../src/session/process/agent-process-pool.ts";
+} from "../../src/engine/session/api/session-api.ts";
+import { type ClosedSessionHandling, SessionManager } from "../../src/engine/session/manager/session-manager.ts";
+import { AgentProcessPool } from "../../src/engine/session/process/agent-process-pool.ts";
 
 export type TestSessionPrepareOptions = Omit<SessionPrepareOptions, "adapter">;
 
