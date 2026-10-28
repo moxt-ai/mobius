@@ -102,6 +102,14 @@ export function registerManagedUpgradeScenarios(
                                 ? {}
                                 : { bash: { command, runInBackground: mode === "background" } }),
                             ...(mode === "background-agent" ? { subagent: BACKGROUND_AGENT } : {}),
+                            ...(mode === "background-agent"
+                                ? {}
+                                : {
+                                      toolPrompt:
+                                          taskCount === 2
+                                              ? fakeProviderPrompts.twoTools
+                                              : fakeProviderPrompts.successfulTool,
+                                  }),
                             beforeFirstText: async (scenario, _signal, conversation) => {
                                 if (mode === "background-agent") {
                                     // Hold the subagent's answer, then the root's handling of its result.

@@ -184,14 +184,7 @@ async function interruptedJourney(
                     targetCommandId: "",
                 }),
             );
-        // Claude does not make a brand-new conversation resumable while its first
-        // model request is still unanswered. Complete a harmless tool round trip
-        // before holding the reply, rather than relying on injected reminder text
-        // to accidentally trigger that checkpoint.
-        const interruptedPrompt =
-            agentId === "claude"
-                ? "Use a shell tool successfully, then begin work that will be interrupted by the runtime restart"
-                : "Begin work that will be interrupted by the runtime restart";
+        const interruptedPrompt = "Begin work that will be interrupted by the runtime restart";
         sendPrompt(commandId, interruptedPrompt);
         stage = "waiting for the original provider request";
         await awaitPeerOperation(entered, peer.signal);
