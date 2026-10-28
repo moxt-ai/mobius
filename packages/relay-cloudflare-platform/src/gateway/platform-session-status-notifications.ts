@@ -1,10 +1,10 @@
 import { RuntimeMessageScheduler, type SessionStatusNotifications } from "@moxt-ai/mobius-relay-core";
 import {
     encodeSessionStatusWebhookBody,
+    isSessionLiveEvent,
     lastRecordedLifecycleStatus,
     type SessionLiveEvent,
     type SessionStatusWebhookCommand,
-    sessionLiveEventSchema,
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { AppSessionStatusWebhookService } from "../service/app-session-status-webhook-service.ts";
 import type { AppSessionStatusWebhookStorage } from "../storage/app-session-status-webhook-storage.ts";
@@ -47,11 +47,10 @@ export class PlatformSessionStatusNotifications implements SessionStatusNotifica
             if (wireEvent.type !== "lifecycle-metadata") {
                 continue;
             }
-            const parsed = sessionLiveEventSchema.safeParse(wireEvent);
-            if (!parsed.success) {
+            if (!isSessionLiveEvent(wireEvent)) {
                 continue;
             }
-            const event = parsed.data;
+            const event = wireEvent;
             const events = eventsBySession.get(event.sessionId) ?? [];
             events.push(event);
             eventsBySession.set(event.sessionId, events);

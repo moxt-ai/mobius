@@ -1,4 +1,4 @@
-import { boundedJsonSchema } from "@moxt-ai/mobius-sdk/protocol";
+import { isBoundedJson } from "@moxt-ai/mobius-sdk/protocol";
 import { z } from "zod";
 
 const toolEventSchema = z.looseObject({
@@ -52,7 +52,7 @@ export function prepareCodexToolUpdate(update: SessionUpdate): SessionUpdate {
 }
 
 function fitPayload(value: unknown): unknown {
-    if (value === undefined || boundedJsonSchema.safeParse(value).success) {
+    if (value === undefined || isBoundedJson(value)) {
         return value;
     }
     return { truncated: true, text: payloadText(value) };

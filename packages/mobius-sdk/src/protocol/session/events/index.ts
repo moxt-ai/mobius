@@ -648,6 +648,8 @@ export const decodeKnownSessionEventPayload = (value: unknown): SessionEventPayl
 };
 export const encodeSessionEvent = (value: SessionEvent): string => encode(value, sessionEventSchema);
 export const decodeSessionLiveEvent = (value: unknown): SessionLiveEvent => decode(value, sessionLiveEventSchema);
+export const isSessionLiveEvent = (value: unknown): value is SessionLiveEvent =>
+    sessionLiveEventSchema.safeParse(value).success;
 export const encodeSessionLiveEvent = (value: SessionLiveEvent): string => encode(value, sessionLiveEventSchema);
 export const decodeSessionWireEnvelope = (value: unknown): SessionWireEnvelope =>
     decode(value, sessionWireEnvelopeSchema);
