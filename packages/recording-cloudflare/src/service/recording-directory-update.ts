@@ -8,7 +8,12 @@ import type { DirectoryOperation, RecordingDirectoryUpdate } from "../entity/rec
 
 function operation(wireEvent: SessionWireEvent): DirectoryOperation {
     const recordedAt = wireEvent.recordedAt;
-    if (!isSessionLiveEvent(wireEvent)) {
+    // Only a prompt request or a Session info update can change a summary. Every other event only marks
+    // activity, so it is not validated against the full live schema just to be discarded.
+    const summarized =
+        (wireEvent.type === "lifecycle-metadata" && wireEvent.payload["kind"] === "prompt.requested") ||
+        (wireEvent.type === "acp" && wireEvent.payload["sessionUpdate"] === "session_info_update");
+    if (!summarized || !isSessionLiveEvent(wireEvent)) {
         return { kind: "activity", recordedAt };
     }
     const event = wireEvent;

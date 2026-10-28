@@ -224,6 +224,45 @@ describe("Recording multi-Session batches", () => {
         });
     });
 
+    it("Given output this deployment cannot read, When it is recorded, Then the Session's directory activity still advances", async () => {
+        const projectId = "unread-activity-project";
+        const runtimeId = "unread-activity-runtime";
+        expect((await write(projectId, runtimeId, [requested("unread-activity-session")])).status).toBe(201);
+        const future = {
+            ...chunk("unread-activity-session", 2),
+            payload: { sessionUpdate: "future_update", value: 1 },
+            recordedAt: "2026-10-21T00:00:07.000Z",
+        };
+        // A Session info update that fails the live schema changes no title, but it is still activity.
+        const unreadTitle = {
+            ...chunk("unread-activity-session", 3),
+            payload: { sessionUpdate: "session_info_update", title: "t".repeat(1_000_001) },
+            recordedAt: "2026-10-21T00:00:09.000Z",
+        };
+        for (const event of [future, unreadTitle]) {
+            const response = await worker.fetch(
+                new Request("https://recording.test/v1/session-event-batches", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        projectId,
+                        runtimeId,
+                        envelope: { kind: "session.event.v2", events: [event] },
+                    }),
+                }),
+                env,
+            );
+            expect(await response.json()).toEqual({
+                results: [{ sessionId: "unread-activity-session", kind: "recorded" }],
+            });
+        }
+
+        expect(await directory(projectId, runtimeId)).toMatchObject({
+            sessions: [
+                { sessionId: "unread-activity-session", title: "Batch title", updatedAt: "2026-10-21T00:00:09.000Z" },
+            ],
+        });
+    });
+
     it("Given completion followed by a new request and title reset, When a batch is folded, Then its ordered status, context and fallback title survive", async () => {
         const id = "ordered-session";
         const reset: SessionLiveEvent = {
