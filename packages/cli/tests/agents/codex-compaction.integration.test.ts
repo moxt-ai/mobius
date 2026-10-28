@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { decodeSessionEvent, encodeSessionPromptCommand, SessionPromptDisposition } from "@moxt-ai/mobius-sdk/protocol";
+import {
+    decodeSessionLiveEvent,
+    encodeSessionPromptCommand,
+    SessionPromptDisposition,
+} from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
 import { CodexAgentSpecification } from "../../src/agent/specification/vendors/codex-agent.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
@@ -35,7 +39,7 @@ test("Given Codex auto-compacts a conversation, When the daemon relays the turns
                 }),
             );
             for (;;) {
-                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                 if (event.type === "lifecycle-metadata") {
                     if (event.payload.kind === "prompt.failed") {
                         throw new Error(JSON.stringify(event));

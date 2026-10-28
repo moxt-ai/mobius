@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { decodeSessionEvent, encodeSessionPromptCommand, SessionPromptDisposition } from "@moxt-ai/mobius-sdk/protocol";
+import {
+    decodeSessionLiveEvent,
+    encodeSessionPromptCommand,
+    SessionPromptDisposition,
+} from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
 import { ClaudeCodeAgentSpecification } from "../../src/agent/specification/vendors/claude-code-agent.ts";
 import { ClaudeFixture } from "../support/agents/claude.ts";
@@ -31,7 +35,7 @@ test("Given Claude Code compacts a conversation with content, When the daemon re
         // Seed a turn so compaction has content to summarize.
         sendPrompt("Talk about something first");
         for (;;) {
-            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (event.type === "lifecycle-metadata") {
                 if (event.payload.kind === "prompt.failed") {
                     throw new Error(JSON.stringify(event));
@@ -48,7 +52,7 @@ test("Given Claude Code compacts a conversation with content, When the daemon re
         const summaryChunks: string[] = [];
         const bannerTexts: string[] = [];
         for (;;) {
-            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (event.type === "lifecycle-metadata") {
                 if (event.payload.kind === "prompt.failed") {
                     throw new Error(JSON.stringify(event));

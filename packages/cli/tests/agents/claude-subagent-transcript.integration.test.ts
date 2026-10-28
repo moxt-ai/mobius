@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
-    decodeSessionEvent,
+    decodeSessionLiveEvent,
     encodeSessionPermissionRespondCommand,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
@@ -90,7 +90,7 @@ async function observeTurn(peer: RealDaemonPeer, commandId: string): Promise<Obs
     let agentText = "";
     let completion: { stopReason: string } | undefined;
     for (;;) {
-        const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+        const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
         if (event.type !== "acp") {
             if (event.type === "lifecycle-metadata" && event.payload.kind === "session.permission.requested") {
                 const option = event.payload.event.options.find((entry) => entry.kind === "allow_once");

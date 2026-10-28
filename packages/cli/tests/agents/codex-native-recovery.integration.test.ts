@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
-    decodeSessionEvent,
     decodeSessionEventEnvelope,
     decodeSessionHistoryPageLoaded,
+    decodeSessionLiveEvent,
     encodeSessionCancelCommand,
     encodeSessionHistoryPageLoad,
     encodeSessionPromptCommand,
@@ -96,7 +96,7 @@ test("Given a real Codex native Session, When the active prompt is cancelled wit
             const finish = async (commandId: string, reason: string): Promise<string> => {
                 let text = "";
                 for (;;) {
-                    const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                    const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                     if (
                         event.type === "lifecycle-metadata" &&
                         event.payload.kind === "prompt.failed" &&

@@ -8,12 +8,13 @@ import {
     encodeSessionPermissionRespondCommand,
     encodeSessionPromptCommand,
     type SessionEvent,
+    type SessionLiveEvent,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect } from "vitest";
 import type { RealDaemonPeer } from "./real-daemon.ts";
 
-function imageReferences(events: readonly SessionEvent[]): readonly string[] {
+function imageReferences(events: readonly (SessionEvent | SessionLiveEvent)[]): readonly string[] {
     return events.flatMap((event) => {
         if (
             event.type !== "acp" ||
@@ -65,8 +66,8 @@ export async function verifyImageDelivery(
                 targetCommandId: "",
             }),
         );
-    const finish = async (): Promise<readonly SessionEvent[]> => {
-        const events: SessionEvent[] = [];
+    const finish = async (): Promise<readonly SessionLiveEvent[]> => {
+        const events: SessionLiveEvent[] = [];
         for (;;) {
             const message = await peer.nextMessage();
             expect(message).not.toContain(encodedPrefix);

@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
-    decodeSessionEvent,
     decodeSessionHistoryPageLoaded,
+    decodeSessionLiveEvent,
     encodeSessionHistoryPageLoad,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
@@ -39,7 +39,7 @@ async function promptRealSession(peer: RealDaemonPeer, sessionId: string, text: 
     );
     let output = "";
     for (;;) {
-        const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+        const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
         if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
             throw new Error(JSON.stringify(event));
         }
@@ -92,11 +92,6 @@ test("Given a real Codex conversation, When more Sessions are opened than the da
             const userText = [
                 ...new Set(
                     page.events.flatMap((event) => {
-                        if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.requested") {
-                            return event.payload.content.flatMap((content) =>
-                                content.type === "text" ? [content.text] : [],
-                            );
-                        }
                         return event.type === "acp" &&
                             event.payload.sessionUpdate === "user_message_chunk" &&
                             event.payload.content.type === "text"

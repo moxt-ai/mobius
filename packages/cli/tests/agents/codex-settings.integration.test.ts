@@ -5,7 +5,7 @@ import { join } from "node:path";
 import {
     decodeAgentSettingsDiscoveredEvent,
     decodeMessageKind,
-    decodeSessionEvent,
+    decodeSessionLiveEvent,
     encodeAgentSettingsDiscoverCommand,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
@@ -141,7 +141,7 @@ test("Given Codex publishes complete model settings and defaults to Full access,
             );
             let text = "";
             for (;;) {
-                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                 if (event.type === "lifecycle-metadata" && event.payload.kind === "session.permission.requested") {
                     throw new Error("Codex requested approval while Full access was the default mode");
                 }

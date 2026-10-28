@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
-    decodeSessionEvent,
     decodeSessionEventEnvelope,
+    decodeSessionLiveEvent,
     decodeSessionReadyEvent,
     encodeSessionPermissionRespondCommand,
     encodeSessionPrepareCommand,
@@ -122,7 +122,7 @@ test("Given real Pi has an active SDK turn, When the user steers it, Then Pi con
             }
             let text = "";
             for (;;) {
-                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                 if (
                     event.type === "acp" &&
                     event.payload.sessionUpdate === "agent_message_chunk" &&
@@ -216,7 +216,7 @@ test("Given real Pi without an external ACP adapter, When Bash executes through 
             let toolOutput: unknown;
             const toolContent = new Map<string, readonly unknown[]>();
             for (;;) {
-                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                 if (event.type === "lifecycle-metadata" && event.payload.kind === "session.permission.requested") {
                     const option = event.payload.event.options.find((entry) => entry.kind === "allow_once");
                     if (option === undefined) {

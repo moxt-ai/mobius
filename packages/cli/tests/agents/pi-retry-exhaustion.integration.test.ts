@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { decodeSessionEvent, encodeSessionPromptCommand, SessionPromptDisposition } from "@moxt-ai/mobius-sdk/protocol";
+import {
+    decodeSessionLiveEvent,
+    encodeSessionPromptCommand,
+    SessionPromptDisposition,
+} from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
 import { PiAgentSpecification } from "../../src/agent/specification/vendors/pi-agent.ts";
 import { PiFixture } from "../support/agents/pi.ts";
@@ -43,7 +47,7 @@ test("Given real pi exhausts its automatic model retries, When the last attempt 
         let failure: { readonly code: string; readonly message: string } | null = null;
         let transcript = "";
         for (;;) {
-            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (
                 event.type === "acp" &&
                 (event.payload.sessionUpdate === "agent_message_chunk" ||
@@ -81,7 +85,7 @@ test("Given real pi exhausts its automatic model retries, When the last attempt 
         const recoveredCommandId = sendPrompt("Recovery check. Reply with a short greeting.");
         let recovered = "";
         for (;;) {
-            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (
                 event.type === "acp" &&
                 event.payload.sessionUpdate === "agent_message_chunk" &&
@@ -138,7 +142,7 @@ test("Given a pi turn's first model call fails retryably, When pi's automatic re
 
         let text = "";
         for (;;) {
-            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (
                 event.type === "acp" &&
                 (event.payload.sessionUpdate === "agent_message_chunk" ||

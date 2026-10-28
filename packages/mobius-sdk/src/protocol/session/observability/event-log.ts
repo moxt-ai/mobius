@@ -414,16 +414,9 @@ const sharedSessionEventFields = {
     sessionId: identifier,
 };
 const sessionLiveEventFields = { ...sharedSessionEventFields, position: positionSchema };
-export const sessionEventSchema = z.discriminatedUnion("type", [
-    z.object({ ...sharedSessionEventFields, payload: acpSessionUpdateSchema, type: z.literal("acp") }).readonly(),
-    z
-        .object({
-            ...sharedSessionEventFields,
-            payload: lifecycleMetadataSchema,
-            type: z.literal("lifecycle-metadata"),
-        })
-        .readonly(),
-]);
+export const sessionEventSchema = z
+    .object({ ...sharedSessionEventFields, payload: acpSessionUpdateSchema, type: z.literal("acp") })
+    .readonly();
 export type SessionEvent = z.infer<typeof sessionEventSchema>;
 export const sessionLiveEventSchema = z.discriminatedUnion("type", [
     z.object({ ...sessionLiveEventFields, payload: acpSessionUpdateSchema, type: z.literal("acp") }).readonly(),

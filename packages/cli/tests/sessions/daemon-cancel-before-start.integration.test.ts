@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
     decodeMessageKind,
-    decodeSessionEvent,
     decodeSessionEventEnvelope,
+    decodeSessionLiveEvent,
     decodeSessionOperationFailedEvent,
     encodeSessionCancelCommand,
     encodeSessionPromptCommand,
@@ -53,7 +53,7 @@ test("Given running and queued work, When cancellation permits only unstarted wo
                     });
                 peer.send(prompt(running, "reject", "", "hold after first delta"));
                 for (;;) {
-                    const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                    const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                     if (
                         event.type === "lifecycle-metadata" &&
                         event.payload.kind === "prompt.started" &&
@@ -64,7 +64,7 @@ test("Given running and queued work, When cancellation permits only unstarted wo
                 }
                 peer.send(prompt(queued, "queue", running, "This queued instruction must never execute"));
                 for (;;) {
-                    const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                    const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                     if (event.type === "lifecycle-metadata" && event.payload.kind === "session.queue.changed") {
                         break;
                     }
@@ -123,7 +123,7 @@ test("Given running and queued work, When cancellation permits only unstarted wo
                 const next = randomUUID();
                 peer.send(prompt(next, "reject", "", "The next request completes"));
                 for (;;) {
-                    const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                    const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                     if (
                         event.type === "lifecycle-metadata" &&
                         event.payload.kind === "prompt.completed" &&

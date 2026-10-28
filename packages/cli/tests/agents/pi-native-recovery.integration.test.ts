@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
     decodeNativeSessionResult,
-    decodeSessionEvent,
     decodeSessionEventEnvelope,
     decodeSessionHistoryPageLoaded,
+    decodeSessionLiveEvent,
     decodeSessionOperationFailedEvent,
     decodeSessionPreviewHistoryPageLoaded,
     encodeNativeSessionCommand,
@@ -59,7 +59,7 @@ test("Given a real pi native Session, When the active prompt is cancelled with a
             const finish = async (commandId: string, reason: string): Promise<string> => {
                 let text = "";
                 for (;;) {
-                    const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                    const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                     if (
                         event.type === "lifecycle-metadata" &&
                         event.payload.kind === "prompt.failed" &&
@@ -148,7 +148,7 @@ test("Given a real Pi native Session was previewed, When the user imports it, Th
             }),
         );
         for (;;) {
-            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (
                 event.type === "lifecycle-metadata" &&
                 event.payload.kind === "prompt.failed" &&
@@ -278,7 +278,7 @@ test("Given a saved real Pi native Session, When the user forks it, Then its his
             }),
         );
         for (;;) {
-            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (
                 event.type === "lifecycle-metadata" &&
                 event.payload.kind === "prompt.completed" &&
@@ -413,7 +413,7 @@ test("Given a saved real Pi native Session, When the user forks it, Then its his
         );
         let reply = "";
         for (;;) {
-            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (
                 event.type === "acp" &&
                 event.payload.sessionUpdate === "agent_message_chunk" &&

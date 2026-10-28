@@ -40,6 +40,18 @@ describe("Session Event V2 contracts", () => {
         }
     });
 
+    it("Given lifecycle metadata, When decoded as history or live traffic, Then only the live boundary accepts it", () => {
+        const { position, ...history } = {
+            ...sharedEvent,
+            type: "lifecycle-metadata" as const,
+            payload: { kind: "prompt.completed" as const, commandId: "command-1", stopReason: "end_turn" },
+            position: "1",
+        };
+
+        expect(() => decodeSessionEvent(history)).toThrow();
+        expect(decodeSessionLiveEvent({ ...history, position })).toEqual({ ...history, position });
+    });
+
     it("Given a large legacy inline image, When its recorded event crosses the protocol boundary, Then it is accepted", () => {
         const event = {
             ...sharedEvent,

@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
     decodeMessageKind,
-    decodeSessionEvent,
     decodeSessionHistoryPageLoaded,
+    decodeSessionLiveEvent,
     encodeSessionHistoryPageLoad,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
@@ -63,7 +63,7 @@ test("Given a deeply nested multibyte workspace, When real Codex runs a tool thr
                 );
                 let response = "";
                 for (;;) {
-                    const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                    const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                     if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
                         throw new Error(JSON.stringify(event));
                     }

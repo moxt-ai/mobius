@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { decodeSessionEvent, encodeSessionPromptCommand, SessionPromptDisposition } from "@moxt-ai/mobius-sdk/protocol";
+import {
+    decodeSessionLiveEvent,
+    encodeSessionPromptCommand,
+    SessionPromptDisposition,
+} from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
 import { CodexAgentSpecification } from "../../src/agent/specification/vendors/codex-agent.ts";
 import { ControlledCodexFixture } from "../support/agents/controlled-codex.ts";
@@ -26,7 +30,7 @@ test("Given an owned Codex session, When Codex changes collaboration mode during
         );
         const selections: string[] = [];
         for (;;) {
-            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (event.type === "acp" && event.payload.sessionUpdate === "config_option_update") {
                 const option = event.payload.configOptions.find((option) => option.id === "collaboration_mode");
                 if (option?.type === "select") {

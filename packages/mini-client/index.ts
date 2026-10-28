@@ -14,6 +14,7 @@ import {
     type SessionConfigOption,
     type SessionConfigurationSelection,
     type SessionEvent,
+    type SessionLiveEvent,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
 import {
@@ -745,7 +746,7 @@ async function getCommand(directory: string, flags: ReadonlyMap<string, string>)
         const seen = new Set<string>();
         const followedCommandId = targetTurnId(session);
         const terminal = Promise.withResolvers<void>();
-        const isFollowedTerminal = (event: SessionEvent): boolean =>
+        const isFollowedTerminal = (event: SessionLiveEvent): boolean =>
             event.type === "lifecycle-metadata" &&
             (event.payload.kind === "prompt.completed" || event.payload.kind === "prompt.failed") &&
             event.payload.commandId === followedCommandId;
@@ -756,9 +757,6 @@ async function getCommand(directory: string, flags: ReadonlyMap<string, string>)
                     seen.add(event.eventId);
                 }
                 output({ connection: liveConnection.kind, events, sessionId: session.sessionId });
-                if (events.events.events.some(isFollowedTerminal)) {
-                    terminal.resolve();
-                }
             },
             receive: async (events) => {
                 const unseen = events.filter((event) => !seen.has(event.eventId));

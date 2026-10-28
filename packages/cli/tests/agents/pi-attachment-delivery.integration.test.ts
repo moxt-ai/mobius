@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
-    decodeSessionEvent,
+    decodeSessionLiveEvent,
     encodeSessionPermissionRespondCommand,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
@@ -43,7 +43,7 @@ test("Given real Pi receives an embedded text attachment, When the turn runs, Th
         );
         let text = "";
         for (;;) {
-            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (event.type === "lifecycle-metadata" && event.payload.kind === "session.permission.requested") {
                 const option = event.payload.event.options.find((entry) => entry.kind === "allow_once");
                 if (option === undefined) {

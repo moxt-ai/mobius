@@ -20,7 +20,7 @@ import {
     SESSION_EVENT_KIND,
     SESSION_OPERATION_FAILED_KIND,
     SESSION_PROMPT_KIND,
-    type SessionEvent,
+    type SessionLiveEvent,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-sdk/protocol";
@@ -989,7 +989,7 @@ describe("daemon relay connection liveness", () => {
             if (firstSocket === undefined) {
                 throw new Error("Test relay did not retain the first connection");
             }
-            const initialEvents: SessionEvent[] = [];
+            const initialEvents: SessionLiveEvent[] = [];
             while (
                 !initialEvents.some(
                     (event) => event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed",

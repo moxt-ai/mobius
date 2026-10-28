@@ -6,7 +6,7 @@ import { join } from "node:path";
 import {
     decodeMessageKind,
     decodeRuntimeDiagnosticsResult,
-    decodeSessionEvent,
+    decodeSessionLiveEvent,
     encodeSessionPrepareCommand,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
@@ -68,7 +68,7 @@ test("Given an Agent rejects a turn, When the turn fails, Then the failure event
                 );
                 let failureMessage: string | undefined;
                 for (;;) {
-                    const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                    const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                     if (
                         event.type === "lifecycle-metadata" &&
                         (event.payload.kind === "prompt.failed" || event.payload.kind === "prompt.failed-before-start")

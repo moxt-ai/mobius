@@ -13,6 +13,7 @@ import {
     encodeSessionPromptCommand,
     type NativeSessionResult,
     type SessionEvent,
+    type SessionLiveEvent,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
@@ -26,7 +27,7 @@ const image = Buffer.from(
     "base64",
 );
 
-function imageKeys(events: readonly SessionEvent[]): readonly string[] {
+function imageKeys(events: readonly (SessionEvent | SessionLiveEvent)[]): readonly string[] {
     return events.flatMap((event) => {
         if (
             event.type !== "acp" ||
@@ -213,8 +214,8 @@ test("Given saved Codex image generation, When the real daemon reopens it throug
                     targetCommandId: "",
                 }),
             );
-        const finish = async (): Promise<readonly SessionEvent[]> => {
-            const events: SessionEvent[] = [];
+        const finish = async (): Promise<readonly SessionLiveEvent[]> => {
+            const events: SessionLiveEvent[] = [];
             for (;;) {
                 const message = await peer.nextMessage();
                 const kind = decodeMessageKind(message);

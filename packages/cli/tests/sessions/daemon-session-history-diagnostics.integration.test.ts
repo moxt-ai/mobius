@@ -9,8 +9,8 @@ import {
     decodeFileBeginEvent,
     decodeFileEndEvent,
     decodeMessageKind,
-    decodeSessionEvent,
     decodeSessionHistoryPageLoaded,
+    decodeSessionLiveEvent,
     decodeSessionOperationFailedEvent,
     encodeFileReadCommand,
     encodeSessionHistoryPageLoad,
@@ -91,7 +91,7 @@ if (process.argv.includes("--version")) {
                     }),
                 );
                 for (;;) {
-                    const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                    const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                     if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
                         break;
                     }

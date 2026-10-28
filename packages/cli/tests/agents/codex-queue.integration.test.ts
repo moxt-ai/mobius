@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
-    decodeSessionEvent,
     decodeSessionEventEnvelope,
     decodeSessionHistoryPageLoaded,
+    decodeSessionLiveEvent,
     encodeSessionCancelCommand,
     encodeSessionHistoryPageLoad,
     encodeSessionPromptCommand,
@@ -301,7 +301,7 @@ test("Given real Codex advances between repeated prompts, When V2 recovery pagin
             }
             releaseQueued.resolve();
             for (;;) {
-                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                 if (
                     event.type === "lifecycle-metadata" &&
                     event.payload.kind === "prompt.completed" &&
@@ -398,7 +398,7 @@ test("Given real Codex with an active turn, When three follow-ups are accepted a
                 encodeSessionCancelCommand({ kind: "session.cancel", sessionId: peer.sessionId, commandId: cancelled }),
             );
             for (;;) {
-                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+                const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
                 if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
                     expect(event.payload.commandId).toBe(cancelled);
                     expect(event.payload.stopReason).toBe("cancelled");
