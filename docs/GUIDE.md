@@ -147,6 +147,12 @@ other writers or in-flight requests make ownership uncertain, stop automatic rec
 reconcile with the operators involved. Do not revoke or rotate an arbitrary new
 credential or assume a missing list entry makes a retry safe.
 
+Confirm an unused credential with the integration owners and their deployed
+configuration before revoking it. Usage timestamps are best-effort observations,
+not a complete audit trail. A missing or old observation does not prove inactivity;
+the legacy last-use timestamp can also contain the issuance time before any use.
+Do not use these values alone to decide that a credential is safe to revoke.
+
 - **Lost `createApp` response:** after confirming which App was created, use its
   `defaultCredentialId` and `listAppCredentials` to locate the credential. Rotate
   that credential to obtain and save a replacement secret. If it was already
@@ -187,6 +193,11 @@ Disconnected or overloaded viewers can miss events, and daemon or Relay restarts
 lose in-flight messages. Reconnecting resumes the broadcast; clients catch up through
 the available current-turn view, native Agent history, or optional cloud Recording.
 Restarting the daemon does not resume running work or queued prompts.
+
+When reconnecting or observing another client's prompts, use the
+[prompt identity contract](protocol.md#prompt-identity-across-http-and-daemon-apis)
+to target cancellation and steering from the current execution view, even when
+the original submission response is unavailable.
 
 Recording is best effort: slow writes, failures, or restarts can leave gaps. It must
 never block live output, and failed writes are not retried. Recording is not a

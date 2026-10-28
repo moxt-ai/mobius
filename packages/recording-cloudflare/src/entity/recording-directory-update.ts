@@ -22,23 +22,18 @@ export const directoryOperationSchema = z
     .transform((operation) =>
         operation.kind === "status" ? { kind: "activity" as const, recordedAt: operation.recordedAt } : operation,
     );
+const directoryUpdateEntrySchema = z
+    .object({
+        sessionId: identifier,
+        operations: z.array(directoryOperationSchema).min(1).max(1000).readonly(),
+    })
+    .readonly();
 export const directoryUpdateSchema = z
     .object({
         projectId: identifier,
         runtimeId: identifier,
         events: z.number().int().min(1).max(1000),
-        updates: z
-            .array(
-                z
-                    .object({
-                        sessionId: identifier,
-                        operations: z.array(directoryOperationSchema).min(1).max(1000).readonly(),
-                    })
-                    .readonly(),
-            )
-            .min(1)
-            .max(256)
-            .readonly(),
+        updates: z.array(directoryUpdateEntrySchema).min(1).max(256).readonly(),
     })
     .readonly()
     .refine(
@@ -49,42 +44,29 @@ export const directoryUpdateSchema = z
 export type DirectoryOperation = z.infer<typeof directoryOperationSchema>;
 export type RecordingDirectoryUpdate = z.infer<typeof directoryUpdateSchema>;
 
-const knownDirectoryOperationKinds = new Set(["activity", "requested", "status", "title"]);
-
-/** Decodes an update for consumption, omitting operation variants this deployment does not know. */
+/** Decodes an update for consumption, omitting entries this deployment cannot consume. */
 export function decodeKnownDirectoryUpdate(value: unknown): RecordingDirectoryUpdate | null {
     if (typeof value !== "object" || value === null || !("updates" in value) || !Array.isArray(value.updates)) {
         return directoryUpdateSchema.parse(value);
     }
-    const updates = value.updates
-        .map((update) => {
-            if (
-                typeof update !== "object" ||
-                update === null ||
-                !("operations" in update) ||
-                !Array.isArray(update.operations)
-            ) {
-                return update;
+    const updates = z
+        .array(z.unknown())
+        .max(256)
+        .parse(value.updates)
+        .flatMap((update) => {
+            if (typeof update !== "object" || update === null || !("operations" in update)) {
+                return [];
             }
-            return {
-                ...update,
-                operations: update.operations.filter(
-                    (operation: unknown) =>
-                        typeof operation !== "object" ||
-                        operation === null ||
-                        !("kind" in operation) ||
-                        typeof operation.kind !== "string" ||
-                        knownDirectoryOperationKinds.has(operation.kind),
-                ),
-            };
-        })
-        .filter(
-            (update) =>
-                typeof update !== "object" ||
-                update === null ||
-                !("operations" in update) ||
-                !Array.isArray(update.operations) ||
-                update.operations.length > 0,
-        );
+            const operations = z.array(z.unknown()).max(1000).safeParse(update.operations);
+            if (!operations.success) {
+                return [];
+            }
+            const knownOperations = operations.data.flatMap((operation) => {
+                const decoded = directoryOperationSchema.safeParse(operation);
+                return decoded.success ? [decoded.data] : [];
+            });
+            const decoded = directoryUpdateEntrySchema.safeParse({ ...update, operations: knownOperations });
+            return decoded.success ? [decoded.data] : [];
+        });
     return updates.length === 0 ? null : directoryUpdateSchema.parse({ ...value, updates });
 }
