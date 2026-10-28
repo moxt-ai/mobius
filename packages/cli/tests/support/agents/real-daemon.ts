@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { inspect } from "node:util";
 import {
     decodeMessageKind,
     decodeSessionEventEnvelope,
@@ -23,6 +24,7 @@ import type { AdapterResolver } from "../../../src/acp/native-history/preview-co
 import { discoverLocalAgentInventory } from "../../../src/agent/discovery/discover-local-agents.ts";
 import { RuntimeAgentDependencies } from "../../../src/agent/runtime-agents.ts";
 import type { LocalAgentSpecification } from "../../../src/agent/specification/agent-specification.ts";
+import { collectLocalDaemonLogs } from "../../../src/cli/handler/logs/logic/collect-local-logs.ts";
 import { sendLocalRequest } from "../../../src/daemon/control/local-client.ts";
 import { lifecycleResponse } from "../../../src/daemon/control/protocol.ts";
 import {
@@ -115,7 +117,7 @@ export async function withRealDaemon(
             output += chunk.toString();
         });
         await new Promise<void>((resolve_, reject) => {
-            child.once("error", reject);
+            child.once("error", (cause) => reject(new Error(`CLI ${args.join(" ")} failed: ${output}`, { cause })));
             child.once("close", (code) =>
                 code === 0 ? resolve_() : reject(new Error(`CLI ${args.join(" ")} failed: ${output}`)),
             );
@@ -289,21 +291,33 @@ export async function withRealDaemon(
                 }
             },
         });
+    } catch (cause) {
+        const diagnostics = await collectLocalDaemonLogs(directory, 100, AbortSignal.timeout(5_000)).catch(
+            (cause: unknown) => ({ collectionFailure: inspect(cause) }),
+        );
+        process.stderr.write(
+            `Real ${specification.label} ${launch} scenario failed: ${inspect(cause, { depth: 8 })}\n` +
+                `Daemon diagnostics:\n${inspect(diagnostics, { depth: 8 }).slice(-32_768)}\n`,
+        );
+        throw cause;
     } finally {
-        if (launch === "managed") {
-            await cli(["quit"], AbortSignal.timeout(15_000));
+        try {
+            if (launch === "managed") {
+                await cli(["quit"], AbortSignal.timeout(15_000));
+            }
+        } finally {
+            controller.abort();
+            signal.removeEventListener("abort", stopWaiting);
+            await runtime?.catch(() => {});
+            for (const connection of server.clients) {
+                connection.terminate();
+            }
+            await new Promise<void>((resolve) => server.close(() => resolve()));
+            if (relay.listening) {
+                await new Promise<void>((resolve) => relay.close(() => resolve()));
+            }
+            await rm(directory, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 });
         }
-        controller.abort();
-        signal.removeEventListener("abort", stopWaiting);
-        await runtime?.catch(() => {});
-        for (const connection of server.clients) {
-            connection.terminate();
-        }
-        await new Promise<void>((resolve) => server.close(() => resolve()));
-        if (relay.listening) {
-            await new Promise<void>((resolve) => relay.close(() => resolve()));
-        }
-        await rm(directory, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 });
     }
 }
 
