@@ -90,7 +90,9 @@ export function selectFakeProviderScenario(payload: unknown): FakeProviderScenar
     // Claude adds tool and skill descriptions to user messages. Those reminders
     // are context, not requests to run tools or stream a reply.
     const prompt = latestUserPrompt(payload).replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gu, "");
-    const asksForTool = /\b(?:bash|command|shell|tool)s?\b/iu.test(prompt);
+    // Fixture tool requests begin with Use/Run. Compaction instructions can
+    // mention the same tools while explicitly requiring a text-only response.
+    const asksForTool = /^\s*(?:use|run)\b/iu.test(prompt) && /\b(?:bash|command|shell|tool)s?\b/iu.test(prompt);
     const asksForTwo = /\b(?:two|twice)\b/iu.test(prompt);
     const asksForFailure = /\b(?:error|fail|failure|failing)\w*\b/iu.test(prompt);
     const asksForStreaming = /\b(?:chunk|stream|unicode)\w*\b/iu.test(prompt);
