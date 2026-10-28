@@ -784,6 +784,27 @@ describe("daemon relay connection liveness", () => {
             await nextFrameOfKind(frames, WORKSPACE_ENTRIES_KIND);
             expect(connectionCount).toBe(1);
 
+            // Additive fields must not cause a known operation to disappear.
+            writeServerTextFrame(
+                socket,
+                JSON.stringify({
+                    kind: WORKSPACE_LIST_KIND,
+                    bindingId: "workspace",
+                    directoryId: "default",
+                    requestId: "extended-workspace-request",
+                    futureOptions: { format: "v3" },
+                }),
+            );
+            const extended = await nextFrameOfKind(frames, WORKSPACE_ENTRIES_KIND);
+            expect(JSON.parse(extended.text).requestId).toBe("extended-workspace-request");
+            expect(connectionCount).toBe(1);
+
+            // Future envelopes with no recognizable discriminator are ignored.
+            writeServerTextFrame(socket, JSON.stringify({ version: 3, message: { kind: "future" } }));
+            // A valid WebSocket binary frame with an unrecognized application format.
+            socket.write(Buffer.from([0x82, 3, 0xff, 0x00, 0x03]));
+            writeServerTextFrame(socket, "{not-json");
+
             // Unknown commands are skipped regardless of their other fields.
             writeServerTextFrame(socket, JSON.stringify({ kind: "session.future.read", requestId: "??" }));
             writeServerTextFrame(
