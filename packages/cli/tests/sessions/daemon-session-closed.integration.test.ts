@@ -320,17 +320,27 @@ test("Given a closed Session, When a client prepares it again, Then the Runtime 
     });
 });
 
-test("Given a Session that its first prompt titled, When a client closes it, Then the Runtime still stores the Session with its title", async () => {
-    const specification = new ClosableAgentSpecification();
-    await withClosableDaemon(specification, async (peer) => {
-        const sessionId = await closedSession(peer, "Plan the release");
+test.each([
+    { prompt: "Plan the release", title: "Plan the release" },
+    { prompt: "\n> ## Plan   the release\nAdditional instructions", title: "Plan the release" },
+    { prompt: `# ${"\u{1f680}".repeat(45)}\nAdditional instructions`, title: `${"\u{1f680}".repeat(41)}\u2026` },
+])(
+    "Given a first prompt $prompt, When a client closes and continues the Session, Then its readable fallback title survives",
+    async ({ prompt: firstPrompt, title }) => {
+        const specification = new ClosableAgentSpecification();
+        await withClosableDaemon(specification, async (peer) => {
+            const sessionId = await closedSession(peer, firstPrompt);
 
-        const requestId = crypto.randomUUID();
-        peer.send(encodeSessionQueryCommand({ kind: "session.query", requestId, sessionIds: [sessionId] }));
-
-        const queried = decodeSessionsQueriedEvent(await nextMessageOfKind(peer, "session.queried"));
-        expect(queried.entries).toEqual([
-            expect.objectContaining({ prompted: true, sessionId, title: "Plan the release" }),
-        ]);
-    });
-});
+            const queryTitle = async (): Promise<void> => {
+                const requestId = crypto.randomUUID();
+                peer.send(encodeSessionQueryCommand({ kind: "session.query", requestId, sessionIds: [sessionId] }));
+                const queried = decodeSessionsQueriedEvent(await nextMessageOfKind(peer, "session.queried"));
+                expect(queried.entries).toEqual([expect.objectContaining({ prompted: true, sessionId, title })]);
+            };
+            await queryTitle();
+            await prepare(peer, sessionId);
+            await prompt(peer, sessionId, "Continue with a different request");
+            await queryTitle();
+        });
+    },
+);
