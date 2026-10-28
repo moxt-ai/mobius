@@ -74,8 +74,14 @@ describe("Session execution read contracts", () => {
         expect(decoded.action === "active-turn" ? decoded.lastTurn : null).toBeUndefined();
     });
 
-    it("Given an execution with a failed last turn, When it is decoded, Then the outcome is kept", () => {
-        const lastTurn = { code: "boom", commandId: "command-1", message: "The local Agent failed", state: "failed" };
+    it("Given an older Runtime's generic failed last turn, When it is decoded, Then the original outcome is kept", () => {
+        // Retained pre-fix wire contract: an old Runtime cannot recover the Agent's original reason.
+        const lastTurn = {
+            code: "acp_agent_error",
+            commandId: "command-1",
+            message: "The local Agent could not complete the request",
+            state: "failed",
+        };
         expect(decodeNativeSessionResult(JSON.stringify({ ...execution, lastTurn }))).toMatchObject({ lastTurn });
     });
 
