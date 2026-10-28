@@ -18,6 +18,8 @@ export function registerPairAction(command: Command, context: CliContext): void 
         .addOption(valueOption("--workspace <directory>", "default workspace directory"))
         .action(async (options: ParsedPairOptions) => {
             const requested = requirePairOptions(options, command);
+            const control = await openMobiusControlInstallation(context.shutdownSignal, process.env);
+            await ensureWorkingProcess(control.stateDirectory, context.version, context.shutdownSignal);
             const installation = await openMobiusCliInstallation(context.shutdownSignal, process.env);
             process.stdout.write(`mobius version: ${context.version}\n`);
             const paired = await pairLocalMachine(pairArguments(requested), context.shutdownSignal);
@@ -26,8 +28,6 @@ export function registerPairAction(command: Command, context: CliContext): void 
                 "active",
                 context.shutdownSignal,
             );
-            const control = await openMobiusControlInstallation(context.shutdownSignal, process.env);
-            await ensureWorkingProcess(control.stateDirectory, context.version, context.shutdownSignal);
             await reloadDaemon(control.stateDirectory, context.shutdownSignal);
             process.stdout.write(
                 `\nLocal machine paired.\nApp ID: ${connection.appId}\nConnection ID: ${connection.connectionId}\n`,

@@ -63,9 +63,10 @@ test("Given real Claude streams a message, When its harness emits chunks and rep
             { cwd, mcpServers: [] },
             { cancellationSignal: signal },
         );
+        const prompt = "Stream a short greeting, without tools";
         const result = await connection.agent.request(
             methods.agent.session.prompt,
-            { sessionId, prompt: [{ type: "text", text: "Stream a short greeting, without tools" }] },
+            { sessionId, prompt: [{ type: "text", text: prompt }] },
             { cancellationSignal: signal },
         );
         const userMessages = updates.filter((update) => update.sessionUpdate === "user_message_chunk");
@@ -76,7 +77,8 @@ test("Given real Claude streams a message, When its harness emits chunks and rep
         expect(messages.length).toBeGreaterThan(1);
         expect(
             messages.flatMap((update) => (update.content.type === "text" ? [update.content.text] : [])).join(""),
-        ).toContain(provider.response);
+        ).toContain(provider.responseFor(prompt));
+        expect(updates.filter((update) => update.sessionUpdate === "tool_call")).toEqual([]);
         expect(new Set(messages.map((update) => update.messageId)).size).toBe(1);
         for (const update of messages) {
             expect(update.messageId).toEqual(expect.any(String));

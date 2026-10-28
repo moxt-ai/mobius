@@ -51,7 +51,7 @@ describe("Runtime installation storage", () => {
         }
     });
 
-    it("Given retained version-5 connection and version-1 index records, When Engine reopens and updates them, Then only installation ownership and Platform appId matter and the rewrite omits local applicationId", async () => {
+    it("Given retained version-5 connection and version-1 index records, When Engine updates activation, Then the original disk format and applicationId survive without becoming Engine identity", async () => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-retained-pairing-"));
         const signal = new AbortController().signal;
         try {
@@ -114,8 +114,18 @@ describe("Runtime installation storage", () => {
             ).rejects.toMatchObject({ code: "connection_conflict" });
             await installation.setConnectionActivation(connectionId, "stopped", signal);
             const rewritten: unknown = JSON.parse(await readFile(installation.connectionPath(connectionId), "utf8"));
-            expect(rewritten).toMatchObject({ activation: "stopped", appId: "platform_retained", version: 6 });
-            expect(rewritten).not.toHaveProperty("applicationId");
+            expect(rewritten).toMatchObject({
+                activation: "stopped",
+                appId: "platform_retained",
+                applicationId: "com.earlier.host",
+                version: 5,
+            });
+            await installation.setConnectionActivation(connectionId, "active", signal);
+            expect(JSON.parse(await readFile(installation.connectionPath(connectionId), "utf8"))).toMatchObject({
+                activation: "active",
+                applicationId: "com.earlier.host",
+                version: 5,
+            });
         } finally {
             await rm(directory, { recursive: true, force: true });
         }

@@ -19,12 +19,12 @@ export function registerStartCommand(program: Command, context: CliContext): voi
         .description("ensure the daemon is running and optionally activate a saved connection")
         .addOption(valueOption("--connection <connection-id>", "saved Runtime connection identifier"))
         .action(async (options: StartOptions) => {
+            const control = await openMobiusControlInstallation(context.shutdownSignal, process.env);
+            await ensureWorkingProcess(control.stateDirectory, context.version, context.shutdownSignal);
             const installation = await openMobiusCliInstallation(context.shutdownSignal, process.env);
             if (options.connection !== undefined) {
                 await installation.setConnectionActivation(options.connection, "active", context.shutdownSignal);
             }
-            const control = await openMobiusControlInstallation(context.shutdownSignal, process.env);
-            await ensureWorkingProcess(control.stateDirectory, context.version, context.shutdownSignal);
             await reloadDaemon(control.stateDirectory, context.shutdownSignal);
             process.stdout.write("Mobius daemon is running.\n");
         });

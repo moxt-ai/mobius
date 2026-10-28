@@ -31,6 +31,17 @@ function isObject(value: unknown): value is JsonObject {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function selectClaudeScenario(payload: unknown): FakeProviderScenario {
+    // Claude injects tool descriptions into user-message reminders. They are
+    // context, not requests to run tools or stream a reply.
+    const prompt = latestUserPrompt(payload).replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gu, "");
+    const scenario = selectFakeProviderScenario({ input: prompt });
+    // Claude compaction also mentions tools while requiring text-only output.
+    // Keep this restriction local: other Agents wrap explicit tool instructions
+    // in attachments and other prompt context rather than at the start.
+    return /^\s*(?:use|run)\b/iu.test(prompt) ? scenario : { ...scenario, toolCalls: 0 };
+}
+
 function toolResultCount(value: unknown): number {
     return countMatchingObjects(value, (object) => object["type"] === "tool_result");
 }
@@ -227,7 +238,7 @@ export class FakeAnthropicProvider implements AsyncDisposable {
         this.#answer = answer;
         this.response = fakeProviderResponse(
             answer,
-            selectFakeProviderScenario({ input: fakeProviderPrompts.successfulTool }),
+            selectClaudeScenario({ input: fakeProviderPrompts.successfulTool }),
         );
         this.#requests = requests;
         this.#close = close;
@@ -238,7 +249,7 @@ export class FakeAnthropicProvider implements AsyncDisposable {
     }
 
     responseFor(prompt: string): string {
-        return fakeProviderResponse(this.#answer, selectFakeProviderScenario({ input: prompt }));
+        return fakeProviderResponse(this.#answer, selectClaudeScenario({ input: prompt }));
     }
 
     static async start(
@@ -279,7 +290,7 @@ export class FakeAnthropicProvider implements AsyncDisposable {
             }
 
             const tools = availableTools(payload);
-            const scenario = selectFakeProviderScenario(payload);
+            const scenario = selectClaudeScenario(payload);
             const completedToolCalls = toolResultCount(payload);
             const prompt = latestUserPrompt(payload);
             const scripted =

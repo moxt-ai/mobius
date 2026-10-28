@@ -328,9 +328,13 @@ export class RuntimeInstallationStore {
         channelIndexFilePath(this.stateDirectory, validateIdentifier(channelId, "invalid_channel_id"));
 
     readonly readConnection = async (connectionId: string, signal: AbortSignal): Promise<VerifiedRuntimeConnection> => {
-        const stored = decodeConnection(
+        return this.decodeOwnedConnection(
             await readJsonFile(this.connectionPath(connectionId), signal, "connection_not_found"),
         );
+    };
+
+    private readonly decodeOwnedConnection = (record: unknown): VerifiedRuntimeConnection => {
+        const stored = decodeConnection(record);
         if (stored.installationId !== this.installationId) {
             throw new RuntimeInstallationStoreError(
                 "connection_owner_mismatch",
@@ -448,7 +452,8 @@ export class RuntimeInstallationStore {
         activation: RuntimeConnectionActivation,
         signal: AbortSignal,
     ): Promise<VerifiedRuntimeConnection> => {
-        const connection = await this.readConnection(connectionId, signal);
+        const record = await readJsonFile(this.connectionPath(connectionId), signal, "connection_not_found");
+        const connection = this.decodeOwnedConnection(record);
         const updated = new VerifiedRuntimeConnection(
             activation,
             connection.appId,
@@ -461,7 +466,14 @@ export class RuntimeInstallationStore {
             connection.runtimeCredential,
             connection.runtimeId,
         );
-        await this.overwriteConnection(updated, signal);
+        if (isRecord(record) && record["version"] === 5) {
+            // A newly installed CLI can still be controlling an older live Worker.
+            // Change only activation in its record, retaining opaque legacy metadata
+            // (including applicationId) without making it part of Engine identity.
+            await writeJsonAtomically(this.connectionPath(connectionId), { ...record, activation }, signal);
+        } else {
+            await this.overwriteConnection(updated, signal);
+        }
         return updated;
     };
 
