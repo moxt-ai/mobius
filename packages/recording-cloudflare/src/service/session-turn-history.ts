@@ -513,14 +513,20 @@ class ProjectionFold {
     }
 
     #requestInteraction(event: SessionLiveEvent, interaction: StoredInteraction): void {
+        const known = this.#interaction(interaction.interactionId);
         // A repeated request event must not reopen a request that was already answered or closed.
-        if (this.#interaction(interaction.interactionId)?.resolved === true) {
+        if (known?.resolved === true) {
             return;
         }
         const turn = this.#ensureTurn(interaction.commandId, event);
         // A Turn that ended or lost its process cannot consume an answer, so its request is closed at once.
         const consumable = !isTerminal(turn.attempt) && turn.attempt.kind !== "indeterminate";
-        this.#putInteraction({ interaction, requestedAt: Date.parse(event.recordedAt), resolved: !consumable });
+        // A request announced again keeps the place it first had among the requests that wait together.
+        this.#putInteraction({
+            interaction,
+            requestedAt: known?.requestedAt ?? Date.parse(event.recordedAt),
+            resolved: !consumable,
+        });
         if (!consumable) {
             return;
         }

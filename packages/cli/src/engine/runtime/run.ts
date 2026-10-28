@@ -197,6 +197,7 @@ export async function runRuntime(
                     diagnostics,
                     onConnected: () => {
                         layer.publishRecoveredOutcomes();
+                        void agentRuntime.republishPendingInteractions();
                         if (catalogPublished) {
                             options.onConnectionStatus?.("online");
                         }

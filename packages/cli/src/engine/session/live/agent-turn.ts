@@ -1,4 +1,5 @@
-const SESSION_CONTROL_COMMAND_ID = "session-control";
+/** The command id of work the Agent does while no Turn runs, such as a request from background activity. */
+export const SESSION_CONTROL_COMMAND_ID = "session-control";
 
 export abstract class AgentTurnState {
     abstract readonly commandId: string;

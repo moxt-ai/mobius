@@ -104,6 +104,24 @@ export class SessionManager {
         return await runtime.recordControlEvent(event);
     };
 
+    /**
+     * Announces every request that a running Agent still waits on. A live event has no delivery
+     * acknowledgement, so one sent right before its connection failed may never have arrived, and
+     * nothing else tells a client that the Agent waits. Call it whenever a connection becomes ready.
+     */
+    readonly republishPendingInteractions = async (): Promise<void> => {
+        for (const [sessionId, runtime] of this.#executionProcesses.entries()) {
+            try {
+                await runtime.republishPendingInteractions();
+            } catch (error) {
+                console.error("Mobius daemon could not announce the pending interactions of a Session", {
+                    sessionId,
+                    error,
+                });
+            }
+        }
+    };
+
     readonly setObserver = (observer: SessionObserver): void => {
         this.#observer = observer;
     };

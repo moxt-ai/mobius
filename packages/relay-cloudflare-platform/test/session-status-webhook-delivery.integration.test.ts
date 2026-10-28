@@ -490,4 +490,46 @@ describe("App Session status webhook delivery", () => {
 
         expect(transport.delivered).toStrictEqual([]);
     });
+
+    it("Given a Runtime announces a waiting request again after it reconnects, When the Turn then finishes, Then only the finished command is notified, once", async () => {
+        const { projectId } = await provisionProject("repeated-request");
+        const waiting = {
+            kind: "session.permission.requested",
+            event: {
+                commandId: "root-command",
+                interactionId: "interaction-1",
+                kind: "session.permission.requested",
+                options: [{ kind: "allow_once", name: "Allow", optionId: "allow" }],
+                sessionId: "session-status-delivery-session",
+                title: "Approve the command",
+                toolCallId: "tool-1",
+                toolKind: "execute",
+            },
+        };
+        const transport = await throughRelay(projectId, async (send, flushNotifications, recorded) => {
+            await send([
+                event(1, {
+                    attemptId: "root-attempt",
+                    commandId: "root-command",
+                    epoch: "epoch-1",
+                    kind: "prompt.started",
+                }),
+                event(2, waiting),
+            ]);
+            await send([event(3, waiting)]);
+            await flushNotifications();
+            expect(recorded.delivered).toStrictEqual([]);
+            await send([event(4, { commandId: "root-command", kind: "prompt.completed", stopReason: "stop" })]);
+        });
+
+        expect(transport.delivered).toHaveLength(1);
+        expect(decodeSessionStatusWebhookBody(transport.only()).commands).toStrictEqual([
+            {
+                commandId: "root-command",
+                completedAt: "2026-10-15T00:00:00.000Z",
+                outcome: "succeeded",
+                stopReason: "stop",
+            },
+        ]);
+    });
 });

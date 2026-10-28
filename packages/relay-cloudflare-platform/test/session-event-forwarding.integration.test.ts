@@ -251,3 +251,46 @@ it("Given a Session message with unknown variants and fields, When the Relay for
         expect(await host.inbox.next()).toEqual(message);
     });
 });
+
+it("Given a Runtime announces a waiting request again after it reconnects, When the Relay forwards both announcements, Then every subscribed browser receives each of them unchanged and the daemon stays connected", async () => {
+    await withRuntimeRelay(async (connect) => {
+        const daemon = await connect("daemon");
+        const all = await connect("host");
+        const selected = await connect("host?sessionId=session-1");
+        expect(await all.inbox.next()).toMatchObject({ kind: "runtime.status", online: true });
+        expect(await selected.inbox.next()).toMatchObject({ kind: "runtime.status", online: true });
+
+        // The announcement as an older reader sees it, written independently of the SDK's current codecs.
+        const announcement = (index: number) => ({
+            kind: "session.event.v2",
+            events: [
+                {
+                    eventId: `waiting-request-${index.toString()}`,
+                    position: index.toString(),
+                    recordedAt: "2026-10-27T00:00:00.000Z",
+                    sessionGenerationId: "generation-1",
+                    sessionId: "session-1",
+                    type: "lifecycle-metadata",
+                    payload: {
+                        kind: "session.permission.requested",
+                        event: {
+                            commandId: "command-1",
+                            interactionId: "interaction-1",
+                            kind: "session.permission.requested",
+                            options: [{ kind: "allow_once", name: "Allow", optionId: "allow" }],
+                            sessionId: "session-1",
+                            title: "Approve the command",
+                            toolCallId: "tool-1",
+                            toolKind: "execute",
+                        },
+                    },
+                },
+            ],
+        });
+        for (const index of [1, 2]) {
+            daemon.socket.send(JSON.stringify(announcement(index)));
+            expect(await all.inbox.next()).toEqual(announcement(index));
+            expect(await selected.inbox.next()).toEqual(announcement(index));
+        }
+    });
+});

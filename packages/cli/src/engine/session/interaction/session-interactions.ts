@@ -36,23 +36,49 @@ interface SessionInteractionContext {
      */
     readonly getToolCall: (toolCallId: string) => ProjectedToolCall | undefined;
     readonly commandId: () => string;
+    /**
+     * Whether the Turn a request was asked under has ended, so nobody waits on the request any more.
+     * A request asked while no Turn runs belongs to no Turn and never ends this way.
+     */
+    readonly turnEnded: (commandId: string) => boolean;
     readonly assertNativeSession: (sessionId: string) => void;
     readonly observer: () => SessionObserver;
     readonly recordSessionEvent: (event: SessionEventPayload) => Promise<void>;
 }
+type AnnouncedRequest = SessionPermissionRequestedEvent | SessionElicitationRequestedEvent;
+
 export class SessionInteractions {
     readonly #pendingPermissions = new Map<string, PendingPermission>();
     readonly #pendingElicitations = new Map<string, PendingElicitation>();
     readonly #acceptedUrlElicitations = new Map<string, string>();
+    /**
+     * The requests still waiting for an answer, as announced and in the order they were asked. A live
+     * event has no delivery acknowledgement, so the connection that carried an announcement can fail
+     * right after sending it. The Runtime owns what its Agent waits on, so it announces this again.
+     */
+    readonly #announced = new Map<string, AnnouncedRequest>();
     readonly #context: SessionInteractionContext;
     constructor(context: SessionInteractionContext) {
         this.#context = context;
     }
+    /** A request that is answered, cancelled or abandoned no longer waits, so it is no longer announced. */
+    readonly #closePermission = (interactionId: string): void => {
+        this.#pendingPermissions.delete(interactionId);
+        this.#announced.delete(interactionId);
+    };
+    readonly #closeElicitation = (interactionId: string): void => {
+        this.#pendingElicitations.delete(interactionId);
+        this.#announced.delete(interactionId);
+    };
+    readonly #recordRequested = async (request: AnnouncedRequest): Promise<void> => {
+        await this.#context.recordSessionEvent(
+            request.kind === SESSION_PERMISSION_REQUESTED_KIND
+                ? { payload: { event: request, kind: "session.permission.requested" }, type: "lifecycle-metadata" }
+                : { payload: { event: request, kind: "session.elicitation.requested" }, type: "lifecycle-metadata" },
+        );
+    };
     readonly #notifyPermissionRequested = async (event: SessionPermissionRequestedEvent): Promise<void> => {
-        await this.#context.recordSessionEvent({
-            payload: { event, kind: "session.permission.requested" },
-            type: "lifecycle-metadata",
-        });
+        await this.#recordRequested(event);
         await this.#context.observer().onPermission(event);
     };
     readonly #notifyPermissionResolved = async (event: SessionPermissionResolvedEvent): Promise<void> => {
@@ -63,10 +89,7 @@ export class SessionInteractions {
         await this.#context.observer().onPermissionResolved(event);
     };
     readonly #notifyElicitationRequested = async (event: SessionElicitationRequestedEvent): Promise<void> => {
-        await this.#context.recordSessionEvent({
-            payload: { event, kind: "session.elicitation.requested" },
-            type: "lifecycle-metadata",
-        });
+        await this.#recordRequested(event);
         await this.#context.observer().onElicitation(event);
     };
     readonly #notifyElicitationResolved = async (event: SessionElicitationResolvedEvent): Promise<void> => {
@@ -100,7 +123,7 @@ export class SessionInteractions {
                 "permission_request_not_found",
             );
         }
-        this.#pendingPermissions.delete(options.interactionId);
+        this.#closePermission(options.interactionId);
         await this.#notifyPermissionResolved({
             interactionId: options.interactionId,
             kind: SESSION_PERMISSION_RESOLVED_KIND,
@@ -141,7 +164,7 @@ export class SessionInteractions {
                 "elicitation_request_not_found",
             );
         }
-        this.#pendingElicitations.delete(options.interactionId);
+        this.#closeElicitation(options.interactionId);
         await this.#notifyElicitationResolved({
             action: options.action,
             interactionId: options.interactionId,
@@ -183,7 +206,7 @@ export class SessionInteractions {
             const kind = request.toolCall.kind ?? announced?.kind;
             const rawInput = request.toolCall.rawInput ?? announced?.rawInput;
             const locations = request.toolCall.locations ?? announced?.locations ?? [];
-            await this.#notifyPermissionRequested({
+            const requested: SessionPermissionRequestedEvent = {
                 commandId: this.#context.commandId(),
                 details: {
                     cwd: this.#context.cwd(),
@@ -197,11 +220,13 @@ export class SessionInteractions {
                 title: truncate(title ?? "Permission required", 500),
                 toolCallId: truncate(request.toolCall.toolCallId, 255),
                 toolKind: truncate(kind ?? "other", 64),
-            });
+            };
+            this.#announced.set(interactionId, requested);
+            await this.#notifyPermissionRequested(requested);
             return await pending.completion.promise;
         } finally {
             signal.removeEventListener("abort", abort);
-            this.#pendingPermissions.delete(interactionId);
+            this.#closePermission(interactionId);
         }
     };
 
@@ -238,7 +263,7 @@ export class SessionInteractions {
         };
         signal.addEventListener("abort", abort, { once: true });
         try {
-            await this.#notifyElicitationRequested({
+            const requested: SessionElicitationRequestedEvent = {
                 accepted: false,
                 commandId: this.#context.commandId(),
                 elicitationId,
@@ -252,11 +277,13 @@ export class SessionInteractions {
                     request.mode === "url" && typeof Reflect.get(request, "url") === "string"
                         ? truncate(readString(Reflect.get(request, "url")), 4_096)
                         : "",
-            });
+            };
+            this.#announced.set(interactionId, requested);
+            await this.#notifyElicitationRequested(requested);
             return await pending.completion.promise;
         } finally {
             signal.removeEventListener("abort", abort);
-            this.#pendingElicitations.delete(interactionId);
+            this.#closeElicitation(interactionId);
         }
     };
 
@@ -279,7 +306,7 @@ export class SessionInteractions {
         if (pending === undefined || !pending.cancel()) {
             return;
         }
-        this.#pendingPermissions.delete(interactionId);
+        this.#closePermission(interactionId);
         await this.#notifyPermissionResolved({
             interactionId,
             kind: SESSION_PERMISSION_RESOLVED_KIND,
@@ -294,7 +321,7 @@ export class SessionInteractions {
         if (pending === undefined || !pending.cancel()) {
             return;
         }
-        this.#pendingElicitations.delete(interactionId);
+        this.#closeElicitation(interactionId);
         await this.#notifyElicitationResolved({
             action: "cancel",
             interactionId,
@@ -321,6 +348,23 @@ export class SessionInteractions {
                 kind: SESSION_ELICITATION_RESOLVED_KIND,
                 sessionId: this.#context.sessionId(),
             });
+        }
+    };
+
+    /**
+     * Announces every request still waiting for an answer once more, in the order they were asked,
+     * with the identity and content they were first announced with. The Recording and clients treat a
+     * repeat as the request they already know, and a request that was lost with its connection becomes
+     * visible again. Only requests that are still waiting are announced, so an answered one never
+     * reopens, and a request of a Turn that has ended is not, because the Recording closed it with the
+     * Turn.
+     */
+    readonly republishPending = async (): Promise<void> => {
+        for (const [interactionId, request] of [...this.#announced]) {
+            // An answer that arrives while an earlier request is announced settles this one as well.
+            if (this.#announced.get(interactionId) === request && !this.#context.turnEnded(request.commandId)) {
+                await this.#recordRequested(request);
+            }
         }
     };
 }

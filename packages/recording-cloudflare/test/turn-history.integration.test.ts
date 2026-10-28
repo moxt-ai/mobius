@@ -702,6 +702,44 @@ describe("Recording Turn history", () => {
         expect(page.interactions).toEqual([]);
     });
 
+    it("Given a request waiting for an answer, When a reconnected Runtime announces it again, Then it is listed once and one answer settles it", async () => {
+        await record([
+            requested("command-1", "Deploy"),
+            started("command-1"),
+            permissionRequest("command-1", "interaction-1"),
+        ]);
+        await record([permissionRequest("command-1", "interaction-1")]);
+        const waiting = await turnPage();
+        expect(waiting.turns[0]?.attempt).toMatchObject({ interactionIds: ["interaction-1"], kind: "waiting_input" });
+        expect(waiting.interactions.map((interaction) => interaction.interactionId)).toEqual(["interaction-1"]);
+
+        await record([permissionResolved("interaction-1")]);
+        const answered = await turnPage();
+        expect(answered.turns[0]?.attempt.kind).toBe("running");
+        expect(answered.interactions).toEqual([]);
+    });
+
+    it("Given a Turn waiting on two requests, When a reconnected Runtime announces both again in one instant, Then they keep the order in which they were asked", async () => {
+        await record([
+            requested("command-1", "Deploy"),
+            started("command-1"),
+            permissionRequest("command-1", "interaction-b"),
+            permissionRequest("command-1", "interaction-a"),
+        ]);
+        const asked = ["interaction-b", "interaction-a"];
+        expect((await turnPage()).interactions.map((interaction) => interaction.interactionId)).toEqual(asked);
+
+        const instant = "2026-10-15T00:01:00.000Z";
+        await record(
+            [permissionRequest("command-1", "interaction-b"), permissionRequest("command-1", "interaction-a")].map(
+                (announcement) => ({ ...announcement, recordedAt: instant }),
+            ),
+        );
+        const page = await turnPage();
+        expect(page.interactions.map((interaction) => interaction.interactionId)).toEqual(asked);
+        expect(page.turns[0]?.attempt).toMatchObject({ interactionIds: asked, kind: "waiting_input" });
+    });
+
     it("Given answer text from two Agent messages in a row, When a client reads the Turn, Then each message is its own answer item", async () => {
         const reply = (messageId: string, text: string) =>
             acp({ content: { text, type: "text" }, messageId, sessionUpdate: "agent_message_chunk" });

@@ -51,7 +51,7 @@ import { SessionInteractions } from "../interaction/session-interactions.ts";
 import { waitForSharedOperation } from "../manager/operation-drain.ts";
 import { type SessionStore, StoredSession } from "../record/session-store.ts";
 import type { AgentSessionRestore } from "./agent-session-restore.ts";
-import { type AgentTurnState, IdleAgentTurn, RunningAgentTurn } from "./agent-turn.ts";
+import { type AgentTurnState, IdleAgentTurn, RunningAgentTurn, SESSION_CONTROL_COMMAND_ID } from "./agent-turn.ts";
 import { SessionConfigurations } from "./session-configurations.ts";
 import { restoreSession } from "./session-restore.ts";
 
@@ -170,6 +170,7 @@ export class AgentSession implements AgentSessionRestore {
             getToolCall: (toolCallId) => this.#store.events.getToolCall(this.#mobiusSessionId, toolCallId),
             sessionId: () => this.#mobiusSessionId,
             commandId: () => this.#turn.commandId,
+            turnEnded: (commandId) => commandId !== SESSION_CONTROL_COMMAND_ID && commandId !== this.#turn.commandId,
             assertNativeSession: this.assertNativeSession,
             observer: getObserver,
             recordSessionEvent: this.recordLifecycleEvent,
@@ -732,6 +733,11 @@ export class AgentSession implements AgentSessionRestore {
     };
     readonly respondElicitation = async (options: ElicitationResponseOptions): Promise<void> => {
         await this.#interactions.respondElicitation(options);
+    };
+
+    /** Announces the requests this Session's Agent still waits on once more; see `SessionInteractions`. */
+    readonly republishPendingInteractions = async (): Promise<void> => {
+        await this.#interactions.republishPending();
     };
 
     readonly recordControlEvent = async (event: SessionEventPayload): Promise<boolean> => {
