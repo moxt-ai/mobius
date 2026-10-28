@@ -1,5 +1,9 @@
 import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
-import { type OrganizationInviteRow, organizationInviteRowSchema } from "../entity/organization-invite.ts";
+import {
+    type OrganizationInviteAcceptance,
+    type OrganizationInviteRow,
+    organizationInviteRowSchema,
+} from "../entity/organization-invite.ts";
 import { platformDashboardAuditEvent, platformOrganizationInviteLink } from "../schema/d1/index.ts";
 import { decodeOptionalStorageRecord, decodeStorageRecords } from "./decode-storage-record.ts";
 import { type PlatformDrizzleDatabase, platformDrizzle } from "./platform-drizzle-database.ts";
@@ -20,9 +24,16 @@ export class OrganizationInviteStorage {
         this.database = platformDrizzle(database);
     }
 
-    private readonly audit = (organizationId: string, actor: string, id: string, action: string, now: number) =>
+    private readonly audit = (
+        organizationId: string,
+        actor: string,
+        id: string,
+        action: string,
+        now: number,
+        auditId: string = crypto.randomUUID(),
+    ) =>
         this.database.insert(platformDashboardAuditEvent).values({
-            auditId: crypto.randomUUID(),
+            auditId,
             tenantId: organizationId,
             appId: "",
             projectId: "",
@@ -135,11 +146,19 @@ export class OrganizationInviteStorage {
     readonly accepted = async (
         row: OrganizationInviteRow,
         actor: string,
-        now: number,
+        acceptance: OrganizationInviteAcceptance,
         signal: AbortSignal,
     ): Promise<void> => {
         signal.throwIfAborted();
-        await this.audit(row.organization_id, actor, row.id, "organization_invite.accepted", now);
+        // A membership ID deduplicates retries while allowing a later leave-and-rejoin to be audited.
+        await this.audit(
+            row.organization_id,
+            actor,
+            row.id,
+            "organization_invite.accepted",
+            acceptance.acceptedAt,
+            `organization_invite.accepted:${acceptance.membershipId}`,
+        ).onConflictDoNothing({ target: platformDashboardAuditEvent.auditId });
         signal.throwIfAborted();
     };
 }
