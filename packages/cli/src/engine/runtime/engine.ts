@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { waitForSharedOperation } from "../session/manager/operation-drain.ts";
 import { ConnectionManager } from "./connection/connection-manager.ts";
 import type { VerifiedRuntimeConnection } from "./connection/runtime-connection.ts";
 import { RuntimeInstallationStore } from "./connection/runtime-installation-store.ts";
@@ -25,12 +26,17 @@ export interface RunLoopParams extends RuntimeLoopOptions {
     readonly signal: AbortSignal;
 }
 
+type InstallationState =
+    | { readonly kind: "uninitialized" }
+    | { readonly kind: "initializing"; readonly completion: Promise<void> }
+    | { readonly kind: "ready"; readonly installation: RuntimeInstallationStore };
+
 export class MobiusRuntimeEngine {
     readonly #engineDataDir: string;
     readonly #agentLaunchEnvironment: Readonly<NodeJS.ProcessEnv>;
     readonly #maxAcpProcesses: number;
     readonly #connections: ConnectionManager;
-    #installation: RuntimeInstallationStore | null = null;
+    #installation: InstallationState = { kind: "uninitialized" };
 
     constructor(params: MobiusRuntimeEngineParams) {
         this.#engineDataDir = resolve(params.engineDataDir);
@@ -39,16 +45,40 @@ export class MobiusRuntimeEngine {
         this.#connections = new ConnectionManager(this.#getInstallation);
     }
 
-    // Concurrent initializers use the store's atomic pointer creation. Only a successful,
-    // non-cancelled open is cached, so one caller's cancellation cannot poison the Engine.
     readonly #getInstallation = async (signal: AbortSignal): Promise<RuntimeInstallationStore> => {
         signal.throwIfAborted();
-        if (this.#installation === null) {
-            const installation = await RuntimeInstallationStore.open(this.#engineDataDir, signal);
-            signal.throwIfAborted();
-            this.#installation ??= installation;
+        const state = this.#installation;
+        switch (state.kind) {
+            case "ready":
+                return state.installation;
+            case "initializing":
+                // A borrower can stop waiting without cancelling the owner. If the owner
+                // fails or cancels, a surviving borrower can become the next initializer.
+                await waitForSharedOperation(state.completion, signal);
+                return await this.#getInstallation(signal);
+            case "uninitialized": {
+                const completion = Promise.withResolvers<void>();
+                // Claim initialization before the first filesystem await. Exclusive file
+                // creation alone does not prevent another opener from reading partial JSON.
+                this.#installation = { kind: "initializing", completion: completion.promise };
+                try {
+                    const installation = await RuntimeInstallationStore.open(this.#engineDataDir, signal);
+                    signal.throwIfAborted();
+                    this.#installation = { kind: "ready", installation };
+                    return installation;
+                } catch (cause) {
+                    this.#installation = { kind: "uninitialized" };
+                    signal.throwIfAborted();
+                    throw cause;
+                } finally {
+                    completion.resolve();
+                }
+            }
+            default: {
+                const exhaustive: never = state;
+                return exhaustive;
+            }
         }
-        return this.#installation;
     };
 
     readonly getConnectionManager = (): ConnectionManager => this.#connections;

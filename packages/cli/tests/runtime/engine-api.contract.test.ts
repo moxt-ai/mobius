@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -56,6 +56,92 @@ it("Given a cancelled connection lookup, When another caller lists saved connect
         expect(
             await Promise.all([engine.getConnectionManager().list(signal), engine.getConnectionManager().list(signal)]),
         ).toEqual([[], []]);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+it("Given first-use initialization is pending, When its owner and one waiter cancel, Then another waiter initializes successfully and later callers reuse that installation", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mobius-engine-first-use-"));
+    try {
+        const engine = new MobiusRuntimeEngine({ engineDataDir: directory, agentLaunchEnvironment: { PATH: "" } });
+        const manager = engine.getConnectionManager();
+        const owner = new AbortController();
+        const waiter = new AbortController();
+        const ownerReason = new Error("Initialization owner cancelled");
+        const waiterReason = new Error("Initialization waiter cancelled");
+        const first = manager.list(owner.signal);
+        const cancelledWaiter = manager.list(waiter.signal);
+        const survivingWaiter = manager.list(AbortSignal.timeout(5_000));
+        // All three calls entered synchronously, before the first filesystem await completes.
+        const pending = Promise.allSettled([first, cancelledWaiter, survivingWaiter]);
+        waiter.abort(waiterReason);
+        owner.abort(ownerReason);
+        expect(await pending).toEqual([
+            { status: "rejected", reason: ownerReason },
+            { status: "rejected", reason: waiterReason },
+            { status: "fulfilled", value: [] },
+        ]);
+        expect(await manager.list(AbortSignal.timeout(5_000))).toEqual([]);
+        expect(await readdir(directory)).toEqual(
+            expect.arrayContaining(["current.json", expect.stringMatching(/^min_[a-f0-9]{32}$/)]),
+        );
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+it("Given a fresh Engine data directory, When a host concurrently saves connections on first use, Then every connection belongs to the same readable installation", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mobius-engine-concurrent-"));
+    const signal = AbortSignal.timeout(5_000);
+    try {
+        const manager = new MobiusRuntimeEngine({
+            engineDataDir: directory,
+            agentLaunchEnvironment: { PATH: "" },
+        }).getConnectionManager();
+        const results = await Promise.allSettled(
+            Array.from({ length: 32 }, (_, index) =>
+                manager.save(
+                    {
+                        appId: "concurrent_app",
+                        channelId: `concurrent_channel_${index}`,
+                        defaultWorkspace: join(directory, "workspace"),
+                        pairingId: `concurrent_pairing_${index}`,
+                        relayOrigin: new URL("https://relay.example.com/"),
+                        runtimeCredential: "a".repeat(43),
+                        runtimeId: `concurrent_runtime_${index}`,
+                    },
+                    signal,
+                ),
+            ),
+        );
+        for (const result of results) {
+            if (result.status === "rejected") {
+                throw result.reason;
+            }
+            expect(await manager.read(result.value.connectionId, signal)).toEqual(result.value);
+        }
+        const saved = await manager.list(signal);
+        expect(saved).toHaveLength(32);
+        expect(new Set(saved.map((connection) => connection.installationId)).size).toBe(1);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+it("Given installation initialization fails, When the host fixes the data directory and tries again, Then Engine does not cache the failed initialization", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mobius-engine-retry-"));
+    const data = join(directory, "data");
+    const signal = AbortSignal.timeout(5_000);
+    try {
+        await writeFile(data, "not a directory");
+        const manager = new MobiusRuntimeEngine({
+            engineDataDir: data,
+            agentLaunchEnvironment: { PATH: "" },
+        }).getConnectionManager();
+        await expect(manager.list(signal)).rejects.toMatchObject({ code: "installation_unavailable" });
+        await rm(data);
+        expect(await manager.list(signal)).toEqual([]);
     } finally {
         await rm(directory, { recursive: true, force: true });
     }
