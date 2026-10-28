@@ -9,6 +9,7 @@ import {
 import { truncate } from "../../util/value-utils.ts";
 import { AcpExecutionError } from "../acp-error.ts";
 import type { AcpAgentDefinition } from "../agent/agent-definition.ts";
+import type { BackgroundActivity } from "../agent/in-process-endpoint.ts";
 import type { AgentConnection } from "../connection/agent-connection.ts";
 import { AgentUpdateStream } from "../connection/agent-update-stream.ts";
 import type { AcpClientHandler } from "../connection/create-client.ts";
@@ -41,7 +42,7 @@ interface SessionConnectionScope {
 }
 
 export interface AdapterSessionConnectionOptions extends SessionConnectionScope {
-    readonly onBackgroundActivity?: (active: boolean) => void;
+    readonly onBackgroundActivity?: (activity: BackgroundActivity) => void;
     readonly interactions: Pick<AcpClientHandler, "onPermission" | "onElicitation" | "onElicitationComplete">;
 }
 
@@ -58,9 +59,9 @@ export interface AdapterSessionConnector {
 /** ACP subscription lifetime, ordered delivery and harness normalization belong to the adapter. */
 export class AdapterSessionConnection {
     readonly #connection: AgentConnection;
-    readonly #onBackgroundActivity: (active: boolean) => void;
-    #backgroundActivity = false;
-    readonly hasBackgroundActivity = (): boolean => this.#backgroundActivity;
+    readonly #onBackgroundActivity: (activity: BackgroundActivity) => void;
+    #backgroundActivity: BackgroundActivity = "none";
+    readonly hasBackgroundActivity = (): boolean => this.#backgroundActivity !== "none";
     readonly #updates: AgentUpdateStream;
     readonly #lifetime = new AbortController();
     readonly #onClosed: () => void;
@@ -181,12 +182,12 @@ export class AdapterSessionConnection {
         this.#connection = options.agent.createConnection({
             cwd: options.cwd,
             client,
-            onBackgroundActivity: (active) => {
+            onBackgroundActivity: (activity) => {
                 if (this.#lifetime.signal.aborted) {
                     return;
                 }
-                this.#backgroundActivity = active;
-                this.#onBackgroundActivity(active);
+                this.#backgroundActivity = activity;
+                this.#onBackgroundActivity(activity);
             },
         });
     }
@@ -209,8 +210,8 @@ export class AdapterSessionConnection {
                 await this.#updates.drained().catch(() => undefined);
             } finally {
                 this.#onClosed();
-                this.#backgroundActivity = false;
-                this.#onBackgroundActivity(false);
+                this.#backgroundActivity = "none";
+                this.#onBackgroundActivity("none");
             }
         }
     };

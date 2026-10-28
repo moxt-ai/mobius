@@ -1,4 +1,5 @@
 import type { SessionInfoUpdatedEvent, SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
+import type { BackgroundActivity } from "../../acp/agent/in-process-endpoint.ts";
 import { AcpSessionTable } from "../../storage/session/acp-session-table.ts";
 import { ExecutionReceiptTable } from "../../storage/session/execution-receipt-table.ts";
 import { LiveEventPositionTable } from "../../storage/session/live-event-position-table.ts";
@@ -25,14 +26,14 @@ import { NullSessionObserver } from "./session-api.ts";
 
 /** Records live session events through the projection and publishes info updates through the sink. */
 export class SessionLayerObserver extends NullSessionObserver {
-    readonly #backgroundActivity: (source: object, active: boolean) => void;
+    readonly #backgroundActivity: (source: object, activity: BackgroundActivity) => void;
     readonly #publishInfo: (event: SessionInfoUpdatedEvent) => void;
     readonly #record: (event: SessionLiveEvent) => void;
 
     constructor(
         record: (event: SessionLiveEvent) => void,
         publishInfo: (event: SessionInfoUpdatedEvent) => void,
-        backgroundActivity: (source: object, active: boolean) => void = () => {},
+        backgroundActivity: (source: object, activity: BackgroundActivity) => void = () => {},
     ) {
         super();
         this.#backgroundActivity = backgroundActivity;
@@ -40,8 +41,8 @@ export class SessionLayerObserver extends NullSessionObserver {
         this.#record = record;
     }
 
-    override readonly onBackgroundActivity = (source: object, active: boolean): void => {
-        this.#backgroundActivity(source, active);
+    override readonly onBackgroundActivity = (source: object, activity: BackgroundActivity): void => {
+        this.#backgroundActivity(source, activity);
     };
 
     override readonly onSessionEvent = (event: SessionLiveEvent): Promise<void> => {
@@ -96,8 +97,8 @@ export function buildSessionLayer(options: SessionLayerOptions) {
                 eventProjection.record(event);
             },
             sink.publishInfo,
-            (source, active) => {
-                options.turnActivity?.setBackgroundActivity(source, active);
+            (source, activity) => {
+                options.turnActivity?.setBackgroundActivity(source, activity);
                 options.processes.notifyChanged();
             },
         ),

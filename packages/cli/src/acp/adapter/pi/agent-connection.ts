@@ -39,7 +39,7 @@ export class PiAgentConnection extends EndpointAgentConnection {
                         await options.client.onUpdate({ ...notification, update });
                 }
             },
-            onBackgroundActivity: (active) => options.onBackgroundActivity?.(active),
+            onBackgroundActivity: (activity) => options.onBackgroundActivity?.(activity),
         });
         super(endpoint, options.client);
     }

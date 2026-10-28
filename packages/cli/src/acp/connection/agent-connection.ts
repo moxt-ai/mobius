@@ -1,6 +1,6 @@
 import type { ClientConnection } from "@agentclientprotocol/sdk";
 import type { AgentModelEffort } from "@moxt-ai/mobius-sdk/protocol";
-import type { AcpEndpointTermination } from "../agent/in-process-endpoint.ts";
+import type { AcpEndpointTermination, BackgroundActivity } from "../agent/in-process-endpoint.ts";
 import type { AcpClientHandler } from "./create-client.ts";
 
 /** Adapter-owned runtime and transport for one ACP client. */
@@ -16,7 +16,7 @@ export interface AgentConnection {
 export interface AgentConnectionOptions {
     readonly cwd: string;
     readonly client: AcpClientHandler;
-    readonly onBackgroundActivity?: (active: boolean) => void;
+    readonly onBackgroundActivity?: (activity: BackgroundActivity) => void;
 }
 
 export interface AgentConnectionLaunchOptions extends AgentConnectionOptions {

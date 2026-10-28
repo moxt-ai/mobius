@@ -46,11 +46,14 @@ export interface InProcessAcpEndpoint {
     readonly close: () => Promise<void>;
 }
 
+/** Native background work: tasks still running, or finished tasks whose results the Agent has not handled. */
+export type BackgroundActivity = "none" | "running" | "awaiting-results";
+
 /** The verified local inputs an endpoint is allowed to launch from. */
 export interface InProcessAcpEndpointOptions {
     /** The vendor executable, already resolved and revalidated by discovery. */
     /** Local lifecycle evidence only; never inferred from persisted or remote ACP metadata. */
-    readonly onBackgroundActivity?: (active: boolean) => void;
+    readonly onBackgroundActivity?: (activity: BackgroundActivity) => void;
     readonly command: string;
     readonly cwd: string;
     readonly environment: Readonly<Record<string, string>>;
