@@ -226,15 +226,19 @@ jobs:
   npm-compatibility:
     # The daemon finds and installs its own upgrades through the user's npm, so its
     # upgrade journeys run against every supported npm major, not only the bundled one.
-    name: npm compatibility (npm ${{ matrix.npm }})
+    name: npm compatibility (npm ${{ matrix.npm }}${{ matrix.os == 'windows-latest' && ', Windows' || '' }})
     needs: changes
     if: needs.changes.outputs.docs-only == 'false'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         npm: ["10", "11", "12"]
+        include:
+          - os: windows-latest
+            npm: "12"
     steps:
       - uses: actions/checkout@v4
         with:

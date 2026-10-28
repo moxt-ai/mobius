@@ -21,21 +21,23 @@ export async function packedRelease(
         await writeFile(join(source, "package.json"), JSON.stringify({ ...cliPackage, version }));
         await symlink(resolve(import.meta.dirname, "../../node_modules"), join(source, "node_modules"), "junction");
         // Stamp and bundle each release once, rather than transpiling its source graph on every CLI/daemon restart.
-        const esbuild = await findExecutableOnPath("esbuild", process.env);
-        if (esbuild === null) {
-            throw new Error("esbuild is required to bundle the upgrade scenario's releases");
-        }
         await runBoundedProcess({
-            command: esbuild.path,
+            command: process.execPath,
             arguments: [
-                join(source, "src/cli/entrypoint.ts"),
-                `--outfile=${join(source, "dist/cli.js")}`,
-                "--bundle",
-                "--platform=node",
-                "--target=node22.19.0",
-                "--format=esm",
-                "--external:@agentclientprotocol/sdk",
-                "--external:undici",
+                "--input-type=module",
+                "--eval",
+                // esbuild's extensionless bin entry can be JavaScript or a native binary. Its JS API is portable;
+                // running it in a child keeps bundling bounded and cancellable without depending on PATH shims.
+                `import { build } from ${JSON.stringify(import.meta.resolve("esbuild"))}; await build(JSON.parse(process.argv[1]));`,
+                JSON.stringify({
+                    entryPoints: [join(source, "src/cli/entrypoint.ts")],
+                    outfile: join(source, "dist/cli.js"),
+                    bundle: true,
+                    platform: "node",
+                    target: "node22.19.0",
+                    format: "esm",
+                    external: ["@agentclientprotocol/sdk", "undici"],
+                }),
             ],
             cwd: source,
             environment: process.env,
