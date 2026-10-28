@@ -290,6 +290,48 @@ describe("App Session status webhook delivery", () => {
         await abortAllDurableObjects();
     });
 
+    it("Given a configured webhook, When saving its settings races rotating its secret, Then the stored webhook keeps both the rotated secret and the saved endpoint", async () => {
+        const { appId } = await provisionProject("settings-rotation-race");
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+            createPlatformGateways,
+        );
+        const environment = bindings();
+        const webhookUrl = `${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${appId}/session-status-webhook`;
+        const service = new AppSessionStatusWebhookService(
+            null,
+            new AppSessionStatusWebhookStorage(environment.PLATFORM_DIRECTORY_DATABASE),
+            environment.MOBIUS_SESSION_WEBHOOK_SECRET_ENCRYPTION_KEY,
+        );
+        for (const round of [1, 2, 3, 4, 5]) {
+            const endpoint = `https://consumer.example.test/webhook-${round}`;
+            const [saved, rotated] = await Promise.all([
+                worker.fetch(
+                    new Request(webhookUrl, {
+                        body: JSON.stringify({ enabled: true, endpoint }),
+                        headers: developerHeaders(),
+                        method: "PUT",
+                    }),
+                    environment,
+                ),
+                worker.fetch(
+                    new Request(`${webhookUrl}/rotate`, { body: "{}", headers: developerHeaders(), method: "POST" }),
+                    environment,
+                ),
+            ]);
+            await responseJson(saved, 200);
+            const secret = text(await responseJson(rotated, 200), "secret");
+            const stored = await new AppSessionStatusWebhookStorage(environment.PLATFORM_DIRECTORY_DATABASE).read(
+                appId,
+            );
+            if (stored === null) {
+                throw new Error("Expected the stored webhook");
+            }
+            expect(stored.endpoint).toBe(endpoint);
+            expect(await service.decryptSecret(stored)).toBe(secret);
+        }
+    });
+
     it("Given Recording is disabled by default, When a command finishes, Then the enabled webhook receives its outcome", async () => {
         const { projectId } = await provisionProject("recording-disabled");
         const transport = await deliver(projectId, [
