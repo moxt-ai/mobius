@@ -37,6 +37,21 @@ prompt's submission from its execution and completion. A queued prompt has not
 started an Agent turn. Queue, reject and supported steering behavior are daemon
 admission decisions, not guarantees made by ACP's ordinary prompt request.
 
+Queued-submission HTTP replies are advisory. The `session.queue.changed`
+notification is scoped to a Session, carries no command identifier, and can also
+occur when another queued Turn finishes. The relay can therefore return before
+the submitted command has actually entered the queue. A returned Turn identifier
+associates the reply with the request; it does not make the queue notification a
+confirmation for that command. Where the reply includes a queued state, that state
+has the same limitation.
+
+Clients must use the command's own lifecycle events to determine whether it started,
+failed or completed, and the available current-turn recovery view to inspect queued
+work. A successful submission reply must not override a later command-specific
+failure or be treated as proof of execution or durable queue admission. Missing
+lifecycle evidence leaves the outcome unknown; live delivery and recovery remain
+subject to the limitations below.
+
 Clients observing one session must see prompts submitted by other clients as well
 as Agent output. Prompt lifecycle and queue changes therefore accompany ACP updates
 in the shared event stream. A command reply alone is insufficient to synchronize
