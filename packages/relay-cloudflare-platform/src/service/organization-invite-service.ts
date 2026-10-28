@@ -124,8 +124,10 @@ export class OrganizationInviteService {
         const organization = await this.clerk.organization(row.organization_id, signal);
         // Recheck validity immediately before the external membership side effect.
         await this.resolve(token, signal);
-        await this.clerk.join(organization.id, userId, signal);
-        await this.storage.accepted(row, userId, Date.now(), signal);
+        const joined = await this.clerk.join(organization.id, userId, signal);
+        if (joined) {
+            await this.storage.accepted(row, userId, Date.now(), signal);
+        }
         return { organizationId: organization.id, organizationName: organization.name, member: true };
     };
 }

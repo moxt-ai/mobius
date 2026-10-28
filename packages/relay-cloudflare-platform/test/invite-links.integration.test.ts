@@ -38,7 +38,7 @@ function fixture() {
             }),
             env,
         );
-    const revocations = async (id: string) => {
+    const audits = async (id: string, action: string) => {
         const response = await request("tenants/org_invites/audit-events", admin);
         expect(response.status).toBe(200);
         const { events } = await response.json<{
@@ -49,13 +49,20 @@ function fixture() {
                 readonly outcome: string;
             }[];
         }>();
-        return events.filter((event) => event.action === "organization_invite.revoked" && event.subjectId === id);
+        return events.filter((event) => event.action === action && event.subjectId === id);
     };
-    return { request, admin, visitor, clerk, revocations };
+    return {
+        request,
+        admin,
+        visitor,
+        clerk,
+        revocations: (id: string) => audits(id, "organization_invite.revoked"),
+        acceptances: (id: string) => audits(id, "organization_invite.accepted"),
+    };
 }
 
-it("Given an admin's shareable link, When a user without an organization previews and accepts it twice, Then they join as a member and can open the organization", async () => {
-    const { request, admin, visitor, clerk } = fixture();
+it("Given an admin's shareable link, When a user without an organization previews and accepts it twice, Then they join as a member with exactly one acceptance audit", async () => {
+    const { request, admin, visitor, clerk, acceptances } = fixture();
     const created = await request("tenants/org_invites/invite-links", admin, "POST", {});
     expect(created.status).toBe(201);
     const link = await created.json<{ token: string; id: string }>();
@@ -67,7 +74,12 @@ it("Given an admin's shareable link, When a user without an organization preview
     for (let attempt = 0; attempt < 2; attempt++) {
         const accepted = await request("invite-links/accept", visitor, "POST", { token: link.token });
         expect(accepted.status).toBe(200);
-        expect(await accepted.json()).toMatchObject({ organizationId: "org_invites" });
+        expect(await accepted.json()).toEqual({
+            organizationId: "org_invites",
+            organizationName: "Invite team",
+            member: true,
+        });
+        expect(await acceptances(link.id)).toMatchObject([{ actorId: "user_visitor", outcome: "succeeded" }]);
     }
     await expect(
         clerk.organizationGateway.role("org_invites", "user_visitor", new AbortController().signal),
@@ -75,6 +87,23 @@ it("Given an admin's shareable link, When a user without an organization preview
     const listed = await (await request("tenants/org_invites/invite-links", admin)).text();
     expect(listed).toContain(link.id);
     expect(listed).not.toContain(link.token);
+});
+
+it("Given an existing organization admin, When they accept a shared invite, Then their role is preserved without an acceptance audit", async () => {
+    const { request, admin, clerk, acceptances } = fixture();
+    const link = await (await request("tenants/org_invites/invite-links", admin, "POST", {})).json<{
+        token: string;
+        id: string;
+    }>();
+    const accepted = await request("invite-links/accept", admin, "POST", { token: link.token });
+    expect(accepted.status).toBe(200);
+    expect(await accepted.json()).toEqual({
+        organizationId: "org_invites",
+        organizationName: "Invite team",
+        member: true,
+    });
+    expect(clerk.membership("org_invites", "user_admin")).toBe("org:admin");
+    expect(await acceptances(link.id)).toEqual([]);
 });
 
 it("Given a shared link, When it is revoked or expires, Then recipients cannot join", async () => {

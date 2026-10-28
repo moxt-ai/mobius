@@ -228,6 +228,9 @@ export class FakeClerk implements OidcJwksSource {
             if (typeof body.user_id !== "string" || typeof body.role !== "string") {
                 return new Response(null, { status: 400 });
             }
+            if (this.membership(id, body.user_id) !== null) {
+                return new Response(null, { status: 422 });
+            }
             this.setMembership(id, body.user_id, body.role);
             return Response.json({ role: body.role, public_user_data: { user_id: body.user_id } });
         }

@@ -96,9 +96,9 @@ export class ClerkOrganizationGateway implements OrganizationMembershipGateway {
         return parsed.output.data.find((entry) => entry.public_user_data.user_id === userId)?.role ?? null;
     };
 
-    readonly join = async (id: string, userId: string, signal: AbortSignal): Promise<void> => {
+    readonly join = async (id: string, userId: string, signal: AbortSignal): Promise<boolean> => {
         if ((await this.role(id, userId, signal)) !== null) {
-            return;
+            return false;
         }
         const response = await this.request(`${encodeURIComponent(id)}/memberships`, signal, {
             user_id: userId,
@@ -108,7 +108,7 @@ export class ClerkOrganizationGateway implements OrganizationMembershipGateway {
         if (!response.ok) {
             await response.body?.cancel();
             if ((await this.role(id, userId, signal)) !== null) {
-                return;
+                return false;
             }
             throw new PlatformControlPlaneError(
                 "clerk_unavailable",
@@ -124,5 +124,6 @@ export class ClerkOrganizationGateway implements OrganizationMembershipGateway {
                 502,
             );
         }
+        return true;
     };
 }
