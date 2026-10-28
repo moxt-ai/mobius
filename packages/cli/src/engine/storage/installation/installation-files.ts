@@ -4,27 +4,23 @@ import { dirname, join } from "node:path";
 import { z } from "zod";
 import { isNodeError } from "../../util/node-error.ts";
 
-// One application's installations live in its application directory. `current.json`
+// Engine data lives beneath its explicitly selected data directory. `current.json`
 // points at the current installation, whose directory keeps one file per saved connection in
 // `connections/` and one index file per relay channel in `channels/`.
 
 const MAXIMUM_FILE_BYTES = 16 * 1024;
 
-export function applicationDirectory(directory: string, applicationId: string): string {
-    return join(directory, "installations", applicationId);
-}
-
-export function installationPointerPath(applicationDirectory: string): string {
-    return join(applicationDirectory, "current.json");
+export function installationPointerPath(engineDataDir: string): string {
+    return join(engineDataDir, "current.json");
 }
 
 const installationDirectorySchema = z.string().brand<"InstallationDirectory">();
 
-/** One installation's own directory beneath its application directory. */
+/** One data directory selected by the current pointer. */
 export type InstallationDirectory = z.infer<typeof installationDirectorySchema>;
 
-export function installationDirectory(applicationDirectory: string, installationId: string): InstallationDirectory {
-    return installationDirectorySchema.parse(join(applicationDirectory, installationId));
+export function installationDirectory(engineDataDir: string, installationId: string): InstallationDirectory {
+    return installationDirectorySchema.parse(join(engineDataDir, installationId));
 }
 
 export function connectionDirectory(installationDirectory: string): string {

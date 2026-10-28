@@ -15,7 +15,6 @@ export class VerifiedRuntimeConnection {
     readonly kind = "verified";
     readonly activation: RuntimeConnectionActivation;
     readonly appId: string;
-    readonly applicationId: string;
     readonly channelId: string;
     readonly connectionId: string;
     readonly defaultWorkspace: string;
@@ -28,7 +27,6 @@ export class VerifiedRuntimeConnection {
 
     constructor(
         activation: RuntimeConnectionActivation,
-        applicationId: string,
         appId: string,
         installationId: string,
         connectionId: string,
@@ -40,7 +38,6 @@ export class VerifiedRuntimeConnection {
         runtimeId: string,
     ) {
         this.activation = activation;
-        this.applicationId = applicationId;
         this.appId = appId;
         this.channelId = channelId;
         this.connectionId = connectionId;

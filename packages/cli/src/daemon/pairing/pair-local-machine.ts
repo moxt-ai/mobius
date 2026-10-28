@@ -22,8 +22,10 @@ import {
     openEngineInstallationStore,
     openRuntimeInstallationStore,
     type RuntimeInstallationStore,
+    RuntimeInstallationStoreError,
 } from "../../engine/runtime/connection/runtime-installation-store.ts";
-import { ensureCanonicalDirectory } from "../../engine/storage/files/local-files.ts";
+import { ensureCanonicalDirectory, ensurePrivateDirectory } from "../../engine/storage/files/local-files.ts";
+import { validateLocalPath } from "../../engine/util/filesystem/private-path.ts";
 import { environmentProxyDispatcher } from "../../engine/util/network/environment-proxy.ts";
 import { isRecord } from "../../engine/util/value-utils.ts";
 import { readCurrentDataVersion } from "../../storage/daemon/version-data.ts";
@@ -35,7 +37,6 @@ const PAIRING_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}$/;
 const TOKEN_PATTERN = /^[a-zA-Z0-9_-]{32,256}$/;
 const CLAIM_RESPONSE_KEYS: readonly string[] = ["appId", "channelId", "daemonToken", "runtimeId"];
 const REDEEM_RESPONSE_KEYS: readonly string[] = ["appId", "channelId", "runtimeCredential", "runtimeId"];
-const MOBIUS_CLI_APPLICATION_ID = "dev.mobius.cli";
 
 interface PairCommandOptions {
     readonly code: string;
@@ -411,13 +412,19 @@ export async function openMobiusControlInstallation(
     signal: AbortSignal,
     environment: Readonly<NodeJS.ProcessEnv>,
 ): Promise<RuntimeInstallationStore> {
-    return await openRuntimeInstallationStore(
-        {
-            applicationId: MOBIUS_CLI_APPLICATION_ID,
-            stateDirectory: readStateDirectory(environment),
-        },
-        signal,
-    );
+    const root = readStateDirectory(environment);
+    try {
+        await ensurePrivateDirectory(root);
+        await validateLocalPath(root, true, true, signal);
+    } catch (cause) {
+        signal.throwIfAborted();
+        throw new RuntimeInstallationStoreError(
+            "installation_unavailable",
+            "The local installation cannot be initialized",
+            { cause },
+        );
+    }
+    return await openRuntimeInstallationStore(join(root, "installations", "dev.mobius.cli"), signal);
 }
 
 // CLI commands use the data the current data pointer names, which is the data the daemon uses. Only before any

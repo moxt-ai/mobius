@@ -41,8 +41,8 @@ export async function findLogDirectories(
     }
     const found: string[] = [];
     for (const installations of installationsRoots) {
-        for (const applicationId of await listDirectories(installations, root, unreadable, signal)) {
-            const application = join(installations, applicationId);
+        for (const dataDirectory of await listDirectories(installations, root, unreadable, signal)) {
+            const application = join(installations, dataDirectory);
             for (const installationId of await listDirectories(application, root, unreadable, signal)) {
                 const logs = join(application, installationId, "logs");
                 const status = await directoryStatus(logs);

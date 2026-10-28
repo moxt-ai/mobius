@@ -3,7 +3,6 @@ import { resolve } from "node:path";
 import { isIdentifier } from "@moxt-ai/mobius-sdk/protocol";
 import { ensurePrivateDirectory } from "../../storage/files/local-files.ts";
 import {
-    applicationDirectory as applicationDirectoryPath,
     channelIndexFilePath,
     connectionDirectory,
     connectionFilePath,
@@ -24,22 +23,14 @@ import {
     VerifiedRuntimeConnection,
 } from "./runtime-connection.ts";
 
-const APPLICATION_ID_PATTERN = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+){1,31}$/;
 const CONNECTION_ID_PATTERN = /^mcn_[a-f0-9]{32}$/;
 const INSTALLATION_ID_PATTERN = /^min_[a-f0-9]{32}$/;
 const RUNTIME_CREDENTIAL_PATTERN = /^[a-zA-Z0-9_-]{32,256}$/;
 const INSTALLATION_POINTER_KEYS: readonly string[] = ["installationId", "version"];
-const CHANNEL_INDEX_KEYS: readonly string[] = [
-    "applicationId",
-    "channelId",
-    "connectionId",
-    "installationId",
-    "version",
-];
+const CHANNEL_INDEX_KEYS: readonly string[] = ["channelId", "connectionId", "installationId", "version"];
 const VERIFIED_CONNECTION_KEYS: readonly string[] = [
     "activation",
     "appId",
-    "applicationId",
     "channelId",
     "connectionId",
     "defaultWorkspace",
@@ -51,11 +42,6 @@ const VERIFIED_CONNECTION_KEYS: readonly string[] = [
     "runtimeId",
     "version",
 ];
-
-export interface RuntimeInstallationStoreOptions {
-    readonly applicationId: string;
-    readonly stateDirectory: string;
-}
 
 export class RuntimeInstallationStoreError extends Error {
     readonly code: string;
@@ -72,7 +58,6 @@ interface InstallationPointer {
 }
 
 interface ChannelIndex {
-    readonly applicationId: string;
     readonly channelId: string;
     readonly connectionId: string;
     readonly installationId: string;
@@ -85,13 +70,6 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 function hasExactKeys(value: Readonly<Record<string, unknown>>, expectedKeys: readonly string[]): boolean {
     const keys = Object.keys(value);
     return keys.length === expectedKeys.length && expectedKeys.every((key) => Object.hasOwn(value, key));
-}
-
-function validateApplicationId(value: string): string {
-    if (!APPLICATION_ID_PATTERN.test(value)) {
-        throw new RuntimeInstallationStoreError("invalid_application_id", "The application ID is invalid");
-    }
-    return value;
 }
 
 function validateRemoteAppId(value: string): string {
@@ -171,24 +149,30 @@ function decodeInstallationPointer(value: unknown): InstallationPointer {
     return { installationId: validateInstallationId(storedInstallationId) };
 }
 
-function decodeChannelIndex(value: unknown): ChannelIndex {
-    if (!isRecord(value) || !hasExactKeys(value, CHANNEL_INDEX_KEYS) || value["version"] !== 1) {
+// Previous disk versions carried extra fields. Retain only fields this reader owns;
+// current versions still require the exact schema below.
+function retainedFields(
+    value: Readonly<Record<string, unknown>>,
+    keys: readonly string[],
+): Readonly<Record<string, unknown>> {
+    return Object.fromEntries(keys.filter((key) => Object.hasOwn(value, key)).map((key) => [key, value[key]]));
+}
+
+function decodeChannelIndex(input: unknown): ChannelIndex {
+    if (!isRecord(input)) {
         throw new RuntimeInstallationStoreError("invalid_connection", "The saved Runtime connection is invalid");
     }
-    const applicationId = value["applicationId"];
+    const value = input["version"] === 1 ? retainedFields(input, CHANNEL_INDEX_KEYS) : input;
+    if (!hasExactKeys(value, CHANNEL_INDEX_KEYS) || (value["version"] !== 1 && value["version"] !== 2)) {
+        throw new RuntimeInstallationStoreError("invalid_connection", "The saved Runtime connection is invalid");
+    }
     const channelId = value["channelId"];
     const connectionId = value["connectionId"];
     const storedInstallationId = value["installationId"];
-    if (
-        typeof applicationId !== "string" ||
-        typeof channelId !== "string" ||
-        typeof connectionId !== "string" ||
-        typeof storedInstallationId !== "string"
-    ) {
+    if (typeof channelId !== "string" || typeof connectionId !== "string" || typeof storedInstallationId !== "string") {
         throw new RuntimeInstallationStoreError("invalid_connection", "The saved Runtime connection is invalid");
     }
     return {
-        applicationId: validateApplicationId(applicationId),
         channelId: validateIdentifier(channelId, "invalid_connection"),
         connectionId: validateConnectionId(connectionId),
         installationId: validateInstallationId(storedInstallationId),
@@ -196,10 +180,13 @@ function decodeChannelIndex(value: unknown): ChannelIndex {
 }
 
 function decodeVerifiedConnection(value: Readonly<Record<string, unknown>>): VerifiedRuntimeConnection {
-    if (!hasExactKeys(value, VERIFIED_CONNECTION_KEYS) || value["version"] !== 5 || value["kind"] !== "verified") {
+    if (
+        !hasExactKeys(value, VERIFIED_CONNECTION_KEYS) ||
+        (value["version"] !== 5 && value["version"] !== 6) ||
+        value["kind"] !== "verified"
+    ) {
         throw new RuntimeInstallationStoreError("invalid_connection", "The saved Runtime connection is invalid");
     }
-    const applicationId = value["applicationId"];
     const activation = value["activation"];
     const appId = value["appId"];
     const channelId = value["channelId"];
@@ -211,7 +198,6 @@ function decodeVerifiedConnection(value: Readonly<Record<string, unknown>>): Ver
     const runtimeCredential = value["runtimeCredential"];
     const runtimeId = value["runtimeId"];
     if (
-        typeof applicationId !== "string" ||
         (activation !== "active" && activation !== "stopped") ||
         typeof appId !== "string" ||
         typeof channelId !== "string" ||
@@ -227,7 +213,6 @@ function decodeVerifiedConnection(value: Readonly<Record<string, unknown>>): Ver
     }
     return new VerifiedRuntimeConnection(
         activation,
-        validateApplicationId(applicationId),
         validateRemoteAppId(appId),
         validateInstallationId(storedInstallationId),
         validateConnectionId(connectionId),
@@ -244,7 +229,7 @@ function decodeConnection(value: unknown): VerifiedRuntimeConnection {
     if (!isRecord(value)) {
         throw new RuntimeInstallationStoreError("invalid_connection", "The saved Runtime connection is invalid");
     }
-    return decodeVerifiedConnection(value);
+    return decodeVerifiedConnection(value["version"] === 5 ? retainedFields(value, VERIFIED_CONNECTION_KEYS) : value);
 }
 
 async function readJsonFile(path: string, signal: AbortSignal, missingCode: string): Promise<unknown> {
@@ -294,53 +279,22 @@ async function writeJsonAtomically(
 }
 
 export class RuntimeInstallationStore {
-    readonly applicationId: string;
     readonly installationId: string;
     readonly stateDirectory: InstallationDirectory;
     readonly #connectionDirectory: string;
 
-    private constructor(applicationId: string, installationId: string, stateDirectory: InstallationDirectory) {
-        this.applicationId = applicationId;
+    private constructor(installationId: string, stateDirectory: InstallationDirectory) {
         this.installationId = installationId;
         this.stateDirectory = stateDirectory;
         this.#connectionDirectory = connectionDirectory(stateDirectory);
     }
 
-    static readonly open = async (
-        options: RuntimeInstallationStoreOptions,
-        signal: AbortSignal,
-    ): Promise<RuntimeInstallationStore> => {
+    static readonly open = async (engineDataDir: string, signal: AbortSignal): Promise<RuntimeInstallationStore> => {
         signal.throwIfAborted();
-        const applicationId = validateApplicationId(options.applicationId);
-        const dataDirectory = resolve(options.stateDirectory);
+        const dataDirectory = resolve(engineDataDir);
         try {
             await ensurePrivateDirectory(dataDirectory);
             await validateLocalPath(dataDirectory, true, true, signal);
-        } catch (cause) {
-            signal.throwIfAborted();
-            throw new RuntimeInstallationStoreError(
-                "installation_unavailable",
-                "The local installation cannot be initialized",
-                { cause },
-            );
-        }
-        return await RuntimeInstallationStore.openEngine(
-            applicationDirectoryPath(dataDirectory, applicationId),
-            signal,
-            applicationId,
-        );
-    };
-
-    static readonly openEngine = async (
-        engineDataDir: string,
-        signal: AbortSignal,
-        applicationId = "dev.mobius.cli",
-    ): Promise<RuntimeInstallationStore> => {
-        signal.throwIfAborted();
-        const applicationDirectory = resolve(engineDataDir);
-        try {
-            await ensurePrivateDirectory(applicationDirectory);
-            await validateLocalPath(applicationDirectory, true, true, signal);
         } catch (cause) {
             throw new RuntimeInstallationStoreError(
                 "installation_unavailable",
@@ -350,8 +304,8 @@ export class RuntimeInstallationStore {
                 },
             );
         }
-        const storedInstallationId = await readOrCreateInstallationId(applicationDirectory, signal);
-        const stateDirectory = installationDirectory(applicationDirectory, storedInstallationId);
+        const storedInstallationId = await readOrCreateInstallationId(dataDirectory, signal);
+        const stateDirectory = installationDirectory(dataDirectory, storedInstallationId);
         try {
             await ensurePrivateDirectory(stateDirectory);
         } catch (cause) {
@@ -364,7 +318,7 @@ export class RuntimeInstallationStore {
             );
         }
         signal.throwIfAborted();
-        return new RuntimeInstallationStore(applicationId, storedInstallationId, stateDirectory);
+        return new RuntimeInstallationStore(storedInstallationId, stateDirectory);
     };
 
     readonly connectionPath = (connectionId: string): string =>
@@ -377,7 +331,7 @@ export class RuntimeInstallationStore {
         const stored = decodeConnection(
             await readJsonFile(this.connectionPath(connectionId), signal, "connection_not_found"),
         );
-        if (stored.applicationId !== this.applicationId || stored.installationId !== this.installationId) {
+        if (stored.installationId !== this.installationId) {
             throw new RuntimeInstallationStoreError(
                 "connection_owner_mismatch",
                 "The saved Runtime connection belongs to another installation",
@@ -394,11 +348,7 @@ export class RuntimeInstallationStore {
         const index = decodeChannelIndex(
             await readJsonFile(this.channelIndexPath(normalizedChannelId), signal, "connection_not_found"),
         );
-        if (
-            index.applicationId !== this.applicationId ||
-            index.installationId !== this.installationId ||
-            index.channelId !== normalizedChannelId
-        ) {
+        if (index.installationId !== this.installationId || index.channelId !== normalizedChannelId) {
             throw new RuntimeInstallationStoreError(
                 "connection_owner_mismatch",
                 "The saved Runtime connection belongs to another installation",
@@ -413,7 +363,6 @@ export class RuntimeInstallationStore {
     ): Promise<VerifiedRuntimeConnection> => {
         const stored = new VerifiedRuntimeConnection(
             "active",
-            this.applicationId,
             validateRemoteAppId(input.appId),
             this.installationId,
             connectionId(),
@@ -448,11 +397,10 @@ export class RuntimeInstallationStore {
         await writeJsonAtomically(
             this.channelIndexPath(stored.channelId),
             {
-                applicationId: this.applicationId,
                 channelId: stored.channelId,
                 connectionId: stored.connectionId,
                 installationId: this.installationId,
-                version: 1,
+                version: 2,
             },
             signal,
         );
@@ -503,7 +451,6 @@ export class RuntimeInstallationStore {
         const connection = await this.readConnection(connectionId, signal);
         const updated = new VerifiedRuntimeConnection(
             activation,
-            connection.applicationId,
             connection.appId,
             connection.installationId,
             connection.connectionId,
@@ -547,7 +494,6 @@ export class RuntimeInstallationStore {
             connectionPath,
             {
                 activation: connection.activation,
-                applicationId: connection.applicationId,
                 appId: connection.appId,
                 channelId: connection.channelId,
                 connectionId: connection.connectionId,
@@ -558,15 +504,15 @@ export class RuntimeInstallationStore {
                 relayOrigin: connection.relayOrigin.toString(),
                 runtimeCredential: connection.runtimeCredential,
                 runtimeId: connection.runtimeId,
-                version: 5,
+                version: 6,
             },
             signal,
         );
     };
 }
 
-async function readOrCreateInstallationId(applicationDirectory: string, signal: AbortSignal): Promise<string> {
-    const pointerPath = installationPointerPath(applicationDirectory);
+async function readOrCreateInstallationId(engineDataDir: string, signal: AbortSignal): Promise<string> {
+    const pointerPath = installationPointerPath(engineDataDir);
     try {
         return decodeInstallationPointer(await readJsonFile(pointerPath, signal, "installation_not_found"))
             .installationId;
@@ -596,15 +542,15 @@ async function readOrCreateInstallationId(applicationDirectory: string, signal: 
 }
 
 export async function openRuntimeInstallationStore(
-    options: RuntimeInstallationStoreOptions,
+    engineDataDir: string,
     signal: AbortSignal,
 ): Promise<RuntimeInstallationStore> {
-    return await RuntimeInstallationStore.open(options, signal);
+    return await RuntimeInstallationStore.open(engineDataDir, signal);
 }
 
 export async function openEngineInstallationStore(
     engineDataDir: string,
     signal: AbortSignal,
 ): Promise<RuntimeInstallationStore> {
-    return await RuntimeInstallationStore.openEngine(engineDataDir, signal);
+    return await RuntimeInstallationStore.open(engineDataDir, signal);
 }

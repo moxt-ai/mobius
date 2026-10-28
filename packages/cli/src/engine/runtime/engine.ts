@@ -83,7 +83,7 @@ async function resolveWorkspace(path: string): Promise<string> {
 }
 
 export interface CreateMobiusRuntimeEngineParams {
-    /** Application directory containing current.json and its installation directories. */
+    /** Engine data directory containing current.json and its data directories. */
     readonly engineDataDir: string;
     readonly connection: MobiusRuntimeConnection;
     readonly signal: AbortSignal;
@@ -203,6 +203,5 @@ export {
     openRuntimeInstallationStore,
     RuntimeInstallationStore,
     RuntimeInstallationStoreError,
-    type RuntimeInstallationStoreOptions,
 } from "./connection/runtime-installation-store.ts";
 export { RuntimeRelayRevokedError } from "./relay/runtime-revocation.ts";

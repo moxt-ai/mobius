@@ -83,10 +83,7 @@ describe("pairing a machine without a local Agent", () => {
 
         try {
             const { openRuntimeInstallationStore, pairMobiusRuntime } = await import("../../src/exports/engine.ts");
-            const installation = await openRuntimeInstallationStore(
-                { applicationId: "dev.mobius.unattended-test", stateDirectory },
-                AbortSignal.timeout(5_000),
-            );
+            const installation = await openRuntimeInstallationStore(stateDirectory, AbortSignal.timeout(5_000));
 
             const paired = await pairMobiusRuntime(
                 installation,
@@ -127,10 +124,7 @@ describe("pairing a machine without a local Agent", () => {
             const { openRuntimeInstallationStore, pairMobiusRuntime, resumeMobiusRuntime } = await import(
                 "../../src/exports/engine.ts"
             );
-            const installation = await openRuntimeInstallationStore(
-                { applicationId: "dev.mobius.unattended-test", stateDirectory },
-                AbortSignal.timeout(5_000),
-            );
+            const installation = await openRuntimeInstallationStore(stateDirectory, AbortSignal.timeout(5_000));
             const paired = await pairMobiusRuntime(
                 installation,
                 {
