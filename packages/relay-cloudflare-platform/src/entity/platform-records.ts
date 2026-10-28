@@ -47,6 +47,7 @@ export const CredentialRowSchema = v.object({
     app_lifecycle: v.string(),
     credential_id: v.string(),
     issued_at: nonNegativeInteger,
+    last_observed_used_at: v.nullable(nonNegativeInteger),
     last_used_at: nonNegativeInteger,
     overlap_ends_at: v.nullable(nonNegativeInteger),
     permissions_json: v.string(),

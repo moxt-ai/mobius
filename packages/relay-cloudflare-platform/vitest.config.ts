@@ -61,7 +61,7 @@ export default defineConfig(async (): Promise<ViteUserConfig> => {
                 miniflare: {
                     // Legacy data can outlive the deployment that stopped trusting it.
                     kvNamespaces: ["APP_CREDENTIAL_CACHE"],
-                    d1Databases: ["TEST_UNINITIALIZED_SHARD"],
+                    d1Databases: ["TEST_UNINITIALIZED_SHARD", "TEST_CREDENTIAL_USAGE_DATABASE"],
                     r2Buckets: ["R2_BUCKET_WNAM"],
                     bindings: {
                         MOBIUS_SESSION_WEBHOOK_SECRET_ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
