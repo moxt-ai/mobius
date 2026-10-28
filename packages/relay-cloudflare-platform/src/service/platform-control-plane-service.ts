@@ -593,7 +593,8 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
 
     readonly deleteApp = async (access: PlatformDeveloperAccess, app: AppRow, signal: AbortSignal): Promise<object> => {
         this.requireOwner(access);
-        if (access.tenantId !== app.tenant_id || app.lifecycle !== "active") {
+        // Suspension blocks use of the App, but its owner can still delete it.
+        if (access.tenantId !== app.tenant_id || app.lifecycle === "deleted") {
             throw new PlatformControlPlaneError("app_access_denied", "The App is unavailable", 403);
         }
         const now = Date.now();

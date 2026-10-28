@@ -547,3 +547,70 @@ it("Given an active Project with App and Session credentials, When its directory
     await expectRejected(await app.authenticateApp(scoped.credential), "project_access_denied", 403);
     await expectRejected(await app.authenticateSession(), "project_access_denied", 403);
 });
+
+it("Given a suspended App with active and suspended Projects, When its owner deletes it, Then deletion is atomic, terminal and preserves suspension history", async () => {
+    const app = await application();
+    const activeProject = await app.createProject("active-project");
+    const suspendedAt = new Date().toISOString();
+    // Retain existing stored suspension states without introducing a management API.
+    await env.PLATFORM_DIRECTORY_DATABASE.batch([
+        env.PLATFORM_DIRECTORY_DATABASE.prepare(
+            "UPDATE platform_apps SET lifecycle = 'suspended', suspended_at = ? WHERE app_id = ?",
+        ).bind(Date.now(), app.appId),
+        env.PLATFORM_DIRECTORY_DATABASE.prepare(
+            "UPDATE platform_projects SET lifecycle = 'suspended', suspended_at = ? WHERE project_id = ?",
+        ).bind(Date.now(), app.projectId),
+    ]);
+    const beforeDeletion = await app.readApp();
+    const projectsBeforeDeletion = await responseJson(await app.listProjects(), 200);
+    const auditsBeforeDeletion = await app.listAuditEvents();
+    await expectRejected(await app.authenticateApp(), "credential_revoked");
+    await expectRejected(await app.authenticateSession(), "credential_revoked");
+
+    await env.PLATFORM_DIRECTORY_DATABASE.prepare(
+        `CREATE TRIGGER reject_suspended_app_deletion BEFORE UPDATE OF lifecycle ON platform_projects
+         WHEN NEW.lifecycle = 'deleted'
+         BEGIN SELECT RAISE(ABORT, 'Controlled deletion failure'); END`,
+    ).run();
+    try {
+        await expectRejected(await app.deleteApp(), "internal_error", 500);
+        expect(await app.readApp()).toEqual(beforeDeletion);
+        expect(await responseJson(await app.listProjects(), 200)).toEqual(projectsBeforeDeletion);
+        expect(await app.listAuditEvents()).toEqual(auditsBeforeDeletion);
+    } finally {
+        await env.PLATFORM_DIRECTORY_DATABASE.prepare("DROP TRIGGER reject_suspended_app_deletion").run();
+    }
+
+    const deletedAt = "2026-10-27T00:01:00.000Z";
+    vi.setSystemTime(new Date(deletedAt));
+    const deleted = await responseJson(await app.deleteApp(), 200);
+    expect(v.parse(legacyAppResource, deleted)).toMatchObject({
+        appId: app.appId,
+        lifecycle: "deleted",
+        suspendedAt,
+        deletedAt,
+        updatedAt: deletedAt,
+    });
+    expect(await app.developer.readApp(app.appId, new AbortController().signal)).toMatchObject({
+        lifecycle: "deleted",
+        suspendedAt,
+        deletedAt,
+    });
+    expect(await responseJson(await app.listProjects(), 200)).toMatchObject({
+        projects: expect.arrayContaining([
+            expect.objectContaining({ projectId: app.projectId, lifecycle: "deleted", suspendedAt, deletedAt }),
+            expect.objectContaining({
+                projectId: activeProject.projectId,
+                lifecycle: "deleted",
+                suspendedAt: "",
+                deletedAt,
+            }),
+        ]),
+    });
+    await expectRejected(await app.authenticateApp(), "credential_revoked");
+    await expectRejected(await app.authenticateSession(), "credential_revoked");
+    const auditsAfterDeletion = await app.listAuditEvents();
+    await expectRejected(await app.deleteApp(), "app_access_denied", 403);
+    expect(await app.readApp()).toEqual(deleted);
+    expect(await app.listAuditEvents()).toEqual(auditsAfterDeletion);
+});

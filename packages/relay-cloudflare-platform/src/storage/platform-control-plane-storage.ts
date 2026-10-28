@@ -1,5 +1,5 @@
 import { relayDrizzle } from "@moxt-ai/mobius-relay-core/database";
-import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import {
     type ActiveCountRow,
     ActiveCountRowSchema,
@@ -25,7 +25,12 @@ import {
     type TenantRow,
     TenantRowSchema,
 } from "../entity/platform-records.ts";
-import { platformAppCredential, platformAppCredentialScope, platformDashboardAuditEvent } from "../schema/d1/index.ts";
+import {
+    platformApp,
+    platformAppCredential,
+    platformAppCredentialScope,
+    platformDashboardAuditEvent,
+} from "../schema/d1/index.ts";
 import { platformAuditEvent } from "../schema/project-do/index.ts";
 import { waitForD1 } from "./d1-operation.ts";
 import { decodeOptionalStorageRecord, decodeStorageRecord, decodeStorageRecords } from "./decode-storage-record.ts";
@@ -119,12 +124,17 @@ export class PlatformControlPlaneStorage {
         const results = await waitForD1(
             () =>
                 this.#database.batch([
-                    this.#database
-                        .prepare(
-                            `UPDATE platform_apps SET lifecycle = 'deleted', deleted_at = ?, updated_at = ?
-                              WHERE app_id = ? AND lifecycle = 'active'`,
-                        )
-                        .bind(deletedAt, deletedAt, appId),
+                    this.statement(
+                        platformDrizzle(this.#database)
+                            .update(platformApp)
+                            .set({ lifecycle: "deleted", deletedAt, updatedAt: deletedAt })
+                            .where(
+                                and(
+                                    eq(platformApp.appId, appId),
+                                    inArray(platformApp.lifecycle, ["active", "suspended"]),
+                                ),
+                            ),
+                    ),
                     this.#database
                         .prepare(
                             `UPDATE platform_projects SET lifecycle = 'deleted', deleted_at = ?, updated_at = ?
