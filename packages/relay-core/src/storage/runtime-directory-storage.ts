@@ -2,6 +2,7 @@ import { and, count, eq, exists, gt, isNull, lt, lte, notExists, or, sql } from 
 import { MAX_RUNTIMES_PER_PROJECT } from "../entity/pairing/pairing.ts";
 import type {
     PairingChannelRow,
+    PairingClaimRow,
     RuntimeDirectoryRow,
     RuntimePairingAudit,
     RuntimePairingRow,
@@ -98,6 +99,7 @@ export class RuntimeDirectoryStorage {
             .select({
                 ...identityFields,
                 pairing_id: runtimePairingRequest.pairingId,
+                poll_token_hash: runtimePairingRequest.pollTokenHash,
                 expires_at: runtimePairingRequest.expiresAt,
                 revoked_at: runtimeIdentity.revokedAt,
                 registration: registrationFields,
@@ -106,7 +108,7 @@ export class RuntimeDirectoryStorage {
             .innerJoin(runtimeIdentity, eq(runtimeIdentity.runtimeId, runtimePairingRequest.runtimeId))
             .leftJoin(runtimeRegistration, eq(runtimeRegistration.runtimeId, runtimeIdentity.runtimeId));
 
-    readonly readPairingCode = async (codeHash: string, signal: AbortSignal): Promise<PairingChannelRow | null> => {
+    readonly readPairingCode = async (codeHash: string, signal: AbortSignal): Promise<PairingClaimRow | null> => {
         const rows = await this.pairingQuery(relayDrizzle(this.#database, signal))
             .where(
                 and(
@@ -260,7 +262,17 @@ export class RuntimeDirectoryStorage {
                     agentsJson: sql<string>`${value.agents}`.as("agents_json"),
                 })
                 .from(runtimeDaemonCredential)
-                .where(eq(runtimeDaemonCredential.tokenHash, value.daemonHash)),
+                .where(
+                    and(
+                        eq(runtimeDaemonCredential.tokenHash, value.daemonHash),
+                        notExists(
+                            database
+                                .select({ runtimeId: runtimeRegistration.runtimeId })
+                                .from(runtimeRegistration)
+                                .where(eq(runtimeRegistration.runtimeId, runtimeDaemonCredential.runtimeId)),
+                        ),
+                    ),
+                ),
         );
         const audit = database.insert(runtimePairingAuditEvent).select(
             database
@@ -279,7 +291,22 @@ export class RuntimeDirectoryStorage {
                 .innerJoin(runtimeIdentity, eq(runtimeIdentity.runtimeId, runtimeDaemonCredential.runtimeId))
                 .innerJoin(runtimeRegistration, eq(runtimeRegistration.runtimeId, runtimeIdentity.runtimeId))
                 .innerJoin(runtimePairingRequest, eq(runtimePairingRequest.runtimeId, runtimeIdentity.runtimeId))
-                .where(eq(runtimeDaemonCredential.tokenHash, value.daemonHash)),
+                .where(
+                    and(
+                        eq(runtimeDaemonCredential.tokenHash, value.daemonHash),
+                        notExists(
+                            database
+                                .select({ auditId: runtimePairingAuditEvent.auditId })
+                                .from(runtimePairingAuditEvent)
+                                .where(
+                                    and(
+                                        eq(runtimePairingAuditEvent.pairingId, value.pairingId),
+                                        eq(runtimePairingAuditEvent.action, "runtime_pairing.claimed"),
+                                    ),
+                                ),
+                        ),
+                    ),
+                ),
         );
         const results = await this.#database.batch(
             [this.statement(credential), this.statement(registration), this.statement(audit)],

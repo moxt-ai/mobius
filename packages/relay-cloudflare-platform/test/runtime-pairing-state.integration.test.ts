@@ -112,19 +112,24 @@ async function project(name = "Runtime pairing") {
     const create = async (idempotencyKey: string) =>
         request(`/v1/projects/${projectId}/runtime-pairings`, "POST", { idempotencyKey });
     return {
+        appId,
         projectId,
         credentialId: defaultCredential.credentialId,
         create,
         pair: async (key: string): Promise<Pairing> =>
             v.parse(pairingSchema, await responseJson(await create(key), 201)),
         status: async (pairing: Pairing) => request(`/v1/projects/${projectId}/runtime-pairings/${pairing.pairingId}`),
-        claim: async (pairing: Pairing) =>
-            request(`/v1/runtime-pairings/${pairing.pairingId}/redeem`, "POST", {
-                pairingCode: pairing.pairingCode,
-                machineName: "Runtime machine",
-                workspaceName: "Runtime workspace",
-                agents: [],
-            }),
+        claim: async (pairing: Pairing, endpoint: "claim" | "redeem" = "redeem", machineName = "Runtime machine") =>
+            request(
+                endpoint === "claim" ? "/pairings/claim" : `/v1/runtime-pairings/${pairing.pairingId}/redeem`,
+                "POST",
+                {
+                    pairingCode: pairing.pairingCode,
+                    machineName,
+                    workspaceName: "Runtime workspace",
+                    agents: [],
+                },
+            ),
         revoke: async (pairing: Pairing) =>
             request(`/v1/projects/${projectId}/runtimes/${pairing.runtimeId}`, "DELETE"),
         list: async () => request(`/v1/projects/${projectId}/runtimes`),
@@ -224,8 +229,66 @@ it("Given a claim whose audit cannot commit, When the caller retries after recov
         await responseJson(await app.claim(pairing), 200),
     );
     expect((await app.publish(pairing, claimed.runtimeCredential)).status).toBe(204);
-    expect((await app.claim(pairing)).status).toBe(400);
+    expect(await responseJson(await app.claim(pairing), 200)).toMatchObject(claimed);
 });
+
+it.each(["claim", "redeem"] as const)(
+    "Given a committed %s response is lost, When the caller retries after a relay restart, Then the original credential is recovered without changing the registration",
+    async (endpoint) => {
+        const app = await project();
+        const pairing = await app.pair(`lost-${endpoint}`);
+        // Discard the first result before the caller can save its credential.
+        expect((await app.claim(pairing, endpoint)).status).toBe(200);
+        await app.restart();
+        vi.setSystemTime(new Date(Date.now() + 20_000));
+        const response = await responseJson(await app.claim(pairing, endpoint, "Retry machine"), 200);
+        // Independently retain both released CLI response contracts, including
+        // their exact keys and credential syntax.
+        const identity = { appId: v.string(), channelId: v.string(), runtimeId: v.string() };
+        const credential = v.pipe(v.string(), v.regex(/^[a-zA-Z0-9_-]{32,256}$/));
+        const runtimeCredential =
+            endpoint === "claim"
+                ? v.parse(v.strictObject({ ...identity, daemonToken: credential }), response).daemonToken
+                : v.parse(v.strictObject({ ...identity, runtimeCredential: credential }), response).runtimeCredential;
+        expect(response).toMatchObject({
+            appId: app.appId,
+            channelId: pairing.channelId,
+            runtimeId: pairing.runtimeId,
+        });
+        expect((await app.publish(pairing, runtimeCredential)).status).toBe(204);
+        // Retain the pre-fix daemon authentication contract (e5ef604), independent
+        // of the current storage reader: a rollback must still accept this token.
+        const tokenHash = await hashSecret(runtimeCredential);
+        expect(
+            await app.storage((storage) =>
+                storage.sql
+                    .exec(
+                        `SELECT r.channel_id, r.runtime_id, r.project_id FROM runtimes r
+                         JOIN runtime_registrations s ON s.runtime_id = r.runtime_id
+                         JOIN runtime_daemon_credentials c ON c.runtime_id = r.runtime_id
+                         WHERE r.project_id = ? AND r.channel_id = ? AND r.revoked_at IS NULL AND c.token_hash = ?`,
+                        app.projectId,
+                        pairing.channelId,
+                        tokenHash,
+                    )
+                    .toArray(),
+            ),
+        ).toEqual([{ channel_id: pairing.channelId, runtime_id: pairing.runtimeId, project_id: app.projectId }]);
+        expect(await responseJson(await app.list(), 200)).toMatchObject({
+            runtimes: [{ runtimeId: pairing.runtimeId, machineName: "Runtime machine" }],
+        });
+        expect(
+            await app.storage((storage) =>
+                storage.sql.exec("SELECT action FROM runtime_pairing_audit_events ORDER BY action").toArray(),
+            ),
+        ).toEqual([{ action: "runtime_pairing.claimed" }, { action: "runtime_pairing.requested" }]);
+        expect((await app.revoke(pairing)).status).toBe(204);
+        expect(await responseJson(await app.claim(pairing, endpoint), 400)).toMatchObject({
+            error: { code: "invalid_pairing_code" },
+        });
+        expect((await app.publish(pairing, runtimeCredential)).status).toBe(401);
+    },
+);
 
 it("Given a revocation whose audit cannot commit, When it is retried, Then access remains until the complete revocation commits", async () => {
     const app = await project();
@@ -313,7 +376,7 @@ it("Given all legacy pairing lifecycles and existing credentials, When the Proje
     const pending = await app.pair("legacy-pending");
     const expired = { ...(await app.pair("legacy-expired")), expiresAt: new Date(now - 1).toISOString() };
     const overdue = { ...(await app.pair("legacy-overdue")), expiresAt: new Date(now - 1).toISOString() };
-    const paired = { ...(await app.pair("legacy-paired")), expiresAt: new Date(now - 1).toISOString() };
+    const paired = { ...(await app.pair("legacy-paired")), expiresAt: new Date(now + 30_000).toISOString() };
     const revoked = await app.pair("legacy-revoked");
     const cancelled = await app.pair("legacy-cancelled");
     const daemonToken = `${app.projectId}_${"D".repeat(43)}`;
@@ -427,6 +490,14 @@ it("Given all legacy pairing lifecycles and existing credentials, When the Proje
         expect(await app.pair(row.key)).toEqual(row.pairing);
     }
     expect((await app.publish(paired, daemonToken)).status).toBe(204);
+    // An old random credential cannot be reconstructed. A replay must neither
+    // replace it nor return a newly derived credential that cannot authenticate.
+    expect(await responseJson(await app.claim(paired), 400)).toMatchObject({
+        error: { code: "invalid_pairing_code" },
+    });
+    vi.setSystemTime(new Date(paired.expiresAt));
+    expect(await responseJson(await app.status(paired), 200)).toMatchObject({ status: "paired" });
+    expect((await app.publish(paired, daemonToken)).status).toBe(204);
     expect(await responseJson(await app.readChannel(paired, hostToken), 200)).toMatchObject({
         runtimeId: paired.runtimeId,
     });
@@ -517,17 +588,17 @@ it("Given one available Runtime place, When distinct requests compete, Then exac
     expect(await responseJson(await app.status(pairing), 200)).toMatchObject({ status: "pending" });
 });
 
-it("Given a pending pairing, When daemons compete to claim it, Then one credential wins and its Runtime survives the handshake deadline", async () => {
+it("Given a pending pairing, When claims arrive concurrently, Then they return the same credential and its Runtime survives the handshake deadline", async () => {
     const app = await project();
     const pairing = await app.pair("claim-once");
     const responses = await Promise.all([app.claim(pairing), app.claim(pairing)]);
-    expect(responses.map((response) => response.status).sort()).toEqual([200, 400]);
-    const winner = responses.find((response) => response.status === 200);
-    if (winner === undefined) {
-        throw new Error("Expected one successful claim");
-    }
-    const { runtimeCredential } = v.parse(v.object({ runtimeCredential: v.string() }), await responseJson(winner, 200));
+    const results = await Promise.all(responses.map((response) => responseJson(response, 200)));
+    expect(results[0]).toEqual(results[1]);
+    const { runtimeCredential } = v.parse(v.object({ runtimeCredential: v.string() }), results[0]);
     vi.setSystemTime(new Date(Date.parse(pairing.expiresAt) + 1));
+    expect(await responseJson(await app.claim(pairing), 400)).toMatchObject({
+        error: { code: "invalid_pairing_code" },
+    });
     expect(await responseJson(await app.status(pairing), 200)).toMatchObject({ status: "paired", agents: [] });
     expect((await app.publish(pairing, runtimeCredential)).status).toBe(204);
     expect(await responseJson(await app.list(), 200)).toMatchObject({ runtimes: [{ runtimeId: pairing.runtimeId }] });

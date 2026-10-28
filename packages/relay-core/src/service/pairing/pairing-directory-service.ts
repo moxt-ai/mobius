@@ -35,7 +35,7 @@ import type { ProjectStorageContext, ProjectStorageDirectory } from "../../infra
 import type { AuthorizedChannelRow, PairingStorage } from "../../storage/pairing-storage.ts";
 import type { PairingIdentityService } from "./pairing-identity-service.ts";
 import type { PairingOperations } from "./pairing-operations.ts";
-import { deriveRuntimePairingSecrets } from "./runtime-pairing-secrets.ts";
+import { deriveRuntimeDaemonToken, deriveRuntimePairingSecrets } from "./runtime-pairing-secrets.ts";
 
 export interface PairingDirectoryInfrastructure {
     readonly gateways: { readonly projectApplications: ProjectApplicationResolver };
@@ -415,7 +415,12 @@ export class PairingDirectoryService implements PairingOperations {
             throw new PairingDirectoryError("invalid_pairing_code", "The pairing code is invalid or expired");
         }
         const appId = await this.#cx.gateways.projectApplications.resolveApplicationId(pairing.project_id, signal);
-        const daemonToken = `${pairing.project_id}_${createRandomToken(32)}`;
+        const daemonToken = await deriveRuntimeDaemonToken(
+            pairingCode,
+            pairing.project_id,
+            pairing.pairing_id,
+            pairing.poll_token_hash,
+        );
         const daemonHash = await hashSecret(daemonToken);
         const now = Date.now();
         const claimed = await storage.runtimes.claim(
@@ -431,7 +436,14 @@ export class PairingDirectoryService implements PairingOperations {
             },
             signal,
         );
-        if (claimed) {
+        // Replays prove possession of the original code and must match the
+        // committed credential. Never rotate an older random credential, extend
+        // the pairing deadline, or resurrect a revoked Runtime.
+        if (
+            claimed ||
+            (pairing.expires_at > Date.now() &&
+                (await storage.runtimes.readDaemon(pairing.channel_id, daemonHash, signal)) !== null)
+        ) {
             return { appId, channelId: pairing.channel_id, daemonToken, runtimeId: pairing.runtime_id };
         }
         await storage.runtimes.recordAudit(
