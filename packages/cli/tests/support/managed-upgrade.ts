@@ -249,6 +249,7 @@ export function registerManagedUpgradeScenarios(
             const completed = new Set<string>();
             const nativeSessions = new Map<string, string>();
             const taskStatuses: string[] = [];
+            const toolSessions = new Set<string>();
             const failures: string[] = [];
             const progressed = Promise.withResolvers<void>();
             const failed = Promise.withResolvers<never>();
@@ -281,6 +282,9 @@ export function registerManagedUpgradeScenarios(
                     }
                     if (message.kind === "session.event.v2") {
                         for (const event of message.events) {
+                            if (event.type === "acp" && event.payload.sessionUpdate === "tool_call") {
+                                toolSessions.add(event.sessionId);
+                            }
                             if (
                                 event.type === "acp" &&
                                 (event.payload.sessionUpdate === "tool_call" ||
@@ -535,6 +539,7 @@ export function registerManagedUpgradeScenarios(
                         ),
                     ).toBe("completed");
                     expect(await readFile(join(control.stateDirectory, "worker.lock"), "utf8")).toBe(worker);
+                    expect(toolSessions).not.toContain(nativeSessions.get(concurrent));
                     releaseSecondAnswer.resolve();
                 }
                 releaseAnswer.resolve();
