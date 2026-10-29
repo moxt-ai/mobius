@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
-import { on } from "node:events";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { on, once } from "node:events";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -28,7 +28,32 @@ interface ProbeOptions {
 
 interface VersionWriter {
     readonly pid: number;
+    readonly closed: Promise<void>;
     readonly release: () => void;
+}
+
+async function expectWriterStopped(writer: VersionWriter): Promise<void> {
+    await writer.closed;
+    if (process.platform !== "linux") {
+        expect(() => process.kill(writer.pid, 0)).toThrow();
+        return;
+    }
+    // An orphan's PID may remain until the runner's init reaps it. A zombie
+    // cannot execute or retain the output pipe, even though kill(pid, 0) succeeds.
+    const stat = await readFile(`/proc/${writer.pid.toString()}/stat`, "utf8").catch((error: unknown) => {
+        if (error instanceof Error && Reflect.get(error, "code") === "ENOENT") {
+            return null;
+        }
+        throw error;
+    });
+    if (stat !== null) {
+        expect(["Z", "X"]).toContain(
+            stat
+                .slice(stat.lastIndexOf(")") + 1)
+                .trimStart()
+                .charAt(0),
+        );
+    }
 }
 
 async function createProbeEngine(options: ProbeOptions, signal: AbortSignal) {
@@ -41,7 +66,9 @@ async function createProbeEngine(options: ProbeOptions, signal: AbortSignal) {
     let releaseVersions = options.scenario !== "held" && options.scenario !== "nonzero-held";
     const control = createServer((request, response) => {
         const pid = Number(new URL(request.url ?? "", "http://localhost").searchParams.get("pid"));
-        const writer = { pid, release: () => response.writeHead(204).end() };
+        const closed = once(response, "close", { signal }).then(() => undefined);
+        void closed.catch(() => undefined);
+        const writer = { pid, closed, release: () => response.writeHead(204).end() };
         writerResponses.push(response);
         const waiting = writerWaiters.shift();
         if (waiting === undefined) {
@@ -415,8 +442,8 @@ test("Given a version launcher exited but a descendant holds its output open, Wh
         expect(report.entries).toContainEqual(
             expect.objectContaining({ event: "agent_discovery_result", agentId: "codex", code: "agent_probe_timeout" }),
         );
-        expect(() => process.kill(first.pid, 0)).toThrow();
-        expect(() => process.kill(second.pid, 0)).toThrow();
+        await expectWriterStopped(first);
+        await expectWriterStopped(second);
     } finally {
         await peer.close();
         vi.useRealTimers();
@@ -444,7 +471,7 @@ test("Given a version pipe times out once, When the retry drains normally, Then 
         expect(report.entries).toContainEqual(
             expect.objectContaining({ event: "agent_discovery_result", agentId: "codex", code: "ready" }),
         );
-        expect(() => process.kill(first.pid, 0)).toThrow();
+        await expectWriterStopped(first);
     } finally {
         await peer.close();
         vi.useRealTimers();
@@ -462,7 +489,7 @@ test("Given a version pipe remains open after its launcher exits, When the host 
         peer.shutdown.abort(reason);
         await expect(peer.execution).rejects.toBe(reason);
         expect(peer.catalogs).toEqual([]);
-        expect(() => process.kill(writer.pid, 0)).toThrow();
+        await expectWriterStopped(writer);
         const logs = await peer.localLogs();
         expect(JSON.parse(logs)).toMatchObject({
             entries: expect.arrayContaining([
