@@ -21,6 +21,7 @@ import { fakeProviderPrompts } from "../support/llm/scenarios.ts";
 test("Given a reused real Pi session, When local commands reply consecutively, Then each reply has a distinct identity without synthetic user chunks", async () => {
     await using provider = await FakeOpenAiProvider.start("gpt-4.1", "PI_LOCAL_COMMAND_REPLY");
     await using agent = await PiFixture.create(provider);
+    await agent.overrideSettings({ quietStartup: false });
     await withRealDaemon(new PiAgentSpecification(), agent.environment, async (peer) => {
         const replyIds = new Set<string>();
         for (const prompt of ["Begin", "/session", "/session", "/steering", "/steering", "/export", "/export"]) {
@@ -72,7 +73,13 @@ test("Given a reused real Pi session, When local commands reply consecutively, T
                     break;
                 }
             }
-            expect(messageIds.size).toBe(1);
+            // The seed prompt can also deliver the independently identified startup notice.
+            // Only the local commands under test must produce exactly one reply identity.
+            if (prompt === "Begin") {
+                expect(messageIds.size).toBeGreaterThan(0);
+            } else {
+                expect(messageIds.size).toBe(1);
+            }
             for (const id of messageIds) {
                 expect(id).toEqual(expect.any(String));
                 expect(replyIds.has(id)).toBe(false);
