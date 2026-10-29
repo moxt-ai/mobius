@@ -5,7 +5,6 @@ import {
     decodeKnownNativeSessionEvents,
     decodeKnownSessionEventLogPage,
     decodeKnownSessionLiveEventBatch,
-    decodeMobiusSessionExport,
     decodeNativeSessionResult,
     decodePromptAttachment,
     decodeRuntimeDiagnosticsResult,
@@ -23,7 +22,6 @@ import {
     type ExternalResourceContentBlock,
     isIdentifier,
     MOBIUS_API_PREFIX,
-    type MobiusSessionExport,
     type NativeEventPageRequest,
     type NativeSessionEvents,
     type NativeSessionRequest,
@@ -32,7 +30,6 @@ import {
     type RuntimeDiagnosticsResult,
     type SessionConfigureCommand,
     type SessionEventLogPage,
-    type SessionEventOmission,
     type SessionLiveEventBatch,
     SessionPromptDisposition,
     type WorkspaceEntriesEvent,
@@ -59,7 +56,6 @@ import {
     decodeMobiusRuntimeList,
     decodeMobiusRuntimePairing,
     decodeMobiusRuntimePairingStatus,
-    decodeMobiusSession,
     decodeMobiusTurn,
     decodeRuntimeDescriptor,
     type MobiusBrowserCredential,
@@ -77,9 +73,7 @@ import {
     type MobiusRuntimePairingRequest,
     type MobiusRuntimePairingStatus,
     type MobiusRuntimePairingWaitOptions,
-    type MobiusSession,
     MobiusSessionAccess,
-    type MobiusSessionImportBinding,
     type MobiusTurn,
     type SubmitMobiusTurnRequest,
 } from "./resources.ts";
@@ -880,7 +874,6 @@ export class MobiusRuntimeResources {
         directoryId: string,
         signal: AbortSignal,
     ): Promise<Pick<WorkspaceEntriesEvent, "directoryId" | "directoryLabel">> => {
-        // Older relays and daemons ignore the optional view and return a full listing.
         const listing = decodeWorkspaceEntriesEvent(
             JSON.stringify(
                 await this.#executor.post(
@@ -1268,38 +1261,6 @@ export class MobiusSessionResources {
                   );
         return decodeSessionRenamedEvent(JSON.stringify(result));
     };
-
-    readonly export = async (sessionId: string, signal: AbortSignal): Promise<MobiusSessionExport> =>
-        decodeMobiusSessionExport(
-            await this.#executor.get(sessionPath(this.#projectId, sessionId, "export-v2"), signal),
-        );
-
-    readonly import = async (
-        exported: MobiusSessionExport,
-        targetBinding: MobiusSessionImportBinding,
-        signal: AbortSignal,
-    ): Promise<MobiusSession> => {
-        const validated = decodeMobiusSessionExport(exported);
-        return decodeMobiusSession(
-            await this.#executor.post(
-                projectPath(this.#projectId, "session-imports-v2"),
-                { ...validated, targetBinding },
-                signal,
-            ),
-        );
-    };
-
-    readonly forkRecorded = async (
-        sessionId: string,
-        request: {
-            readonly throughEventId: string;
-            readonly targetBinding: MobiusSessionImportBinding;
-        },
-        signal: AbortSignal,
-    ): Promise<MobiusSession> =>
-        decodeMobiusSession(
-            await this.#executor.post(sessionPath(this.#projectId, sessionId, "forks-v2"), request, signal),
-        );
 
     readonly uploadContent = async (
         sessionId: string,
@@ -1798,9 +1759,6 @@ export class MobiusEventResources {
         sessionId: string,
         page: MobiusPageRequest,
         signal: AbortSignal,
-        options: {
-            /** @deprecated Reasoning is always included; retained for older callers. */ readonly omit?: readonly SessionEventOmission[];
-        } = {},
     ): Promise<SessionEventLogPage> => {
         const path = requestUrl(
             new URL("https://mobius.invalid/"),
@@ -1809,12 +1767,6 @@ export class MobiusEventResources {
         path.searchParams.set("limit", page.limit.toString());
         if (page.cursor.length > 0) {
             path.searchParams.set("cursor", page.cursor);
-        }
-        if (
-            options.omit !== undefined &&
-            (options.omit.length > 1 || options.omit.some((value) => value !== "agent-reasoning"))
-        ) {
-            throw new MobiusValidationError("The Session event omission is invalid");
         }
         return decodeKnownSessionEventLogPage(
             await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal),

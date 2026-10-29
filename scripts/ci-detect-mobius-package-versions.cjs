@@ -16,7 +16,6 @@ const packages = [
     {
         label: "SDK",
         manifest: "packages/mobius-sdk/package.json",
-        legacyManifest: "packages/web-sdk/package.json",
         name: "@moxt-ai/mobius-sdk",
         output: "sdk",
     },
@@ -55,14 +54,7 @@ for (const packageDefinition of packages) {
     const current = readCurrentVersion(packageDefinition);
     let previous = current;
     if (!manual) {
-        try {
-            previous = readPreviousVersion(packageDefinition.manifest, packageDefinition.name);
-        } catch (error) {
-            if (packageDefinition.legacyManifest === undefined) {
-                throw error;
-            }
-            previous = readPreviousVersion(packageDefinition.legacyManifest, packageDefinition.name);
-        }
+        previous = readPreviousVersion(packageDefinition.manifest, packageDefinition.name);
     }
     const changed = manual || previous !== current;
     console.log(

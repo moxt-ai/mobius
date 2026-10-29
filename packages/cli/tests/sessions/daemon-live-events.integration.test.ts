@@ -424,7 +424,6 @@ async function history(
     options: {
         readonly cursor?: string | null;
         readonly eventLimit?: number;
-        readonly omit?: readonly "agent-reasoning"[];
     } = {},
 ) {
     sendText(
@@ -435,7 +434,6 @@ async function history(
             sessionId: command.sessionId,
             cursor: options.cursor ?? null,
             eventLimit: options.eventLimit ?? 200,
-            ...(options.omit === undefined ? {} : { omit: options.omit }),
         }),
     );
     for (;;) {
@@ -979,7 +977,7 @@ describe("daemon V2 live delivery", () => {
         }
     });
 
-    it("Given reasoning exceeds a history page, When an older client requests agent-reasoning omission, Then it receives the same reasoning text and pagination as a current client", async () => {
+    it("Given reasoning exceeds a history page, When a client loads live history, Then it receives the reasoning text with pagination", async () => {
         const fixture = await startControlledDaemon();
         try {
             const command = prompt(fixture, "stream paged reasoning");
@@ -990,19 +988,17 @@ describe("daemon V2 live delivery", () => {
                     break;
                 }
             }
-            const complete = await history(fixture, command, { eventLimit: 200 });
-            const legacy = await history(fixture, command, { eventLimit: 200, omit: ["agent-reasoning"] });
-            const retainedReasoning = legacy.events.filter(
+            const page = await history(fixture, command, { eventLimit: 200 });
+            const reasoning = page.events.filter(
                 (event) => event.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk",
             );
 
-            expect(complete.throughPosition).toBeDefined();
-            expect(legacy).toEqual(complete);
-            expect(legacy.events).toHaveLength(200);
-            expect(retainedReasoning.length).toBeGreaterThan(0);
-            for (const event of retainedReasoning) {
+            expect(page.throughPosition).toBeDefined();
+            expect(page.events).toHaveLength(200);
+            expect(reasoning.length).toBeGreaterThan(0);
+            for (const event of reasoning) {
                 if (event.type !== "acp" || event.payload.sessionUpdate !== "agent_thought_chunk") {
-                    throw new Error("Expected retained reasoning");
+                    throw new Error("Expected reasoning");
                 }
                 expect(event.mobiusMetadata?.omitted).not.toBe(true);
                 expect(event.payload.content).toMatchObject({ type: "text", text: expect.stringContaining("chunk-") });

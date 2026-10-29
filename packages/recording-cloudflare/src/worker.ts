@@ -344,26 +344,6 @@ function recordingDirectoryRoutes(
 ): Hono<RecordingEnvironment> {
     return new Hono<RecordingEnvironment>()
         .onError((cause, context): Response => internalErrorResponse(cause, context.req.raw))
-        .post("/events", async (context): Promise<Response> => {
-            try {
-                const write = await decode(context.req.raw);
-                const before = metrics.snapshot();
-                directory.record(write);
-                const after = metrics.snapshot();
-                console.info(
-                    JSON.stringify({
-                        event: "recording_directory_write",
-                        events: write.envelope.events.length,
-                        sessions: new Set(write.envelope.events.map((event) => event.sessionId)).size,
-                        sqlReads: after.reads - before.reads,
-                        sqlWrites: after.writes - before.writes,
-                    }),
-                );
-                return context.body(null, 204);
-            } catch (cause) {
-                return envelopeError(cause);
-            }
-        })
         .post("/updates", async (context): Promise<Response> => {
             let write: ReturnType<typeof decodeKnownDirectoryUpdate>;
             try {
@@ -959,54 +939,6 @@ export function createRecordingWorker(): RecordingWorker {
                 { results: await recordSessionBatch(context.env, write, context.req.raw.signal, background) },
                 201,
             );
-        })
-        .post("/v1/session-events", async (context): Promise<Response> => {
-            let write: SessionRecordingWireWrite;
-            try {
-                write = requireSingleSession(await decode(context.req.raw));
-            } catch (cause) {
-                if (cause instanceof ProtocolMessageError) {
-                    return errorResponse("invalid_envelope", 400);
-                }
-                throw cause;
-            }
-            const { projectId, runtimeId } = write;
-            const [firstEvent] = write.envelope.events;
-            if (firstEvent === undefined) {
-                return errorResponse("invalid_envelope", 400);
-            }
-            const body = JSON.stringify(write);
-            const recorded = await durableObjectFetch(
-                context.env.SESSION_RECORDING,
-                JSON.stringify([projectId, firstEvent.sessionId]),
-                new Request("https://recording.internal/events", {
-                    method: "POST",
-                    body,
-                    signal: context.req.raw.signal,
-                }),
-            );
-            if (!recorded.ok) {
-                return recorded;
-            }
-            await recorded.body?.cancel();
-            const indexed = await durableObjectFetch(
-                context.env.RECORDING_DIRECTORY,
-                JSON.stringify([projectId, runtimeId]),
-                new Request("https://directory.internal/events", {
-                    method: "POST",
-                    body,
-                    signal: context.req.raw.signal,
-                }),
-            );
-            console.info(
-                JSON.stringify({
-                    event: "recording_ingest",
-                    events: write.envelope.events.length,
-                    sessionRequests: 1,
-                    directoryRequests: 1,
-                }),
-            );
-            return indexed.ok ? context.json({ recorded: true }, 201) : errorResponse("storage_unavailable", 503);
         })
         .get("/v1/projects/:projectId/runtimes/:runtimeId/sessions", (context) =>
             recordingSummaryResponse(context, 1, "directory"),

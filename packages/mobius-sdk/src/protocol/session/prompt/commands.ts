@@ -58,7 +58,7 @@ export interface SessionCancelCommand {
     readonly sessionId: string;
 }
 
-/** Fails closed on older Runtimes; it must never degrade into cancellation of running work. */
+/** Cancels only work that has not started; it must never degrade into cancellation of running work. */
 export interface SessionCancelBeforeStartCommand {
     readonly commandId: string;
     readonly kind: typeof SESSION_CANCEL_BEFORE_START_KIND;

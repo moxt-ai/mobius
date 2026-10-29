@@ -343,9 +343,6 @@ export function createPlatformApplication(
                 context.req.raw.signal,
             );
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
-            if (context.req.queries("omit") !== undefined) {
-                v.parse(v.pipe(v.array(v.literal("agent-reasoning")), v.maxLength(1)), context.req.queries("omit"));
-            }
             const eventLimit = v.parse(
                 v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(10_000)),
                 Number(context.req.query("eventLimit") ?? "50"),
@@ -839,9 +836,6 @@ export function createPlatformApplication(
                 context.req.raw.signal,
             );
             if (context.req.header("upgrade")?.toLowerCase() !== "websocket") {
-                if (context.req.queries("omit") !== undefined) {
-                    v.parse(v.pipe(v.array(v.literal("agent-reasoning")), v.maxLength(1)), context.req.queries("omit"));
-                }
                 const result = await sessionOperations(context).requestProjectScopeControl(
                     new ProjectScope(target.projectId),
                     target.runtimeId,

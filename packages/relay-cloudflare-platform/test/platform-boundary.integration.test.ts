@@ -1184,7 +1184,7 @@ describe.sequential("Platform Session-only boundary", () => {
             expect(JSON.parse(await v2Messages.next())).toEqual([futureEvent]);
             const historyResponse = worker.fetch(
                 new Request(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/events-v2?limit=50&omit=agent-reasoning`,
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/events-v2?limit=50`,
                     { headers: { authorization: `Bearer ${text(browserAccess, "credential")}` } },
                 ),
                 environment,
@@ -1193,7 +1193,6 @@ describe.sequential("Platform Session-only boundary", () => {
             if (historyLoad.kind !== "session.live-history.v2.page.load") {
                 throw new Error("Expected history loading without a preceding Session query");
             }
-            expect(historyLoad.omit).toBeUndefined();
 
             daemon.send(
                 encodeSessionStatusChangedEvent({
@@ -1253,7 +1252,7 @@ describe.sequential("Platform Session-only boundary", () => {
             daemon.send(historyPage);
             const previewHistoryResponse = worker.fetch(
                 new Request(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/native-events-preview?agentId=codex&directoryId=root&eventLimit=50&omit=agent-reasoning`,
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/native-events-preview?agentId=codex&directoryId=root&eventLimit=50`,
                     { headers: { authorization: `Bearer ${text(browserAccess, "credential")}` } },
                 ),
                 environment,
@@ -1262,7 +1261,6 @@ describe.sequential("Platform Session-only boundary", () => {
             if (previewHistoryLoad.kind !== "session.preview-history.page.load") {
                 throw new Error("Expected a native Session preview history request");
             }
-            expect(previewHistoryLoad.omit).toBeUndefined();
 
             const previewHistoryPage = encodeSessionPreviewHistoryPageLoaded({
                 events: {
@@ -2819,15 +2817,15 @@ describe.sequential("Platform Turn submission", () => {
         }
     });
 
-    // @no-uc: Compatibility; legacy omission options must not reach older Runtimes under App access.
+    // @no-uc: Technical regression; a read-only App credential must load a Runtime event page through its cursor.
     it("App access restores a Runtime event page with read permission", async () => {
         const runtime = await connectRuntimeDaemon("app-history");
         try {
             const readOnly = await runtime.issueAppCredential(["session:read"]);
-            const response = runtime.appSessionRequest(
-                "/events-v2?limit=2&cursor=previous-event&omit=agent-reasoning",
-                { method: "GET", credential: readOnly },
-            );
+            const response = runtime.appSessionRequest("/events-v2?limit=2&cursor=previous-event", {
+                method: "GET",
+                credential: readOnly,
+            });
             const first = await Promise.race([
                 runtime.daemonMessages.next().then((message) => ({ kind: "command", message })),
                 response.then((result) => ({ kind: "response", message: String(result.status) })),
@@ -2843,7 +2841,6 @@ describe.sequential("Platform Turn submission", () => {
             if (command.kind !== "session.live-history.v2.page.load") {
                 throw new Error("Expected a history request");
             }
-            expect(command.omit).toBeUndefined();
             const page = {
                 events: [],
                 nextCursor: "next-event",
@@ -2970,7 +2967,6 @@ describe.sequential("Platform Turn submission", () => {
         },
         { label: "empty event page", path: "/events-v2?limit=0", method: "GET" },
         { label: "empty event cursor", path: "/events-v2?cursor=", method: "GET" },
-        { label: "unknown event omission", path: "/events-v2?omit=unknown", method: "GET" },
         { label: "malformed Runtime target", path: "/events-v2", method: "GET", runtimeId: "invalid%24runtime" },
     ])("App access reports $label as an invalid request", async (operation) => {
         const runtime = await connectRuntimeDaemon("app-invalid-request");

@@ -30,7 +30,7 @@ const event = {
 };
 const { position: _historicalPosition, ...historicalEvent } = event;
 function write(runtimeId = "runtime-live", envelope: unknown = { kind: "session.event.v2", events: [event] }): Request {
-    return new Request("https://recording.internal/v1/session-events", {
+    return new Request("https://recording.internal/v1/session-event-batches", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ projectId, runtimeId, envelope }),
@@ -150,7 +150,11 @@ describe("Recording live V2 events", () => {
     });
     it("Given a recorded session belongs to a Runtime, When another Runtime submits an event for it, Then its history is protected", async () => {
         expect((await worker.fetch(write(), env)).status).toBe(201);
-        expect((await worker.fetch(write("runtime-other"), env)).status).toBe(409);
+        const rejected = await worker.fetch(write("runtime-other"), env);
+        expect(rejected.status).toBe(201);
+        expect(await rejected.json()).toEqual({
+            results: [{ sessionId: event.sessionId, kind: "failed", code: "write_failed" }],
+        });
     });
 });
 
@@ -854,7 +858,7 @@ describe("Recording incremental reads", () => {
         expect(afterRestart.generationReset).toBe(true);
     });
 
-    it("Given an event larger than a stored Recording batch holds, When it is recorded, Then it is rejected with a typed code and earlier history stays readable", async () => {
+    it("Given an event larger than a stored Recording batch holds, When it is recorded, Then its Session write fails and earlier history stays readable", async () => {
         expect(
             (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: numberedEvents(1, 1) }), env))
                 .status,
@@ -871,9 +875,9 @@ describe("Recording incremental reads", () => {
             env,
         );
 
-        expect(response.status).toBe(413);
+        expect(response.status).toBe(201);
         expect(await response.json()).toEqual({
-            error: { code: "recording_event_too_large", message: "The Recording request could not be completed" },
+            results: [{ sessionId: event.sessionId, kind: "failed", code: "write_failed" }],
         });
         const page = decodeSessionRecordingHistoryPage(
             await (await worker.fetch(read("?after=0&limit=10"), env)).text(),

@@ -168,10 +168,6 @@ export function createProjectRuntimeSessionControlRoutes() {
         .get("/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/events-v2", async (context) => {
             const sessionId = validateIdentifier(context.req.param("sessionId"), "session_id");
             const cursor = context.req.query("cursor");
-            const omit = context.req.queries("omit");
-            if (omit !== undefined) {
-                validated(v.pipe(v.array(v.literal("agent-reasoning")), v.maxLength(1)), omit);
-            }
             const result = await requestControl(
                 context,
                 decodeSessionHistoryPageLoad(

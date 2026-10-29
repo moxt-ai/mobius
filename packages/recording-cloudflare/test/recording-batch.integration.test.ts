@@ -44,14 +44,9 @@ function completed(sessionId: string, position: number): SessionLiveEvent {
     };
 }
 
-async function write(
-    projectId: string,
-    runtimeId: string,
-    events: readonly SessionLiveEvent[],
-    path = "session-event-batches",
-) {
+async function write(projectId: string, runtimeId: string, events: readonly SessionLiveEvent[]) {
     return await worker.fetch(
-        new Request(`https://recording.test/v1/${path}`, {
+        new Request("https://recording.test/v1/session-event-batches", {
             method: "POST",
             body: encodeSessionRecordingWrite({ projectId, runtimeId, envelope: { kind: "session.event.v2", events } }),
         }),
@@ -142,9 +137,7 @@ describe("Recording multi-Session batches", () => {
     });
 
     it("Given an identity conflict in one Session, When a mixed batch arrives, Then the healthy Session records and the conflicting history stays unchanged", async () => {
-        expect(
-            (await write("partial-project", "old-runtime", [requested("owned-session")], "session-events")).status,
-        ).toBe(201);
+        expect((await write("partial-project", "old-runtime", [requested("owned-session")])).status).toBe(201);
         const response = await write("partial-project", "new-runtime", [
             requested("owned-session", 2),
             requested("healthy-session"),
@@ -301,38 +294,35 @@ describe("Recording multi-Session batches", () => {
     });
 });
 
-it.each(["session-events", "session-event-batches"])(
-    "Given long primary and additional directory references, When %s records a turn, Then the directory and history retain the complete references",
-    async (endpoint) => {
-        const id = `long-${endpoint}`;
-        const bytes = new TextEncoder().encode(`/project/${"\u00e9/".repeat(700)}`);
-        const directoryId = `path-${btoa(String.fromCharCode(...bytes))
-            .replaceAll("+", "-")
-            .replaceAll("/", "_")
-            .replace(/=+$/u, "")}`;
-        const additionalDirectoryIds = [`${directoryId}YQ`];
-        expect(directoryId.length).toBeGreaterThan(2048);
-        const longContext = { agentId: "codex", directoryId, additionalDirectoryIds };
-        const event: SessionLiveEvent = {
-            ...requested(id),
-            type: "lifecycle-metadata",
-            payload: {
-                kind: "prompt.requested",
-                commandId: `${id}-turn`,
-                content: [{ type: "text", text: "Long workspace recording" }],
-                context: longContext,
-            },
-        };
-        const response = await write(id, "long-runtime", [event, completed(id, 2)], endpoint);
-        expect(response.status).toBe(201);
-        expect(await directory(id, "long-runtime")).toMatchObject({
-            sessions: [{ ...longContext, sessionId: id, status: "idle", title: "Long workspace recording" }],
-        });
-        const history = await worker.fetch(
-            new Request(`https://recording.test/v1/projects/${id}/runtimes/long-runtime/sessions/${id}/events`),
-            env,
-        );
-        expect(history.status).toBe(200);
-        expect(await history.json()).toMatchObject({ events: [event, completed(id, 2)] });
-    },
-);
+it("Given long primary and additional directory references, When a turn is recorded, Then the directory and history retain the complete references", async () => {
+    const id = "long-session";
+    const bytes = new TextEncoder().encode(`/project/${"\u00e9/".repeat(700)}`);
+    const directoryId = `path-${btoa(String.fromCharCode(...bytes))
+        .replaceAll("+", "-")
+        .replaceAll("/", "_")
+        .replace(/=+$/u, "")}`;
+    const additionalDirectoryIds = [`${directoryId}YQ`];
+    expect(directoryId.length).toBeGreaterThan(2048);
+    const longContext = { agentId: "codex", directoryId, additionalDirectoryIds };
+    const event: SessionLiveEvent = {
+        ...requested(id),
+        type: "lifecycle-metadata",
+        payload: {
+            kind: "prompt.requested",
+            commandId: `${id}-turn`,
+            content: [{ type: "text", text: "Long workspace recording" }],
+            context: longContext,
+        },
+    };
+    const response = await write(id, "long-runtime", [event, completed(id, 2)]);
+    expect(response.status).toBe(201);
+    expect(await directory(id, "long-runtime")).toMatchObject({
+        sessions: [{ ...longContext, sessionId: id, status: "idle", title: "Long workspace recording" }],
+    });
+    const history = await worker.fetch(
+        new Request(`https://recording.test/v1/projects/${id}/runtimes/long-runtime/sessions/${id}/events`),
+        env,
+    );
+    expect(history.status).toBe(200);
+    expect(await history.json()).toMatchObject({ events: [event, completed(id, 2)] });
+});

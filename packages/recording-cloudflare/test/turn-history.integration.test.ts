@@ -78,9 +78,9 @@ const permissionResolved = (interactionId: string) =>
         kind: "session.permission.resolved",
     });
 
-async function record(events: readonly unknown[], endpoint = "session-events"): Promise<void> {
+async function record(events: readonly unknown[]): Promise<void> {
     const response = await worker.fetch(
-        new Request(`https://recording.internal/v1/${endpoint}`, {
+        new Request("https://recording.internal/v1/session-event-batches", {
             body: JSON.stringify({ envelope: { events, kind: "session.event.v2" }, projectId, runtimeId }),
             headers: { "content-type": "application/json" },
             method: "POST",
@@ -88,6 +88,7 @@ async function record(events: readonly unknown[], endpoint = "session-events"): 
         env,
     );
     expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({ results: [{ sessionId, kind: "recorded" }] });
 }
 
 async function completedTurn(commandId: string, prompt: string, reply: string): Promise<void> {
@@ -125,53 +126,46 @@ function promptText(page: SessionRecordingTurnPage): readonly string[] {
 }
 
 describe("Recording Turn history", () => {
-    it.each(["session-events", "session-event-batches"])(
-        "Given duplicate event frames through %s, When Turns are updated and rebuilt, Then each logical event contributes once while raw frames remain intact",
-        async (endpoint) => {
-            const begin = [requested("command-1", "Say hello"), started("command-1")];
-            const output = answer("Hello");
-            await record([...begin, output, output], endpoint);
-            await record([output], endpoint);
-            expect((await turnPage()).turns[0]).toMatchObject({
-                answerLength: 5,
-                items: [{ kind: "answer", text: "Hello" }],
-            });
+    it("Given duplicate event frames, When Turns are updated and rebuilt, Then each logical event contributes once while raw frames remain intact", async () => {
+        const begin = [requested("command-1", "Say hello"), started("command-1")];
+        const output = answer("Hello");
+        await record([...begin, output, output]);
+        await record([output]);
+        expect((await turnPage()).turns[0]).toMatchObject({
+            answerLength: 5,
+            items: [{ kind: "answer", text: "Hello" }],
+        });
 
-            const rest = [answer("Hello"), completed("command-1")];
-            await record(rest, endpoint);
-            await record([output], endpoint);
-            const projected = await turnPage();
-            expect(projected.turns[0]).toMatchObject({
-                answerLength: 10,
-                attempt: { kind: "succeeded" },
-                items: [{ kind: "answer", text: "HelloHello" }],
-            });
-            const frames = [...begin, output, output, output, ...rest, output];
-            const raw = await worker.fetch(new Request(sessionPath("events")), env);
-            expect(await raw.json()).toMatchObject({ events: frames });
+        const rest = [answer("Hello"), completed("command-1")];
+        await record(rest);
+        await record([output]);
+        const projected = await turnPage();
+        expect(projected.turns[0]).toMatchObject({
+            answerLength: 10,
+            attempt: { kind: "succeeded" },
+            items: [{ kind: "answer", text: "HelloHello" }],
+        });
+        const frames = [...begin, output, output, output, ...rest, output];
+        const raw = await worker.fetch(new Request(sessionPath("events")), env);
+        expect(await raw.json()).toMatchObject({ events: frames });
 
-            const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]));
-            await runInDurableObject(stub, (_instance, state) => {
-                // A deployed projection predates duplicate suppression and may already contain repeated text.
-                state.storage.sql.exec(
-                    "UPDATE recording_projection SET state_json = json_remove(state_json, '$.version')",
-                );
-                state.storage.sql.exec("UPDATE recorded_turn_items SET text = text || 'Hello'");
-                state.storage.sql.exec(
-                    "UPDATE recorded_turns SET turn_json = json_set(turn_json, '$.answerLength', 15)",
-                );
-            });
-            const building = await worker.fetch(new Request(sessionPath("turns")), env);
-            expect(building.status).toBe(503);
-            expect(await building.json()).toMatchObject({ error: { code: "projection_building" } });
-            while (await runDurableObjectAlarm(stub)) {
-                // Rebuild through the same bounded production path as an existing Recording.
-            }
-            expect(await turnPage()).toEqual(projected);
-            const rebuiltRaw = await worker.fetch(new Request(sessionPath("events")), env);
-            expect(await rebuiltRaw.json()).toMatchObject({ events: frames });
-        },
-    );
+        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]));
+        await runInDurableObject(stub, (_instance, state) => {
+            // A deployed projection predates duplicate suppression and may already contain repeated text.
+            state.storage.sql.exec("UPDATE recording_projection SET state_json = json_remove(state_json, '$.version')");
+            state.storage.sql.exec("UPDATE recorded_turn_items SET text = text || 'Hello'");
+            state.storage.sql.exec("UPDATE recorded_turns SET turn_json = json_set(turn_json, '$.answerLength', 15)");
+        });
+        const building = await worker.fetch(new Request(sessionPath("turns")), env);
+        expect(building.status).toBe(503);
+        expect(await building.json()).toMatchObject({ error: { code: "projection_building" } });
+        while (await runDurableObjectAlarm(stub)) {
+            // Rebuild through the same bounded production path as an existing Recording.
+        }
+        expect(await turnPage()).toEqual(projected);
+        const rebuiltRaw = await worker.fetch(new Request(sessionPath("events")), env);
+        expect(await rebuiltRaw.json()).toMatchObject({ events: frames });
+    });
     it("Given terminal events without message identities, When Recording persists and reads them, Then their outcomes round-trip unchanged", async () => {
         const events = [
             lifecycle({

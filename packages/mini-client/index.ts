@@ -13,7 +13,6 @@ import {
     type SessionCommand,
     type SessionConfigOption,
     type SessionConfigurationSelection,
-    type SessionEvent,
     type SessionLiveEvent,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
@@ -23,7 +22,6 @@ import {
     MobiusPageRequest,
     MobiusRuntimePairingRequest,
     type MobiusSessionEventObserver,
-    MobiusSessionImportBinding,
     StaticMobiusCredentialProvider,
     WsTransport,
 } from "@moxt-ai/mobius-sdk/server";
@@ -329,74 +327,6 @@ async function runtimeCommand(directory: string): Promise<void> {
     const service = connection.service;
     try {
         output({ runtimes: await service.runtimes.list(operationSignal()) });
-    } finally {
-        connection.close();
-    }
-}
-
-async function allEvents(service: MobiusClient, sessionId: string): Promise<readonly SessionEvent[]> {
-    let cursor = "";
-    let events: readonly SessionEvent[] = [];
-    do {
-        const page = await service.events.list(sessionId, new MobiusPageRequest(100, cursor), operationSignal());
-        events = [...page.events, ...events];
-        cursor = page.nextCursor ?? "";
-    } while (cursor.length > 0);
-    return events;
-}
-
-function copiedSessionBinding(state: MiniClientState, source: MiniClientSession): MobiusSessionImportBinding {
-    return new MobiusSessionImportBinding(identifier("binding"), state.runtimeId, source.agentId, source.directoryId);
-}
-
-async function copyEventLogCommand(
-    directory: string,
-    flags: ReadonlyMap<string, string>,
-    operation: "import" | "fork",
-): Promise<void> {
-    const state = await readState(directory);
-    requireOnline(state);
-    const source = sessionFromState(state, requireFlag(flags, "session"));
-    const connection = client(state);
-    try {
-        const service = connection.service;
-        const sourceEvents = await allEvents(service, source.sessionId);
-        const throughEventId =
-            operation === "fork" ? requireFlag(flags, "through-event") : sourceEvents.at(-1)?.eventId;
-        if (throughEventId === undefined) {
-            throw new MiniClientError("event_log_empty", "The source V2 Session event log is empty");
-        }
-        const target =
-            operation === "import"
-                ? await service.sessions.import(
-                      await service.sessions.export(source.sessionId, operationSignal()),
-                      copiedSessionBinding(state, source),
-                      operationSignal(),
-                  )
-                : await service.sessions.forkRecorded(
-                      source.sessionId,
-                      { targetBinding: copiedSessionBinding(state, source), throughEventId },
-                      operationSignal(),
-                  );
-        const boundary = sourceEvents.findIndex((event) => event.eventId === throughEventId);
-        if (boundary === -1) {
-            throw new MiniClientError("event_not_found", "The selected V2 fork boundary is unavailable");
-        }
-        const expected = operation === "import" ? sourceEvents : sourceEvents.slice(0, boundary + 1);
-        const copied = await allEvents(service, target.sessionId);
-        const matches =
-            copied.length === expected.length &&
-            copied.every(
-                (event, index) =>
-                    JSON.stringify(event.payload) === JSON.stringify(expected[index]?.payload) &&
-                    event.sessionId === target.sessionId &&
-                    event.eventId !== expected[index]?.eventId,
-            );
-        if (!matches) {
-            throw new MiniClientError("event_log_mismatch", "The copied V2 event log does not match its source");
-        }
-        await writeState(directory, replaceSession(state, { ...source, sessionId: target.sessionId, turns: [] }));
-        output({ count: copied.length, operation, sessionId: target.sessionId, verified: true });
     } finally {
         connection.close();
     }
@@ -802,10 +732,8 @@ type MiniClientCommand =
     | "create-session"
     | "get"
     | "get-agent-configuration"
-    | "import-event-log"
     | "list-runtimes"
     | "list-sessions"
-    | "fork-event-log"
     | "send-prompt"
     | "start"
     | "status"
@@ -881,12 +809,6 @@ async function runCommand(program: Command, command: Command, name: MiniClientCo
         case "get":
             await getCommand(directory, flags);
             break;
-        case "import-event-log":
-            await copyEventLogCommand(directory, flags, "import");
-            break;
-        case "fork-event-log":
-            await copyEventLogCommand(directory, flags, "fork");
-            break;
     }
 }
 
@@ -939,13 +861,6 @@ function createProgram(): Command {
     add("get", "get raw V2 Session events and optionally follow updates")
         .option("--session <id>", "Session identifier")
         .option("--follow", "follow Session updates");
-    add("import-event-log", "import and verify a V2 Session event log").option(
-        "--session <id>",
-        "source Session identifier",
-    );
-    add("fork-event-log", "fork and verify a V2 Session event-log prefix")
-        .option("--session <id>", "source Session identifier")
-        .option("--through-event <id>", "inclusive source event identifier");
     return program;
 }
 
