@@ -61,6 +61,49 @@ test("Given scoped environments, When Sessions run concurrently and restore, The
     }
 });
 
+// @no-uc: Compatibility; native readers must not inherit a previously resolved execution environment.
+test("Given an execution Session has scoped environment, When other conversations browse and find native history, Then query children stay unscoped", async ({
+    signal,
+}) => {
+    const peer = await runtimePeer(signal);
+    try {
+        peer.send(
+            encodeSessionPrepareCommand({ ...peer.base("seed"), kind: "session.prepare", requestId: "prepare-seed" }),
+        );
+        await peer.next("prepare-seed", ["session.ready"]);
+        await peer.prompt("seed", "seed-history");
+        peer.send(
+            encodeNativeSessionCommand({
+                ...peer.base("first-browser"),
+                kind: NATIVE_SESSION_REQUEST_KIND,
+                requestId: "list-unscoped",
+                action: "list",
+                cursor: null,
+            }),
+        );
+        const listed = decodeNativeSessionResult(await peer.next("list-unscoped", ["native.session.result"]));
+        if (listed.action !== "list" || listed.entries[0] === undefined) {
+            throw new Error("Expected the seeded native conversation");
+        }
+        peer.send(
+            encodeNativeSessionCommand({
+                ...peer.base("second-browser"),
+                kind: NATIVE_SESSION_REQUEST_KIND,
+                requestId: "find-unscoped",
+                action: "find",
+                nativeSessionId: listed.entries[0].nativeSessionId,
+            }),
+        );
+        expect(decodeNativeSessionResult(await peer.next("find-unscoped", ["native.session.result"]))).toMatchObject({
+            action: "find",
+            entry: { nativeSessionId: listed.entries[0].nativeSessionId },
+        });
+        expect(await peer.launches()).toEqual([{ context: "seed" }, { context: null }]);
+    } finally {
+        await peer.close();
+    }
+});
+
 // @no-uc: Technical regression; native discovery, new destinations and canonical reimports must not share identity.
 test("Given native history, When it is imported, reopened and forked, Then execution uses the destination or canonical Session", async ({
     signal,

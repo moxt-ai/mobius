@@ -8,8 +8,8 @@ import { MemorySessionEventStore } from "../../src/engine/session/history/sessio
 import { fixture } from "./native-session-fixture.ts";
 
 /** A direct-read adapter with canned history, standing in for the Codex app-server. */
-const cannedHistoryAdapter: AdapterResolver = (_agent, dependencies) => {
-    const acp = new ClaudeAdapter(dependencies);
+const cannedHistoryAdapter: AdapterResolver = (agent, dependencies) => {
+    const acp = new ClaudeAdapter(agent, dependencies);
     const events = new MemorySessionEventStore();
     return {
         getCapabilities: acp.getCapabilities,
@@ -26,7 +26,7 @@ const cannedHistoryAdapter: AdapterResolver = (_agent, dependencies) => {
             await acp.close();
             events.close();
         },
-        readSessionHistory: async (_query, request) => {
+        readSessionHistory: async (_cwd, _additionalDirectories, request) => {
             events.materialize(request.sessionId, request.nativeSessionId, [
                 {
                     type: "acp",

@@ -1,8 +1,8 @@
 import { methods } from "@agentclientprotocol/sdk";
 import type { SessionCapabilities, SessionConfigOption } from "@moxt-ai/mobius-sdk/protocol";
-import { arraysEqual } from "../../util/value-utils.ts";
 import { AcpExecutionError } from "../acp-error.ts";
-import type { NativeSessionQuery, SessionEventPage, SessionEventStore } from "../native-history/preview-contract.ts";
+import type { AcpAgentDefinition } from "../agent/agent-definition.ts";
+import type { SessionEventPage, SessionEventStore } from "../native-history/preview-contract.ts";
 import { type NativeSessionPage, nativeSessionPageSchema } from "../protocol/native-session.ts";
 import { unsupportedSessionCapabilities } from "../protocol/session-capabilities.ts";
 import {
@@ -14,22 +14,30 @@ import type { AcpSessionConnector, AdapterSessionConnection } from "./session-ev
 
 /** Adapter-owned ACP reader. It has neither a live observer nor interactive-session state. */
 export class AcpQuerySession {
-    readonly #options: NativeSessionQuery;
+    readonly #cwd: string;
+    readonly #sessionId: string;
     readonly #events: SessionEventStore;
     readonly #connection: AdapterSessionConnection;
     #capabilities: SessionCapabilities = unsupportedSessionCapabilities();
     #configOptions: readonly SessionConfigOption[] = [];
 
-    private constructor(options: NativeSessionQuery, events: SessionEventStore, connector: AcpSessionConnector) {
-        this.#options = options;
+    private constructor(
+        agent: AcpAgentDefinition,
+        cwd: string,
+        sessionId: string,
+        events: SessionEventStore,
+        connector: AcpSessionConnector,
+    ) {
+        this.#cwd = cwd;
+        this.#sessionId = sessionId;
         this.#events = events;
         this.#connection = connector.connectQuerySession({
-            agent: options.agent,
-            cwd: options.cwd,
-            sessionId: () => options.sessionId,
+            agent,
+            cwd,
+            sessionId: () => sessionId,
             configOptions: () => this.#configOptions,
             onEvent: async (event) => {
-                this.#events.append(options.sessionId, { type: "acp", payload: event.payload });
+                this.#events.append(sessionId, { type: "acp", payload: event.payload });
                 if (event.kind === "configuration") {
                     this.#configOptions = event.configOptions;
                 }
@@ -38,27 +46,30 @@ export class AcpQuerySession {
     }
 
     static readonly start = async (
-        options: NativeSessionQuery,
+        agent: AcpAgentDefinition,
+        cwd: string,
+        sessionId: string,
         events: SessionEventStore,
         connector: AcpSessionConnector,
+        signal: AbortSignal,
     ): Promise<AcpQuerySession> => {
         for (let attempt = 1; attempt <= 2; attempt += 1) {
-            await validateAgentRuntime(options.agent, options.signal);
-            const runtime = new AcpQuerySession(options, events, connector);
+            await validateAgentRuntime(agent, signal);
+            const runtime = new AcpQuerySession(agent, cwd, sessionId, events, connector);
             try {
                 const initialized = await initializeAgentConnection(
                     runtime.#connection,
-                    options.agent.id,
-                    options.agent.agentVersion,
-                    options.signal,
+                    agent.id,
+                    agent.agentVersion,
+                    signal,
                 );
                 runtime.#capabilities = initialized.capabilities;
                 return runtime;
             } catch (error) {
                 await runtime.closeProcess();
-                options.signal.throwIfAborted();
+                signal.throwIfAborted();
                 if (error instanceof RetryableAcpInitializationError && attempt === 1) {
-                    console.warn(`[${options.agent.id}-acp] ACP agent initialization failed; retrying once`);
+                    console.warn(`[${agent.id}-acp] ACP agent initialization failed; retrying once`);
                     continue;
                 }
                 if (error instanceof AcpExecutionError) {
@@ -71,11 +82,6 @@ export class AcpQuerySession {
     };
 
     readonly capabilities = (): SessionCapabilities => this.#capabilities;
-    readonly belongsTo = (agentId: string, cwd: string, directories: readonly string[]): boolean =>
-        this.#options.agent.id === agentId &&
-        this.#options.cwd === cwd &&
-        arraysEqual(this.#options.additionalDirectories, directories);
-
     readonly listNativeSessions = async (cursor: string | null, signal: AbortSignal): Promise<NativeSessionPage> => {
         if (!this.#capabilities.listSessions) {
             throw new AcpExecutionError(
@@ -105,6 +111,7 @@ export class AcpQuerySession {
     readonly previewEvents = async (
         nativeSessionId: string,
         eventLimit: number,
+        additionalDirectories: readonly string[],
         signal: AbortSignal,
     ): Promise<SessionEventPage> => {
         if (!this.#capabilities.loadSession) {
@@ -114,14 +121,14 @@ export class AcpQuerySession {
                 "native_history_unsupported",
             );
         }
-        this.#events.reset(this.#options.sessionId);
+        this.#events.reset(this.#sessionId);
         this.#connection.events.select(nativeSessionId);
         await this.#connection.race(
             this.#connection.connection.agent.request(
                 methods.agent.session.load,
                 {
-                    additionalDirectories: [...this.#options.additionalDirectories],
-                    cwd: this.#options.cwd,
+                    additionalDirectories: [...additionalDirectories],
+                    cwd: this.#cwd,
                     mcpServers: [],
                     sessionId: nativeSessionId,
                 },
@@ -132,8 +139,9 @@ export class AcpQuerySession {
         );
         await this.#connection.events.drained();
         signal.throwIfAborted();
-        return this.#events.page(this.#options.sessionId, eventLimit, null);
+        return this.#events.page(this.#sessionId, eventLimit, null);
     };
 
     readonly closeProcess = async (): Promise<void> => await this.#connection.closeProcess();
+    readonly discardEvents = (): void => this.#events.remove(this.#sessionId);
 }

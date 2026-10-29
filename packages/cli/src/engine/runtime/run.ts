@@ -116,7 +116,7 @@ export async function runRuntime(
             environment === undefined
                 ? catalogAgent
                 : catalogAgent.withEnvironment({ ...catalogAgent.environment, ...environment });
-        return { agent, adapter: adapters.resolve(agent) };
+        return { agent, adapter: adapters.resolve(catalogAgent) };
     };
     const layer = buildSessionLayer({
         processes,
