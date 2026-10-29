@@ -5233,6 +5233,52 @@ export class ClaudeAcpAgent {
 
         const seenTools = new Set<string>();
         for (const message of messages) {
+            signal.throwIfAborted();
+            if (message.nativeCompaction !== undefined) {
+                const compaction = message.nativeCompaction;
+                if (compaction.kind === "boundary") {
+                    await this.client.sessionUpdate({
+                        sessionId,
+                        update: {
+                            sessionUpdate: "compaction_update",
+                            compactionId: compaction.id,
+                            status: "completed",
+                        },
+                    });
+                } else {
+                    const body = message.message;
+                    const content =
+                        typeof body === "object" && body !== null && "content" in body ? body.content : undefined;
+                    const text =
+                        typeof content === "string"
+                            ? content
+                            : Array.isArray(content)
+                              ? content
+                                    .flatMap((block: unknown) =>
+                                        typeof block === "object" &&
+                                        block !== null &&
+                                        "type" in block &&
+                                        block.type === "text" &&
+                                        "text" in block &&
+                                        typeof block.text === "string"
+                                            ? [block.text]
+                                            : [],
+                                    )
+                                    .join("\n")
+                              : "";
+                    if (text.length > 0) {
+                        await this.client.sessionUpdate({
+                            sessionId,
+                            update: {
+                                sessionUpdate: "compaction_summary_chunk",
+                                compactionId: compaction.id,
+                                content: { type: "text", text },
+                            },
+                        });
+                    }
+                }
+                continue;
+            }
             if (isTaskNotificationOrigin(message.nativeOrigin)) {
                 const body = message.message;
                 const content =
