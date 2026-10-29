@@ -124,6 +124,16 @@ export interface AdapterSessionOperation extends AdapterSessionTarget {
     readonly signal: AbortSignal;
 }
 
+/**
+ * A native history entry that changes whenever another native client, such as the Agent's
+ * own terminal, appends to the conversation. An Agent process continues from the copy it
+ * loaded, so callers compare it with the value recorded after their own writes settle; those
+ * writes may also change it. An Agent whose native runtime refuses a second writer is untracked.
+ */
+export type NativeHistoryRevision =
+    | { readonly kind: "untracked" }
+    | { readonly kind: "tracked"; readonly latestEntryId: string };
+
 /** Business-facing session operations. Transport and initialization belong to the adapter. */
 export interface Adapter {
     readonly refreshAgent: (agent: AcpAgentDefinition) => void;
@@ -135,6 +145,7 @@ export interface Adapter {
     readonly closeSession: (params: AdapterSessionOperation) => Promise<void>;
     /** Release a retained execution without changing the native conversation. */
     readonly releaseSession: (params: AdapterSessionOperation) => Promise<void>;
+    readonly readNativeHistoryRevision: (params: AdapterSessionOperation) => Promise<NativeHistoryRevision>;
     readonly prompt: (
         params: AdapterSessionOperation & { readonly content: PromptContent },
     ) => Promise<AdapterPromptResult>;

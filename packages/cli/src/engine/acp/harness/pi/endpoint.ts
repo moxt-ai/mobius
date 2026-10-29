@@ -98,6 +98,11 @@ export class PiAcpEndpoint implements InProcessAcpEndpoint {
                 }
             })
             .onRequest(
+                "_session/revision",
+                (params: unknown) => params,
+                async (context) => await piAgentOrThrow(piAgent).readSessionRevision(context.params),
+            )
+            .onRequest(
                 "_session/steering",
                 (params: unknown) => params,
                 async (context) => await piAgentOrThrow(piAgent).steer(context.params, context.signal),

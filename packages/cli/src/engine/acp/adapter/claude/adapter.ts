@@ -94,6 +94,8 @@ export class ClaudeAdapter implements Adapter {
     readonly cancel: Adapter["cancel"] = (...args) => this.#executionConnections.cancel(...args);
     readonly closeSession: Adapter["closeSession"] = (...args) => this.#executionConnections.closeSession(...args);
     readonly releaseSession: Adapter["releaseSession"] = (params) => this.#executionConnections.releaseSession(params);
+    readonly readNativeHistoryRevision: Adapter["readNativeHistoryRevision"] = (params) =>
+        this.#executionConnections.readNativeHistoryRevision(params);
     readonly prompt: Adapter["prompt"] = (...args) => this.#executionConnections.prompt(...args);
     readonly steer: Adapter["steer"] = (...args) => this.#executionConnections.steer(...args);
     readonly renameSession: Adapter["renameSession"] = (...args) => this.#executionConnections.renameSession(...args);

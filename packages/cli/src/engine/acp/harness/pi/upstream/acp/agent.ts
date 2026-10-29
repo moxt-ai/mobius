@@ -38,7 +38,7 @@ import { maybeAuthRequiredError } from "./auth-required.js";
 import type { PiAcpClient } from "./client.js";
 import { getPiAcpSessionMapPath } from "./paths.js";
 import { toAvailableCommandsFromPiGetCommands } from "./pi-commands.js";
-import { readPiHistory } from "./pi-history.js";
+import { readPiHistory, readPiLatestEntryId } from "./pi-history.js";
 import { findPiSession, listPiSessions } from "./pi-sessions.js";
 import { getAgentDir, getEnableSkillCommands, getQuietStartup } from "./pi-settings.js";
 import { type PiAcpSession, SessionManager } from "./session.js";
@@ -74,6 +74,7 @@ const contentBlockSchema: z.ZodType<ContentBlock> = z.discriminatedUnion("type",
     }),
 ]);
 
+const revisionRequestSchema = z.object({ sessionId: z.string().min(1) });
 const steerRequestSchema = z.object({
     _meta: z
         .object({
@@ -1044,6 +1045,18 @@ export class PiAcpAgent {
             result === "error" ? (session.wasCancelRequested() ? "cancelled" : "end_turn") : result;
 
         return { stopReason };
+    }
+
+    async readSessionRevision(params: unknown): Promise<{ readonly latestEntryId: string }> {
+        const parsed = revisionRequestSchema.safeParse(params);
+        if (!parsed.success) {
+            throw RequestError.invalidParams("Invalid revision request");
+        }
+        const stored = this.findStoredSession(parsed.data.sessionId);
+        if (!stored) {
+            throw RequestError.invalidParams(`Unknown sessionId: ${parsed.data.sessionId}`);
+        }
+        return { latestEntryId: await readPiLatestEntryId(stored.sessionFile) };
     }
 
     async steer(

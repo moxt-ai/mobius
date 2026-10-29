@@ -1,5 +1,5 @@
 import { isAbsolute, resolve } from "node:path";
-import { methods } from "@agentclientprotocol/sdk";
+import { methods, RequestError } from "@agentclientprotocol/sdk";
 import { decodeAgentPromptResponse, type SessionConfigOption } from "@moxt-ai/mobius-sdk/protocol";
 import { z } from "zod";
 import { arraysEqual, isRecord, truncate } from "../../util/value-utils.ts";
@@ -24,6 +24,8 @@ export interface AcpExecutionConnection {
 }
 
 const absolutePathSchema = z.string().min(1).refine(isAbsolute);
+const nativeHistoryRevisionSchema = z.object({ latestEntryId: z.string().max(256) });
+const isMethodNotFound = (cause: unknown): boolean => cause instanceof RequestError && cause.code === -32_601;
 const targetSchema = z.object({
     nativeSessionId: nativeSessionIdSchema,
     cwd: absolutePathSchema,
@@ -326,6 +328,40 @@ export class AcpExecutionConnections {
             );
         }
         return { nativeRenameApplied: true };
+    };
+
+    /** Asks the harness that owns the native history for its latest conversation entry. */
+    readonly readNativeHistoryRevision: Adapter["readNativeHistoryRevision"] = async ({ signal, ...target }) => {
+        signal.throwIfAborted();
+        const { connection } = this.#resolve(target);
+        let response: unknown;
+        try {
+            response = await connection.race(
+                connection.connection.agent.request(
+                    "_session/revision",
+                    { sessionId: target.nativeSessionId },
+                    { cancellationSignal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]) },
+                ),
+                "ACP agent exited while reading native history",
+                signal,
+            );
+        } catch (error) {
+            signal.throwIfAborted();
+            // A harness without the extension keeps the behavior that predates revision tracking.
+            if (error instanceof AcpExecutionError && isMethodNotFound(error.cause)) {
+                return { kind: "untracked" };
+            }
+            throw error;
+        }
+        const decoded = nativeHistoryRevisionSchema.safeParse(response);
+        if (!decoded.success) {
+            throw new AcpExecutionError(
+                "ACP agent returned an invalid native history revision",
+                { cause: decoded.error },
+                "invalid_native_session_response",
+            );
+        }
+        return { kind: "tracked", latestEntryId: decoded.data.latestEntryId };
     };
 
     readonly configureSession: Adapter["configureSession"] = async ({
