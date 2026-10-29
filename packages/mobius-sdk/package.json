@@ -1,6 +1,6 @@
 {
     "name": "@moxt-ai/mobius-sdk",
-    "version": "0.0.145",
+    "version": "0.0.146",
     "description": "Unified Mobius TypeScript SDK for browsers and Node.js.",
     "type": "module",
     "types": "./src/index.ts",
@@ -68,5 +68,10 @@
         "happy-dom": "20.14.5"
     },
     "sideEffects": false,
-    "license": "ISC"
+    "license": "Apache-2.0",
+    "author": "Moxt",
+    "homepage": "https://github.com/moxt-ai/mobius#readme",
+    "bugs": {
+        "url": "https://github.com/moxt-ai/mobius/issues"
+    }
 }
