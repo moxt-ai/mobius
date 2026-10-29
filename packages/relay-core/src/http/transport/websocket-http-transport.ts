@@ -221,6 +221,9 @@ export function acceptWebSocketHttpTransport(
     >();
     let pendingDeclaredBinaryBytes = 0;
     const browserOrigin = request.headers.get("origin");
+    // The original Worker endpoint retains server-driven subscription heartbeats.
+    const legacy = new URL(request.url).pathname === `${MOBIUS_API_PREFIX}/v1/transport`;
+    let heartbeatTimeout: ReturnType<typeof setTimeout> | null = null;
     let subscriptionDiagnosticCount = 0;
     let lastActivityAt = Date.now();
     let idleTimeout: ReturnType<typeof setTimeout>;
@@ -260,6 +263,10 @@ export function acceptWebSocketHttpTransport(
     };
     const release = () => {
         clearTimeout(idleTimeout);
+        if (heartbeatTimeout !== null) {
+            clearTimeout(heartbeatTimeout);
+            heartbeatTimeout = null;
+        }
         for (const subscription of subscriptions.values()) {
             if (subscription.kind === "pending") {
                 subscription.controller.abort(new Error("WebSocket transport closed"));
@@ -272,6 +279,26 @@ export function acceptWebSocketHttpTransport(
         }
         subscriptions.clear();
         releaseAllBinaryRequests();
+    };
+    const scheduleHeartbeat = (): void => {
+        if (heartbeatTimeout !== null) {
+            clearTimeout(heartbeatTimeout);
+            heartbeatTimeout = null;
+        }
+        if (!legacy || subscriptions.size === 0 || server.readyState !== WebSocket.OPEN) {
+            return;
+        }
+        heartbeatTimeout = setTimeout(() => {
+            heartbeatTimeout = null;
+            if (server.readyState !== WebSocket.OPEN) {
+                return;
+            }
+            for (const subscriptionId of subscriptions.keys()) {
+                server.send(JSON.stringify({ kind: "session.events.heartbeat", subscriptionId }));
+            }
+            touch();
+            scheduleHeartbeat();
+        }, 20_000);
     };
     const receive = (data: string | ArrayBuffer) => {
         const event = { data };
@@ -340,6 +367,7 @@ export function acceptWebSocketHttpTransport(
                         subscription.socket.close(1000, "Session event subscription closed");
                     }
                     subscriptions.delete(subscriptionId);
+                    scheduleHeartbeat();
                     return;
                 }
                 if (kind === EVENT_SUBSCRIBE_KIND) {
@@ -364,12 +392,14 @@ export function acceptWebSocketHttpTransport(
                         subscriptionController.signal,
                     );
                     subscriptions.set(subscriptionId, { controller: subscriptionController, kind: "pending" });
+                    scheduleHeartbeat();
                     const subscriptionHeaders = new Headers(converted.request.headers);
                     subscriptionHeaders.set("Upgrade", "websocket");
                     const response = await dispatch(new Request(converted.request, { headers: subscriptionHeaders }));
                     const subscription = response.webSocket;
                     if (subscription === null) {
                         subscriptions.delete(subscriptionId);
+                        scheduleHeartbeat();
                         const failure = await response.json().catch(() => null);
                         const error =
                             typeof failure === "object" && failure !== null && "error" in failure
@@ -434,6 +464,7 @@ export function acceptWebSocketHttpTransport(
                                     "Session event subscription disconnected",
                                 );
                             }
+                            scheduleHeartbeat();
                             server.send(JSON.stringify({ kind: "session.events.end", subscriptionId }));
                         }
                     };

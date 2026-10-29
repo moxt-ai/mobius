@@ -31,7 +31,7 @@ function nextMessage(socket: WebSocket): Promise<string> {
 }
 
 it("Given a browser connection, When it heartbeats through the public Platform transport, Then Cloudflare acknowledges it and application requests remain usable", async () => {
-    const response = await SELF.fetch("https://platform.test/mobius/api/v1/transport", {
+    const response = await SELF.fetch("https://platform.test/mobius/api/v1/transport-v2", {
         headers: { Upgrade: "websocket" },
     });
     expect(response.status).toBe(101);
@@ -65,37 +65,40 @@ it("Given a browser connection, When it heartbeats through the public Platform t
     }
 });
 
-it("Given an HTTP-over-WebSocket client, When it uses the public DO-owned transport, Then application responses preserve their request identities", async () => {
-    const response = await SELF.fetch("https://platform.test/mobius/api/v1/transport", {
-        headers: { Upgrade: "websocket" },
-    });
-    expect(response.status).toBe(101);
-    const socket = response.webSocket;
-    if (socket === null) {
-        throw new Error("Expected the public WebSocket transport");
-    }
-    socket.accept();
-    try {
-        const result = nextMessage(socket);
-        socket.send(
-            JSON.stringify({
-                kind: "http.request",
-                requestId: "request-identity",
-                method: "GET",
-                path: "/mobius/api/dashboard/health",
-                headers: [],
-                body: "",
-            }),
-        );
-        expect(JSON.parse(await result)).toMatchObject({
-            kind: "http.response",
-            requestId: "request-identity",
-            status: 200,
+it.each(["transport", "transport-v2"])(
+    "Given an HTTP-over-WebSocket client, When it uses public %s, Then application responses preserve their request identities",
+    async (endpoint) => {
+        const response = await SELF.fetch(`https://platform.test/mobius/api/v1/${endpoint}`, {
+            headers: { Upgrade: "websocket" },
         });
-    } finally {
-        socket.close();
-    }
-});
+        expect(response.status).toBe(101);
+        const socket = response.webSocket;
+        if (socket === null) {
+            throw new Error("Expected the public WebSocket transport");
+        }
+        socket.accept();
+        try {
+            const result = nextMessage(socket);
+            socket.send(
+                JSON.stringify({
+                    kind: "http.request",
+                    requestId: "request-identity",
+                    method: "GET",
+                    path: "/mobius/api/dashboard/health",
+                    headers: [],
+                    body: "",
+                }),
+            );
+            expect(JSON.parse(await result)).toMatchObject({
+                kind: "http.response",
+                requestId: "request-identity",
+                status: 200,
+            });
+        } finally {
+            socket.close();
+        }
+    },
+);
 
 it.each([
     { name: "missing", authorization: null, code: "session_access_required" },
@@ -141,12 +144,57 @@ class MultipleSubscriptionDaemonBoundary {
     };
 }
 
+it("Given a legacy client, When a quiet subscription crosses several idle deadlines, Then the original subscription heartbeats keep it usable without client pings", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));
+    const daemon = new SubscriptionDaemonBoundary();
+    const response = acceptWebSocketHttpTransport(
+        new Request("https://platform.test/mobius/api/v1/transport", { headers: { Upgrade: "websocket" } }),
+        daemon.fetch,
+        standardWebSocketHost,
+    );
+    const socket = response.webSocket;
+    if (socket === null) {
+        throw new Error("Expected the legacy transport");
+    }
+    socket.accept();
+    try {
+        const ready = nextMessage(socket);
+        socket.send(
+            JSON.stringify({
+                kind: "session.events.subscribe",
+                subscriptionId: "legacy-stream",
+                path: "/mobius/api/v1/projects/project/sessions/session/events-v2",
+                headers: [],
+            }),
+        );
+        expect(JSON.parse(await ready)).toMatchObject({ kind: "session.events.ready" });
+        for (let interval = 0; interval < 6; interval += 1) {
+            const heartbeat = nextMessage(socket);
+            await vi.advanceTimersByTimeAsync(20_000);
+            expect(JSON.parse(await heartbeat)).toEqual({
+                kind: "session.events.heartbeat",
+                subscriptionId: "legacy-stream",
+            });
+        }
+        const delivered = nextMessage(socket);
+        daemon.downstream?.send("legacy-event-after-idle");
+        expect(JSON.parse(await delivered)).toMatchObject({
+            kind: "session.events.event",
+            data: "legacy-event-after-idle",
+        });
+    } finally {
+        socket.close();
+        vi.useRealTimers();
+    }
+});
+
 it("Given two quiet subscriptions, When multiple heartbeat intervals pass, Then one connection heartbeat suffices and both subscriptions still deliver", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));
     const daemon = new MultipleSubscriptionDaemonBoundary();
     const response = acceptWebSocketHttpTransport(
-        new Request("https://platform.test/mobius/api/v1/transport", {
+        new Request("https://platform.test/mobius/api/v1/transport-v2", {
             headers: { Upgrade: "websocket" },
         }),
         daemon.fetch,
@@ -616,7 +664,7 @@ it("Given an established event subscription is quiet, When the transport idle de
     try {
         const daemon = new SubscriptionDaemonBoundary();
         const response = acceptWebSocketHttpTransport(
-            new Request("https://platform.test/mobius/api/v1/transport", {
+            new Request("https://platform.test/mobius/api/v1/transport-v2", {
                 headers: { Upgrade: "websocket" },
             }),
             daemon.fetch,

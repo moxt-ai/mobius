@@ -1043,7 +1043,17 @@ export function createPlatformApplication(
         .onError((error) => {
             throw error;
         })
+        // Legacy Worker-owned endpoint; keep its subscription heartbeat contract.
         .get(`${MOBIUS_API_PREFIX}/v1/transport`, (context): Response => {
+            const executionContext = optionalExecutionContext(context);
+            return acceptWebSocketHttpTransport(
+                context.req.raw,
+                async (request): Promise<Response> =>
+                    await platformApplication.fetch(request, context.env, executionContext),
+                standardWebSocketHost,
+            );
+        })
+        .get(`${MOBIUS_API_PREFIX}/v1/transport-v2`, (context): Response => {
             const executionContext = optionalExecutionContext(context);
             return acceptWebSocketHttpTransport(
                 context.req.raw,
@@ -1095,7 +1105,7 @@ export function createPlatformWorker() {
             const path = new URL(request.url).pathname;
             if (
                 request.headers.get("Upgrade")?.toLowerCase() === "websocket" &&
-                (path === `${MOBIUS_API_PREFIX}/v1/transport` || path.endsWith("/events-v2"))
+                path === `${MOBIUS_API_PREFIX}/v1/transport-v2`
             ) {
                 const namespace = environment.WEBSOCKET_TRANSPORT;
                 if (namespace === undefined) {
