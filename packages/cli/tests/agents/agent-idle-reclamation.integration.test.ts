@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
     decodeMessageKind,
     decodeSessionLiveEvent,
+    encodeNativeSessionCommand,
     encodeSessionHistoryPageLoad,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
@@ -58,10 +59,37 @@ test.each(["codex", "claude"] as const)(
                     const exited = waitForAgentFile(join(processes, original), false);
                     timer.advance(1);
                     await exited;
+                    // Browsing re-establishes the workspace reader independently of execution.
+                    peer.send(
+                        encodeNativeSessionCommand({
+                            kind: "native.session.request",
+                            action: "list",
+                            requestId: crypto.randomUUID(),
+                            sessionId: "idle-recovery-browser",
+                            agentId,
+                            bindingId: peer.bindingId,
+                            directoryId: "default",
+                            additionalDirectoryIds: [],
+                            cursor: null,
+                        }),
+                    );
+                    for (;;) {
+                        const message = await peer.nextMessage();
+                        const kind = decodeMessageKind(message);
+                        if (kind === "session.operation.failed" || kind === "session.close.notice") {
+                            throw new Error(message);
+                        }
+                        if (kind === "native.session.result") {
+                            expect(message).toContain(sessionId);
+                            break;
+                        }
+                    }
+                    const readers = (await readdir(processes)).filter((name) => name.endsWith(".process"));
                     await prompt(peer, agentId, sessionId, "Continue AFTER_IDLE_RECOVERY without tools");
                     const resumed = (await readdir(processes)).filter((name) => name.endsWith(".process"));
-                    expect(resumed).toHaveLength(1);
-                    expect(resumed[0]).not.toBe(original);
+                    expect(resumed).toHaveLength(readers.length + 1);
+                    expect(resumed).toEqual(expect.arrayContaining(readers));
+                    expect(resumed).not.toContain(original);
                     peer.send(
                         encodeSessionHistoryPageLoad({
                             kind: "session.live-history.v2.page.load",
@@ -83,6 +111,11 @@ test.each(["codex", "claude"] as const)(
                             break;
                         }
                     }
+                    // Both the query reader and the replacement execution must be reclaimable.
+                    const exits = resumed.map((name) => waitForAgentFile(join(processes, name), false));
+                    timer.advance(2 * 60 * 60 * 1_000);
+                    await Promise.all(exits);
+                    expect((await readdir(processes)).filter((name) => name.endsWith(".process"))).toEqual([]);
                 },
                 "embedded",
                 undefined,
