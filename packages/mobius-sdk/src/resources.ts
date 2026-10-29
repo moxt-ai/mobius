@@ -129,11 +129,13 @@ export class MobiusSessionAccess {
 export interface CreateMobiusSessionRequest {
     readonly additionalDirectoryIds: readonly string[];
     readonly agentId: string;
-    readonly bindingId: string;
+    /** @deprecated Legacy field ignored by Relay; the Runtime owns its workspace binding. */
+    readonly bindingId?: string;
     readonly directoryId: string;
     readonly runtimeId: string;
     readonly sessionId: string;
-    readonly title: string;
+    /** @deprecated Legacy field ignored by Relay; use sessions.rename to change the Runtime-owned title. */
+    readonly title?: string;
 }
 
 export interface SubmitMobiusTurnRequest {

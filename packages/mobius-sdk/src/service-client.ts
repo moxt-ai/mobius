@@ -27,6 +27,7 @@ import {
     type NativeSessionRequest,
     type NativeSessionResult,
     type PromptAttachment,
+    RUNTIME_WORKSPACE_BINDING_ID,
     type RuntimeDiagnosticsResult,
     type SessionConfigureCommand,
     type SessionEventLogPage,
@@ -1108,7 +1109,12 @@ export class MobiusSessionResources {
             JSON.stringify(
                 await this.#executor.post(
                     projectPath(this.#projectId, `runtimes/${encodeURIComponent(request.runtimeId)}/sessions`),
-                    request,
+                    {
+                        ...request,
+                        // Older Relays require these legacy fields even though they do not use them.
+                        bindingId: request.bindingId === undefined ? RUNTIME_WORKSPACE_BINDING_ID : request.bindingId,
+                        title: request.title === undefined ? "" : request.title,
+                    },
                     signal,
                 ),
             ),

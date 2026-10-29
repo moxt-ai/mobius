@@ -5,67 +5,94 @@ import { RUNTIME_WORKSPACE_BINDING_ID } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, it } from "vitest";
 import { startTestPlatform } from "../support/platform.ts";
 
-it("Given a new Session, When the SDK creates and prompts it, Then its conversation is listed without enabling Recording", async () => {
-    const cancellation = new AbortController();
-    await using platform = await startTestPlatform();
-    try {
-        const project = await platform.developer.createProject(
-            platform.appId,
-            {
-                clientReference: `client-${crypto.randomUUID()}`,
-                displayName: "Runtime Session directory",
-                idempotencyKey: `project-${crypto.randomUUID()}`,
-                locationHint: "wnam",
-            },
-            cancellation.signal,
-        );
-        const runtime = await platform.connectAgent(project.projectId);
-        const sessionId = `session-${crypto.randomUUID()}`;
-        await runtime.client.sessions.create(
-            {
+for (const client of ["SDK", "legacy HTTP", "HTTP"] as const) {
+    it(`Given a new Session, When ${client} creates and prompts it, Then its conversation uses the Runtime title and workspace without enabling Recording`, async () => {
+        const cancellation = new AbortController();
+        await using platform = await startTestPlatform();
+        try {
+            const project = await platform.developer.createProject(
+                platform.appId,
+                {
+                    clientReference: `client-${crypto.randomUUID()}`,
+                    displayName: "Runtime Session directory",
+                    idempotencyKey: `project-${crypto.randomUUID()}`,
+                    locationHint: "wnam",
+                },
+                cancellation.signal,
+            );
+            const runtime = await platform.connectAgent(project.projectId);
+            const sessionId = `session-${crypto.randomUUID()}`;
+            const request = {
                 additionalDirectoryIds: [],
                 agentId: "claude",
-                bindingId: RUNTIME_WORKSPACE_BINDING_ID,
                 directoryId: "default",
                 runtimeId: runtime.runtimeId,
                 sessionId,
-                title: "Remembered conversation",
-            },
-            cancellation.signal,
-        );
-        await runtime.client.turns.submitToRuntime(
-            runtime.runtimeId,
-            sessionId,
-            {
-                additionalDirectoryIds: [],
-                agentId: "claude",
-                attachments: [],
-                content: "Remember this conversation",
-                directoryId: "default",
-                idempotencyKey: `turn-${crypto.randomUUID()}`,
-            },
-            cancellation.signal,
-        );
-
-        await expect(
-            runtime.client.runtimes.listSessions(runtime.runtimeId, 100, cancellation.signal),
-        ).resolves.toEqual([
-            expect.objectContaining({
-                agentId: "claude",
-                directoryId: expect.any(String),
-                prompted: true,
+            };
+            if (client === "SDK") {
+                await runtime.client.sessions.create(request, cancellation.signal);
+            } else {
+                const response = await platform.app.request(
+                    new Request(
+                        `${platform.baseUrl}/mobius/api/v1/projects/${project.projectId}/runtimes/${runtime.runtimeId}/sessions`,
+                        {
+                            method: "POST",
+                            headers: {
+                                authorization: `Bearer ${platform.appCredential}`,
+                                "content-type": "application/json",
+                            },
+                            body: JSON.stringify({
+                                ...request,
+                                ...(client === "legacy HTTP"
+                                    ? { bindingId: "binding_legacy", title: "Legacy title" }
+                                    : {}),
+                            }),
+                            signal: cancellation.signal,
+                        },
+                    ),
+                );
+                expect(response.status).toBe(200);
+                expect(await response.json()).toMatchObject({
+                    kind: "session.ready",
+                    sessionId,
+                    agentId: "claude",
+                    directoryId: "default",
+                });
+            }
+            await runtime.client.turns.submitToRuntime(
+                runtime.runtimeId,
                 sessionId,
-                status: { kind: "idle" },
-                title: "Remember this conversation",
-            }),
-        ]);
-        await expect(
-            platform.developer.readProjectRecordingPolicy(project.projectId, cancellation.signal),
-        ).resolves.toMatchObject({ effectiveMode: "disabled", inheritedFrom: "system", mode: "inherit" });
-    } finally {
-        cancellation.abort(new Error("Runtime Session directory test completed"));
-    }
-});
+                {
+                    additionalDirectoryIds: [],
+                    agentId: "claude",
+                    attachments: [],
+                    content: "Remember this conversation",
+                    directoryId: "default",
+                    idempotencyKey: `turn-${crypto.randomUUID()}`,
+                },
+                cancellation.signal,
+            );
+
+            await expect(
+                runtime.client.runtimes.listSessions(runtime.runtimeId, 100, cancellation.signal),
+            ).resolves.toEqual([
+                expect.objectContaining({
+                    agentId: "claude",
+                    directoryId: expect.any(String),
+                    prompted: true,
+                    sessionId,
+                    status: { kind: "idle" },
+                    title: "Remember this conversation",
+                }),
+            ]);
+            await expect(
+                platform.developer.readProjectRecordingPolicy(project.projectId, cancellation.signal),
+            ).resolves.toMatchObject({ effectiveMode: "disabled", inheritedFrom: "system", mode: "inherit" });
+        } finally {
+            cancellation.abort(new Error("Runtime Session directory test completed"));
+        }
+    });
+}
 
 it("Given long ASCII and multibyte directory references, When the SDK browses them, Then the local filesystem remains the authority for directory availability", async () => {
     await using platform = await startTestPlatform();

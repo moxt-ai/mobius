@@ -42,10 +42,11 @@ const sessionIdentitySchema = v.strictObject({
 });
 const createSessionSchema = v.strictObject({
     ...sessionIdentitySchema.entries,
-    bindingId: identifier,
+    // Legacy clients send these fields. Workspace authorization and titles belong to the Runtime.
+    bindingId: v.optional(identifier),
     runtimeId: identifier,
     sessionId: identifier,
-    title: v.pipe(v.string(), v.maxLength(512)),
+    title: v.optional(v.pipe(v.string(), v.maxLength(512))),
 });
 const configureSessionSchema = v.strictObject({
     ...sessionIdentitySchema.entries,
@@ -242,7 +243,7 @@ export function createProjectRuntimeRoutes() {
                     JSON.stringify({
                         additionalDirectoryIds: body.additionalDirectoryIds,
                         agentId: body.agentId,
-                        bindingId: "workspace",
+                        bindingId: RUNTIME_WORKSPACE_BINDING_ID,
                         directoryId: body.directoryId,
                         kind: "session.prepare",
                         requestId: crypto.randomUUID(),
