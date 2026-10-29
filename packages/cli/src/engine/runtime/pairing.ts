@@ -8,6 +8,7 @@ import { RuntimeAgentDependencies } from "../agent/runtime-agents.ts";
 import { ensureCanonicalDirectory } from "../storage/files/local-files.ts";
 import { environmentProxyDispatcher } from "../util/network/environment-proxy.ts";
 import { isRecord } from "../util/value-utils.ts";
+import { discoverRuntimeAgentInventory } from "./catalog/discover-agent-catalog.ts";
 import { publishAgentCatalog } from "./catalog/publish-agent-catalog.ts";
 import { createCatalogAgentResolver } from "./catalog/resolve-catalog-agent.ts";
 import {
@@ -241,22 +242,28 @@ function buildSavedRuntimeConfig(
         new OpaqueRuntimeReconnectTarget(connection.connectionId),
         createCatalogAgentResolver(
             (refreshSignal) =>
-                discoverLocalAgentInventory({
-                    defaultWorkspace,
-                    dataDirectory: localContext.stateDirectory,
-                    environment: localContext.agentLaunchEnvironment,
-                    signal: refreshSignal,
-                }),
+                discoverRuntimeAgentInventory(
+                    {
+                        defaultWorkspace,
+                        dataDirectory: localContext.stateDirectory,
+                        environment: localContext.agentLaunchEnvironment,
+                        signal: refreshSignal,
+                    },
+                    connection.channelId,
+                ),
             () => config,
             publishAgentCatalog,
         ),
         (refreshSignal: AbortSignal) =>
-            discoverLocalAgentInventory({
-                defaultWorkspace,
-                dataDirectory: localContext.stateDirectory,
-                environment: localContext.agentLaunchEnvironment,
-                signal: refreshSignal,
-            }).then((inventory) => inventory.readyAgents()),
+            discoverRuntimeAgentInventory(
+                {
+                    defaultWorkspace,
+                    dataDirectory: localContext.stateDirectory,
+                    environment: localContext.agentLaunchEnvironment,
+                    signal: refreshSignal,
+                },
+                connection.channelId,
+            ).then((inventory) => inventory.readyAgents()),
     );
     return config;
 }
@@ -319,11 +326,14 @@ export async function prepareRuntimeConnection(
 ): Promise<RuntimeConfig> {
     const localContext = new RuntimeLocalContext(installation.stateDirectory, environment, maxAcpProcesses);
     const defaultWorkspace = await resolveDefaultWorkspace(connection.defaultWorkspace);
-    const inventory = await discoverLocalAgentInventory({
-        defaultWorkspace,
-        dataDirectory: localContext.stateDirectory,
-        environment: localContext.agentLaunchEnvironment,
-        signal,
-    });
+    const inventory = await discoverRuntimeAgentInventory(
+        {
+            defaultWorkspace,
+            dataDirectory: localContext.stateDirectory,
+            environment: localContext.agentLaunchEnvironment,
+            signal,
+        },
+        connection.channelId,
+    );
     return buildSavedRuntimeConfig(connection, defaultWorkspace, inventory, localContext);
 }

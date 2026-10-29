@@ -373,11 +373,20 @@ export async function runBoundedProcess(options: RunProcessOptions): Promise<Pro
     }
 
     try {
-        const exit = new Promise<number>((resolveExit, rejectExit) => {
-            child.once("error", rejectExit);
-            child.once("exit", (code) => resolveExit(code ?? 1));
+        const completion = new Promise<number>((resolveCompletion, rejectCompletion) => {
+            child.once("error", rejectCompletion);
+            // Failed exits have no result to drain. Preserve their error and
+            // release descendants even when they still own the output pipes.
+            child.once("exit", (code) => {
+                if (code !== 0) {
+                    resolveCompletion(code ?? 1);
+                }
+            });
+            // Exit does not mean the pipes have drained. Keep collecting through
+            // close, with the same deadline and cancellation covering that wait.
+            child.once("close", (code) => resolveCompletion(code ?? 1));
         });
-        const exitCode = await Promise.race([exit, interrupted.promise.then(() => -1)]);
+        const exitCode = await Promise.race([completion, interrupted.promise.then(() => -1)]);
         if (interruptionCleanupFailure !== null) {
             throw interruptionCleanupFailure;
         }
@@ -389,11 +398,21 @@ export async function runBoundedProcess(options: RunProcessOptions): Promise<Pro
         }
         return new ProcessResult(Buffer.concat(stdout).toString("utf8"), Buffer.concat(stderr).toString("utf8"));
     } catch (error) {
-        if (error instanceof ProcessExecutionError) {
-            throw error;
-        }
-        throw new ProcessExecutionError("process_spawn_failed", "The executable could not be started", {
+        const failure =
+            error instanceof ProcessExecutionError
+                ? error
+                : new ProcessExecutionError("process_spawn_failed", "The executable could not be started", {
+                      cause: error,
+                  });
+        throw new ProcessExecutionError(failure.code, failure.message, {
             cause: error,
+            diagnosticDetails: {
+                stdoutBytes: stdoutBytes.toString(),
+                stderrBytes: stderrBytes.toString(),
+                outputLimitBytes: outputLimitBytes.toString(),
+                ...(child.exitCode === null ? {} : { exitCode: child.exitCode.toString() }),
+                ...(child.signalCode === null ? {} : { signal: child.signalCode }),
+            },
         });
     } finally {
         clearTimeout(timeout);

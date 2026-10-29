@@ -16,7 +16,7 @@ import {
     type UnavailableAgent,
     UnsupportedAgentVersion,
 } from "./agent-discovery.ts";
-import type { LocalAgentDiscoveryContext } from "./agent-discovery-context.ts";
+import type { AgentProbeDiagnostic, LocalAgentDiscoveryContext } from "./agent-discovery-context.ts";
 import { AgentProbeError } from "./agent-probe-error.ts";
 import { isAgentVersionSupported } from "./agent-version.ts";
 import { probeVersion, resolveAdapterExecutables, resolveAgentExecutables } from "./executable-discovery.ts";
@@ -43,9 +43,35 @@ function isRetryableProbeFailure(error: unknown): boolean {
     return error instanceof AgentProbeError && error.code === "adapter_probe_timeout";
 }
 
-async function probeWithRetry<Value>(signal: AbortSignal, probe: () => Promise<Value>): Promise<Value> {
+async function probeWithRetry<Value>(
+    context: LocalAgentDiscoveryContext,
+    specification: LocalAgentSpecification,
+    source: AgentProbeDiagnostic["source"],
+    probe: () => Promise<Value>,
+): Promise<Value> {
+    const signal = context.signal;
+    const run = async (attempt: number): Promise<Value> => {
+        const startedAt = performance.now();
+        try {
+            return await probe();
+        } catch (failure) {
+            context.onProbeDiagnostic?.({
+                agentId: specification.id,
+                source,
+                event: signal.aborted ? "agent_probe_cancelled" : "agent_probe_failed",
+                attempt,
+                elapsedMilliseconds: Math.round(performance.now() - startedAt),
+                timeoutMilliseconds:
+                    source === "acp_readiness"
+                        ? specification.acpProbeTimeoutMilliseconds
+                        : specification.versionProbeTimeoutMilliseconds,
+                failure,
+            });
+            throw failure;
+        }
+    };
     try {
-        return await probe();
+        return await run(1);
     } catch (error) {
         if (signal.aborted) {
             signal.throwIfAborted();
@@ -53,7 +79,7 @@ async function probeWithRetry<Value>(signal: AbortSignal, probe: () => Promise<V
         if (!isRetryableProbeFailure(error)) {
             throw error;
         }
-        return await probe();
+        return await run(2);
     }
 }
 
@@ -91,7 +117,9 @@ export async function discoverAgent(
         let agentVersion = "";
         try {
             agentVersion = await probeWithRetry(
-                context.signal,
+                context,
+                specification,
+                "agent_version",
                 async () =>
                     await probeVersion(
                         agent,
@@ -143,7 +171,9 @@ export async function discoverAgent(
                 launchEnvironment = await specification.createLaunchEnvironment(agent, context);
                 if (specification.adapterVersionArguments.length > 0) {
                     adapterVersion = await probeWithRetry(
-                        context.signal,
+                        context,
+                        specification,
+                        "adapter_version",
                         async () =>
                             await probeVersion(
                                 adapter,
@@ -184,7 +214,9 @@ export async function discoverAgent(
                 );
             try {
                 const readiness = await probeWithRetry(
-                    context.signal,
+                    context,
+                    specification,
+                    "acp_readiness",
                     async () =>
                         await probeAcpReadiness(
                             specification,

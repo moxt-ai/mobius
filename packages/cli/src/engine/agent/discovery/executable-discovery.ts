@@ -95,7 +95,14 @@ export async function probeVersion(
     });
     const version = normalize(result.stdout || result.stderr);
     if (version.length === 0) {
-        throw new ProcessExecutionError("process_exit_failed", "The executable did not report a version");
+        throw new ProcessExecutionError("process_exit_failed", "The executable did not report a version", {
+            diagnosticDetails: {
+                probeReason: "empty_version_output",
+                exitCode: "0",
+                stdoutBytes: Buffer.byteLength(result.stdout).toString(),
+                stderrBytes: Buffer.byteLength(result.stderr).toString(),
+            },
+        });
     }
     return version;
 }
