@@ -69,18 +69,35 @@ export class AgentProcessPool {
                 return;
             }
             this.#idleTimeouts.delete(id);
-            // Recheck ownership and activity at the deadline. Retirement detaches the process
-            // synchronously before awaiting teardown, so a new request starts a fresh process.
-            if (this.#stopping || this.#slots.get(id) !== slot || slot.retention.isBusy()) {
-                return;
-            }
-            const retirement = slot.retention.retireIdle();
-            this.#idleRetirements.add(retirement);
-            void retirement
-                .catch((error: unknown) => console.error("The idle Agent process could not be released", error))
-                .finally(() => this.#idleRetirements.delete(retirement));
+            void this.#retireIdle(id, slot);
         }, ACP_PROCESS_IDLE_TIMEOUT_MILLISECONDS);
         this.#idleTimeouts.set(id, timeout);
+    };
+
+    readonly #retireIdle = async (id: symbol, slot: ProcessSlot): Promise<void> => {
+        // Recheck ownership and activity when retiring. Retirement detaches the process
+        // synchronously before awaiting teardown, so a new request starts a fresh process.
+        if (this.#stopping || this.#slots.get(id) !== slot || slot.kind !== "retained" || slot.retention.isBusy()) {
+            return;
+        }
+        this.#cancelIdleTimeout(id);
+        const retirement = slot.retention.retireIdle();
+        this.#idleRetirements.add(retirement);
+        try {
+            await retirement;
+        } catch (error) {
+            console.error("The idle Agent process could not be released", error);
+        } finally {
+            this.#idleRetirements.delete(retirement);
+        }
+    };
+
+    /**
+     * Releases every retained process that is not working now, as its idle deadline would.
+     * Native clients, such as an Agent's own terminal, can then take over their conversations.
+     */
+    readonly retireIdleProcesses = async (): Promise<void> => {
+        await Promise.all([...this.#slots].map(async ([id, slot]) => await this.#retireIdle(id, slot)));
     };
 
     /** Stop scheduling before Runtime shutdown and drain teardowns already in flight. */

@@ -337,6 +337,49 @@ export class SessionManager {
         });
     }
 
+    /**
+     * Reuses an idle process only while it still continues the latest native conversation.
+     * Otherwise its Agent would answer from, and append to, an earlier copy, so the process is
+     * released and the Session reopens from native history as after idle reclamation.
+     */
+    async #currentSessionProcess(
+        existing: AgentSession,
+        options: SessionPrepareOptions,
+        recovery: SessionRecovery,
+    ): Promise<AgentSession> {
+        const changed =
+            !this.#isNativeSessionOperationActive(options.sessionId) &&
+            (await existing.nativeHistoryChanged(options.signal));
+        // Another operation may have reopened the Session while the native history was read.
+        const pending = this.#executionProcesses.pending(options.sessionId);
+        if (pending !== undefined) {
+            return await waitForSharedOperation(pending, options.signal);
+        }
+        const current = this.#executionProcesses.get(options.sessionId);
+        if (current !== undefined && current !== existing) {
+            return current;
+        }
+        if (!changed) {
+            return existing;
+        }
+        return await this.#executionProcesses.prepare(options.sessionId, async () => {
+            await this.#stopSessionProcess(options.sessionId, existing);
+            return await this.#startRetainedSessionProcess(
+                options,
+                async (capabilities) =>
+                    await AgentSession.start(
+                        options,
+                        recovery,
+                        () => this.#observer,
+                        this.#store,
+                        unmeasuredOperationMetrics,
+                        options.adapter,
+                        capabilities,
+                    ),
+            );
+        });
+    }
+
     async #prepareSession(
         options: SessionPrepareOptions,
         recovery: SessionRecovery,
@@ -384,14 +427,15 @@ export class SessionManager {
                 const existing = this.#executionProcesses.get(options.sessionId);
                 if (existing !== undefined) {
                     if (existing.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)) {
-                        this.#executionProcesses.touch(options.sessionId, existing);
+                        const runtime = await this.#currentSessionProcess(existing, options, recovery);
+                        this.#executionProcesses.touch(options.sessionId, runtime);
                         if (recovery.kind === "history-required") {
                             await metrics.measure(
                                 "session-load",
-                                async () => await existing.ensureHistoryLoaded(options.signal),
+                                async () => await runtime.ensureHistoryLoaded(options.signal),
                             );
                         }
-                        return existing.prepared();
+                        return runtime.prepared();
                     }
                     if (!existing.canRebind()) {
                         throw new AcpExecutionError(
@@ -536,11 +580,12 @@ export class SessionManager {
                 );
             }
             if (existing.usesEnvironment(options.agent.environment)) {
+                const runtime = await this.#currentSessionProcess(existing, options, recovery);
                 if (recovery.kind === "execution-only") {
-                    existing.startExecutionOnlyCapture();
+                    runtime.startExecutionOnlyCapture();
                 }
-                this.#executionProcesses.touch(options.sessionId, existing);
-                return existing.prepared();
+                this.#executionProcesses.touch(options.sessionId, runtime);
+                return runtime.prepared();
             }
             if (existing.hasRunningTurn()) {
                 throw new AcpExecutionError(
@@ -569,8 +614,11 @@ export class SessionManager {
                 this.#assertOpen(options.sessionId);
                 // Process reclamation must not turn a native rename into a metadata-only write.
                 // Keep the same process borrowed through recovery and the acknowledged rename.
-                if (this.#executionProcesses.get(options.sessionId) === undefined) {
+                const existing = this.#executionProcesses.get(options.sessionId);
+                if (existing === undefined) {
                     await this.#prepareSession(options, { kind: "interactive-only" }, "keep-closed");
+                } else {
+                    await this.#currentSessionProcess(existing, options, { kind: "interactive-only" });
                 }
                 const runtime = this.#executionProcesses.get(options.sessionId);
                 if (runtime === undefined) {
@@ -887,11 +935,16 @@ export class SessionManager {
                         "session_identity_mismatch",
                     );
                 }
+                const runtime = await this.#currentSessionProcess(
+                    existing,
+                    options,
+                    options.recovery ?? { kind: "interactive-only" },
+                );
                 if (options.recovery?.kind === "execution-only") {
-                    existing.startExecutionOnlyCapture();
+                    runtime.startExecutionOnlyCapture();
                 }
-                this.#executionProcesses.touch(options.sessionId, existing);
-                return existing;
+                this.#executionProcesses.touch(options.sessionId, runtime);
+                return runtime;
             }
             await this.#prepareSession(options, options.recovery ?? { kind: "interactive-only" }, "reopen");
             const started = this.#executionProcesses.get(options.sessionId);

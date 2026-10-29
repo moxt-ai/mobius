@@ -147,6 +147,11 @@ export class CodexAdapter implements Adapter {
     };
     readonly closeSession: Adapter["closeSession"] = (...args) => this.#executionConnections.closeSession(...args);
     readonly releaseSession: Adapter["releaseSession"] = (params) => this.#executionConnections.releaseSession(params);
+    // Codex admits one active writer per thread; another client borrows the thread instead.
+    readonly readNativeHistoryRevision: Adapter["readNativeHistoryRevision"] = async ({ signal }) => {
+        signal.throwIfAborted();
+        return { kind: "untracked" };
+    };
     readonly prompt: Adapter["prompt"] = (...args) => this.#executionConnections.prompt(...args);
     readonly steer: Adapter["steer"] = (...args) => this.#executionConnections.steer(...args);
     readonly renameSession: Adapter["renameSession"] = (...args) => this.#executionConnections.renameSession(...args);
