@@ -3,15 +3,14 @@ import { decodeAcpSessionUpdate, type SessionEventPayload } from "@moxt-ai/mobiu
 import { revalidateExecutable, stopProcessTree } from "../../../util/process/executable.ts";
 import { runCleanup } from "../../../util/run-cleanup.ts";
 import { AcpExecutionError } from "../../acp-error.ts";
+import type { AcpAgentDefinition } from "../../agent/agent-definition.ts";
 import type { AcpContentExternalizer } from "../../content/content-externalizer.ts";
 import { CodexAppServerClient } from "../../harness/codex/app-server-client.ts";
 import { replayCodexHistory } from "../../harness/codex/history.ts";
 import type {
     Adapter,
     AdapterDependencies,
-    NativeSessionLookupBudget,
     NativeSessionPreviewRequest,
-    NativeSessionQuery,
     SessionEventPage,
 } from "../../native-history/preview-contract.ts";
 import { nativeSessionIdSchema } from "../../protocol/native-session.ts";
@@ -28,6 +27,7 @@ import { fitCodexToolEvent, prepareCodexToolUpdate } from "./tool-event.ts";
  * `session/load` remains the fallback for resuming the conversation.
  */
 export class CodexAdapter implements Adapter {
+    #agent: AcpAgentDefinition;
     readonly #queryProcesses: AgentQueryProcesses;
     readonly #connector: AcpSessionConnector;
     readonly #liveSessions: AcpLiveSessions;
@@ -35,7 +35,8 @@ export class CodexAdapter implements Adapter {
     readonly #contentExternalizer: Pick<AcpContentExternalizer, "update">;
     #previewCache: PreviewEventCache | null = null;
 
-    constructor(dependencies: AdapterDependencies) {
+    constructor(agent: AcpAgentDefinition, dependencies: AdapterDependencies) {
+        this.#agent = agent;
         this.#dependencies = dependencies;
         this.#contentExternalizer = {
             update: async (sessionId, update, signal) => {
@@ -47,10 +48,15 @@ export class CodexAdapter implements Adapter {
         };
         this.#connector = new AcpSessionConnector(this.#contentExternalizer, fitCodexToolEvent);
         this.#liveSessions = new AcpLiveSessions(this.#contentExternalizer, fitCodexToolEvent);
-        this.#queryProcesses = new AgentQueryProcesses(dependencies.processes, this.#connector);
+        this.#queryProcesses = new AgentQueryProcesses(agent, dependencies.processes, this.#connector);
     }
 
-    readonly getCapabilities = async (query: NativeSessionQuery) => await this.#queryProcesses.capabilities(query);
+    readonly refreshAgent: Adapter["refreshAgent"] = (agent) => {
+        this.#agent = agent;
+        this.#queryProcesses.refreshAgent(agent);
+    };
+    readonly getCapabilities: Adapter["getCapabilities"] = (cwd, signal) =>
+        this.#queryProcesses.capabilities(cwd, signal);
     readonly connectSession = (options: LiveSessionConnectionOptions) => this.#liveSessions.connectSession(options);
     readonly cancel: Adapter["cancel"] = (...args) => this.#liveSessions.cancel(...args);
     readonly closeSession: Adapter["closeSession"] = (...args) => this.#liveSessions.closeSession(...args);
@@ -58,10 +64,10 @@ export class CodexAdapter implements Adapter {
     readonly steer: Adapter["steer"] = (...args) => this.#liveSessions.steer(...args);
     readonly renameSession: Adapter["renameSession"] = (...args) => this.#liveSessions.renameSession(...args);
     readonly configureSession: Adapter["configureSession"] = (...args) => this.#liveSessions.configureSession(...args);
-    readonly listSessions = async (query: NativeSessionQuery, cursor: string | null) =>
-        await this.#queryProcesses.listNativeSessions(query, cursor);
-    readonly findSession = (query: NativeSessionQuery, nativeSessionId: string, budget: NativeSessionLookupBudget) =>
-        findNativeSession(this.listSessions, query, nativeSessionId, budget);
+    readonly listSessions: Adapter["listSessions"] = (cwd, cursor, signal) =>
+        this.#queryProcesses.listNativeSessions(cwd, cursor, signal);
+    readonly findSession: Adapter["findSession"] = (cwd, nativeSessionId, budget, signal) =>
+        findNativeSession(this.listSessions, cwd, nativeSessionId, budget, signal);
     readonly close = async (): Promise<void> => {
         await runCleanup(
             () => this.#queryProcesses.close(),
@@ -71,11 +77,13 @@ export class CodexAdapter implements Adapter {
     };
 
     readonly readSessionHistory = async (
-        query: NativeSessionQuery,
+        cwd: string,
+        _additionalDirectories: readonly string[],
         request: NativeSessionPreviewRequest,
+        cancellation: AbortSignal,
     ): Promise<SessionEventPage> => {
-        const { agent, cwd } = query;
-        const signal = AbortSignal.any([query.signal, AbortSignal.timeout(60_000)]);
+        const agent = this.#agent;
+        const signal = AbortSignal.any([cancellation, AbortSignal.timeout(60_000)]);
         const { sessionId } = request;
         signal.throwIfAborted();
         nativeSessionIdSchema.parse(request.nativeSessionId);

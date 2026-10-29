@@ -64,15 +64,6 @@ export interface AdapterDependencies {
 /** Constructs one harness adapter for a runtime. */
 export type AdapterResolver = (agent: AcpAgentDefinition, dependencies: AdapterDependencies) => Adapter;
 
-/** Validated query scope; contains no execution-session recovery or process controls. */
-export interface NativeSessionQuery {
-    readonly agent: AcpAgentDefinition;
-    readonly cwd: string;
-    readonly additionalDirectories: readonly string[];
-    readonly sessionId: string;
-    readonly signal: AbortSignal;
-}
-
 /** Application lookup budget; null allows all entries within the page budget. */
 export interface NativeSessionLookupBudget {
     readonly maximumPages: number;
@@ -93,6 +84,7 @@ export interface AdapterPromptResult {
 
 /** Business-facing session operations. Transport and initialization belong to the adapter. */
 export interface Adapter {
+    readonly refreshAgent: (agent: AcpAgentDefinition) => void;
     readonly connectSession: (options: LiveSessionConnectionOptions) => AdapterSessionConnection;
     readonly cancel: (target: AdapterSessionTarget, signal: AbortSignal) => Promise<void>;
     readonly closeSession: (target: AdapterSessionTarget, signal: AbortSignal) => Promise<void>;
@@ -116,16 +108,19 @@ export interface Adapter {
         selection: SessionConfigurationSelection,
         signal: AbortSignal,
     ) => Promise<readonly SessionConfigOption[]>;
-    readonly getCapabilities: (query: NativeSessionQuery) => Promise<SessionCapabilities>;
-    readonly listSessions: (query: NativeSessionQuery, cursor: string | null) => Promise<NativeSessionPage>;
+    readonly getCapabilities: (cwd: string, signal: AbortSignal) => Promise<SessionCapabilities>;
+    readonly listSessions: (cwd: string, cursor: string | null, signal: AbortSignal) => Promise<NativeSessionPage>;
     readonly findSession: (
-        query: NativeSessionQuery,
+        cwd: string,
         nativeSessionId: string,
         budget: NativeSessionLookupBudget,
+        signal: AbortSignal,
     ) => Promise<NativeSessionInfo>;
     readonly readSessionHistory: (
-        query: NativeSessionQuery,
+        cwd: string,
+        additionalDirectories: readonly string[],
         request: NativeSessionPreviewRequest,
+        signal: AbortSignal,
     ) => Promise<SessionEventPage>;
     readonly close: () => Promise<void>;
 }
