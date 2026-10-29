@@ -184,6 +184,8 @@ const nativeSessionResultSchema = z.discriminatedUnion("action", [
             command: commandDeliverySchema.optional().catch(undefined),
             // Absent from older Runtimes and while the last started command is still running.
             lastTurn: lastTurnOutcomeSchema.optional().catch(undefined),
+            // Runtime-owned support; older Relays strip this field before exposing the snapshot.
+            queuedCancellation: z.literal("before-start").optional().catch(undefined),
         })
         .readonly(),
     z

@@ -151,6 +151,7 @@ export class NativeSessionService {
                 sessionId: command.sessionId,
                 targetSessionId: command.targetSessionId,
                 ...(await this.#activeTurn(command, options)),
+                queuedCancellation: "before-start",
             };
         }
         const capabilities = await options.adapter.getCapabilities(options);

@@ -16,6 +16,60 @@ import { ControlledAcpAgentSpecification } from "../support/agents/controlled-ac
 import { withControlledDaemon } from "../support/agents/real-daemon.ts";
 import { writeControlledAcpExecutable } from "../support/controlled-acp-executable.ts";
 
+test("Given a command already completed, When a delayed queue edit cancels it before start, Then the Runtime refuses to claim that it was withdrawn", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-29T00:00:00Z"));
+    const directory = await mkdtemp(join(tmpdir(), "mobius-late-queue-edit-"));
+    try {
+        const executableDirectory = await writeControlledAcpExecutable(directory);
+        await withControlledDaemon(
+            new ControlledAcpAgentSpecification(),
+            { MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(directory, "agent"), PATH: executableDirectory },
+            async (peer) => {
+                const commandId = randomUUID();
+                peer.send(
+                    encodeSessionPromptCommand({
+                        additionalDirectoryIds: [],
+                        agentId: "controlled-acp",
+                        bindingId: peer.bindingId,
+                        commandId,
+                        directoryId: "default",
+                        disposition: "reject",
+                        attachments: [],
+                        kind: "session.prompt",
+                        prompt: "Complete before the edit reaches the Runtime",
+                        sessionId: peer.sessionId,
+                        targetCommandId: "",
+                    }),
+                );
+                for (;;) {
+                    const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
+                    if (
+                        event.type === "lifecycle-metadata" &&
+                        event.payload.kind === "prompt.completed" &&
+                        event.payload.commandId === commandId
+                    ) {
+                        expect(event.payload.stopReason).toBe("end_turn");
+                        break;
+                    }
+                }
+                peer.send(
+                    JSON.stringify({ commandId, kind: "session.cancel-before-start", sessionId: peer.sessionId }),
+                );
+                const reply = await peer.nextMessage();
+                expect(decodeMessageKind(reply)).toBe("session.operation.failed");
+                expect(decodeSessionOperationFailedEvent(reply)).toMatchObject({
+                    requestId: commandId,
+                    code: "turn_already_started",
+                });
+            },
+        );
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+        vi.useRealTimers();
+    }
+}, 90_000);
+
 // @no-uc: Compatibility; conditional cancellation must never cancel a command which already started.
 test("Given running and queued work, When cancellation permits only unstarted work, Then the queued work stops and the running work is preserved", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });

@@ -19,6 +19,7 @@ function sessionRuntimeErrorStatus(code: string): number {
         code === "session_conflict" ||
         code === "idempotency_conflict" ||
         code === "command_result_expired" ||
+        code === "turn_already_started" ||
         code === "session_configuration_conflict" ||
         code === "steering_target_unavailable" ||
         code === "steering_unsupported"

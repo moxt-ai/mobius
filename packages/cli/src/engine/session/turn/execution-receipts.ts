@@ -157,6 +157,14 @@ export class ExecutionReceipts {
                 return undefined;
         }
     };
+    /** Started identities remain authoritative after their detailed receipt is evicted. */
+    readonly hasStarted = (commandId: string, sessionId: string): boolean => {
+        const receipt = this.#executions.get(commandId);
+        return receipt === undefined
+            ? this.#table.identity(commandId)?.sessionId === sessionId
+            : receipt.sessionId === sessionId && receipt.started;
+    };
+
     /** Reserves an unseen command for cancellation before a delayed prompt can claim its identity. */
     readonly recordCancellationBeforeAdmission = (
         commandId: string,
