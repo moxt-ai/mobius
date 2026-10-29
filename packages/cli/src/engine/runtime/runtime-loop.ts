@@ -148,8 +148,12 @@ export class RuntimeLoop {
         // Claim this execution before asynchronous preparation can yield.
         this.#state = { kind: "preparing" };
         try {
-            const config = await this.#prepare(signal);
+            const prepared = await this.#prepare(signal);
             signal.throwIfAborted();
+            const config =
+                this.#options.sessionEnvironment === undefined
+                    ? prepared
+                    : { ...prepared, sessionEnvironment: this.#options.sessionEnvironment };
             validateRuntimeConfiguration(config);
             this.#state = { kind: "running", config };
             await runRuntime(config, signal, undefined, {
@@ -175,6 +179,8 @@ export class RuntimeLoop {
 }
 
 export interface RuntimeLoopOptions {
+    /** Session-scoped Agent environment for this execution only; never persisted with the connection. */
+    readonly sessionEnvironment?: RuntimeConfig["sessionEnvironment"];
     readonly turnActivity?: RuntimeTurnActivity;
     readonly onConnectionStatus?: (status: "online" | "reconnecting") => void;
     readonly onExecutionCountChange?: (count: number) => void;
