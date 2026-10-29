@@ -262,6 +262,14 @@ jobs:
           NPM_MAJOR: ${{ matrix.npm }}
         run: npm install --global "npm@$env:NPM_MAJOR" && npm --version
       - run: pnpm test:npm-compatibility
+      - name: Repeat Windows upgrade diagnosis
+        if: runner.os == 'Windows'
+        run: |
+          1..8 | ForEach-Object {
+            Write-Output "Windows upgrade attempt $_"
+            pnpm --filter @moxt-ai/mobius exec vitest run tests/runtime/daemon-upgrade.integration.test.ts
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
   cli-compatibility:
     needs: changes
