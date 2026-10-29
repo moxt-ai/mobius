@@ -45,6 +45,12 @@ describe("Runtime descriptor decoding contracts", () => {
         expect(() => decodeMobiusRuntimeList({ runtimes: [{ ...runtime, installableAgents: [] }] })).not.toThrow();
     });
 
+    it("Given a Runtime list whose Agents carry fields from a newer service, When it is decoded, Then its Agents are available", () => {
+        const agents = runtime.agents.map((agent) => ({ ...agent, futureAgentField: { format: 2 } }));
+        const decoded = decodeMobiusRuntimeList({ runtimes: [{ ...runtime, agents }] });
+        expect(decoded[0]?.agents[0]?.id).toBe("codex");
+    });
+
     it("Given a paired status, When it is decoded, Then it is accepted", () => {
         const decoded = decodeMobiusRuntimePairingStatus(pairedStatus);
         expect(decoded.status).toBe(MobiusRuntimePairingLifecycle.Paired);
