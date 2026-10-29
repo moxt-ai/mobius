@@ -121,6 +121,7 @@ export function buildSessionLayer(options: SessionLayerOptions) {
             return true;
         },
         activeSessions.recordSessionEvent,
+        operations.hasStarted,
     );
     const nativeSessions = new NativeSessionService(
         bindingId,
