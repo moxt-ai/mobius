@@ -23,7 +23,6 @@ interface QueuedPromptRequest {
         readonly directoryId: string;
         readonly additionalDirectoryIds: readonly string[];
     };
-    readonly phase: "queued" | "running";
 }
 
 export interface PromptRequestRecovery {
@@ -64,15 +63,18 @@ export class PromptLifecycle {
     readonly #publications = new Map<string, SessionLiveEvent[]>();
     readonly #queued = new Map<string, QueuedPromptRequest>();
     readonly #recordActiveTurn: (event: SessionLiveEvent) => void;
+    readonly #hasStarted: (commandId: string, sessionId: string) => boolean;
 
     readonly #recordLifecycle: (sessionId: string, event: SessionEventPayload) => Promise<boolean>;
     constructor(
         sink: SessionEventSink,
         recordLifecycle: (sessionId: string, event: SessionEventPayload) => Promise<boolean>,
         recordActiveTurn: (event: SessionLiveEvent) => void,
+        hasStarted: (commandId: string, sessionId: string) => boolean,
     ) {
         this.#recordLifecycle = recordLifecycle;
         this.#recordActiveTurn = recordActiveTurn;
+        this.#hasStarted = hasStarted;
         this.#sink = sink;
     }
 
@@ -86,13 +88,12 @@ export class PromptLifecycle {
                 directoryId: command.directoryId,
                 additionalDirectoryIds: command.additionalDirectoryIds,
             },
-            phase: "queued",
             sessionId: command.sessionId,
             ...(command.targetCommandId.length === 0 ? {} : { targetCommandId: command.targetCommandId }),
         });
     };
 
-    readonly started = (
+    readonly executionMetadata = (
         sessionId: string,
         commandId: string,
         attemptId: string,
@@ -108,7 +109,6 @@ export class PromptLifecycle {
     } => {
         const request = this.#queued.get(commandId);
         if (request?.sessionId === sessionId) {
-            this.#queued.set(commandId, { ...request, phase: "running" });
             return {
                 attemptId,
                 content: request.content,
@@ -198,7 +198,7 @@ export class PromptLifecycle {
                 kind: "prompt.completed",
                 commandId,
                 stopReason,
-                ...(request.phase === "queued" ? { execution: "not-started" as const } : {}),
+                ...(this.#hasStarted(commandId, sessionId) ? {} : { execution: "not-started" as const }),
             },
         });
         if (!recorded) {
@@ -227,7 +227,7 @@ export class PromptLifecycle {
 
     readonly promptRequestRecovery = (sessionId: string): PromptRequestRecovery => ({
         queuedPromptRequests: [...this.#queued.values()]
-            .filter((request) => request.sessionId === sessionId && request.phase === "queued")
+            .filter((request) => request.sessionId === sessionId && !this.#hasStarted(request.commandId, sessionId))
             .map(({ commandId, content, disposition, targetCommandId }) => ({
                 commandId,
                 content,

@@ -72,15 +72,6 @@ export const sessionCancelBeforeStartCommand: RuntimeCommand = {
             return;
         }
         // No await separates checking admission from requesting cancellation.
-        if (turn.snapshot() !== null) {
-            reportOperationFailure(
-                socket,
-                message.commandId,
-                message.sessionId,
-                new SessionError("turn_already_started", "The command already started"),
-            );
-            return;
-        }
         turn.requestCancellation();
     },
 };
