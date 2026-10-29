@@ -636,8 +636,11 @@ export class PairingDirectoryService implements PairingOperations {
             if (state === null) {
                 throw new PairingDirectoryError("access_grant_invalid", "The access link is invalid");
             }
-            if (state.is_redeemed === 1) {
+            if (state.redeemed_at !== null) {
                 throw new PairingDirectoryError("access_grant_redeemed", "The access link has already been used");
+            }
+            if (state.runtime_revoked_at !== null) {
+                throw new PairingDirectoryError("runtime_revoked", "The Runtime has been revoked");
             }
             if (state.expires_at <= now) {
                 throw new PairingDirectoryError("access_grant_expired", "The access link has expired");

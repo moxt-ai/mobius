@@ -1,6 +1,9 @@
+import { and, eq, exists, gt, isNull, sql } from "drizzle-orm";
 import type { DatabaseResolver } from "../infra/database-resolver.ts";
+import { relayDrizzle } from "../infra/drizzle-database.ts";
 import type { ProjectStorageContext } from "../infra/project-storage-directory.ts";
 import type { SqlDatabase } from "../infra/sql-database.ts";
+import { channelAccessGrant, channelHostCredential, runtimeIdentity } from "../schema/project-do/index.ts";
 import { RuntimeDirectoryStorage } from "./runtime-directory-storage.ts";
 
 interface ChannelScopeRow {
@@ -184,30 +187,83 @@ export class PairingStorage {
         hostHash: string,
         now: number,
         signal: AbortSignal,
-    ) =>
-        this.#database.batch(
-            [
-                this.#database
-                    .prepare(`UPDATE channel_access_grants SET redeemed_at = ?, redeemed_credential_id = ?
-            WHERE grant_id = ? AND channel_id = ? AND secret_hash = ? AND redeemed_at IS NULL AND expires_at > ?`)
-                    .bind(now, credentialId, grantId, channelId, secretHash, now),
-                this.#database
-                    .prepare(`INSERT INTO channel_host_credentials (credential_id, channel_id, token_hash,
-            authority, created_at, last_used_at, source_grant_id)
-            SELECT ?, channel_id, ?, 'linked', ?, ?, grant_id FROM channel_access_grants
-            WHERE grant_id = ? AND channel_id = ? AND redeemed_at = ? AND redeemed_credential_id = ?`)
-                    .bind(credentialId, hostHash, now, now, grantId, channelId, now, credentialId),
-            ],
+    ) => {
+        const database = relayDrizzle(this.#database, signal);
+        const grant = and(eq(channelAccessGrant.grantId, grantId), eq(channelAccessGrant.channelId, channelId));
+        const redemption = database
+            .update(channelAccessGrant)
+            .set({ redeemedAt: now, redeemedCredentialId: credentialId })
+            .where(
+                and(
+                    grant,
+                    eq(channelAccessGrant.secretHash, secretHash),
+                    isNull(channelAccessGrant.redeemedAt),
+                    gt(channelAccessGrant.expiresAt, now),
+                    exists(
+                        database
+                            .select({ runtimeId: runtimeIdentity.runtimeId })
+                            .from(runtimeIdentity)
+                            .where(
+                                and(
+                                    eq(runtimeIdentity.channelId, channelAccessGrant.channelId),
+                                    isNull(runtimeIdentity.revokedAt),
+                                ),
+                            ),
+                    ),
+                ),
+            );
+        const credential = database.insert(channelHostCredential).select(
+            database
+                .select({
+                    credentialId: sql<string>`${credentialId}`.as("credential_id"),
+                    channelId: channelAccessGrant.channelId,
+                    tokenHash: sql<string>`${hostHash}`.as("token_hash"),
+                    authority: sql<"linked">`'linked'`.as("authority"),
+                    createdAt: sql<number>`${now}`.as("created_at"),
+                    lastUsedAt: sql<number>`${now}`.as("last_used_at"),
+                    revokedAt: sql<null>`null`.as("revoked_at"),
+                    sourceGrantId: channelAccessGrant.grantId,
+                    replacedByCredentialId: sql<null>`null`.as("replaced_by_credential_id"),
+                    overlapEndsAt: sql<null>`null`.as("overlap_ends_at"),
+                })
+                .from(channelAccessGrant)
+                .where(
+                    and(
+                        grant,
+                        eq(channelAccessGrant.redeemedAt, now),
+                        eq(channelAccessGrant.redeemedCredentialId, credentialId),
+                    ),
+                ),
+        );
+        // Authorization and consumption share the credential-issuance transaction.
+        return this.#database.batch(
+            [redemption, credential].map((query) => {
+                const { sql, params } = query.toSQL();
+                return this.#database.prepare(sql).bind(...params);
+            }),
             signal,
         );
+    };
 
-    readonly readGrant = (channelId: string, grantId: string, secretHash: string, signal: AbortSignal) =>
-        this.#database
-            .prepare(`
-        SELECT expires_at, CASE WHEN redeemed_at IS NULL THEN 0 ELSE 1 END AS is_redeemed FROM channel_access_grants
-        WHERE grant_id = ? AND channel_id = ? AND secret_hash = ?`)
-            .bind(grantId, channelId, secretHash)
-            .first<{ readonly expires_at: number; readonly is_redeemed: number }>(signal);
+    readonly readGrant = async (channelId: string, grantId: string, secretHash: string, signal: AbortSignal) => {
+        const rows = await relayDrizzle(this.#database, signal)
+            .select({
+                expires_at: channelAccessGrant.expiresAt,
+                redeemed_at: channelAccessGrant.redeemedAt,
+                runtime_revoked_at: runtimeIdentity.revokedAt,
+            })
+            .from(channelAccessGrant)
+            .innerJoin(runtimeIdentity, eq(runtimeIdentity.channelId, channelAccessGrant.channelId))
+            .where(
+                and(
+                    eq(channelAccessGrant.grantId, grantId),
+                    eq(channelAccessGrant.channelId, channelId),
+                    eq(channelAccessGrant.secretHash, secretHash),
+                ),
+            )
+            .limit(1);
+        return rows[0] ?? null;
+    };
 
     readonly revokeLinked = (channelId: string, credentialId: string, now: number, signal: AbortSignal) =>
         this.#database
