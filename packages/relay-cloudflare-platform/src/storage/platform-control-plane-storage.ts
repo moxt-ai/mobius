@@ -1,5 +1,5 @@
 import { relayDrizzle } from "@moxt-ai/mobius-relay-core/database";
-import { and, asc, desc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import {
     type ActiveCountRow,
     ActiveCountRowSchema,
@@ -718,33 +718,6 @@ export class PlatformControlPlaneStorage {
     private readonly statement = (query: { readonly toSQL: () => { sql: string; params: unknown[] } }) => {
         const { sql: text, params } = query.toSQL();
         return this.#database.prepare(text).bind(...params);
-    };
-
-    readonly touchCredential = async (credentialId: string, now: number, signal: AbortSignal): Promise<boolean> => {
-        // Observations may finish out of order. Update the fact and its legacy projection atomically;
-        // an older or repeated observation is still a successful touch of an active credential.
-        const result = await waitForD1(
-            () =>
-                platformDrizzle(this.#database)
-                    .update(platformAppCredential)
-                    .set({
-                        lastUsedAt: sql`max(${platformAppCredential.lastUsedAt}, coalesce(${platformAppCredential.lastObservedUsedAt}, ${now}), ${now})`,
-                        lastObservedUsedAt: sql`max(coalesce(${platformAppCredential.lastObservedUsedAt}, ${now}), ${now})`,
-                    })
-                    .where(
-                        and(
-                            eq(platformAppCredential.credentialId, credentialId),
-                            isNull(platformAppCredential.revokedAt),
-                            or(
-                                isNull(platformAppCredential.replacedByCredentialId),
-                                gt(platformAppCredential.overlapEndsAt, now),
-                            ),
-                        ),
-                    )
-                    .run(),
-            signal,
-        );
-        return result.meta.changes === 1;
     };
 
     readonly readCredentialByPublicId = async (
