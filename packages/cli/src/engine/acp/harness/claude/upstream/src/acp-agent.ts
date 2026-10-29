@@ -101,7 +101,7 @@ import {
     isTaskNotificationOrigin,
     parseTaskNotifications,
 } from "./background-task-notifications.js";
-import { formatContextBlock, formatUriAsLink, replayContextResources } from "./context-resources.js";
+import { formatContextBlock, formatUriAsLink } from "./context-resources.js";
 import {
     applyAskElicitationResponse,
     askUserQuestionsToCreateRequest,
@@ -8126,14 +8126,9 @@ export function toAcpNotifications(
     const toolResultMeta = parseToolResultMeta(options?.toolResultMeta);
 
     const output = [];
-    const replayedResources = role === "user" && options.historical === true ? replayContextResources(content) : null;
     // Only handle the first chunk for streaming; extend as needed for batching
-    for (const [index, chunk] of content.entries()) {
-        if (replayedResources !== null && index >= replayedResources.contextStart) {
-            break;
-        }
+    for (const chunk of content) {
         let update: SessionNotification["update"] | null = null;
-        const resource = replayedResources?.resources.get(index);
         switch (chunk.type) {
             case "text":
             case "text_delta": {
@@ -8142,7 +8137,7 @@ export function toAcpNotifications(
                     update = {
                         sessionUpdate: role === "assistant" ? "agent_message_chunk" : "user_message_chunk",
                         messageId,
-                        content: resource ?? {
+                        content: {
                             type: "text",
                             text: chunk.text,
                         },
