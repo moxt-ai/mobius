@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { appendFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
@@ -232,13 +231,6 @@ export async function stopProcessTree(
     }
     const childExited = child.exitCode !== null || child.signalCode !== null;
     const processes = mergeProcessTrees(capturedProcesses, await captureProcessTree(child));
-    const diagnosticDirectory = process.env["MOBIUS_TEST_CLOCK_DIRECTORY"];
-    if (diagnosticDirectory !== undefined) {
-        appendFileSync(
-            join(diagnosticDirectory, "state", "process-trees.log"),
-            `${JSON.stringify({ caller: process.pid, childProcessId, childExited, processes })}\n`,
-        );
-    }
     if (childExited && processes.length === 0) {
         return;
     }
