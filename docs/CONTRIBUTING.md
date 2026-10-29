@@ -10,6 +10,8 @@ metadata:
 
 This guide is for developing Mobius itself. To integrate Mobius into your own
 application, start with the [README](../README.md#start-with-the-sdk).
+For the product and infrastructure vocabulary used throughout the repository, see
+the [Mobius glossary](GLOSSARY.md).
 
 ## Issues and pull requests
 
