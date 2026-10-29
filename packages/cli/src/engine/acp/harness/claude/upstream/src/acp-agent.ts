@@ -2107,16 +2107,6 @@ export class ClaudeAcpAgent {
 
         const userMessage = promptToClaude(params);
         userMessage.uuid = promptUuid;
-        for (const content of params.prompt) {
-            if (submission.aborted) {
-                onSubmitted();
-                return { stopReason: "cancelled" };
-            }
-            await this.client.sessionUpdate({
-                sessionId: params.sessionId,
-                update: { sessionUpdate: "user_message_chunk", messageId: promptUuid, content },
-            });
-        }
 
         if (submission.aborted) {
             onSubmitted();
@@ -2329,12 +2319,6 @@ export class ClaudeAcpAgent {
         }
         session.input.push(userMessage);
         const firstText = params.prompt[0]?.type === "text" ? params.prompt[0].text : "";
-        for (const content of params.prompt) {
-            await this.client.sessionUpdate({
-                sessionId,
-                update: { sessionUpdate: "user_message_chunk", messageId: steeredUuid, content },
-            });
-        }
         await this.publishGoalFromPrompt(sessionId, firstText, steeredUuid);
         return { outcome: "injected", messageId: steeredUuid };
     }
@@ -4389,8 +4373,9 @@ export class ClaudeAcpAgent {
                         // order. The first echo promotes that turn to active; if a different
                         // turn is still active, it is handed off (settled end_turn) first.
                         // Done before the `cancelled` guard so a turn enqueued after a cancel
-                        // is still promoted — activateTurn() clears the flag. The turn's own
-                        // echo is then dropped from the feed (the client already shows it).
+                        // is still promoted — activateTurn() clears the flag. Forward the
+                        // first native echo, not the submitted ACP representation.
+                        let isInputEcho = false;
                         if (message.type === "user" && "uuid" in message && message.uuid) {
                             if (session.pendingGoalUpdate?.commandUuid === message.uuid) {
                                 session.pendingGoalUpdate.started = true;
@@ -4398,6 +4383,7 @@ export class ClaudeAcpAgent {
                             const queued = findUnsettledTurn(message.uuid);
                             if (queued) {
                                 if (!queued.inputEchoObserved) {
+                                    isInputEcho = true;
                                     queued.inputEchoObserved = true;
                                     this.logger.log(
                                         JSON.stringify({
@@ -4468,9 +4454,10 @@ export class ClaudeAcpAgent {
                                     // result re-emit the answer.
                                     activateTurn(queued);
                                 }
-                                break;
-                            }
-                            if ("isReplay" in message && message.isReplay) {
+                                if (!isInputEcho) {
+                                    break;
+                                }
+                            } else if ("isReplay" in message && message.isReplay) {
                                 // A steered message's echo matches no turn (steer() creates
                                 // none), but it marks the steered cycle as running — how the idle
                                 // lane tells "the answer is still ahead" from "the turn is over"
@@ -4479,12 +4466,15 @@ export class ClaudeAcpAgent {
                                     isSteering(session.activeTurn) &&
                                     session.activeTurn.steeredEchoes.delete(message.uuid)
                                 ) {
+                                    isInputEcho = true;
                                     // The interrupted/held cycle's result cannot finish work
                                     // that only starts at this echo. Wait for its own result.
                                     session.activeTurn.steeredSettle = undefined;
                                 }
-                                // Unrelated replay (e.g. the echo of an already-settled turn).
-                                break;
+                                if (!isInputEcho) {
+                                    // Unrelated replay (e.g. the echo of an already-settled turn).
+                                    break;
+                                }
                             }
                         }
 
@@ -4569,9 +4559,11 @@ export class ClaudeAcpAgent {
                             this.logger.error(message.message.content);
                             break;
                         }
-                        // Skip these user messages for now, since they seem to just be messages we don't want in the feed
+                        // Unmatched text-only user frames are SDK-internal input, not
+                        // submitted prompts. Matched native echoes are visible input.
                         if (
                             message.type === "user" &&
+                            !isInputEcho &&
                             (typeof message.message.content === "string" ||
                                 (Array.isArray(message.message.content) &&
                                     message.message.content.length === 1 &&

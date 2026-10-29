@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { addAbortListener } from "node:events";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +10,7 @@ import {
     encodeSessionPreviewHistoryPageLoad,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
+import { z } from "zod";
 import { createAcpClient } from "../../src/engine/acp/connection/create-client.ts";
 import { getEnvironmentSessionMessages } from "../../src/engine/acp/harness/claude/upstream/dist/environment-session-messages.js";
 import { type ClaudeSessionUpdate, createClaudeAcpApp } from "../../src/engine/acp/harness/claude/upstream/dist/lib.js";
@@ -17,8 +19,23 @@ import { ClaudeFixture } from "../support/agents/claude.ts";
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeAnthropicProvider } from "../support/llm/anthropic.ts";
 
-test("Given real Claude saves text and four resources, When its ACP history is replayed, Then saved links and context remain text with their message identity", async () => {
-    await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "ATTACHMENT_REPLAY_REPLY");
+test("Given real Claude receives resources, When it echoes prompts and steering and replays history, Then chunks contain native links and context with stable identities", async () => {
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const steeringUri = "file:///workspace/steering.js";
+    await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "ATTACHMENT_REPLAY_REPLY", {
+        beforeFirstText: async (_scenario, signal, conversation) => {
+            if (!conversation.includes("Wait for my steering context") || conversation.includes(steeringUri)) {
+                return;
+            }
+            entered.resolve();
+            const stopped = Promise.withResolvers<void>();
+            using _abort = addAbortListener(signal, () => stopped.resolve());
+            if (!signal.aborted) {
+                await Promise.race([release.promise, stopped.promise]);
+            }
+        },
+    });
     await using fixture = await ClaudeFixture.create(provider);
     const cwd = await mkdtemp(join(tmpdir(), "mobius-claude-attachment-replay-"));
     const updates: ClaudeSessionUpdate[] = [];
@@ -69,7 +86,6 @@ test("Given real Claude saves text and four resources, When its ACP history is r
             { cancellationSignal: signal },
         );
         const live = updates.filter((update) => update.sessionUpdate === "user_message_chunk");
-        expect(live.map((update) => update.content)).toEqual(prompt);
         const messageId = live[0]?.messageId;
         expect(messageId).toEqual(expect.any(String));
         updates.length = 0;
@@ -100,6 +116,8 @@ test("Given real Claude saves text and four resources, When its ACP history is r
                     : [],
             ),
         ]);
+        expect(live.map((update) => update.content)).toEqual(replay);
+        expect(new Set(live.map((update) => update.messageId))).toEqual(new Set([messageId]));
         const saved = await getEnvironmentSessionMessages(fixture.environment, sessionId, signal);
         expect(saved.find((message) => message.uuid === messageId)?.message).toEqual(
             expect.objectContaining({
@@ -125,7 +143,41 @@ test("Given real Claude saves text and four resources, When its ACP history is r
                 ],
             }),
         );
+        updates.length = 0;
+        const running = connection.agent.request(
+            methods.agent.session.prompt,
+            { sessionId, prompt: [{ type: "text", text: "Wait for my steering context" }] },
+            { cancellationSignal: signal },
+        );
+        const stopped = Promise.withResolvers<never>();
+        using _abort = addAbortListener(signal, () => stopped.reject(signal.reason));
+        try {
+            await Promise.race([entered.promise, stopped.promise]);
+            const steering = z.object({ outcome: z.literal("injected"), messageId: z.string().min(1) }).parse(
+                await connection.agent.request(
+                    "_session/steering",
+                    {
+                        sessionId,
+                        prompt: [{ type: "resource_link", uri: steeringUri, name: "steering.js" }],
+                    },
+                    { cancellationSignal: signal },
+                ),
+            );
+            release.resolve();
+            expect(await running).toMatchObject({ stopReason: "end_turn" });
+            expect(
+                updates.flatMap((update) =>
+                    update.sessionUpdate === "user_message_chunk" && update.messageId === steering.messageId
+                        ? [update.content]
+                        : [],
+                ),
+            ).toEqual([{ type: "text", text: "[@steering.js](file:///workspace/steering.js)" }]);
+        } finally {
+            release.resolve();
+            await running;
+        }
     } finally {
+        release.resolve();
         await claude.agent()?.dispose();
         connection.close();
         await rm(cwd, { recursive: true, force: true });
