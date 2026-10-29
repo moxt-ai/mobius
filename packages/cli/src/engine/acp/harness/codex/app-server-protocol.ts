@@ -69,6 +69,13 @@ export function decodeAppServerMessage(value: unknown): AppServerMessage {
 
 const turnStatusSchema = z.enum(["inProgress", "completed", "interrupted", "failed"]);
 const messagePhaseSchema = z.enum(["commentary", "final_answer"]);
+// A question Codex put to the user without waiting for the answer (`request_user_input_async`); the
+// user replies with an ordinary message. This is newer than the rest of the item, so a shape this
+// Mobius cannot read degrades to "no questions" instead of failing the item that carries the message.
+const askedQuestionSchema = z.object({
+    options: z.array(z.string()).nullish(),
+    title: z.string(),
+});
 const commandExecutionStatusSchema = z.enum(["inProgress", "completed", "failed", "declined"]);
 const patchApplyStatusSchema = z.enum(["inProgress", "completed", "failed", "declined"]);
 const mcpToolCallStatusSchema = z.enum(["inProgress", "completed", "failed"]);
@@ -109,6 +116,7 @@ export const threadItemSchema = z.discriminatedUnion("type", [
         text: boundedText(1_000_000),
         type: z.literal("agentMessage"),
         phase: messagePhaseSchema.nullish(),
+        questions: z.array(askedQuestionSchema).nullish().catch(null),
     }),
     z.object({
         content: z.array(z.unknown()).max(10_000),

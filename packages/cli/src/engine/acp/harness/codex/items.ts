@@ -13,6 +13,9 @@ import { type ThreadItem, threadItemSchema } from "./app-server-protocol.ts";
 
 const TOOL_OUTPUT_CHARACTER_LIMIT = 32_768;
 const TITLE_CHARACTER_LIMIT = 500;
+const ASKED_QUESTION_LIMIT = 20;
+const ASKED_OPTION_LIMIT = 20;
+const ASKED_CHARACTER_LIMIT = 500;
 // Mobius reads this key in its activity tracker to split streamed commentary from the final answer.
 // It is a Mobius-internal convention, not an app-server field.
 
@@ -278,4 +281,41 @@ export function reasoningText(item: ThreadItem): string | null {
         return null;
     }
     return boundedParagraphs(item.content.length > 0 ? item.content : item.summary, TOOL_OUTPUT_CHARACTER_LIMIT);
+}
+
+type MessageItem = Extract<ThreadItem, { type: "agentMessage" | "plan" }>;
+
+/**
+ * What to add after the text of an agent message that asks questions without waiting for the answers
+ * (Codex's `request_user_input_async`): the user replies with an ordinary message, and no Session event
+ * carries the options separately, so they are written into the message. A question the text already
+ * presents, with all its options, is not repeated. Returns "" when there is nothing to add.
+ */
+export function askedQuestionsSuffix(item: MessageItem): string {
+    if (item.type !== "agentMessage") {
+        return "";
+    }
+    const blocks = (item.questions ?? []).slice(0, ASKED_QUESTION_LIMIT).flatMap((question) => {
+        const title = truncate(question.title.trim(), ASKED_CHARACTER_LIMIT);
+        const options = (question.options ?? [])
+            .map((option) => truncate(option.trim(), ASKED_CHARACTER_LIMIT))
+            .filter((option) => option.length > 0)
+            .slice(0, ASKED_OPTION_LIMIT);
+        if (
+            title.length === 0 ||
+            (item.text.includes(title) && options.every((option) => item.text.includes(option)))
+        ) {
+            return [];
+        }
+        return [[`**${title}**`, ...options.map((option) => `- ${option}`)].join("\n")];
+    });
+    if (blocks.length === 0) {
+        return "";
+    }
+    return `${item.text.length === 0 ? "" : "\n\n"}${blocks.join("\n\n")}`;
+}
+
+/** The text a client is shown for an assistant message or a proposed plan. */
+export function messageItemText(item: MessageItem): string {
+    return `${item.text}${askedQuestionsSuffix(item)}`;
 }
