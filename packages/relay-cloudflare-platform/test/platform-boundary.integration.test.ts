@@ -4034,12 +4034,12 @@ describe.sequential("Platform Turn submission", () => {
         }
     });
 
-    it("Given a daemon using fixed-text heartbeats, When it sends a retired identified heartbeat near its deadline, Then that frame cannot renew its liveness", async () => {
-        const runtime = await connectRuntimeDaemon("identified-heartbeat", { anchorClockToHeartbeat: true });
+    it("Given a daemon using fixed-text heartbeats, When it sends a noncanonical heartbeat near its deadline, Then only host auto-responses renew its liveness", async () => {
+        const runtime = await connectRuntimeDaemon("noncanonical-heartbeat", { anchorClockToHeartbeat: true });
         const heartbeatAt = Date.now();
         try {
             vi.setSystemTime(heartbeatAt + 30_000);
-            runtime.daemon.send(JSON.stringify({ heartbeatId: "identified-heartbeat", kind: "runtime.heartbeat" }));
+            runtime.daemon.send(JSON.stringify({ extra: "ignored", kind: "runtime.heartbeat" }));
             expect(await runtime.readOnline()).toBe(true);
 
             vi.setSystemTime(heartbeatAt + 36_000);

@@ -1,4 +1,4 @@
-import { assertKind, ProtocolMessageError, parseJson, readBoolean, readIdentifier } from "../shared/message-codec.ts";
+import { assertKind, parseJson, readBoolean, readIdentifier } from "../shared/message-codec.ts";
 
 export const RUNTIME_STATUS_KIND = "runtime.status";
 export const RUNTIME_LIVENESS_READY_KIND = "runtime.liveness.ready";
@@ -62,18 +62,12 @@ export function decodeRuntimeLivenessReadyEvent(encoded: string): RuntimeLivenes
 export function decodeRuntimeHeartbeatEvent(encoded: string): RuntimeHeartbeatEvent {
     const value = parseJson(encoded);
     assertKind(value, RUNTIME_HEARTBEAT_KIND);
-    if ("heartbeatId" in value) {
-        throw new ProtocolMessageError("Runtime heartbeats do not support identifiers");
-    }
     return { kind: RUNTIME_HEARTBEAT_KIND };
 }
 
 export function decodeRuntimeHeartbeatAckEvent(encoded: string): RuntimeHeartbeatAckEvent {
     const value = parseJson(encoded);
     assertKind(value, RUNTIME_HEARTBEAT_ACK_KIND);
-    if ("heartbeatId" in value) {
-        throw new ProtocolMessageError("Runtime heartbeat acknowledgements do not support identifiers");
-    }
     return { kind: RUNTIME_HEARTBEAT_ACK_KIND };
 }
 

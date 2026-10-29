@@ -4,7 +4,6 @@ import {
     decodeRuntimeHeartbeatAckEvent,
     decodeRuntimeHeartbeatEvent,
     decodeServiceToDaemonMessage,
-    ProtocolMessageError,
     RUNTIME_HEARTBEAT_ACK_MESSAGE,
     RUNTIME_HEARTBEAT_MESSAGE,
 } from "../../src/protocol/index.ts";
@@ -15,15 +14,15 @@ it("Given fixed-text Runtime heartbeats, When either peer decodes them, Then the
 });
 
 it.each(["runtime.heartbeat", "runtime.heartbeat.ack"])(
-    "Given a retired identified %s frame, When a peer decodes it, Then it rejects the unsupported protocol instead of ignoring its identifier",
+    "Given a %s frame with unknown fields, When a peer decodes it, Then only its supported kind is retained",
     (kind) => {
-        const encoded = JSON.stringify({ kind, heartbeatId: "retired-heartbeat" });
+        const encoded = JSON.stringify({ kind, extra: "ignored" });
         const decode = kind === "runtime.heartbeat" ? decodeRuntimeHeartbeatEvent : decodeRuntimeHeartbeatAckEvent;
-        expect(() => decode(encoded)).toThrow(ProtocolMessageError);
+        expect(decode(encoded)).toEqual({ kind });
         if (kind === "runtime.heartbeat") {
-            expect(decodeDaemonToRelayMessage(encoded)).toBeNull();
+            expect(decodeDaemonToRelayMessage(encoded)).toEqual({ kind });
         } else {
-            expect(() => decodeServiceToDaemonMessage(encoded)).toThrow(ProtocolMessageError);
+            expect(decodeServiceToDaemonMessage(encoded)).toEqual({ kind });
         }
     },
 );
