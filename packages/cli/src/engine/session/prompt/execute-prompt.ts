@@ -132,7 +132,7 @@ export async function executePrompt({
             }
         }
         const stream = activateAttempt();
-        const lifecycle = eventProjection.executionMetadata(
+        const lifecycle = eventProjection.started(
             command.sessionId,
             command.commandId,
             attemptId,

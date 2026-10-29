@@ -93,7 +93,8 @@ export class PromptLifecycle {
         });
     };
 
-    readonly executionMetadata = (
+    /** Metadata for an execution already claimed by the receipt owner. */
+    readonly started = (
         sessionId: string,
         commandId: string,
         attemptId: string,
