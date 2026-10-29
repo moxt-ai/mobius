@@ -17,6 +17,7 @@ class BrowserWebSocket extends EventTarget implements WebSocket {
     onmessage: WebSocket["onmessage"] = null;
     onopen: WebSocket["onopen"] = null;
     readonly protocol = "";
+    readonly liveness: "responsive" | "silent";
     readyState: WebSocket["readyState"] = WebSocket.OPEN;
     readonly subscriptionIds: string[] = [];
     readonly requestBodies: string[] = [];
@@ -24,10 +25,11 @@ class BrowserWebSocket extends EventTarget implements WebSocket {
     readonly url: string;
     closedWith: { readonly code: number; readonly reason: string } | null = null;
 
-    constructor(url: string, responseBody = "") {
+    constructor(url: string, responseBody = "", liveness: "responsive" | "silent" = "responsive") {
         super();
         this.responseBody = responseBody;
         this.url = url;
+        this.liveness = liveness;
     }
 
     readonly close = (code = 1000, reason = ""): void => {
@@ -46,6 +48,12 @@ class BrowserWebSocket extends EventTarget implements WebSocket {
         const value: unknown = JSON.parse(data);
         if (typeof value !== "object" || value === null) {
             throw new Error("Expected a WebSocket message");
+        }
+        if ("kind" in value && value.kind === "ping") {
+            if (this.liveness === "responsive") {
+                queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", { data: '{"kind":"pong"}' })));
+            }
+            return;
         }
         if ("subscriptionId" in value) {
             if (typeof value.subscriptionId !== "string") {
@@ -96,10 +104,12 @@ class BrowserWebSocketConnector implements MobiusWebSocketConnector {
     connectAttempts = 0;
     readonly responseBody: string;
     readonly sockets: BrowserWebSocket[] = [];
+    readonly liveness: "responsive" | "silent";
 
-    constructor(reconnectFailures = 0, responseBody = "") {
+    constructor(reconnectFailures = 0, responseBody = "", liveness: "responsive" | "silent" = "responsive") {
         this.#remainingReconnectFailures = reconnectFailures;
         this.responseBody = responseBody;
+        this.liveness = liveness;
     }
 
     readonly connect = async (endpoint: URL, signal: AbortSignal): Promise<WebSocket> => {
@@ -109,7 +119,7 @@ class BrowserWebSocketConnector implements MobiusWebSocketConnector {
             this.#remainingReconnectFailures -= 1;
             throw new Error("The controlled WebSocket reconnect failed because the network is unavailable");
         }
-        const socket = new BrowserWebSocket(endpoint.toString(), this.responseBody);
+        const socket = new BrowserWebSocket(endpoint.toString(), this.responseBody, this.liveness);
         this.sockets.push(socket);
         return socket;
     };
@@ -117,6 +127,60 @@ class BrowserWebSocketConnector implements MobiusWebSocketConnector {
 
 afterEach(() => {
     vi.useRealTimers();
+});
+
+it("Given a quiet subscription with connection heartbeats, When multiple idle deadlines pass, Then its original stream still delivers events", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "clearTimeout", "setTimeout"] });
+    vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));
+    const connector = new BrowserWebSocketConnector(0, "", "responsive");
+    const transport = new WsTransport({ connector });
+    const stream = await transport.openSessionLiveEvents(new Request("https://relay.example.test/session/events-v2"));
+    const reader = stream.getReader();
+    try {
+        await vi.advanceTimersByTimeAsync(180_000);
+        const socket = connector.sockets[0];
+        const subscriptionId = socket?.subscriptionIds[0];
+        if (socket === undefined || subscriptionId === undefined) {
+            throw new Error("Expected the live subscription");
+        }
+        socket.dispatchEvent(
+            new MessageEvent("message", {
+                data: JSON.stringify({
+                    kind: "session.events.event",
+                    subscriptionId,
+                    seqId: 1,
+                    eventId: "event-1",
+                    data: "event-after-idle",
+                }),
+            }),
+        );
+        await expect(reader.read()).resolves.toEqual({
+            done: false,
+            value: { seqId: 1, eventId: "event-1", data: "event-after-idle" },
+        });
+    } finally {
+        transport.close();
+        reader.releaseLock();
+    }
+});
+
+it("Given a transport whose peer stops answering heartbeats, When the ten-second acknowledgement deadline expires, Then the stream fails and a subsequent request reconnects", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "clearTimeout", "setTimeout"] });
+    vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));
+    const connector = new BrowserWebSocketConnector(0, "", "silent");
+    const transport = new WsTransport({ connector });
+    const stream = await transport.openSessionLiveEvents(new Request("https://relay.example.test/session/events-v2"));
+    const reader = stream.getReader();
+    try {
+        await vi.advanceTimersByTimeAsync(20_000);
+        const failed = expect(reader.read()).rejects.toBeInstanceOf(MobiusConnectionError);
+        await vi.advanceTimersByTimeAsync(10_000);
+        await failed;
+        expect((await transport.fetch(new Request("https://relay.example.test/after-recovery"))).status).toBe(204);
+    } finally {
+        transport.close();
+        reader.releaseLock();
+    }
 });
 
 it("Given a Unicode JSON request and response, When the browser uses the WebSocket transport, Then it transfers their text without Base64 wrapping", async () => {

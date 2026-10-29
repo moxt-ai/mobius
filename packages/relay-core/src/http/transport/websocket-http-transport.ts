@@ -2,6 +2,7 @@ import { decodeContentChunkFrame, MOBIUS_API_PREFIX } from "@moxt-ai/mobius-sdk/
 import { type HttpError, toHttpError } from "../../entity/http-error.ts";
 import { diagnosticText, serializeDiagnosticError } from "../../infra/log-diagnostics.ts";
 import { logger } from "../../infra/logger.ts";
+import type { WebSocketHost } from "../../infra/websocket-host.ts";
 
 const REQUEST_KIND = "http.request";
 const RESPONSE_KIND = "http.response";
@@ -13,7 +14,6 @@ const MAX_PENDING_BINARY_BYTES = MAX_BODY_BYTES;
 const MAX_PENDING_BINARY_REQUESTS = 16;
 const BINARY_REQUEST_TIMEOUT_MILLISECONDS = 30_000;
 const IDLE_TIMEOUT_MILLISECONDS = 60_000;
-const LIVE_EVENT_HEARTBEAT_MILLISECONDS = 20_000;
 const MAX_SUBSCRIPTION_DIAGNOSTICS = 8;
 const FORBIDDEN_HEADERS = new Set([
     "connection",
@@ -188,7 +188,11 @@ function responseHeaders(response: Response): readonly (readonly [string, string
     );
 }
 
-export function acceptWebSocketHttpTransport(request: Request, dispatch: DispatchRequest): Response {
+export function acceptWebSocketHttpTransport(
+    request: Request,
+    dispatch: DispatchRequest,
+    host: WebSocketHost,
+): Response {
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
         return Response.json(
             { error: { code: "websocket_upgrade_required", message: "A WebSocket upgrade is required" } },
@@ -218,17 +222,26 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
     let pendingDeclaredBinaryBytes = 0;
     const browserOrigin = request.headers.get("origin");
     let subscriptionDiagnosticCount = 0;
-    let idleTimeout = setTimeout(() => {
-        controller.abort(new Error("WebSocket transport became inactive"));
-        server.close(1001, "WebSocket transport idle timeout");
-    }, IDLE_TIMEOUT_MILLISECONDS);
-    let heartbeatTimeout: ReturnType<typeof setTimeout> | null = null;
+    let lastActivityAt = Date.now();
+    let idleTimeout: ReturnType<typeof setTimeout>;
     const touch = (): void => {
         clearTimeout(idleTimeout);
-        idleTimeout = setTimeout(() => {
+        if (server.readyState !== WebSocket.OPEN) {
+            return;
+        }
+        lastActivityAt = Date.now();
+        idleTimeout = setTimeout(checkIdleDeadline, IDLE_TIMEOUT_MILLISECONDS);
+    };
+    const checkIdleDeadline = (): void => {
+        const lastSeen = Math.max(lastActivityAt, host.lastHeartbeatAt(server) ?? 0);
+        const remaining = IDLE_TIMEOUT_MILLISECONDS - (Date.now() - lastSeen);
+        if (remaining > 0) {
+            idleTimeout = setTimeout(checkIdleDeadline, remaining);
+        } else {
             controller.abort(new Error("WebSocket transport became inactive"));
             server.close(1001, "WebSocket transport idle timeout");
-        }, IDLE_TIMEOUT_MILLISECONDS);
+            release();
+        }
     };
     const releaseBinaryRequest = (requestId: string) => {
         const upload = binaryRequests.get(requestId);
@@ -245,63 +258,23 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
             releaseBinaryRequest(requestId);
         }
     };
-    const scheduleHeartbeat = (): void => {
-        if (heartbeatTimeout !== null) {
-            clearTimeout(heartbeatTimeout);
-            heartbeatTimeout = null;
-        }
-        if (subscriptions.size === 0 || server.readyState !== WebSocket.OPEN) {
-            return;
-        }
-        heartbeatTimeout = setTimeout(() => {
-            heartbeatTimeout = null;
-            if (server.readyState !== WebSocket.OPEN) {
-                return;
+    const release = () => {
+        clearTimeout(idleTimeout);
+        for (const subscription of subscriptions.values()) {
+            if (subscription.kind === "pending") {
+                subscription.controller.abort(new Error("WebSocket transport closed"));
+            } else if (
+                subscription.socket.readyState === WebSocket.OPEN ||
+                subscription.socket.readyState === WebSocket.CONNECTING
+            ) {
+                subscription.socket.close(1000, "WebSocket transport closed");
             }
-            for (const subscriptionId of subscriptions.keys()) {
-                server.send(JSON.stringify({ kind: "session.events.heartbeat", subscriptionId }));
-            }
-            touch();
-            scheduleHeartbeat();
-        }, LIVE_EVENT_HEARTBEAT_MILLISECONDS);
+        }
+        subscriptions.clear();
+        releaseAllBinaryRequests();
     };
-    server.accept();
-    server.addEventListener(
-        "close",
-        () => {
-            clearTimeout(idleTimeout);
-            if (heartbeatTimeout !== null) {
-                clearTimeout(heartbeatTimeout);
-                heartbeatTimeout = null;
-            }
-            for (const subscription of subscriptions.values()) {
-                if (subscription.kind === "pending") {
-                    subscription.controller.abort(new Error("WebSocket transport closed"));
-                } else if (
-                    subscription.socket.readyState === WebSocket.OPEN ||
-                    subscription.socket.readyState === WebSocket.CONNECTING
-                ) {
-                    subscription.socket.close(1000, "WebSocket transport closed");
-                }
-            }
-            subscriptions.clear();
-            releaseAllBinaryRequests();
-        },
-        { once: true },
-    );
-    server.addEventListener(
-        "error",
-        () => {
-            clearTimeout(idleTimeout);
-            if (heartbeatTimeout !== null) {
-                clearTimeout(heartbeatTimeout);
-                heartbeatTimeout = null;
-            }
-            releaseAllBinaryRequests();
-        },
-        { once: true },
-    );
-    server.addEventListener("message", (event) => {
+    const receive = (data: string | ArrayBuffer) => {
+        const event = { data };
         touch();
         void (async () => {
             let requestId = "unknown";
@@ -350,6 +323,10 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                 }
                 const message = record(decoded);
                 const kind = string(message, "kind", 32);
+                if (kind === "ping" && Object.keys(message).length === 1) {
+                    server.send('{"kind":"pong"}');
+                    return;
+                }
                 if (kind === EVENT_UNSUBSCRIBE_KIND) {
                     const subscriptionId = string(message, "subscriptionId", 128);
                     const subscription = subscriptions.get(subscriptionId);
@@ -363,7 +340,6 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                         subscription.socket.close(1000, "Session event subscription closed");
                     }
                     subscriptions.delete(subscriptionId);
-                    scheduleHeartbeat();
                     return;
                 }
                 if (kind === EVENT_SUBSCRIBE_KIND) {
@@ -388,14 +364,12 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                         subscriptionController.signal,
                     );
                     subscriptions.set(subscriptionId, { controller: subscriptionController, kind: "pending" });
-                    scheduleHeartbeat();
                     const subscriptionHeaders = new Headers(converted.request.headers);
                     subscriptionHeaders.set("Upgrade", "websocket");
                     const response = await dispatch(new Request(converted.request, { headers: subscriptionHeaders }));
                     const subscription = response.webSocket;
                     if (subscription === null) {
                         subscriptions.delete(subscriptionId);
-                        scheduleHeartbeat();
                         const failure = await response.json().catch(() => null);
                         const error =
                             typeof failure === "object" && failure !== null && "error" in failure
@@ -460,7 +434,6 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                                     "Session event subscription disconnected",
                                 );
                             }
-                            scheduleHeartbeat();
                             server.send(JSON.stringify({ kind: "session.events.end", subscriptionId }));
                         }
                     };
@@ -496,7 +469,12 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                         { once: true },
                     );
                     subscription.accept();
-                    server.send(JSON.stringify({ kind: "session.events.ready", subscriptionId }));
+                    server.send(
+                        JSON.stringify({
+                            kind: "session.events.ready",
+                            subscriptionId,
+                        }),
+                    );
                     touch();
                     return;
                 }
@@ -602,6 +580,11 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                 );
             }
         })();
+    };
+    host.accept(server, { message: receive, close: release, error: release });
+    touch();
+    return new Response(null, {
+        status: 101,
+        webSocket: client,
     });
-    return new Response(null, { status: 101, webSocket: client });
 }

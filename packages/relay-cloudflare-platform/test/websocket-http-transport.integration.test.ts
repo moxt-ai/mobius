@@ -1,4 +1,5 @@
-import { acceptWebSocketHttpTransport, SessionRuntimeError } from "@moxt-ai/mobius-relay-core";
+import { SELF } from "cloudflare:test";
+import { acceptWebSocketHttpTransport, SessionRuntimeError, standardWebSocketHost } from "@moxt-ai/mobius-relay-core";
 import { encodeContentChunkFrame } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, it, vi } from "vitest";
 
@@ -29,6 +30,93 @@ function nextMessage(socket: WebSocket): Promise<string> {
     });
 }
 
+it("Given a browser connection, When it heartbeats through the public Platform transport, Then Cloudflare acknowledges it and application requests remain usable", async () => {
+    const response = await SELF.fetch("https://platform.test/mobius/api/v1/transport", {
+        headers: { Upgrade: "websocket" },
+    });
+    expect(response.status).toBe(101);
+    const socket = response.webSocket;
+    if (socket === null) {
+        throw new Error("Expected the public WebSocket transport");
+    }
+    socket.accept();
+    try {
+        const heartbeat = nextMessage(socket);
+        socket.send('{"kind":"ping"}');
+        expect(await heartbeat).toBe('{"kind":"pong"}');
+        const result = nextMessage(socket);
+        socket.send(
+            JSON.stringify({
+                kind: "http.request",
+                requestId: "after-heartbeat",
+                method: "GET",
+                path: "/mobius/api/dashboard/health",
+                headers: [],
+                body: "",
+            }),
+        );
+        expect(JSON.parse(await result)).toMatchObject({
+            kind: "http.response",
+            requestId: "after-heartbeat",
+            status: 200,
+        });
+    } finally {
+        socket.close();
+    }
+});
+
+it("Given an HTTP-over-WebSocket client, When it uses the public DO-owned transport, Then application responses preserve their request identities", async () => {
+    const response = await SELF.fetch("https://platform.test/mobius/api/v1/transport", {
+        headers: { Upgrade: "websocket" },
+    });
+    expect(response.status).toBe(101);
+    const socket = response.webSocket;
+    if (socket === null) {
+        throw new Error("Expected the public WebSocket transport");
+    }
+    socket.accept();
+    try {
+        const result = nextMessage(socket);
+        socket.send(
+            JSON.stringify({
+                kind: "http.request",
+                requestId: "request-identity",
+                method: "GET",
+                path: "/mobius/api/dashboard/health",
+                headers: [],
+                body: "",
+            }),
+        );
+        expect(JSON.parse(await result)).toMatchObject({
+            kind: "http.response",
+            requestId: "request-identity",
+            status: 200,
+        });
+    } finally {
+        socket.close();
+    }
+});
+
+it.each([
+    { name: "missing", authorization: null, code: "session_access_required" },
+    { name: "malformed", authorization: "Bearer invalid-session-credential", code: "project_credential_invalid" },
+])(
+    "Given a $name Session credential, When the public event-stream upgrade crosses ProjectDO, Then it returns the authentication error without another public handoff",
+    { timeout: 5_000 },
+    async ({ authorization, code }) => {
+        const headers = new Headers({ Upgrade: "websocket" });
+        if (authorization !== null) {
+            headers.set("Authorization", authorization);
+        }
+        const response = await SELF.fetch(
+            "https://platform.test/mobius/api/v1/projects/prj_wn_01_ABCDEFGHIJKLMNOPQRSTUVWX/sessions/session-unauthorized/events-v2",
+            { headers },
+        );
+        expect(response.status).toBe(401);
+        expect(await response.json()).toMatchObject({ error: { code } });
+    },
+);
+
 class SubscriptionDaemonBoundary {
     requestSignal: AbortSignal | null = null;
     downstream: WebSocket | null = null;
@@ -52,6 +140,59 @@ class MultipleSubscriptionDaemonBoundary {
         return Promise.resolve(new Response(null, { status: 101, webSocket: pair[0] }));
     };
 }
+
+it("Given two quiet subscriptions, When multiple heartbeat intervals pass, Then one connection heartbeat suffices and both subscriptions still deliver", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));
+    const daemon = new MultipleSubscriptionDaemonBoundary();
+    const response = acceptWebSocketHttpTransport(
+        new Request("https://platform.test/mobius/api/v1/transport", {
+            headers: { Upgrade: "websocket" },
+        }),
+        daemon.fetch,
+        standardWebSocketHost,
+    );
+    const socket = response.webSocket;
+    if (socket === null) {
+        throw new Error("Expected a WebSocket transport");
+    }
+    socket.accept();
+    try {
+        for (const subscriptionId of ["first-stream", "second-stream"]) {
+            const ready = nextMessage(socket);
+            socket.send(
+                JSON.stringify({
+                    kind: "session.events.subscribe",
+                    subscriptionId,
+                    path: "/mobius/api/v1/projects/project/sessions/session/events-v2",
+                    headers: [],
+                }),
+            );
+            expect(JSON.parse(await ready)).toEqual({
+                kind: "session.events.ready",
+                subscriptionId,
+            });
+        }
+        for (let interval = 0; interval < 4; interval += 1) {
+            const heartbeat = nextMessage(socket);
+            await vi.advanceTimersByTimeAsync(20_000);
+            socket.send('{"kind":"ping"}');
+            expect(await heartbeat).toBe('{"kind":"pong"}');
+        }
+        for (const [index, downstream] of daemon.downstreams.entries()) {
+            const delivered = nextMessage(socket);
+            downstream.send(`stream-${index}`);
+            expect(JSON.parse(await delivered)).toMatchObject({
+                kind: "session.events.event",
+                data: `stream-${index}`,
+                subscriptionId: index === 0 ? "first-stream" : "second-stream",
+            });
+        }
+    } finally {
+        socket.close();
+        vi.useRealTimers();
+    }
+});
 
 class PendingDaemonBoundary {
     readonly response = Promise.withResolvers<Response>();
@@ -86,6 +227,7 @@ it("Given a Unicode JSON request and response, When the relay carries them over 
             headers: { Upgrade: "websocket" },
         }),
         daemon.fetch,
+        standardWebSocketHost,
     );
     const socket = response.webSocket;
     if (socket === null) {
@@ -121,6 +263,7 @@ it("Given an invalid binary declaration, When the request ID is reused for a val
     const response = acceptWebSocketHttpTransport(
         new Request("https://platform.test/mobius/api/v1/transport", { headers: { Upgrade: "websocket" } }),
         daemon.fetch,
+        standardWebSocketHost,
     );
     const socket = response.webSocket;
     if (socket === null) {
@@ -171,6 +314,7 @@ it("Given a binary upload sends an invalid chunk, When it retries the same reque
     const response = acceptWebSocketHttpTransport(
         new Request("https://platform.test/mobius/api/v1/transport", { headers: { Upgrade: "websocket" } }),
         daemon.fetch,
+        standardWebSocketHost,
     );
     const socket = response.webSocket;
     if (socket === null) {
@@ -209,6 +353,7 @@ it("Given an incomplete upload consumes the aggregate byte budget, When its dead
         const response = acceptWebSocketHttpTransport(
             new Request("https://platform.test/mobius/api/v1/transport", { headers: { Upgrade: "websocket" } }),
             daemon.fetch,
+            standardWebSocketHost,
         );
         const socket = response.webSocket;
         if (socket === null) {
@@ -283,6 +428,7 @@ it("Given many incomplete binary uploads, When their count reaches the pending l
     const response = acceptWebSocketHttpTransport(
         new Request("https://platform.test/mobius/api/v1/transport", { headers: { Upgrade: "websocket" } }),
         daemon.fetch,
+        standardWebSocketHost,
     );
     const socket = response.webSocket;
     if (socket === null) {
@@ -329,6 +475,7 @@ it("Given a daemon request fails with a 5XX error, When the WebSocket transport 
             headers: { Upgrade: "websocket" },
         }),
         daemon.fetch,
+        standardWebSocketHost,
     );
     const socket = response.webSocket;
     if (socket === null) {
@@ -366,6 +513,7 @@ it("Given an established event subscription, When the browser transport closes, 
             headers: { Upgrade: "websocket" },
         }),
         daemon.fetch,
+        standardWebSocketHost,
     );
     const socket = response.webSocket;
     if (socket === null) {
@@ -407,6 +555,7 @@ it("Given two live subscriptions, When each receives event batches, Then deliver
             headers: { Upgrade: "websocket" },
         }),
         daemon.fetch,
+        standardWebSocketHost,
     );
     const socket = response.webSocket;
     if (socket === null) {
@@ -471,6 +620,7 @@ it("Given an established event subscription is quiet, When the transport idle de
                 headers: { Upgrade: "websocket" },
             }),
             daemon.fetch,
+            standardWebSocketHost,
         );
         const socket = response.webSocket;
         if (socket === null) {
@@ -491,16 +641,12 @@ it("Given an established event subscription is quiet, When the transport idle de
             subscriptionId: "subscription-1",
         });
 
-        const heartbeat = nextMessage(socket);
-        await vi.advanceTimersByTimeAsync(20_001);
-
-        expect(JSON.parse(await heartbeat)).toEqual({
-            kind: "session.events.heartbeat",
-            subscriptionId: "subscription-1",
-        });
-        // The heartbeats keep re-arming the idle deadline, so the connection
-        // outlives it even though the subscription itself stays quiet.
-        await vi.advanceTimersByTimeAsync(40_000);
+        for (let interval = 0; interval < 4; interval += 1) {
+            const heartbeat = nextMessage(socket);
+            await vi.advanceTimersByTimeAsync(20_000);
+            socket.send('{"kind":"ping"}');
+            expect(await heartbeat).toBe('{"kind":"pong"}');
+        }
         expect(socket.readyState).toBe(WebSocket.OPEN);
         socket.close(1000, "Test complete");
     } finally {
@@ -515,6 +661,7 @@ it("Given a finite request is in flight, When the browser transport closes, Then
             headers: { Upgrade: "websocket" },
         }),
         daemon.fetch,
+        standardWebSocketHost,
     );
     const socket = response.webSocket;
     if (socket === null) {

@@ -1,11 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
 import { Hono } from "hono";
 import { RuntimeRelay as PlatformRuntimeRelay } from "../../../relay-cloudflare-platform/src/durable-objects/runtime-relay.ts";
-import type { PlatformRelayBindings } from "../../../relay-cloudflare-platform/src/platform-worker.ts";
+import type { ConfiguredPlatformRelayBindings } from "../../../relay-cloudflare-platform/src/platform-worker.ts";
 import { errorMiddleware, rethrowHonoError } from "../../../relay-core/src/http/middleware/error-middleware.ts";
 import platform from "../../src/platform-worker-entry.ts";
 
 export { ProjectDO } from "../../../relay-cloudflare-platform/src/durable-objects/project-do.ts";
+export { WebSocketTransport } from "../../../relay-cloudflare-platform/src/durable-objects/websocket-transport.ts";
 
 function failure(kind: string): unknown {
     if (kind === "primitive") {
@@ -75,7 +76,7 @@ export class UnavailableProject extends DurableObject {
     }
 }
 
-interface TestBindings extends PlatformRelayBindings {
+interface TestBindings extends ConfiguredPlatformRelayBindings {
     readonly RUNTIME_RELAY: DurableObjectNamespace<RuntimeRelay>;
     readonly UNAVAILABLE_PROJECT: DurableObjectNamespace;
 }

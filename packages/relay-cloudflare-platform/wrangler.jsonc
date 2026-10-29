@@ -6,6 +6,7 @@
     "compatibility_flags": ["enable_request_signal"],
     "durable_objects": {
         "bindings": [
+            { "name": "WEBSOCKET_TRANSPORT", "class_name": "WebSocketTransport" },
             {
                 "name": "RUNTIME_RELAY",
                 "class_name": "RuntimeRelay"
@@ -45,7 +46,8 @@
             "tag": "platform-remove-legacy-session-relays",
             "deleted_classes": ["PlatformSessionRelay", "NonCloudRetentionSessionRelayDO"]
         },
-        { "tag": "platform-rename-project-do", "renamed_classes": [{ "from": "ProjectRelay", "to": "ProjectDO" }] }
+        { "tag": "platform-rename-project-do", "renamed_classes": [{ "from": "ProjectRelay", "to": "ProjectDO" }] },
+        { "tag": "platform-websocket-transport", "new_sqlite_classes": ["WebSocketTransport"] }
     ],
     "d1_databases": [
         {
@@ -83,6 +85,7 @@
             "routes": [{ "pattern": "mobius.moxt.ws", "custom_domain": true }],
             "durable_objects": {
                 "bindings": [
+                    { "name": "WEBSOCKET_TRANSPORT", "class_name": "WebSocketTransport" },
                     { "name": "RUNTIME_RELAY", "class_name": "RuntimeRelay" },
                     { "name": "PROJECT_RELAY", "class_name": "ProjectDO" }
                 ]
@@ -108,6 +111,7 @@
             "routes": [{ "pattern": "mobius.moxt.ai", "custom_domain": true }],
             "durable_objects": {
                 "bindings": [
+                    { "name": "WEBSOCKET_TRANSPORT", "class_name": "WebSocketTransport" },
                     { "name": "RUNTIME_RELAY", "class_name": "RuntimeRelay" },
                     { "name": "PROJECT_RELAY", "class_name": "ProjectDO" }
                 ]

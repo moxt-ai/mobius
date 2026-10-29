@@ -12,6 +12,8 @@ import {
     type RelayContext,
     RequestAccessMetrics,
     requestTimeoutMiddleware,
+    standardWebSocketHost,
+    type WebSocketHost,
     type WorkerRuntimeGateways,
 } from "@moxt-ai/mobius-relay-core";
 import type { SqlDatabase } from "@moxt-ai/mobius-relay-core/database";
@@ -97,6 +99,7 @@ export interface PlatformRelayBindings extends PlatformStorageBindings, ProjectW
     readonly RECORDING?: Fetcher;
     readonly RECORDING_PROVIDER_ID?: string;
     readonly RUNTIME_RELAY: DurableObjectNamespace<RuntimeRelay>;
+    readonly WEBSOCKET_TRANSPORT?: DurableObjectNamespace;
 }
 
 export interface ProjectPlatformRelayBindings extends PlatformRelayBindings, ProjectDurableObjectExecutionBindings {}
@@ -217,6 +220,7 @@ async function runtimeSessionIdentity(
 export function createPlatformApplication(
     authentication: PlatformAuthenticationConfiguration,
     gateways: (environment: PlatformApplicationBindings) => WorkerRuntimeGateways,
+    socketHost: WebSocketHost,
     organizations: (environment: PlatformRelayBindings) => OrganizationMembershipGateway = (environment) =>
         new ClerkOrganizationGateway(environment.CLERK_SECRET_KEY),
 ): Hono<{ Bindings: PlatformApplicationBindings }> {
@@ -896,7 +900,7 @@ export function createPlatformApplication(
                 server.close(1000, "V2 Session event subscription closed");
                 void host.close();
             };
-            server.accept();
+            socketHost.accept(server, { message: () => undefined, close, error: close });
             host.socket.addEventListener("message", (event) => {
                 if (closed || typeof event.data !== "string") {
                     return;
@@ -925,8 +929,6 @@ export function createPlatformApplication(
             });
             host.socket.addEventListener("close", close, { once: true });
             host.socket.addEventListener("error", close, { once: true });
-            server.addEventListener("close", close, { once: true });
-            server.addEventListener("error", close, { once: true });
             host.socket.accept();
             return new Response(null, { status: 101, webSocket: client });
         });
@@ -1047,6 +1049,7 @@ export function createPlatformApplication(
                 context.req.raw,
                 async (request): Promise<Response> =>
                     await platformApplication.fetch(request, context.env, executionContext),
+                socketHost,
             );
         })
         .all("*", async (context) => {
@@ -1081,18 +1084,39 @@ export function createPlatformGateways(environment: PlatformApplicationBindings)
     };
 }
 
-export function createPlatformWorker(): {
-    readonly fetch: (
-        request: Request,
-        environment: ConfiguredPlatformRelayBindings | (ConfiguredPlatformRelayBindings & RuntimeExecutionBindings),
-        executionContext?: ExecutionContext,
-    ) => Promise<Response>;
-} {
+export function createPlatformWorker() {
+    const application = createPlatformSocketWorker(standardWebSocketHost);
+    return {
+        fetch: async (
+            request: Request,
+            environment: ConfiguredPlatformRelayBindings,
+            executionContext?: ExecutionContext,
+        ): Promise<Response> => {
+            const path = new URL(request.url).pathname;
+            if (
+                request.headers.get("Upgrade")?.toLowerCase() === "websocket" &&
+                (path === `${MOBIUS_API_PREFIX}/v1/transport` || path.endsWith("/events-v2"))
+            ) {
+                const namespace = environment.WEBSOCKET_TRANSPORT;
+                if (namespace === undefined) {
+                    return Response.json(
+                        { error: { code: "service_unavailable", message: "The WebSocket transport is unavailable" } },
+                        { status: 503 },
+                    );
+                }
+                return await namespace.get(namespace.newUniqueId()).fetch(request);
+            }
+            return await application.fetch(request, environment, executionContext);
+        },
+    };
+}
+
+export function createPlatformSocketWorker(host: WebSocketHost) {
     const configuredApplications = new Map<string, ReturnType<typeof createPlatformApplication>>();
     return {
         fetch: async (
             request: Request,
-            environment: ConfiguredPlatformRelayBindings | (ConfiguredPlatformRelayBindings & RuntimeExecutionBindings),
+            environment: ConfiguredPlatformRelayBindings,
             executionContext?: ExecutionContext,
         ): Promise<Response> => {
             const key = `${environment.MOBIUS_PLATFORM_ALLOWED_ORIGINS}\u0000${environment.MOBIUS_PLATFORM_OIDC_PROVIDERS}\u0000${environment.MOBIUS_PLATFORM_OPERATOR_SUBJECTS}`;
@@ -1103,6 +1127,7 @@ export function createPlatformWorker(): {
             const created = createPlatformApplication(
                 platformAuthenticationFromEnvironment(environment),
                 createPlatformGateways,
+                host,
             );
             configuredApplications.set(key, created);
             return await created.fetch(request, environment, executionContext);

@@ -4,17 +4,18 @@ import {
     DurableObjectSqlDatabase,
     logger,
     RuntimeRelay as RuntimeRelayImplementation,
+    standardWebSocketHost,
 } from "@moxt-ai/mobius-relay-core";
 import { RUNTIME_HEARTBEAT_ACK_MESSAGE, RUNTIME_HEARTBEAT_MESSAGE } from "@moxt-ai/mobius-sdk/protocol";
 import { runtimeRequestTarget } from "../gateway/runtime-session-routing.ts";
-import { type ConfiguredPlatformRelayBindings, createPlatformWorker } from "../platform-worker.ts";
+import { type ConfiguredPlatformRelayBindings, createPlatformSocketWorker } from "../platform-worker.ts";
 import { createPlatformDurableObjectContext } from "./platform-durable-object-context.ts";
 
 export class RuntimeRelay extends DurableObject<ConfiguredPlatformRelayBindings> {
     readonly #runtime: RuntimeRelayImplementation;
     readonly #context: ReturnType<typeof createPlatformDurableObjectContext>;
     readonly #environment: ConfiguredPlatformRelayBindings;
-    readonly #application = createPlatformWorker();
+    readonly #application = createPlatformSocketWorker(standardWebSocketHost);
     readonly #state: DurableObjectState;
 
     constructor(state: DurableObjectState, environment: ConfiguredPlatformRelayBindings) {
@@ -42,14 +43,15 @@ export class RuntimeRelay extends DurableObject<ConfiguredPlatformRelayBindings>
     override async fetch(request: Request): Promise<Response> {
         const current = runtimeRequestTarget(request);
         if (current !== null) {
-            const response = await this.#application.fetch(request, {
+            const environment = {
                 ...this.#environment,
                 MOBIUS_RUNTIME_EXECUTION: {
                     projectId: current.projectId,
                     runtimeId: current.runtimeId,
                     operations: createLocalSessionOperations(this.#context, current.projectId, current.runtimeId),
                 },
-            });
+            };
+            const response = await this.#application.fetch(request, environment);
             if (response.status === 101) {
                 await this.scheduleViewerExpiry();
             }
