@@ -3989,7 +3989,7 @@ describe.sequential("Platform Turn submission", () => {
         }
     });
 
-    it("Given an Agent whose capability advertisement carries values the Relay cannot interpret, When it pairs, Then pairing succeeds and the unreadable capabilities stay withheld", async () => {
+    it("Given an Agent advertisement carrying fields and capability values the Relay cannot interpret, When it pairs, Then pairing succeeds and the unreadable capabilities stay withheld", async () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
@@ -4058,6 +4058,8 @@ describe.sequential("Platform Turn submission", () => {
         }
         const malformed = {
             ...advertised,
+            // A newer daemon may add descriptor fields this Relay does not know.
+            futureAgentField: { format: 2 },
             capabilities: {
                 ...advertised.capabilities,
                 // Non-boolean advertisement values used to reject the whole
