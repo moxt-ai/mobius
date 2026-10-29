@@ -177,7 +177,6 @@ export class MobiusPlatformTenant {
     readonly displayName: string;
     readonly lifecycle: string;
     readonly quotas: Readonly<Record<string, unknown>>;
-    readonly suspendedAt: string;
     readonly tenantId: string;
     readonly updatedAt: string;
 
@@ -187,7 +186,6 @@ export class MobiusPlatformTenant {
         this.displayName = string(value, "displayName", 120);
         this.lifecycle = string(value, "lifecycle", 32);
         this.quotas = record(value["quotas"], "Tenant quotas");
-        this.suspendedAt = timestamp(value, "suspendedAt");
         this.tenantId = identifier(value, "tenantId");
         this.updatedAt = timestamp(value, "updatedAt");
     }
@@ -260,7 +258,6 @@ export class MobiusPlatformAppCredential {
      * @deprecated Legacy compatibility value; not unique or an App-wide sequence.
      * Use credentialId for identity and rotation replacement IDs for lineage.
      */
-    readonly revision: number;
 
     constructor(value: Readonly<Record<string, unknown>>) {
         this.appId = identifier(value, "appId");
@@ -272,7 +269,6 @@ export class MobiusPlatformAppCredential {
         this.issuedAt = timestamp(value, "issuedAt");
         this.permissions = strings(value, "permissions");
         this.publicCredentialId = string(value, "publicCredentialId", 64);
-        this.revision = integer(value, "revision");
     }
 }
 
@@ -292,7 +288,6 @@ export class MobiusPlatformAppCredentialMetadata {
      * @deprecated Legacy compatibility value; not unique or an App-wide sequence.
      * Use credentialId for identity and replacedByCredentialId for the replacement.
      */
-    readonly revision: number;
     readonly revokedAt: string;
 
     constructor(value: Readonly<Record<string, unknown>>) {
@@ -313,7 +308,6 @@ export class MobiusPlatformAppCredentialMetadata {
         this.projectIds = strings(value, "projectIds");
         this.publicCredentialId = string(value, "publicCredentialId", 64);
         this.replacedByCredentialId = string(value, "replacedByCredentialId", 128);
-        this.revision = integer(value, "revision");
         this.revokedAt = timestamp(value, "revokedAt");
     }
 }
@@ -337,7 +331,6 @@ export class MobiusPlatformApp {
     readonly deletedAt: string;
     readonly displayName: string;
     readonly lifecycle: string;
-    readonly suspendedAt: string;
     readonly tenantId: string;
     readonly updatedAt: string;
 
@@ -354,7 +347,6 @@ export class MobiusPlatformApp {
         this.deletedAt = timestamp(value, "deletedAt");
         this.displayName = string(value, "displayName", 120);
         this.lifecycle = string(value, "lifecycle", 32);
-        this.suspendedAt = timestamp(value, "suspendedAt");
         this.tenantId = identifier(value, "tenantId");
         this.updatedAt = timestamp(value, "updatedAt");
     }
@@ -379,7 +371,6 @@ export class MobiusPlatformProject {
     readonly displayName: string;
     readonly lifecycle: string;
     readonly projectId: string;
-    readonly suspendedAt: string;
     readonly tenantId: string;
     readonly updatedAt: string;
 
@@ -391,7 +382,6 @@ export class MobiusPlatformProject {
         this.displayName = string(value, "displayName", 120);
         this.lifecycle = string(value, "lifecycle", 32);
         this.projectId = identifier(value, "projectId");
-        this.suspendedAt = timestamp(value, "suspendedAt");
         this.tenantId = identifier(value, "tenantId");
         this.updatedAt = timestamp(value, "updatedAt");
     }

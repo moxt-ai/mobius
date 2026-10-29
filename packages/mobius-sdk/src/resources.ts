@@ -149,8 +149,10 @@ export interface SubmitMobiusTurnRequest {
     readonly targetCommandId?: string;
 }
 
-export interface CancelMobiusTurnRequest {
-    readonly idempotencyKey: string;
+/** How a cancelled Turn ended: `cancelled`, or the Agent's stop reason when the Turn finished first. */
+export interface MobiusTurnCancellation {
+    readonly turnId: string;
+    readonly stopReason: string;
 }
 
 export class MobiusBrowserCredentialRequest {

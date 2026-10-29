@@ -98,7 +98,7 @@ class LegacyQueueRelay implements AsyncDisposable {
             if (
                 typeof body !== "object" ||
                 body === null ||
-                Reflect.get(body, "idempotencyKey") !== "edit-1" ||
+                typeof Reflect.get(body, "idempotencyKey") !== "string" ||
                 Object.keys(body).length !== 1
             ) {
                 response
@@ -119,7 +119,7 @@ class LegacyQueueRelay implements AsyncDisposable {
                 JSON.stringify({
                     acceptedAt: timestamp,
                     bindingId: "workspace",
-                    idempotencyKey: "edit-1",
+                    idempotencyKey: Reflect.get(body, "idempotencyKey"),
                     request: { content: "", kind: "prompt", sessionConfigurations: [] },
                     sessionId: "session-1",
                     state: { cancelledAt: timestamp, kind: "cancelled" },
@@ -164,12 +164,7 @@ test("Given an older Relay and Runtime, When the new SDK withdraws a queued prom
     await using relay = new LegacyQueueRelay(false);
     const client = await relay.start();
     try {
-        await client.turns.cancelQueued(
-            "session-1",
-            "queued",
-            { ...identity, idempotencyKey: "edit-1" },
-            AbortSignal.timeout(5_000),
-        );
+        await client.turns.cancelQueued("session-1", "queued", identity, AbortSignal.timeout(5_000));
         relay.completeWork();
         expect(await relay.output()).toEqual(["ACTIVE_REPLY"]);
         expect(
@@ -189,12 +184,7 @@ test("Given an older Relay that labels a completed prompt cancelled, When execut
     await using relay = new LegacyQueueRelay(true);
     const client = await relay.start();
     try {
-        const withdrawal = client.turns.cancelQueued(
-            "session-1",
-            "queued",
-            { ...identity, idempotencyKey: "edit-1" },
-            AbortSignal.timeout(5_000),
-        );
+        const withdrawal = client.turns.cancelQueued("session-1", "queued", identity, AbortSignal.timeout(5_000));
         const rejected = expect(withdrawal).rejects.toMatchObject({ code: "queued_cancellation_unconfirmed" });
         await relay.cancellationEntered.promise;
         relay.completeWork();

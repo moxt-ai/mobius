@@ -614,13 +614,12 @@ async function cancelCommand(directory: string, flags: ReadonlyMap<string, strin
     const connection = await sessionClient(state, session);
     const service = connection.service;
     try {
-        const turn = await service.turns.cancel(
+        const cancellation = await service.turns.cancel(
             session.sessionId,
             requireFlag(flags, "turn"),
-            { idempotencyKey: identifier("cancel") },
             operationSignal(),
         );
-        output({ sessionId: session.sessionId, state: turn.state, turnId: turn.turnId });
+        output({ sessionId: session.sessionId, stopReason: cancellation.stopReason, turnId: cancellation.turnId });
     } finally {
         connection.close();
     }
