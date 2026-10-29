@@ -4,6 +4,7 @@ import type { RuntimeConfig } from "../../engine/runtime/config.ts";
 import { RuntimeInstallationStore } from "../../engine/runtime/connection/runtime-installation-store.ts";
 import { prepareRuntimeConnection } from "../../engine/runtime/pairing.ts";
 import { RuntimeLoop } from "../../engine/runtime/runtime-loop.ts";
+import { RuntimeAgentProcesses } from "../../engine/session/process/runtime-agent-processes.ts";
 import { RuntimeTurnActivity } from "../../engine/session/turn/runtime-turn-activity.ts";
 import type { InstallationDirectory } from "../../engine/storage/installation/installation-files.ts";
 import { isNodeError } from "../../engine/util/node-error.ts";
@@ -34,6 +35,24 @@ export async function reloadDaemon(stateDirectory: InstallationDirectory, signal
         ) {
             throw new Error("Saved configuration could not be applied to the running daemon");
         }
+    } catch (cause) {
+        if (!isNodeError(cause, "ENOENT") && !isNodeError(cause, "ECONNREFUSED")) {
+            throw cause;
+        }
+    }
+}
+
+/** Releases idle Agent processes of a running daemon; succeeds when no daemon is running. */
+export async function releaseIdleAgentProcesses(
+    stateDirectory: InstallationDirectory,
+    signal: AbortSignal,
+): Promise<void> {
+    try {
+        const response = await sendLocalRequest(stateDirectory, "worker", { kind: "release" }, signal);
+        if (typeof response === "object" && response !== null && "kind" in response && response.kind === "released") {
+            return;
+        }
+        throw new Error("The running daemon cannot release Agent sessions. Run `mobius start` to update it first.");
     } catch (cause) {
         if (!isNodeError(cause, "ENOENT") && !isNodeError(cause, "ECONNREFUSED")) {
             throw cause;
@@ -87,6 +106,7 @@ async function runWorkerRuntime(
     // writer of the worker's rejection log; buffered startup entries flush now.
     rejectionGuard.bindStateDirectory(control.stateDirectory);
     const turnActivity = new RuntimeTurnActivity();
+    const agentProcesses = new RuntimeAgentProcesses();
     const active = new Map<
         string,
         {
@@ -133,6 +153,7 @@ async function runWorkerRuntime(
                 const loop = new RuntimeLoop(async () => config, {
                     processLogsDirectory: control.stateDirectory,
                     turnActivity,
+                    agentProcesses,
                     reportUpgradeAvailability: reportDaemonUpgradeAvailability,
                 });
                 const completion = loop
@@ -188,6 +209,16 @@ async function runWorkerRuntime(
             "worker",
             combined,
             async (request) => {
+                if (
+                    typeof request === "object" &&
+                    request !== null &&
+                    "kind" in request &&
+                    request.kind === "release"
+                ) {
+                    // Agents' own clients can continue the conversations that idle processes held.
+                    await agentProcesses.retireIdleProcesses();
+                    return { kind: "released" };
+                }
                 if (
                     typeof request !== "object" ||
                     request === null ||
