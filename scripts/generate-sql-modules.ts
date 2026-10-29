@@ -1,4 +1,5 @@
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 
 interface MigrationSource {
@@ -39,7 +40,15 @@ async function writeMigrationModule(
         "",
     ].join("\n");
     await mkdir(dirname(outputPath), { recursive: true });
-    await writeFile(outputPath, generated);
+    // Parallel package checks may generate this module while another compiler reads it.
+    const temporaryPath = `${outputPath}.${randomUUID()}.tmp`;
+    try {
+        await writeFile(temporaryPath, generated, { flag: "wx" });
+        await rename(temporaryPath, outputPath);
+    } catch (cause) {
+        await unlink(temporaryPath).catch(() => undefined);
+        throw cause;
+    }
 }
 
 const root = resolve(import.meta.dirname, "..");
