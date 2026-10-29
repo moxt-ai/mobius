@@ -48,8 +48,6 @@
         "test:manual": "vitest run tests/manual",
         "pretest:agents": "pnpm build",
         "test:agents": "vitest run tests/agents --maxWorkers=2",
-        "pretest:npm-compatibility": "pnpm build",
-        "test:npm-compatibility": "vitest run tests/runtime/daemon-upgrade.integration.test.ts",
         "pretest:pressure": "tsc --project src/engine/acp/harness/claude/upstream/tsconfig.json && tsc --project src/engine/acp/harness/pi/upstream/tsconfig.json",
         "test:pressure": "node tests/pressure/concurrent-sessions.mjs"
     },
