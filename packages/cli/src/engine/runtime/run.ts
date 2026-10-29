@@ -4,6 +4,7 @@ import { createRuntimeAdapterRegistry } from "../agent/runtime-agents.ts";
 import { buildSessionLayer } from "../session/api/session-layer.ts";
 import { LocalExternalContentStore } from "../session/content/external-content-store.ts";
 import { AgentProcessPool } from "../session/process/agent-process-pool.ts";
+import type { RuntimeAgentProcesses } from "../session/process/runtime-agent-processes.ts";
 import type { RuntimeTurnActivity } from "../session/turn/runtime-turn-activity.ts";
 import { runCleanup } from "../util/run-cleanup.ts";
 import { systemTimer, type Timer } from "../util/timer.ts";
@@ -68,6 +69,8 @@ async function publishAgentCatalogUntilAvailable(
 
 export interface RunRuntimeOptions {
     readonly turnActivity?: RuntimeTurnActivity;
+    /** The daemon worker's registry of Runtime process pools, for releasing idle Agent processes on request. */
+    readonly agentProcesses?: RuntimeAgentProcesses;
     readonly onExecutionCountChange?: (count: number) => void;
     readonly onConnectionStatus?: (status: "online" | "reconnecting") => void;
     /** Reports a finished daemon upgrade to the relay. The daemon worker supplies it. */
@@ -184,6 +187,7 @@ export async function runRuntime(
         announceReadiness();
     });
 
+    const removeAgentProcesses = options.agentProcesses?.add(processes);
     try {
         while (!signal.aborted) {
             connectionEpoch += 1;
@@ -226,6 +230,7 @@ export async function runRuntime(
             await waitForRelayRetry(signal, timer);
         }
     } finally {
+        removeAgentProcesses?.();
         shutdown.abort();
         operations.beginShutdown();
         await activeSessions.close();
