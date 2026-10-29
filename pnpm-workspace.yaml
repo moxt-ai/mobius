@@ -4,6 +4,15 @@ packages:
 engineStrict: true
 minimumReleaseAge: 1440
 
+overrides:
+  # Enforce security floors for Claude SDK/MCP transitive dependencies.
+  'body-parser@>=2.0.0 <2.4.0': 2.4.0
+  'fast-uri@>=3.0.0 <3.1.9': 3.1.9
+  'qs@>=6.7.0 <=6.16.0': 6.16.2
+  # Drizzle 0.31 still uses this archived loader; remove when Drizzle drops it.
+  # Use the official patched transformer (GHSA-67mh-4wv8-2f99).
+  '@esbuild-kit/core-utils@3.3.2>esbuild': 0.25.12
+
 # Keep the architecture parser's compiler API independent of TS7 across 18.x updates.
 packageExtensions:
   dependency-cruiser@18:
