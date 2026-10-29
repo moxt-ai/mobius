@@ -6,6 +6,7 @@ import {
     decodeMessageKind,
     decodeSessionEventEnvelope,
     decodeSessionOperationFailedEvent,
+    encodeSessionCancelCommand,
     encodeSessionPromptCommand,
     type SessionPromptCommand,
     SessionPromptDisposition,
@@ -21,6 +22,7 @@ async function observe(peer: RealDaemonPeer, commandIds: readonly string[]) {
     const pending = new Set(commandIds);
     const outcomes = new Map<string, Settlement>();
     const completedCommandIds: string[] = [];
+    const unstartedCommandIds: string[] = [];
     let output = "";
     while (pending.size > 0) {
         const message = await peer.nextMessage();
@@ -44,6 +46,9 @@ async function observe(peer: RealDaemonPeer, commandIds: readonly string[]) {
                 const payload = event.payload;
                 if (payload.kind === "prompt.completed") {
                     completedCommandIds.push(payload.commandId);
+                    if (payload.execution === "not-started") {
+                        unstartedCommandIds.push(payload.commandId);
+                    }
                     if (pending.delete(payload.commandId)) {
                         outcomes.set(payload.commandId, { kind: "completed" });
                     }
@@ -56,10 +61,10 @@ async function observe(peer: RealDaemonPeer, commandIds: readonly string[]) {
             }
         }
     }
-    return { outcomes, output, completedCommandIds };
+    return { outcomes, output, completedCommandIds, unstartedCommandIds };
 }
 
-test("Given an executed command, When its receipt is evicted and the daemon restarts, Then retries never execute it again", async () => {
+test("Given an executed command, When its receipt is evicted and the daemon restarts, Then retries and delayed cancellations preserve its executed identity", async () => {
     const directory = await mkdtemp(join(tmpdir(), "mobius-execution-identity-"));
     try {
         const executableDirectory = await writeControlledAcpExecutable(directory);
@@ -103,6 +108,30 @@ test("Given an executed command, When its receipt is evicted and the daemon rest
                     expect(outcome.kind).toBe("failed");
                 }
 
+                const cancelExpired = async () => {
+                    peer.send(
+                        encodeSessionCancelCommand({
+                            kind: "session.cancel",
+                            commandId: original.commandId,
+                            sessionId: peer.sessionId,
+                        }),
+                    );
+                    const cancelled = await observe(peer, [original.commandId]);
+                    expect(cancelled.outcomes.get(original.commandId)).toEqual({ kind: "completed" });
+                    expect(cancelled.unstartedCommandIds).not.toContain(original.commandId);
+                    peer.send(
+                        JSON.stringify({
+                            kind: "session.cancel-before-start",
+                            commandId: original.commandId,
+                            sessionId: peer.sessionId,
+                        }),
+                    );
+                    expect((await observe(peer, [original.commandId])).outcomes.get(original.commandId)).toEqual({
+                        kind: "failed",
+                        code: "turn_already_started",
+                    });
+                };
+                await cancelExpired();
                 send(original);
                 expect((await observe(peer, [original.commandId])).outcomes.get(original.commandId)).toEqual({
                     kind: "failed",
@@ -115,6 +144,7 @@ test("Given an executed command, When its receipt is evicted and the daemon rest
                 });
 
                 await peer.restart();
+                await cancelExpired();
                 send(original);
                 expect((await observe(peer, [original.commandId])).outcomes.get(original.commandId)).toEqual({
                     kind: "failed",
