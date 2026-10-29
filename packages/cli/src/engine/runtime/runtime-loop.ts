@@ -1,12 +1,10 @@
 import { resolve } from "node:path";
 import type { RuntimeUpgradeResult } from "@moxt-ai/mobius-sdk/protocol";
-import {
-    discoverLocalAgentInventory,
-    supportedLocalAgentSpecifications,
-} from "../agent/discovery/discover-local-agents.ts";
+import { supportedLocalAgentSpecifications } from "../agent/discovery/discover-local-agents.ts";
 import { RuntimeAgentDependencies } from "../agent/runtime-agents.ts";
 import type { RuntimeTurnActivity } from "../session/turn/runtime-turn-activity.ts";
 import { ensureCanonicalDirectory } from "../storage/files/local-files.ts";
+import { discoverRuntimeAgentInventory } from "./catalog/discover-agent-catalog.ts";
 import { publishAgentCatalog } from "./catalog/publish-agent-catalog.ts";
 import { createCatalogAgentResolver } from "./catalog/resolve-catalog-agent.ts";
 import { createRuntimeConfig, type RuntimeConfig, RuntimeLocalContext } from "./config.ts";
@@ -102,13 +100,16 @@ export async function prepareProvidedRuntime({
     const specifications = supportedLocalAgentSpecifications();
     const discoveryEnvironment = localContext.agentLaunchEnvironment;
     const discover = async (refreshSignal: AbortSignal) =>
-        await discoverLocalAgentInventory({
-            defaultWorkspace,
-            dataDirectory: localContext.stateDirectory,
-            environment: discoveryEnvironment,
-            signal: refreshSignal,
-            specifications,
-        });
+        await discoverRuntimeAgentInventory(
+            {
+                defaultWorkspace,
+                dataDirectory: localContext.stateDirectory,
+                environment: discoveryEnvironment,
+                signal: refreshSignal,
+                specifications,
+            },
+            connection.channelId,
+        );
     const inventory = await discover(signal);
     const config: RuntimeConfig = createRuntimeConfig(
         {
