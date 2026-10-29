@@ -197,7 +197,7 @@ export const sessionRecordingTurnPrecedingSchema = z
     })
     .readonly();
 
-export const sessionRecordingCompactionSchema = z
+const sessionRecordingCompactionSchema = z
     .object({
         // Agent-owned identity: retain the ACP contract rather than imposing Mobius identifier syntax.
         compactionId: z.string().max(2_048),
@@ -260,6 +260,8 @@ export const sessionRecordingInteractionSchema = z.discriminatedUnion("kind", [
 
 export const decodeSessionRecordingTurnAttempt = (value: unknown): SessionRecordingTurnAttempt =>
     sessionRecordingTurnAttemptSchema.parse(value);
+export const decodeSessionRecordingCompaction = (value: unknown): SessionRecordingCompaction =>
+    sessionRecordingCompactionSchema.parse(value);
 export const decodeSessionRecordingTurnItem = (value: unknown): SessionRecordingTurnItem =>
     sessionRecordingTurnItemSchema.parse(value);
 export const decodeSessionRecordingTurnPrompt = (value: unknown): SessionRecordingTurnPrompt =>

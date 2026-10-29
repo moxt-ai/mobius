@@ -508,6 +508,7 @@ export type {
 } from "./session/recording/turn-history.ts";
 
 export {
+    decodeSessionRecordingCompaction,
     decodeSessionRecordingExecution,
     decodeSessionRecordingInteraction,
     decodeSessionRecordingTurnAttempt,
@@ -530,7 +531,6 @@ export {
     SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT,
     SESSION_RECORDING_TURN_PAGE_DECODE_MAX_ELEMENTS,
     SESSION_RECORDING_TURN_PAGE_MAX_LIMIT,
-    sessionRecordingCompactionSchema,
     sessionRecordingTurnItemCursor,
 } from "./session/recording/turn-history.ts";
 

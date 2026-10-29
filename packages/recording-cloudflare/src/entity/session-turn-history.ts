@@ -1,11 +1,11 @@
 import {
+    decodeSessionRecordingCompaction,
     decodeSessionRecordingInteraction,
     decodeSessionRecordingTurnAttempt,
     decodeSessionRecordingTurnItem,
     decodeSessionRecordingTurnPreceding,
     decodeSessionRecordingTurnPrompt,
     SESSION_RECORDING_TURN_COMPACTION_MAX_ELEMENTS,
-    sessionRecordingCompactionSchema,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { z } from "zod";
 
@@ -23,6 +23,7 @@ function decodedProtocolValue<T>(decode: (value: unknown) => T): z.ZodType<T> {
 }
 
 const sessionRecordingTurnAttempt = decodedProtocolValue(decodeSessionRecordingTurnAttempt);
+const sessionRecordingCompaction = decodedProtocolValue(decodeSessionRecordingCompaction);
 const sessionRecordingTurnItem = decodedProtocolValue(decodeSessionRecordingTurnItem);
 const sessionRecordingTurnPreceding = decodedProtocolValue(decodeSessionRecordingTurnPreceding);
 const sessionRecordingTurnPrompt = decodedProtocolValue(decodeSessionRecordingTurnPrompt);
@@ -35,7 +36,7 @@ export const storedTurnSchema = z
         attempt: sessionRecordingTurnAttempt,
         commandId: z.string().min(1),
         compactions: z
-            .array(sessionRecordingCompactionSchema)
+            .array(sessionRecordingCompaction)
             .max(SESSION_RECORDING_TURN_COMPACTION_MAX_ELEMENTS)
             .readonly()
             .default([]),
