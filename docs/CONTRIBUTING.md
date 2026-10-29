@@ -64,7 +64,7 @@ pnpm db:codegen
 ```
 
 For an integration workflow that pairs an isolated Runtime and exercises sessions
-without Morty, follow the [mini-client walkthrough](../packages/mini-client/README.md).
+without Morty, follow the [SDK session example](../packages/mobius-sdk/README.md#run-the-complete-session-example).
 
 ## Verify your changes
 
