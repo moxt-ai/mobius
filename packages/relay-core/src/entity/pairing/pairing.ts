@@ -253,6 +253,7 @@ function pairingDirectoryErrorStatus(code: string): number {
         case "unauthorized":
         case "credential_expired":
         case "credential_revoked":
+        case "runtime_revoked":
             return 401;
         case "owner_access_required":
         case "runtime_access_denied":
