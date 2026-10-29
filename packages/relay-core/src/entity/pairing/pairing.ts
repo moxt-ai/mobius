@@ -449,25 +449,14 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
     const agents: AgentDescriptor[] = [];
     const identifiers = new Set<string>();
     for (const candidate of value) {
+        // Fields a newer daemon adds are ignored, so an older Relay can still pair it.
         if (
             !isRecord(candidate) ||
-            Object.keys(candidate).length < 5 ||
-            Object.keys(candidate).length > 7 ||
             !Object.hasOwn(candidate, "agentPath") ||
             !Object.hasOwn(candidate, "agentVersion") ||
             !Object.hasOwn(candidate, "capabilities") ||
             !Object.hasOwn(candidate, "id") ||
             !Object.hasOwn(candidate, "label") ||
-            Object.keys(candidate).some(
-                (key) =>
-                    key !== "agentPath" &&
-                    key !== "agentVersion" &&
-                    key !== "agentSettingsDiscovery" &&
-                    key !== "capabilities" &&
-                    key !== "id" &&
-                    key !== "label" &&
-                    key !== "sessionTurnConfiguration",
-            ) ||
             (Object.hasOwn(candidate, "agentSettingsDiscovery") &&
                 typeof candidate["agentSettingsDiscovery"] !== "boolean") ||
             (Object.hasOwn(candidate, "sessionTurnConfiguration") &&

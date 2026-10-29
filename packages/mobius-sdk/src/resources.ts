@@ -331,24 +331,13 @@ export function decodeMobiusAgentCapabilities(value: unknown): SessionCapabiliti
 
 function decodeAgentDescriptor(value: unknown): MobiusAgentDescriptor {
     const agent = record(value, "Agent descriptor");
+    // Fields a newer service adds are ignored, so an older SDK can still list the Agent.
     if (
-        Object.keys(agent).length < 5 ||
-        Object.keys(agent).length > 7 ||
         !Object.hasOwn(agent, "agentPath") ||
         !Object.hasOwn(agent, "agentVersion") ||
         !Object.hasOwn(agent, "capabilities") ||
         !Object.hasOwn(agent, "id") ||
         !Object.hasOwn(agent, "label") ||
-        Object.keys(agent).some(
-            (key) =>
-                key !== "agentPath" &&
-                key !== "agentVersion" &&
-                key !== "agentSettingsDiscovery" &&
-                key !== "capabilities" &&
-                key !== "id" &&
-                key !== "label" &&
-                key !== "sessionTurnConfiguration",
-        ) ||
         (Object.hasOwn(agent, "agentSettingsDiscovery") && typeof agent["agentSettingsDiscovery"] !== "boolean") ||
         (Object.hasOwn(agent, "sessionTurnConfiguration") && typeof agent["sessionTurnConfiguration"] !== "boolean")
     ) {

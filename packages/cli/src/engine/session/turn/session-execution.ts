@@ -122,13 +122,13 @@ export class SessionExecutionState {
             onQueued();
         }
         if (turn.effectiveDisposition() === SessionPromptDisposition.Steer) {
-            return { disposition: SessionPromptDisposition.Steer, kind: "available" };
+            return { disposition: turn.admit(), kind: "available" };
         }
         for (;;) {
             waitSignal.throwIfAborted();
             const first = head();
             if (first === undefined || first === turn) {
-                return { disposition: turn.effectiveDisposition(), kind: "available" };
+                return { disposition: turn.admit(), kind: "available" };
             }
             if (command.disposition !== SessionPromptDisposition.Queue) {
                 return { kind: "busy" };
@@ -142,7 +142,7 @@ export class SessionExecutionState {
                 promotion.then(() => "promoted" as const),
             ]);
             if (decision === "promoted") {
-                return { disposition: SessionPromptDisposition.Steer, kind: "available" };
+                return { disposition: turn.admit(), kind: "available" };
             }
         }
     };
