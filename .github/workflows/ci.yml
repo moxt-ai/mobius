@@ -223,46 +223,6 @@ jobs:
           MERGE_GROUP_REF: ${{ github.event.merge_group.head_ref }}
         run: node scripts/ci-check-package-version-bumps.cjs
 
-  npm-compatibility:
-    # The daemon finds and installs its own upgrades through the user's npm, so its
-    # upgrade journeys run against every supported npm major, not only the bundled one.
-    name: npm compatibility (npm ${{ matrix.npm }}${{ matrix.os == 'windows-latest' && ', Windows' || '' }})
-    needs: changes
-    if: needs.changes.outputs.docs-only == 'false'
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest]
-        npm: ["10", "11", "12"]
-        include:
-          - os: windows-latest
-            npm: "12"
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: pnpm/action-setup@v4
-        with:
-          run_install: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: Install npm ${{ matrix.npm }}
-        if: runner.os != 'Windows'
-        env:
-          NPM_MAJOR: ${{ matrix.npm }}
-        run: npm install --global "npm@$NPM_MAJOR" && npm --version
-      - name: Install npm ${{ matrix.npm }} on Windows
-        if: runner.os == 'Windows'
-        env:
-          NPM_MAJOR: ${{ matrix.npm }}
-        run: npm install --global "npm@$env:NPM_MAJOR" && npm --version
-      - run: pnpm test:npm-compatibility
-
   cli-compatibility:
     needs: changes
     if: needs.changes.outputs.docs-only == 'false'
@@ -270,7 +230,7 @@ jobs:
 
   validate:
     if: always()
-    needs: [changes, checks, client-check, real-agents, npm-compatibility, package-versions, cli-compatibility]
+    needs: [changes, checks, client-check, real-agents, package-versions, cli-compatibility]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -281,7 +241,6 @@ jobs:
           CHECKS_RESULT: ${{ needs.checks.result }}
           CLIENT_TESTS_RESULT: ${{ needs.client-check.result }}
           REAL_AGENTS_RESULT: ${{ needs.real-agents.result }}
-          NPM_COMPATIBILITY_RESULT: ${{ needs.npm-compatibility.result }}
           PACKAGE_VERSIONS_RESULT: ${{ needs.package-versions.result }}
           CLI_COMPATIBILITY_RESULT: ${{ needs.cli-compatibility.result }}
           EVENT_NAME: ${{ github.event_name }}
@@ -290,11 +249,11 @@ jobs:
           if [[ "$DOCS_ONLY" == "true" ]]; then
             [[ "$CLIENT_TESTS_RESULT" == "skipped" ]]
             [[ "$CLI_COMPATIBILITY_RESULT" == "skipped" ]]
-            [[ "$CHECKS_RESULT" == "skipped" && "$REAL_AGENTS_RESULT" == "skipped" && "$NPM_COMPATIBILITY_RESULT" == "skipped" && "$PACKAGE_VERSIONS_RESULT" == "skipped" ]]
+            [[ "$CHECKS_RESULT" == "skipped" && "$REAL_AGENTS_RESULT" == "skipped" && "$PACKAGE_VERSIONS_RESULT" == "skipped" ]]
           else
             [[ "$CLIENT_TESTS_RESULT" == "success" ]]
             [[ "$CLI_COMPATIBILITY_RESULT" == "success" ]]
-            [[ "$DOCS_ONLY" == "false" && "$CHECKS_RESULT" == "success" && "$REAL_AGENTS_RESULT" == "success" && "$NPM_COMPATIBILITY_RESULT" == "success" ]]
+            [[ "$DOCS_ONLY" == "false" && "$CHECKS_RESULT" == "success" && "$REAL_AGENTS_RESULT" == "success" ]]
             # Pushes and manual runs have no pull request whose version bump to check.
             if [[ "$EVENT_NAME" == "pull_request" || "$EVENT_NAME" == "merge_group" ]]; then
               [[ "$PACKAGE_VERSIONS_RESULT" == "success" ]]

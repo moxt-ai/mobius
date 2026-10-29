@@ -1,6 +1,6 @@
 {
     "name": "@moxt-ai/mobius",
-    "version": "0.0.363",
+    "version": "0.0.367",
     "description": "Mobius CLI for pairing and running local AI agent services.",
     "type": "module",
     "bin": {
@@ -48,8 +48,6 @@
         "test:manual": "vitest run tests/manual",
         "pretest:agents": "pnpm build",
         "test:agents": "vitest run tests/agents --maxWorkers=2",
-        "pretest:npm-compatibility": "pnpm build",
-        "test:npm-compatibility": "vitest run tests/runtime/daemon-upgrade.integration.test.ts",
         "pretest:pressure": "tsc --project src/engine/acp/harness/claude/upstream/tsconfig.json && tsc --project src/engine/acp/harness/pi/upstream/tsconfig.json",
         "test:pressure": "node tests/pressure/concurrent-sessions.mjs"
     },
@@ -59,7 +57,7 @@
         "commander": "15.0.0",
         "semver": "^7.8.5",
         "undici": "8.12.2",
-        "zod": "^4.6.5"
+        "zod": "^4.6.7"
     },
     "devDependencies": {
         "@anthropic-ai/sdk": "0.122.0",

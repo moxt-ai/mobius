@@ -15,6 +15,7 @@ const cannedHistoryAdapter: AdapterResolver = (agent, dependencies) => {
         refreshAgent: acp.refreshAgent,
         getCapabilities: acp.getCapabilities,
         releaseSession: acp.releaseSession,
+        readNativeHistoryRevision: acp.readNativeHistoryRevision,
         createSession: acp.createSession,
         forkSession: acp.forkSession,
         openSession: acp.openSession,

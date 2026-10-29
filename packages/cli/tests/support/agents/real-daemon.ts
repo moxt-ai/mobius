@@ -39,6 +39,8 @@ import { acpAdapters } from "../acp-adapters.ts";
 import { installWorkspaceDaemonRelease } from "../installed-daemon-release.ts";
 
 export interface RealDaemonPeer {
+    /** Runs a `mobius` command against this daemon's installation, as the user's terminal would. */
+    readonly cli: (args: readonly string[]) => Promise<void>;
     readonly restart: (mode?: "crash") => Promise<void>;
     readonly send: (message: string | Uint8Array) => void;
     readonly sessionId: string;
@@ -265,6 +267,7 @@ export async function withRealDaemon(
                 await connected.promise;
             },
             bindingId: RUNTIME_WORKSPACE_BINDING_ID,
+            cli: async (args) => await cli(args),
             readDiagnostics: async () => await readFile(join(directory, "logs", "daemon.log"), "utf8"),
             signal,
             sessionId,

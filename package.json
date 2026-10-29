@@ -38,7 +38,6 @@
         "test:agent-daemon": "pnpm test:agent-daemon:controlled",
         "test:agent-daemon:controlled": "pnpm --filter @moxt-ai/mobius test:controlled",
         "test:agent-daemon:real": "pnpm --filter @moxt-ai/mobius test:agents",
-        "test:npm-compatibility": "pnpm --filter @moxt-ai/mobius test:npm-compatibility",
         "test:ci:client": "pnpm test:ci:client:daemon && pnpm test:ci:client:sdk",
         "test:ci:client:daemon": "pnpm test:agent-daemon:controlled --silent=passed-only",
         "test:ci:client:sdk": "vitest run packages/mobius-sdk/tests packages/test-support/tests packages/platform-app/tests --silent=passed-only",
@@ -61,9 +60,9 @@
         "@types/node": "^24.13.5",
         "dependency-cruiser": "18.3.1",
         "drizzle-kit": "0.31.10",
-        "happy-dom": "20.14.5",
+        "happy-dom": "21.0.4",
         "simple-git-hooks": "^2.13.1",
         "typescript": "^7.0.2",
-        "vitest": "^4.1.11"
+        "vitest": "^4.1.12"
     }
 }

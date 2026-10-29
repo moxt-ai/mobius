@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { RequestError } from "@agentclientprotocol/sdk";
 import { z } from "zod";
 
@@ -59,6 +60,36 @@ export function readPiHistory(sessionFile: string): readonly PiHistoryEntry[] {
             leaf = entry.parentId;
         }
         return history.reverse();
+    } catch (cause: unknown) {
+        const error = RequestError.internalError({ code: "PI_HISTORY_READ_FAILED" }, "Unable to read Pi history");
+        error.cause = cause;
+        throw error;
+    }
+}
+
+/**
+ * Pi continues a session from the entry written last. Another pi process that
+ * appends to the file therefore changes this entry, while a process that keeps
+ * an earlier copy would branch from its own in-memory leaf. Empty before Pi
+ * writes the first entry.
+ */
+export async function readPiLatestEntryId(sessionFile: string): Promise<string> {
+    if (!existsSync(sessionFile)) {
+        return "";
+    }
+    try {
+        let latest = "";
+        for (const line of (await readFile(sessionFile, "utf8")).split(/\r?\n/u)) {
+            if (!line.trim()) {
+                continue;
+            }
+            const value: unknown = JSON.parse(line);
+            if (z.object({ type: z.literal("session") }).safeParse(value).success) {
+                continue;
+            }
+            latest = entrySchema.parse(value).id;
+        }
+        return latest;
     } catch (cause: unknown) {
         const error = RequestError.internalError({ code: "PI_HISTORY_READ_FAILED" }, "Unable to read Pi history");
         error.cause = cause;
