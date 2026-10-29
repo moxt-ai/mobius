@@ -167,10 +167,14 @@ export function characterCount(text: string): number {
     return text.length - pairs;
 }
 
-/** A stored item as a read sees it: its fields, its bounded listing, and a prefix of its text. */
+/**
+ * A stored item as a read sees it: its fields and a prefix of its text. A page reads a tool's bounded
+ * listing in place of its fields when it has one, so it never decodes a detail it would not list.
+ */
 export interface StoredTurnItemRead {
     readonly item: StoredTurnItem;
-    readonly listing: StoredTurnItem | null;
+    // Characters of the stored JSON `item` was decoded from, which a listed tool item encodes back to.
+    readonly encodedLength: number;
     // Characters of stored text, counted as SQLite counts them.
     readonly textLength: number;
     readonly textPrefix: string;

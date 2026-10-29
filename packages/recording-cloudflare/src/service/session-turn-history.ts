@@ -232,6 +232,15 @@ function foldInputs(wireEvents: readonly SessionWireEvent[]): readonly FoldInput
     return inputs;
 }
 
+/** Whether two Turns hold the same fields; nested values compare by identity, as folding replaces them. */
+function sameTurn(left: StoredTurn, right: StoredTurn): boolean {
+    const entries = Object.entries(left);
+    return (
+        entries.length === Object.keys(right).length &&
+        entries.every(([key, value]) => Object.is(Reflect.get(right, key), value))
+    );
+}
+
 interface CachedItem {
     readonly commandId: string;
     readonly item: StoredTurnItem;
@@ -344,6 +353,12 @@ class ProjectionFold {
     }
 
     #putTurn(turn: StoredTurn): StoredTurn {
+        const current = this.#turns.get(turn.commandId);
+        // Folding often restates a Turn unchanged, such as reasoning that keeps its answer closed. Only a
+        // changed Turn is written, so a batch does not encode and rewrite its prompt for nothing.
+        if (current !== undefined && sameTurn(current, turn)) {
+            return current;
+        }
         this.#turns.set(turn.commandId, turn);
         this.#dirtyTurns.add(turn.commandId);
         return turn;
@@ -835,7 +850,7 @@ class ProjectionFold {
     }
 }
 
-/** The item a page lists: a bounded text prefix, or the bounded tool listing stored with the item. */
+/** The item a read returns: a text item with a bounded prefix of its text, or the tool as it was read. */
 function listedItem(read: StoredTurnItemRead, textCharacters: number): SessionRecordingTurnItem {
     switch (read.item.kind) {
         case "answer":
@@ -846,7 +861,7 @@ function listedItem(read: StoredTurnItemRead, textCharacters: number): SessionRe
                 text: read.textPrefix,
             };
         case "tool":
-            return read.listing ?? read.item;
+            return read.item;
     }
 }
 
@@ -884,10 +899,11 @@ export class SessionTurnHistory {
         try {
             return this.#history.transaction(() => {
                 const projection = this.#projection() ?? emptyProjection;
-                if (
-                    projection.failure !== null ||
-                    this.#recording.hasBatchBetween(projection.foldedThroughOrdinal, ordinal)
-                ) {
+                // Ordinals only grow, so a projection folded through the previous ordinal has nothing between.
+                const unfolded =
+                    projection.foldedThroughOrdinal !== ordinal - 1 &&
+                    this.#recording.hasBatchBetween(projection.foldedThroughOrdinal, ordinal);
+                if (projection.failure !== null || unfolded) {
                     return false;
                 }
                 const fold = new ProjectionFold(this.#history, projection);
@@ -1103,7 +1119,7 @@ export class SessionTurnHistory {
         if (read === null) {
             return { kind: "not_found" };
         }
-        const item = read.item.kind === "tool" ? read.item : listedItem(read, itemTextCharacters);
+        const item = listedItem(read, itemTextCharacters);
         return { kind: "ready", value: { commandId, item, sessionId: target.sessionId, version: 1 } };
     };
 
@@ -1138,7 +1154,8 @@ export class SessionTurnHistory {
                     : this.#history.itemsBefore(commandId, fromSequence, take, listedTextCharacters);
             for (const read of chunk) {
                 const listed = listedItem(read, listedTextCharacters);
-                const size = JSON.stringify(listed).length;
+                // A listed tool encodes back to the JSON it was read from; text items carry their prefix too.
+                const size = listed.kind === "tool" ? read.encodedLength : JSON.stringify(listed).length;
                 if ((items.length > 0 || !admitFirst) && size > remaining) {
                     break reading;
                 }
