@@ -41,42 +41,44 @@ export async function replayCodexHistory(
                     continue;
                 }
                 if (item.type === "userMessage") {
-                    const text = item.content
-                        .flatMap((content) => {
-                            if (typeof content !== "object" || content === null) {
-                                return [];
-                            }
-                            const type = Reflect.get(content, "type");
-                            const text = Reflect.get(content, "text");
-                            const url = Reflect.get(content, "url");
-                            if (type === "image" && typeof url === "string") {
-                                return [`[@image](${url})`];
-                            }
-                            return type === "text" && typeof text === "string" ? [text] : [];
-                        })
-                        .join("");
-                    const history = await embedLocalHistoryImages(
-                        { status: "available", truncated: false, messages: [{ role: "user", text }] },
-                        deadline,
-                    );
-                    if (history.status !== "available") {
-                        continue;
-                    }
-                    const message = history.messages[0];
-                    for (const image of message?.images ?? []) {
-                        await emit({
-                            content: { type: "image", data: image.data, mimeType: image.mimeType },
-                            messageId: item.id,
-                            sessionUpdate: "user_message_chunk",
-                        });
-                    }
-                    const restoredText = message?.text ?? "";
-                    if (restoredText.length > 0) {
-                        await emit({
-                            content: { text: restoredText, type: "text" },
-                            messageId: item.id,
-                            sessionUpdate: "user_message_chunk",
-                        });
+                    const contents = item.content.flatMap((content) => {
+                        if (typeof content !== "object" || content === null) {
+                            return [];
+                        }
+                        const type = Reflect.get(content, "type");
+                        const text = Reflect.get(content, "text");
+                        const url = Reflect.get(content, "url");
+                        if (type === "image" && typeof url === "string") {
+                            return [`[@image](${url})`];
+                        }
+                        return type === "text" && typeof text === "string" ? [text] : [];
+                    });
+                    // Keep native input boundaries: joining adjacent resource links
+                    // would turn the first file URL into part of the next input.
+                    for (const text of contents) {
+                        const history = await embedLocalHistoryImages(
+                            { status: "available", truncated: false, messages: [{ role: "user", text }] },
+                            deadline,
+                        );
+                        if (history.status !== "available") {
+                            continue;
+                        }
+                        const message = history.messages[0];
+                        for (const image of message?.images ?? []) {
+                            await emit({
+                                content: { type: "image", data: image.data, mimeType: image.mimeType },
+                                messageId: item.id,
+                                sessionUpdate: "user_message_chunk",
+                            });
+                        }
+                        const restoredText = message?.text ?? "";
+                        if (restoredText.length > 0) {
+                            await emit({
+                                content: { text: restoredText, type: "text" },
+                                messageId: item.id,
+                                sessionUpdate: "user_message_chunk",
+                            });
+                        }
                     }
                 } else if (item.type === "agentMessage") {
                     await emit(agentMessageUpdate(item.id, item.text));

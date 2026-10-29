@@ -8,10 +8,11 @@ export function createRuntimeAdapterRegistry(
     adapters: AdapterResolver,
     processes: AdapterDependencies["processes"],
     externalize: ConstructorParameters<typeof AcpContentExternalizer>[0],
+    linkedResources: ConstructorParameters<typeof AcpContentExternalizer>[1],
 ): AdapterRegistry {
     return new AdapterRegistry(adapters, {
         processes,
-        contentExternalizer: new AcpContentExternalizer(externalize),
+        contentExternalizer: new AcpContentExternalizer(externalize, linkedResources),
     });
 }
 

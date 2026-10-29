@@ -1,4 +1,4 @@
-import { readdirSync, unlinkSync } from "node:fs";
+import { existsSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import * as acp from "@agentclientprotocol/sdk";
 import { exitsAfterSessionCreation, persistsEmptySessions } from "../../support/acp-process.ts";
@@ -59,6 +59,12 @@ export function registerNativeSessions(agent: ReturnType<typeof acp.agent>) {
             return sessionConfiguration(state);
         })
         .onRequest(acp.methods.agent.session.list, async (context) => {
+            const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+            const crash = directory === undefined ? undefined : join(directory, "crash-next-list");
+            if (crash !== undefined && existsSync(crash)) {
+                unlinkSync(crash);
+                process.exit(1);
+            }
             if (process.argv.includes("--announce-commands-while-listing") && !listCommandsAnnounced) {
                 const activeSessionId = sessions.keys().next().value ?? "native-browser-notification";
                 listCommandsAnnounced = true;
@@ -76,7 +82,6 @@ export function registerNativeSessions(agent: ReturnType<typeof acp.agent>) {
                     },
                 });
             }
-            const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
             const stored =
                 directory === undefined
                     ? [...sessions.entries()]

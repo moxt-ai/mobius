@@ -76,10 +76,10 @@ export class SessionRuntimeFixture {
         this.sessions.steerPrompt({ ...options, adapter: this.adapters.resolve(options.agent) });
 
     readonly nativeSessionCapabilities = (options: TestSessionPrepareOptions) =>
-        this.adapters.resolve(options.agent).getCapabilities(options);
+        this.adapters.resolve(options.agent).getCapabilities(options.cwd, options.signal);
 
     readonly listNativeSessions = (options: TestSessionPrepareOptions, cursor: string | null) =>
-        this.adapters.resolve(options.agent).listSessions(options, cursor);
+        this.adapters.resolve(options.agent).listSessions(options.cwd, cursor, options.signal);
 
     readonly previewNativeSessionEvents = (
         options: TestSessionPrepareOptions,
@@ -91,12 +91,17 @@ export class SessionRuntimeFixture {
             { ...options, adapter: this.adapters.resolve(options.agent) },
             nativeSessionId,
             (target) =>
-                target.adapter.readSessionHistory(target, {
-                    nativeSessionId,
-                    eventLimit,
-                    cursor,
-                    sessionId: target.sessionId,
-                }),
+                target.adapter.readSessionHistory(
+                    target.cwd,
+                    target.additionalDirectories,
+                    {
+                        nativeSessionId,
+                        eventLimit,
+                        cursor,
+                        sessionId: target.sessionId,
+                    },
+                    target.signal,
+                ),
         );
 
     readonly loadSessionEvents = (options: TestSessionPrepareOptions, eventLimit: number, cursor: string | null) =>

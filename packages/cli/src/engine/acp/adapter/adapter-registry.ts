@@ -1,7 +1,7 @@
 import type { AcpAgentDefinition } from "../agent/agent-definition.ts";
 import type { Adapter, AdapterDependencies, AdapterResolver } from "../native-history/preview-contract.ts";
 
-/** Stable harness adapters for one runtime; query behavior belongs to each adapter. */
+/** Stable adapters retain preview state while query definitions follow catalog rediscovery. */
 export class AdapterRegistry {
     readonly #resolve: AdapterResolver;
     readonly #dependencies: AdapterDependencies;
@@ -15,6 +15,7 @@ export class AdapterRegistry {
     readonly resolve = (agent: AcpAgentDefinition): Adapter => {
         const existing = this.#adapters.get(agent.id);
         if (existing !== undefined) {
+            existing.refreshAgent(agent);
             return existing;
         }
         const adapter = this.#resolve(agent, this.#dependencies);

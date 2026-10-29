@@ -106,8 +106,11 @@ export async function runRuntime(
     // Dispose media only after session and adapter operations have drained.
     await using externalContent = new LocalExternalContentStore(stateDirectory);
     const processes = new AgentProcessPool(config.localContext.maxAcpProcesses, timer);
-    const adapters = createRuntimeAdapterRegistry(config.adapters, processes, (sessionId, content, contentSignal) =>
-        externalContent.put({ ...content, sessionId, signal: contentSignal }),
+    const adapters = createRuntimeAdapterRegistry(
+        config.adapters,
+        processes,
+        (sessionId, content, contentSignal) => externalContent.put({ ...content, sessionId, signal: contentSignal }),
+        externalContent.linkedResources,
     );
     const resolveAgent = async (agentId: string, resolveSignal: AbortSignal, sessionId?: string) => {
         const catalogAgent = await resolveCatalogAgent(config, agentId, resolveSignal);
@@ -116,7 +119,7 @@ export async function runRuntime(
             environment === undefined
                 ? catalogAgent
                 : catalogAgent.withEnvironment({ ...catalogAgent.environment, ...environment });
-        return { agent, adapter: adapters.resolve(agent) };
+        return { agent, adapter: adapters.resolve(catalogAgent) };
     };
     const layer = buildSessionLayer({
         processes,

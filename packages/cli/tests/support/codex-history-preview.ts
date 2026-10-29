@@ -8,10 +8,10 @@ import { MemorySessionEventStore } from "../../src/engine/session/history/sessio
 import { AgentProcessPool } from "../../src/engine/session/process/agent-process-pool.ts";
 import { UnretainedExternalContentStore } from "./unretained-external-content-store.ts";
 
-function historyAdapter() {
+function historyAdapter(agent: AcpAgentDefinition) {
     const processes = new AgentProcessPool();
     const content = new UnretainedExternalContentStore();
-    const adapter = new CodexAdapter({
+    const adapter = new CodexAdapter(agent, {
         processes,
         contentExternalizer: new AcpContentExternalizer((sessionId, value, signal) =>
             content.put({
@@ -29,16 +29,18 @@ function historyAdapter() {
 
 /** Exercises the production preview boundary against a controlled app-server executable. */
 export async function previewCodexHistory(agent: AcpAgentDefinition, cwd: string, nativeSessionId: string) {
-    const { adapter, processes } = historyAdapter();
+    const { adapter, processes } = historyAdapter(agent);
     try {
         return await adapter.readSessionHistory(
-            { agent, cwd, additionalDirectories: [], sessionId: "preview", signal: AbortSignal.timeout(30_000) },
+            cwd,
+            [],
             {
                 nativeSessionId,
                 sessionId: "preview",
                 eventLimit: 500,
                 cursor: null,
             },
+            AbortSignal.timeout(30_000),
         );
     } finally {
         await adapter.close();
@@ -48,7 +50,7 @@ export async function previewCodexHistory(agent: AcpAgentDefinition, cwd: string
 
 /** Reads through the normal ACP session/load lifecycle for parity assertions. */
 export async function loadCodexHistory(agent: AcpAgentDefinition, cwd: string, nativeSessionId: string) {
-    const { adapter, processes } = historyAdapter();
+    const { adapter, processes } = historyAdapter(agent);
     const events = new MemorySessionEventStore();
     try {
         const signal = AbortSignal.timeout(30_000);

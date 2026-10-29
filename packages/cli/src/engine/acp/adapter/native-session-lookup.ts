@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { AcpExecutionError } from "../acp-error.ts";
-import type { Adapter, NativeSessionLookupBudget, NativeSessionQuery } from "../native-history/preview-contract.ts";
+import type { Adapter, NativeSessionLookupBudget } from "../native-history/preview-contract.ts";
 import type { NativeSessionInfo } from "../protocol/native-session.ts";
 import { nativeSessionIdSchema } from "../protocol/native-session.ts";
 
@@ -15,9 +15,10 @@ const lookupSchema = z.object({
 /** ACP has no direct lookup operation; keep its bounded pagination inside the adapter. */
 export async function findNativeSession(
     list: Adapter["listSessions"],
-    query: NativeSessionQuery,
+    cwd: string,
     nativeSessionId: string,
     budget: NativeSessionLookupBudget,
+    signal: AbortSignal,
 ): Promise<NativeSessionInfo> {
     const decoded = lookupSchema.safeParse({ nativeSessionId, budget });
     if (!decoded.success) {
@@ -32,9 +33,9 @@ export async function findNativeSession(
     let inspected = 0;
     const visited = new Set<string>();
     for (let pageNumber = 0; pageNumber < limits.maximumPages; pageNumber += 1) {
-        query.signal.throwIfAborted();
-        const page = await list(query, cursor);
-        query.signal.throwIfAborted();
+        signal.throwIfAborted();
+        const page = await list(cwd, cursor, signal);
+        signal.throwIfAborted();
         inspected += page.sessions.length;
         const found = page.sessions.find((session) => session.sessionId === decoded.data.nativeSessionId);
         if (found !== undefined) {
