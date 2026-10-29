@@ -161,7 +161,7 @@ Compatibility is mandatory unless the human user or maintainer explicitly requir
 the specific breaking change. A new protocol version or negotiated capability does
 not authorize removal of the existing contract. AI agents must not infer permission
 to retire an older peer from a refactoring task or a version bump. Follow
-[AGENTS.md](AGENTS.md) and the mandatory [code review rules](CODE_REVIEW.md).
+[AGENTS.md](../AGENTS.md) and the mandatory [code review rules](CODE_REVIEW.md).
 
 ### Compatibility rules
 
