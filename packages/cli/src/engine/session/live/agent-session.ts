@@ -1,6 +1,6 @@
-import { methods } from "@agentclientprotocol/sdk";
 import { conversationTitleFromText } from "@moxt-ai/mobius-sdk";
 import {
+    type AgentModelEffort,
     SESSION_COMMANDS_UPDATED_KIND,
     SESSION_CONFIG_UPDATED_KIND,
     SESSION_INFO_UPDATED_KIND,
@@ -10,25 +10,21 @@ import {
     type SessionEventPayload,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { AcpExecutionError } from "../../acp/acp-error.ts";
-import {
-    initializeAgentConnection,
-    RetryableAcpInitializationError,
-    validateAgentRuntime,
-} from "../../acp/adapter/agent-initialization.ts";
-import type { AdapterSessionConnection, AdapterSessionEvent } from "../../acp/adapter/session-events.ts";
+import { RetryableAcpInitializationError, validateAgentRuntime } from "../../acp/adapter/agent-initialization.ts";
+import type { AdapterSessionEvent, AdapterSessionSubscriber } from "../../acp/adapter/session-events.ts";
 import type { AcpAgentDefinition } from "../../acp/agent/agent-definition.ts";
+import type { BackgroundActivity } from "../../acp/agent/in-process-endpoint.ts";
 import { validatePromptContent } from "../../acp/client/prompt-content.ts";
-import type { Adapter, AdapterSessionTarget } from "../../acp/native-history/preview-contract.ts";
+import type {
+    Adapter,
+    AdapterSessionCreateParams,
+    AdapterSessionOpened,
+    AdapterSessionScope,
+    AdapterSessionTarget,
+} from "../../acp/native-history/preview-contract.ts";
 import type { NativeSessionOrigin } from "../../acp/protocol/native-session.ts";
-import {
-    restrictAcpSessionCapabilities,
-    unsupportedSessionCapabilities,
-} from "../../acp/protocol/session-capabilities.ts";
-import {
-    type SessionConfigProtocol,
-    type SessionConfigurationSelection,
-    sessionConfigProtocolForAgent,
-} from "../../acp/protocol/session-config-protocol.ts";
+import { unsupportedSessionCapabilities } from "../../acp/protocol/session-capabilities.ts";
+import type { SessionConfigurationSelection } from "../../acp/protocol/session-config-protocol.ts";
 import type { OperationMetrics } from "../../infra/operation-metrics.ts";
 import { SerialTaskQueue } from "../../util/serial-task-queue.ts";
 import { arraysEqual, recordsEqual, truncate } from "../../util/value-utils.ts";
@@ -78,7 +74,7 @@ type NativeHistoryOwnership =
 interface LoadedSession {
     readonly history: HistoryReplayCapture;
     readonly kind: "loaded";
-    readonly response: unknown;
+    readonly opened: AdapterSessionOpened;
 }
 
 export class AgentSession implements AgentSessionRestore {
@@ -105,15 +101,21 @@ export class AgentSession implements AgentSessionRestore {
     get sessionId(): string {
         return this.#mobiusSessionId;
     }
-    get sessionConfigProtocol(): SessionConfigProtocol {
-        return this.#sessionConfigProtocol;
-    }
     get store(): SessionStore {
         return this.#store;
     }
 
-    readonly hasBackgroundActivity = (): boolean => this.#connection.hasBackgroundActivity();
-    readonly #connection: AdapterSessionConnection;
+    readonly hasBackgroundActivity = (): boolean => this.#backgroundActivity !== "none";
+    #backgroundActivity: BackgroundActivity = "none";
+    #modelEffort: AgentModelEffort | null = null;
+    readonly #scope: AdapterSessionScope;
+    readonly #subscriber: AdapterSessionSubscriber;
+    #nativeIdentity: { readonly kind: "unbound" } | { readonly kind: "bound"; readonly nativeSessionId: string } = {
+        kind: "unbound",
+    };
+    get #nativeSessionId(): string {
+        return this.#nativeIdentity.kind === "bound" ? this.#nativeIdentity.nativeSessionId : "";
+    }
     readonly #adapter: Adapter;
     readonly #additionalDirectories: readonly string[];
     readonly #agentId: string;
@@ -122,11 +124,8 @@ export class AgentSession implements AgentSessionRestore {
     readonly #getObserver: () => SessionObserver;
     readonly #interactions: SessionInteractions;
     #mobiusSessionId: string;
-    readonly #updates: AdapterSessionConnection["events"];
     readonly #metrics: OperationMetrics;
-    readonly #sessionConfigProtocol: SessionConfigProtocol;
     readonly #store: SessionStore;
-    readonly #verifiedAgentVersion: string;
     #agentName = "";
     #agentVersion = "";
     #capabilities: SessionCapabilities = unsupportedSessionCapabilities();
@@ -152,6 +151,7 @@ export class AgentSession implements AgentSessionRestore {
         store: SessionStore,
         metrics: OperationMetrics,
         adapter: Adapter,
+        externalize: SessionPrepareOptions["externalizeSessionUpdate"],
     ) {
         this.#additionalDirectories = [...additionalDirectories];
         this.#adapter = adapter;
@@ -161,9 +161,7 @@ export class AgentSession implements AgentSessionRestore {
         this.#environment = agent.environment;
         this.#mobiusSessionId = mobiusSessionId;
         this.#metrics = metrics;
-        this.#sessionConfigProtocol = sessionConfigProtocolForAgent(agent.id);
         this.#store = store;
-        this.#verifiedAgentVersion = agent.agentVersion;
         this.#getObserver = getObserver;
         this.#interactions = new SessionInteractions({
             cwd: () => this.#cwd,
@@ -174,25 +172,33 @@ export class AgentSession implements AgentSessionRestore {
             observer: getObserver,
             recordSessionEvent: this.recordLifecycleEvent,
         });
-        const scope = {
+        this.#scope = {
             agent,
             cwd,
-            sessionId: () => this.#mobiusSessionId,
-            configOptions: () => this.#configOptions,
-            onEvent: this.#processEvent,
-        };
-        this.#connection = this.#adapter.connectSession({
-            ...scope,
             additionalDirectories: this.#additionalDirectories,
-            capabilities: () => this.#capabilities,
-            onBackgroundActivity: (activity) => this.#getObserver().onBackgroundActivity?.(this, activity),
+            ...(externalize === undefined
+                ? {}
+                : { externalizeUpdate: (update, signal) => externalize(this.#mobiusSessionId, update, signal) }),
+        };
+        this.#subscriber = {
+            onSessionEvent: async (nativeSessionId, event) => {
+                if (this.#nativeSessionId.length === 0) {
+                    this.selectNativeSession(nativeSessionId);
+                } else {
+                    this.assertNativeSession(nativeSessionId);
+                }
+                await this.#processEvent(event);
+            },
+            onBackgroundActivity: (activity) => {
+                this.#backgroundActivity = activity;
+                this.#getObserver().onBackgroundActivity?.(this, activity);
+            },
             interactions: {
                 onPermission: this.#interactions.onPermission,
                 onElicitation: this.#interactions.onElicitation,
                 onElicitationComplete: this.#interactions.onElicitationComplete,
             },
-        });
-        this.#updates = this.#connection.events;
+        };
     }
 
     static async #start(
@@ -220,6 +226,7 @@ export class AgentSession implements AgentSessionRestore {
                         store,
                         metrics,
                         adapter,
+                        options.externalizeSessionUpdate,
                     ),
             );
             try {
@@ -250,12 +257,16 @@ export class AgentSession implements AgentSessionRestore {
         store: SessionStore,
         metrics: OperationMetrics,
         adapter: Adapter,
+        capabilities: SessionCapabilities = unsupportedSessionCapabilities(),
     ): Promise<AgentSession> =>
         await AgentSession.#start(
             options,
             getObserver,
             store,
-            async (runtime) => await runtime.initialize(options.signal, recovery, options.origin),
+            async (runtime) => {
+                runtime.#capabilities = capabilities;
+                await runtime.initialize(options.signal, recovery, options.origin);
+            },
             metrics,
             adapter,
         );
@@ -277,7 +288,7 @@ export class AgentSession implements AgentSessionRestore {
             new StoredSession(
                 this.#mobiusSessionId,
                 this.#agentId,
-                this.#updates.sessionId(),
+                this.#nativeSessionId,
                 this.#cwd,
                 this.#additionalDirectories,
                 this.#prompted,
@@ -303,9 +314,9 @@ export class AgentSession implements AgentSessionRestore {
         if (normalized.length === 0) {
             throw new AcpExecutionError("The Session title cannot be empty", {}, "invalid_session_title");
         }
-        const nativeSessionId = this.#updates.sessionId();
+        const nativeSessionId = this.#nativeSessionId;
         if (nativeSessionId.length > 0) {
-            await this.#adapter.renameSession(this.#target(), normalized, signal);
+            await this.#adapter.renameSession({ ...this.#target(), title: normalized, signal });
         }
         const updatedAt = new Date().toISOString();
         await this.#processEvent({
@@ -321,7 +332,7 @@ export class AgentSession implements AgentSessionRestore {
 
     readonly #captureSelectedConfigurationValues = (): void => {
         this.#sessionConfigurations.capture(this.#configOptions);
-        if (this.#updates.sessionId().length > 0) {
+        if (this.#nativeSessionId.length > 0) {
             this.writeStoredSession(new Date().toISOString());
         }
     };
@@ -369,8 +380,12 @@ export class AgentSession implements AgentSessionRestore {
         }
     };
 
-    readonly restrictSessionCapabilities = (response: unknown): void => {
-        this.#capabilities = restrictAcpSessionCapabilities(this.#capabilities, response);
+    readonly applySessionOpened = (opened: AdapterSessionOpened): void => {
+        this.#agentName = opened.agentName;
+        this.#agentVersion = opened.agentVersion;
+        this.#modelEffort = opened.agentSettingsModelEffort;
+        this.#capabilities = opened.capabilities;
+        this.setConfigOptions(opened.configOptions);
     };
 
     readonly prepared = (): PreparedSession =>
@@ -393,7 +408,7 @@ export class AgentSession implements AgentSessionRestore {
                 "native_history_unsupported",
             );
         }
-        await this.#completedHistory(signal, "ACP agent exited while loading history");
+        await this.#completedHistory(signal);
     };
 
     /** Starts live event capture without asking the native Agent to replay its persisted history. */
@@ -419,28 +434,35 @@ export class AgentSession implements AgentSessionRestore {
                 "native_history_unsupported",
             );
         }
-        const history = await this.#completedHistory(signal, "ACP agent exited while loading history");
+        const history = await this.#completedHistory(signal);
         return history.eventPage(eventLimit, cursor);
     };
 
-    async #completedHistory(signal: AbortSignal, exitMessage: string): Promise<HistoryReplayCapture> {
+    async #completedHistory(signal: AbortSignal): Promise<HistoryReplayCapture> {
         if (!this.#prompted && this.#nativeHistoryOwnership.kind === "fresh-session") {
             if (this.#sessionLoad.kind === "not-requested") {
                 this.#store.events.reset(this.#mobiusSessionId);
                 this.#sessionLoad = {
                     history: new HistoryReplayCapture(this.#store.events, this.#mobiusSessionId),
                     kind: "loaded",
-                    response: {},
+                    opened: {
+                        nativeSessionId: this.nativeSessionId(),
+                        capabilities: this.#capabilities,
+                        configOptions: [],
+                        agentName: this.#agentName,
+                        agentVersion: this.#agentVersion,
+                        agentSettingsModelEffort: this.#modelEffort,
+                    },
                 };
             }
             if (this.#sessionLoad.kind === "loaded") {
                 return this.#sessionLoad.history;
             }
         }
-        return (await this.#loadSession(signal, exitMessage)).history;
+        return (await this.#loadSession(signal)).history;
     }
 
-    async #loadSession(signal: AbortSignal, exitMessage: string): Promise<LoadedSession> {
+    async #loadSession(signal: AbortSignal): Promise<LoadedSession> {
         if (this.#sessionLoad.kind === "loaded") {
             return this.#sessionLoad;
         }
@@ -451,24 +473,13 @@ export class AgentSession implements AgentSessionRestore {
         const history = new HistoryReplayCapture(this.#store.events, this.#mobiusSessionId);
         const completion = Promise.resolve().then(async (): Promise<LoadedSession> => {
             try {
-                const response = await this.race(
-                    this.#connection.connection.agent.request(
-                        methods.agent.session.load,
-                        {
-                            additionalDirectories: [...this.#additionalDirectories],
-                            cwd: this.#cwd,
-                            mcpServers: [],
-                            sessionId: this.#updates.sessionId(),
-                        },
-                        { cancellationSignal: signal },
-                    ),
-                    exitMessage,
-                    signal,
-                );
-                await this.#updates.drained();
+                const opened = await this.#adapter.openSessionWithReplay({
+                    ...this.#sessionParams(signal),
+                    nativeSessionId: this.nativeSessionId(),
+                });
                 signal.throwIfAborted();
-                this.restrictSessionCapabilities(response);
-                const loaded = { history, kind: "loaded", response } satisfies LoadedSession;
+                this.#capabilities = opened.capabilities;
+                const loaded = { history, kind: "loaded", opened } satisfies LoadedSession;
                 this.#sessionLoad = loaded;
                 return loaded;
             } catch (cause) {
@@ -480,32 +491,16 @@ export class AgentSession implements AgentSessionRestore {
         return await completion;
     }
 
-    async #initializeAgent(signal: AbortSignal): Promise<void> {
-        await this.#metrics.measure("agent-initialize", async () => await this.#initializeAgentOperation(signal));
-    }
-
-    async #initializeAgentOperation(signal: AbortSignal): Promise<void> {
-        const initialized = await initializeAgentConnection(
-            this.#connection,
-            this.#agentId,
-            this.#verifiedAgentVersion,
-            signal,
-        );
-        this.#capabilities = initialized.capabilities;
-        this.#agentName = initialized.agentName;
-        this.#agentVersion = initialized.agentVersion;
-    }
-
     readonly initialize = async (
         signal: AbortSignal,
         recovery: SessionRecovery,
         origin?: NativeSessionOrigin,
     ): Promise<void> => await restoreSession(this, signal, recovery, origin);
 
-    readonly nativeSessionId = (): string => this.#updates.sessionId();
+    readonly nativeSessionId = (): string => this.#nativeSessionId;
 
     readonly adoptNativeSessionId = (sessionId: string): void => {
-        if (this.#prompted || this.#updates.sessionId() !== sessionId) {
+        if (this.#prompted || this.#nativeSessionId !== sessionId) {
             throw new AcpExecutionError("The new native Session cannot be adopted", {}, "session_identity_mismatch");
         }
         const previousSessionId = this.#mobiusSessionId;
@@ -531,7 +526,7 @@ export class AgentSession implements AgentSessionRestore {
         signal: AbortSignal,
     ): Promise<void> => {
         const configRevision = this.#configRevision;
-        const configured = await this.#adapter.configureSession(this.#target(), selection, signal);
+        const configured = await this.#adapter.configureSession({ ...this.#target(), selection, signal });
         if (this.#configRevision === configRevision) {
             this.#configOptions = configured;
             this.#configRevision = crypto.randomUUID();
@@ -590,7 +585,7 @@ export class AgentSession implements AgentSessionRestore {
     };
 
     readonly #target = (): AdapterSessionTarget => ({
-        nativeSessionId: this.#updates.sessionId(),
+        nativeSessionId: this.#nativeSessionId,
         cwd: this.#cwd,
         additionalDirectories: this.#additionalDirectories,
     });
@@ -603,11 +598,18 @@ export class AgentSession implements AgentSessionRestore {
             this.#sessionLoad = {
                 kind: "loaded",
                 history: new HistoryReplayCapture(this.#store.events, this.#mobiusSessionId),
-                response: {},
+                opened: {
+                    nativeSessionId: this.nativeSessionId(),
+                    capabilities: this.#capabilities,
+                    configOptions: [],
+                    agentName: this.#agentName,
+                    agentVersion: this.#agentVersion,
+                    agentSettingsModelEffort: this.#modelEffort,
+                },
             };
         }
         if (this.#capabilities.loadSession && this.#sessionLoad.kind !== "execution-only") {
-            await this.#completedHistory(options.signal, "ACP agent exited while loading history before a prompt");
+            await this.#completedHistory(options.signal);
         }
         validatePromptContent(options, this.#capabilities);
         if (this.#sessionTitle === null || this.#sessionTitle.length === 0) {
@@ -641,7 +643,7 @@ export class AgentSession implements AgentSessionRestore {
             });
         }
         try {
-            const result = await this.#adapter.prompt(this.#target(), options, options.signal);
+            const result = await this.#adapter.prompt({ ...this.#target(), content: options, signal: options.signal });
             this.writeStoredSession(new Date().toISOString());
             if (lifecycle !== undefined) {
                 await this.recordLifecycleEvent({
@@ -719,7 +721,7 @@ export class AgentSession implements AgentSessionRestore {
             });
         }
         try {
-            const outcome = await this.#adapter.steer(this.#target(), options, options.signal);
+            const outcome = await this.#adapter.steer({ ...this.#target(), content: options, signal: options.signal });
             if (lifecycle !== undefined) {
                 await this.recordLifecycleEvent({
                     payload: {
@@ -757,7 +759,7 @@ export class AgentSession implements AgentSessionRestore {
         await this.#interactions.cancelPendingInteractions();
         signal.throwIfAborted();
         if (this.#turn.running) {
-            return await this.#adapter.cancel(this.#target(), signal);
+            return await this.#adapter.cancel({ ...this.#target(), signal });
         }
         return "retained";
     };
@@ -789,7 +791,14 @@ export class AgentSession implements AgentSessionRestore {
     };
 
     readonly selectNativeSession = (sessionId: string): void => {
-        this.#updates.select(sessionId);
+        if (this.#nativeSessionId.length > 0 && this.#nativeSessionId !== sessionId) {
+            throw new AcpExecutionError(
+                "ACP agent attempted to replace the selected session",
+                {},
+                "invalid_agent_session",
+            );
+        }
+        this.#nativeIdentity = { kind: "bound", nativeSessionId: sessionId };
         this.#nativeHistoryOwnership = { kind: "agent-owned" };
     };
 
@@ -838,7 +847,7 @@ export class AgentSession implements AgentSessionRestore {
                             break;
                     }
                 }
-                if (this.#updates.sessionId().length > 0) {
+                if (this.#nativeSessionId.length > 0) {
                     this.writeStoredSession(new Date().toISOString());
                 }
                 await this.#getObserver().onInfo({
@@ -861,42 +870,37 @@ export class AgentSession implements AgentSessionRestore {
                 await this.closeProcess();
             }
         }
-        if (this.#updates.sessionId().length === 0) {
+        if (this.#nativeSessionId.length === 0) {
             await this.closeProcess();
             return;
         }
-        await this.#adapter.closeSession(this.#target(), AbortSignal.timeout(30_000));
+        await this.#adapter.closeSession({ ...this.#target(), signal: AbortSignal.timeout(30_000) });
     };
 
-    readonly closeProcess = (): Promise<void> => this.#connection.closeProcess();
+    readonly closeProcess = async (): Promise<void> => {
+        if (this.#nativeIdentity.kind === "bound") {
+            await this.#adapter.releaseSession({ ...this.#target(), signal: AbortSignal.timeout(30_000) });
+        }
+        this.#backgroundActivity = "none";
+    };
 
-    readonly agentSettingsModelEffort = () => this.#connection.agentSettingsModelEffort();
-    readonly race = <T>(operation: Promise<T>, exitMessage: string, signal: AbortSignal): Promise<T> =>
-        this.#connection.race(operation, exitMessage, signal);
+    readonly agentSettingsModelEffort = () => this.#modelEffort;
+    readonly #sessionParams = (signal: AbortSignal): AdapterSessionCreateParams => ({
+        ...this.#subscriber,
+        scope: this.#scope,
+        signal,
+    });
+    readonly createSession = (signal: AbortSignal): Promise<AdapterSessionOpened> =>
+        this.#adapter.createSession(this.#sessionParams(signal));
 
-    agentRequest<Params, Result>(
-        method: string,
-        params: Params,
-        options?: { cancellationSignal?: AbortSignal },
-    ): Promise<Result> {
-        return this.#connection.connection.agent.request(
-            method as never,
-            params as never,
-            options as never,
-        ) as Promise<Result>;
-    }
+    readonly forkSession = (sourceSessionId: string, signal: AbortSignal): Promise<AdapterSessionOpened> =>
+        this.#adapter.forkSession({ ...this.#sessionParams(signal), sourceNativeSessionId: sourceSessionId });
 
-    drained(): Promise<void> {
-        return this.#updates.drained();
-    }
+    readonly openSession = (signal: AbortSignal): Promise<AdapterSessionOpened> =>
+        this.#adapter.openSession({ ...this.#sessionParams(signal), nativeSessionId: this.nativeSessionId() });
 
-    initializeAgent(signal: AbortSignal): Promise<void> {
-        return this.#initializeAgent(signal);
-    }
-
-    async loadSession(signal: AbortSignal, exitMessage: string): Promise<{ response: unknown }> {
-        return await this.#loadSession(signal, exitMessage);
-    }
+    readonly openSessionWithReplay = async (signal: AbortSignal): Promise<AdapterSessionOpened> =>
+        (await this.#loadSession(signal)).opened;
 
     setConfigOptions(options: readonly SessionConfigOption[]): void {
         this.#configOptions = options;
@@ -920,7 +924,7 @@ export class AgentSession implements AgentSessionRestore {
     }
 
     readonly assertNativeSession = (sessionId: string): void => {
-        if (sessionId !== this.#updates.sessionId()) {
+        if (sessionId !== this.#nativeSessionId) {
             throw new AcpExecutionError("ACP agent referenced an unknown session", {}, "invalid_agent_session");
         }
     };

@@ -3,8 +3,8 @@ import { revalidateExecutable } from "../../util/process/executable.ts";
 import { truncate } from "../../util/value-utils.ts";
 import { AcpExecutionError } from "../acp-error.ts";
 import type { AcpAgentDefinition } from "../agent/agent-definition.ts";
+import type { AgentConnection } from "../connection/agent-connection.ts";
 import { normalizeAcpCapabilities } from "../protocol/session-capabilities.ts";
-import type { AdapterSessionConnection } from "./session-events.ts";
 
 export class RetryableAcpInitializationError extends AcpExecutionError {
     constructor(cause: unknown) {
@@ -27,7 +27,7 @@ export async function validateAgentRuntime(agent: AcpAgentDefinition, signal: Ab
 }
 
 export async function initializeAgentConnection(
-    connection: AdapterSessionConnection,
+    connection: Pick<AgentConnection, "connection" | "initialize" | "race">,
     agentId: string,
     verifiedVersion: string,
     signal: AbortSignal,

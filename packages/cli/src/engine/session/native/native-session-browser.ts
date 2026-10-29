@@ -18,6 +18,7 @@ import type { SessionManager } from "../manager/session-manager.ts";
 import type { StoredSession } from "../record/session-store.ts";
 import { LocalAuthorizationError } from "../workspace/local-authorization-error.ts";
 import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
+import { nativeSessionQuery } from "./native-query.ts";
 
 interface ListedTarget {
     readonly scope: string;
@@ -117,17 +118,14 @@ export class NativeSessionService {
     ) =>
         this.#operations.run(options, (scoped) =>
             this.#sessions.withNativeSessionOperation(scoped, nativeSessionId, (target) =>
-                target.adapter.readSessionHistory(
-                    target.cwd,
-                    target.additionalDirectories,
-                    {
+                target.adapter.readSessionHistory({
+                    query: nativeSessionQuery(target),
+                    request: {
                         nativeSessionId,
                         eventLimit,
                         cursor,
-                        sessionId: target.sessionId,
                     },
-                    target.signal,
-                ),
+                }),
             ),
         );
 
@@ -159,7 +157,7 @@ export class NativeSessionService {
                 queuedCancellation: "before-start",
             };
         }
-        const capabilities = await options.adapter.getCapabilities(cwd, signal);
+        const capabilities = await options.adapter.getCapabilities(nativeSessionQuery(options));
         if (!capabilities.listSessions) {
             throw new AcpExecutionError(
                 "This Agent does not support native session listing",
@@ -216,7 +214,7 @@ export class NativeSessionService {
                 }
                 cursor = known.cursor;
             }
-            const page = await options.adapter.listSessions(cwd, cursor, signal);
+            const page = await options.adapter.listSessions({ query: nativeSessionQuery(options), cursor });
             const entries: NativeSessionEntry[] = [];
             for (const info of page.sessions) {
                 const entry = await register(info);
@@ -251,15 +249,14 @@ export class NativeSessionService {
             };
         }
         if (command.action === "find") {
-            const found = await options.adapter.findSession(
-                cwd,
-                command.nativeSessionId,
-                {
+            const found = await options.adapter.findSession({
+                query: nativeSessionQuery(options),
+                nativeSessionId: command.nativeSessionId,
+                budget: {
                     maximumPages: 500,
                     maximumEntries: 500,
                 },
-                signal,
-            );
+            });
             const entry = await register(found);
             if (entry !== null) {
                 return { ...envelope, action: "find", entry };
@@ -424,15 +421,14 @@ export class NativeSessionService {
         selected: ListedTarget,
     ): Promise<AuthorizedNativeSession> => {
         const info = await options.adapter
-            .findSession(
-                options.cwd,
-                selected.nativeSessionId,
-                {
+            .findSession({
+                query: nativeSessionQuery(options),
+                nativeSessionId: selected.nativeSessionId,
+                budget: {
                     maximumPages: 100,
                     maximumEntries: null,
                 },
-                options.signal,
-            )
+            })
             .catch((cause: unknown) => {
                 options.signal.throwIfAborted();
                 if (cause instanceof AcpExecutionError && cause.code === "native_session_not_found") {
