@@ -51,6 +51,9 @@ import {
 } from "../api/session-api.ts";
 import type { SessionEventPage } from "../history/session-event-store.ts";
 
+/** Identifies a native session while an import, fork, or continuation manages it. */
+const nativeOperationKey = (agentId: string, nativeSessionId: string): string => `${agentId}:${nativeSessionId}`;
+
 export class SessionManager {
     readonly #operations = new RuntimeOperations();
     readonly #processes: AgentProcessPool;
@@ -118,7 +121,7 @@ export class SessionManager {
         const stored = this.#store.read(sessionId);
         return (
             stored instanceof FoundStoredSession &&
-            this.#nativeOperations.has(`${stored.session.agentId}:${stored.session.nativeSessionId}`)
+            this.#nativeOperations.has(nativeOperationKey(stored.session.agentId, stored.session.nativeSessionId))
         );
     }
 
@@ -398,11 +401,10 @@ export class SessionManager {
                 } else {
                     this.#assertOpen(options.sessionId);
                 }
-                const stored = metrics.measureSync("session-state-read", () => this.#store.read(options.sessionId));
-
                 if (
-                    stored instanceof FoundStoredSession &&
-                    this.#nativeOperations.has(`${stored.session.agentId}:${stored.session.nativeSessionId}`)
+                    metrics.measureSync("session-state-read", () =>
+                        this.#isNativeSessionOperationActive(options.sessionId),
+                    )
                 ) {
                     throw new AcpExecutionError("The native session is being managed", {}, "session_busy");
                 }
@@ -705,11 +707,7 @@ export class SessionManager {
         this.#operations.run(options, async (options) => {
             // A close can land after the prompt was prepared; fail before the Session is reported working.
             this.#assertOpen(options.sessionId);
-            const stored = this.#store.read(options.sessionId);
-            if (
-                stored instanceof FoundStoredSession &&
-                this.#nativeOperations.has(`${stored.session.agentId}:${stored.session.nativeSessionId}`)
-            ) {
+            if (this.#isNativeSessionOperationActive(options.sessionId)) {
                 throw new AcpExecutionError("The native session is being managed", {}, "session_busy");
             }
             this.#executions.begin(options.sessionId, options.commandId);
@@ -723,7 +721,7 @@ export class SessionManager {
                     return { stopReason: "cancelled" };
                 }
                 const runtime = await this.ensureSession(options);
-                if (this.#nativeOperations.has(`${options.agent.id}:${runtime.nativeSessionId()}`)) {
+                if (this.#nativeOperations.has(nativeOperationKey(options.agent.id, runtime.nativeSessionId()))) {
                     throw new AcpExecutionError("The native session is being managed", {}, "session_busy");
                 }
                 if (this.#executions.cancellation(options.sessionId) !== undefined) {
@@ -961,7 +959,7 @@ export class SessionManager {
         operation: (options: SessionPrepareOptions) => Promise<Result>,
     ): Promise<Result> =>
         this.#operations.run(options, async (options) => {
-            const key = `${options.agent.id}:${nativeSessionId}`;
+            const key = nativeOperationKey(options.agent.id, nativeSessionId);
             if (this.#nativeOperations.has(key)) {
                 throw new AcpExecutionError(
                     "Wait for the native session's running operation to finish",
@@ -1010,7 +1008,7 @@ export class SessionManager {
         readonly prepared: PreparedSession;
     }> =>
         this.#operations.run(options, async (options) => {
-            const key = `${options.agent.id}:${origin.nativeSessionId}`;
+            const key = nativeOperationKey(options.agent.id, origin.nativeSessionId);
             if (this.#nativeOperations.has(key)) {
                 throw new AcpExecutionError("The native session is being managed", {}, "session_busy");
             }
@@ -1072,7 +1070,7 @@ export class SessionManager {
                 this.#nativeOperations.add(key);
                 try {
                     const runtime = await this.#startPreparation({ ...target, origin }, { kind: "interactive-only" });
-                    const openedKey = `${options.agent.id}:${runtime.nativeSessionId()}`;
+                    const openedKey = nativeOperationKey(options.agent.id, runtime.nativeSessionId());
                     this.#nativeOperations.add(openedKey);
                     try {
                         const prepared = runtime.prepared();
