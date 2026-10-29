@@ -38,6 +38,7 @@ import { maybeAuthRequiredError } from "./auth-required.js";
 import type { PiAcpClient } from "./client.js";
 import { getPiAcpSessionMapPath } from "./paths.js";
 import { toAvailableCommandsFromPiGetCommands } from "./pi-commands.js";
+import { readPiHistory } from "./pi-history.js";
 import { findPiSession, listPiSessions } from "./pi-sessions.js";
 import { getAgentDir, getEnableSkillCommands, getQuietStartup } from "./pi-settings.js";
 import { type PiAcpSession, SessionManager } from "./session.js";
@@ -1320,11 +1321,30 @@ export class PiAcpAgent {
             sessionFile: stored.sessionFile,
         });
 
-        // Replay full conversation history.
-        const data = (await proc.getMessages()) as any;
-        const messages = Array.isArray(data?.messages) ? data.messages : [];
-
-        for (const m of messages) {
+        // Native entries retain messages that get_messages removes on compaction.
+        for (const entry of readPiHistory(stored.sessionFile)) {
+            if (entry.type === "compaction") {
+                await this.conn.sessionUpdate({
+                    sessionId: session.sessionId,
+                    update: {
+                        sessionUpdate: "compaction_update",
+                        compactionId: entry.id,
+                        status: "completed",
+                    },
+                });
+                if (entry.summary) {
+                    await this.conn.sessionUpdate({
+                        sessionId: session.sessionId,
+                        update: {
+                            sessionUpdate: "compaction_summary_chunk",
+                            compactionId: entry.id,
+                            content: { type: "text", text: entry.summary },
+                        },
+                    });
+                }
+                continue;
+            }
+            const m = entry.message;
             const role = String(m?.role ?? "");
 
             if (role === "user") {
