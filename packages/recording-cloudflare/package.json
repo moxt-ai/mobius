@@ -18,14 +18,14 @@
     "dependencies": {
         "@moxt-ai/mobius-sdk": "workspace:*",
         "drizzle-orm": "^0.45.2",
-        "hono": "^4.13.8",
-        "zod": "^4.6.5"
+        "hono": "^4.13.14",
+        "zod": "^4.6.7"
     },
     "devDependencies": {
+        "@cloudflare/vitest-plugin": "^1.4.9",
+        "@cloudflare/workers-types": "^5.20261028.1",
         "@moxt-ai/mobius-sdk-previous": "npm:@moxt-ai/mobius-sdk@0.0.136",
-        "@cloudflare/vitest-plugin": "^1.1.12",
-        "vitest": "^4.1.11",
-        "@cloudflare/workers-types": "^5.20260918.1",
-        "wrangler": "^4.134.0"
+        "vitest": "^4.1.12",
+        "wrangler": "^4.154.0"
     }
 }
