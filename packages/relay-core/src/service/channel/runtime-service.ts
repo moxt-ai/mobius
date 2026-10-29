@@ -3,8 +3,6 @@ import {
     decodeDaemonToRelayMessage,
     encodeRuntimeStatusEvent,
     encodeServiceToDaemonMessage,
-    RUNTIME_HEARTBEAT_ACK_KIND,
-    RUNTIME_HEARTBEAT_KIND,
     RUNTIME_LIVENESS_READY_KIND,
     RUNTIME_STATUS_KIND,
     type RuntimeLivenessReadyEvent,
@@ -63,14 +61,12 @@ export type RuntimeSocketIdentity =
       };
 
 export interface RuntimeSocket extends ChannelSocket {
-    /** Records when the Relay itself answered a heartbeat, which only daemons that identify heartbeats need. */
-    readonly recordHeartbeat: (at: number) => void;
     readonly replaceDaemon: () => void;
 }
 
 export interface RuntimePeers extends ChannelPeers {
     readonly sockets: () => readonly { readonly identity: RuntimeSocketIdentity; readonly socket: RuntimeSocket }[];
-    /** Daemon connections with the time each one's heartbeat was last answered, by the host or the Relay. */
+    /** Daemon connections with the time each one's heartbeat was last answered by the host. */
     readonly daemonConnections: () => readonly {
         readonly identity: RuntimeSocketIdentity;
         readonly socket: RuntimeSocket;
@@ -464,26 +460,6 @@ export class RuntimeService {
         } catch {
             // Reject this frame without disconnecting unrelated Sessions.
             this.channel(identity.runtimeId, scope).recordSkipped("invalid_daemon_message");
-            return;
-        }
-        // The host answers fixed-text heartbeats without the Relay. Daemons released before that send an
-        // identifier the host cannot match, so the Relay answers those itself, bypassing message scheduling.
-        if (
-            identity.role === "daemon" &&
-            daemonMessage?.kind === RUNTIME_HEARTBEAT_KIND &&
-            "heartbeatId" in daemonMessage
-        ) {
-            if (!this.#cx.services.connections.isCurrent(identity)) {
-                socket.replaceDaemon();
-                return;
-            }
-            socket.recordHeartbeat(Date.now());
-            socket.send(
-                encodeServiceToDaemonMessage({
-                    heartbeatId: daemonMessage.heartbeatId,
-                    kind: RUNTIME_HEARTBEAT_ACK_KIND,
-                }),
-            );
             return;
         }
         const lane = daemonMessage === null ? "runtime" : this.daemonMessageLane(daemonMessage);

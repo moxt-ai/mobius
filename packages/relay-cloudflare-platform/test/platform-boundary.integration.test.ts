@@ -4034,23 +4034,19 @@ describe.sequential("Platform Turn submission", () => {
         }
     });
 
-    it("Given a daemon released before heartbeats became fixed text, When it heartbeats with an identifier and then falls silent, Then the Relay acknowledges that heartbeat and reports the Runtime offline once the silence outlasts the deadline", async () => {
-        const runtime = await connectRuntimeDaemon("identified-heartbeat");
+    it("Given a daemon using fixed-text heartbeats, When it sends a retired identified heartbeat near its deadline, Then that frame cannot renew its liveness", async () => {
+        const runtime = await connectRuntimeDaemon("identified-heartbeat", { anchorClockToHeartbeat: true });
+        const heartbeatAt = Date.now();
         try {
-            const heartbeatAt = Date.now();
-            // The exact text such a daemon sends; Cloudflare does not answer it, so the Relay must.
-            runtime.daemon.send(JSON.stringify({ heartbeatId: "identified-heartbeat", kind: "runtime.heartbeat" }));
-            expect(JSON.parse(await runtime.daemonMessages.next())).toEqual({
-                heartbeatId: "identified-heartbeat",
-                kind: "runtime.heartbeat.ack",
-            });
             vi.setSystemTime(heartbeatAt + 30_000);
+            runtime.daemon.send(JSON.stringify({ heartbeatId: "identified-heartbeat", kind: "runtime.heartbeat" }));
             expect(await runtime.readOnline()).toBe(true);
 
             vi.setSystemTime(heartbeatAt + 36_000);
             expect(await runtime.readOnline()).toBe(false);
             expect(await runtime.daemonClosed).toMatchObject({ code: 4001, reason: "Runtime heartbeat timed out" });
         } finally {
+            vi.setSystemTime(heartbeatAt);
             runtime.daemon.close();
         }
     });
