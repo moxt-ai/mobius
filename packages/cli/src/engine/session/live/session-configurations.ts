@@ -53,13 +53,13 @@ export class SessionConfigurations {
 
     readonly restore = async (
         stored: readonly StoredSessionConfiguration[],
-        options: readonly SessionConfigOption[],
+        options: () => readonly SessionConfigOption[],
         apply: ApplyStoredSessionConfiguration,
         signal: AbortSignal,
     ): Promise<void> => {
         this.#selected = stored;
         for (const selection of this.#selected) {
-            const current = options.find(
+            const current = options().find(
                 (option) => option.id === selection.configId && option.type === selection.type,
             );
             if (current === undefined) {

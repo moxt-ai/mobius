@@ -82,6 +82,22 @@ export function configOptions(state: ControlledSessionState): acp.SessionConfigO
             type: "boolean",
         },
     ];
+    if (process.argv.includes("--model-dependent-mode")) {
+        options.push({
+            category: "mode",
+            currentValue: state.mode,
+            id: "mode",
+            name: "Mode",
+            options:
+                state.model === "test-large"
+                    ? [
+                          { name: "Code", value: "code" },
+                          { name: "Plan", value: "plan" },
+                      ]
+                    : [{ name: "Code", value: "code" }],
+            type: "select",
+        });
+    }
     if (process.argv.includes("--model-last-at-option-limit")) {
         const model = options.find((option) => option.category === "model");
         if (model === undefined) {
@@ -144,7 +160,7 @@ export function sessionModes(state: ControlledSessionState): acp.SessionModeStat
 export function sessionConfiguration(state: ControlledSessionState): Readonly<Record<string, unknown>> {
     return {
         configOptions: configOptions(state),
-        modes: sessionModes(state),
+        ...(process.argv.includes("--model-dependent-mode") ? {} : { modes: sessionModes(state) }),
     };
 }
 
@@ -158,7 +174,10 @@ export function registerSettings(agent: ReturnType<typeof acp.agent>) {
             if (process.argv.includes("--ignore-config-update")) {
                 return { configOptions: configOptions(state) };
             }
-            const updated = state.withConfig(context.params.configId, context.params.value);
+            const updated =
+                context.params.configId === "mode" && typeof context.params.value === "string"
+                    ? state.withMode(state.model === "test-large" ? context.params.value : "code")
+                    : state.withConfig(context.params.configId, context.params.value);
             sessions.set(context.params.sessionId, updated);
             persistState(context.params.sessionId, updated);
             return { configOptions: configOptions(updated) };

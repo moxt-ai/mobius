@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { addAbortListener } from "node:events";
+import { watch } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -119,25 +121,7 @@ test.each(["codex", "claude"] as const)(
                     if (decision === "allow_once") {
                         await peer.restart();
                     }
-                    const listId = randomUUID();
-                    peer.send(
-                        encodeNativeSessionCommand({
-                            ...identity,
-                            kind: "native.session.request",
-                            sessionId: peer.sessionId,
-                            requestId: listId,
-                            action: "list",
-                            cursor: null,
-                        }),
-                    );
-                    const listed = await nativeResult(peer, listId);
-                    if (listed.action !== "list") {
-                        throw new Error("Expected native session list");
-                    }
-                    const source = listed.entries.find((entry) => entry.mobiusSessionIds.includes(peer.sessionId));
-                    if (source === undefined) {
-                        throw new Error("Missing source Session");
-                    }
+                    const source = await nativeSource(peer, agentId, agent.environment["CLAUDE_CONFIG_DIR"]);
                     const requestId = randomUUID();
                     const childId = randomUUID();
                     peer.send(
@@ -178,6 +162,57 @@ test.each(["codex", "claude"] as const)(
         );
     },
 );
+
+async function nativeSource(peer: RealDaemonPeer, agentId: string, configDirectory: string | undefined) {
+    // Claude flushes native history after live completion. Retry the public list
+    // only when its isolated native home changes; no sleeps or timing assumptions.
+    type NativeWrite = { readonly kind: "changed" } | { readonly kind: "failed"; readonly cause: Error };
+    let changed = Promise.withResolvers<NativeWrite>();
+    const watcher =
+        configDirectory === undefined
+            ? undefined
+            : watch(configDirectory, { recursive: true }, () => changed.resolve({ kind: "changed" }));
+    watcher?.on("error", (cause) => changed.resolve({ kind: "failed", cause }));
+    using _abort = addAbortListener(peer.signal, () => changed.resolve({ kind: "changed" }));
+    try {
+        for (;;) {
+            peer.signal.throwIfAborted();
+            const notification = changed.promise;
+            const requestId = randomUUID();
+            peer.send(
+                encodeNativeSessionCommand({
+                    additionalDirectoryIds: [],
+                    agentId,
+                    bindingId: peer.bindingId,
+                    directoryId: "default",
+                    kind: "native.session.request",
+                    sessionId: peer.sessionId,
+                    requestId,
+                    action: "list",
+                    cursor: null,
+                }),
+            );
+            const listed = await nativeResult(peer, requestId);
+            if (listed.action !== "list") {
+                throw new Error("Expected native session list");
+            }
+            const source = listed.entries.find((entry) => entry.mobiusSessionIds.includes(peer.sessionId));
+            if (source !== undefined) {
+                return source;
+            }
+            if (watcher === undefined) {
+                throw new Error("Missing source Session");
+            }
+            const event = await notification;
+            if (event.kind === "failed") {
+                throw event.cause;
+            }
+            changed = Promise.withResolvers<NativeWrite>();
+        }
+    } finally {
+        watcher?.close();
+    }
+}
 
 async function nativeResult(peer: RealDaemonPeer, requestId: string) {
     for (;;) {

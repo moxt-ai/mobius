@@ -331,9 +331,17 @@ export class AgentSession implements AgentSessionRestore {
         signal: AbortSignal,
         intent: "restore" | "fork" = "restore",
     ): Promise<void> => {
+        // A model can change the supported modes. Restore it before replaying
+        // the source mode, regardless of the order in which the user edited them.
+        const configurations =
+            intent === "fork"
+                ? session.configurations.toSorted(
+                      (left, right) => Number(right.configId === "model") - Number(left.configId === "model"),
+                  )
+                : session.configurations;
         await this.#sessionConfigurations.restore(
-            session.configurations,
-            this.#configOptions,
+            configurations,
+            () => this.#configOptions,
             this.#applyConfiguration,
             signal,
         );

@@ -34,7 +34,7 @@ class ForkSettingsAgent extends ControlledAcpSpecification {
     }
 }
 
-test.each(["", "--fork-mode-unavailable", "--fork-omits-mode", "--fork-omits-model"])(
+test.each(["", "--fork-mode-unavailable", "--fork-omits-mode", "--fork-omits-model", "--model-dependent-mode"])(
     "Given source selections and a Fork Agent %s, When a retained client forks, Then settings are inherited or the Fork fails without changing its source",
     async (fault) => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-fork-settings-"));
@@ -52,32 +52,44 @@ test.each(["", "--fork-mode-unavailable", "--fork-omits-mode", "--fork-omits-mod
                         directoryId: "default",
                         additionalDirectoryIds: [],
                     };
-                    peer.send(
-                        encodeSessionPromptCommand({
-                            ...identity,
-                            kind: "session.prompt",
-                            sessionId: peer.sessionId,
-                            commandId: crypto.randomUUID(),
-                            prompt: "Keep these source settings",
-                            attachments: [],
-                            disposition: SessionPromptDisposition.Reject,
-                            targetCommandId: "",
-                            sessionConfigurations: [
-                                { configId: "mode", valueType: "select", value: "plan", booleanValue: false },
-                                { configId: "model", valueType: "select", value: "test-large", booleanValue: false },
-                                { configId: "fast_mode", valueType: "boolean", value: "", booleanValue: true },
-                            ],
-                        }),
-                    );
-                    for (;;) {
-                        const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
-                        if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
-                            throw new Error(JSON.stringify(event));
+                    const configureSource = async (
+                        sessionConfigurations: NonNullable<
+                            Parameters<typeof encodeSessionPromptCommand>[0]["sessionConfigurations"]
+                        >,
+                    ): Promise<void> => {
+                        peer.send(
+                            encodeSessionPromptCommand({
+                                ...identity,
+                                kind: "session.prompt",
+                                sessionId: peer.sessionId,
+                                commandId: crypto.randomUUID(),
+                                prompt: "Keep these source settings",
+                                attachments: [],
+                                disposition: SessionPromptDisposition.Reject,
+                                targetCommandId: "",
+                                sessionConfigurations,
+                            }),
+                        );
+                        for (;;) {
+                            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
+                            if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
+                                throw new Error(JSON.stringify(event));
+                            }
+                            if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
+                                return;
+                            }
                         }
-                        if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
-                            break;
-                        }
+                    };
+                    if (fault === "--model-dependent-mode") {
+                        await configureSource([
+                            { configId: "model", valueType: "select", value: "test-large", booleanValue: false },
+                        ]);
                     }
+                    await configureSource([
+                        { configId: "mode", valueType: "select", value: "plan", booleanValue: false },
+                        { configId: "model", valueType: "select", value: "test-large", booleanValue: false },
+                        { configId: "fast_mode", valueType: "boolean", value: "", booleanValue: true },
+                    ]);
                     const listId = crypto.randomUUID();
                     peer.send(
                         encodeNativeSessionCommand({
