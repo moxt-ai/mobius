@@ -104,19 +104,25 @@ export const sessionCloseCommand: RuntimeCommand = {
 
 export const promptDispositionCommand: RuntimeCommand = {
     kind: SESSION_PROMPT_DISPOSITION_KIND,
-    handle: ({ sessionTurns, socket }, message): void => {
+    handle: ({ diagnostics, operations, sessionTurns, socket }, message): void => {
         if (message.kind !== SESSION_PROMPT_DISPOSITION_KIND) {
             throw new Error("Command kind mismatch");
         }
         const turn = sessionTurns.get(message.commandId, message.sessionId);
-        if (turn === undefined || !turn.promoteQueuedPrompt(message)) {
-            reportOperationFailure(
-                socket,
-                message.commandId,
-                message.sessionId,
-                new Error("The queued prompt is unavailable"),
-            );
+        const result = turn?.promoteQueuedPrompt(message) ?? "unavailable";
+        if (result === "accepted") {
+            return;
         }
+        const started = result === "already-started" || operations.hasStarted(message.commandId, message.sessionId);
+        const error = started
+            ? new SessionError("turn_already_started", "The message already left the queue and could not be steered")
+            : new SessionError("turn_not_active", "The message is no longer waiting to be steered");
+        diagnostics.daemonDiagnostic("session_prompt_disposition_failed", message.commandId, {
+            code: error.code,
+            commandId: message.commandId,
+            sessionId: message.sessionId,
+        });
+        reportOperationFailure(socket, message.commandId, message.sessionId, error);
     },
 };
 
