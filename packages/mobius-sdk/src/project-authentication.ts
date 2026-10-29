@@ -597,6 +597,10 @@ class ReadyExchangedCredentialState extends ExchangedCredentialState {
     readonly read = (): string => this.#credential;
 }
 
+/**
+ * @deprecated Exchanges through `MobiusProjectAuthenticationClient.exchangeExternalIdentity`, whose
+ * `v1/auth/exchanges` endpoint no Mobius service implements, so every exchange fails.
+ */
 export class ExchangingMobiusCredentialProvider implements MobiusCredentialProvider {
     readonly #client: MobiusProjectAuthenticationClient;
     readonly #externalCredentialProvider: MobiusCredentialProvider;
@@ -634,6 +638,9 @@ export class ExchangingMobiusCredentialProvider implements MobiusCredentialProvi
     };
 }
 
+/**
+ * @deprecated No Mobius service implements the `external-identity-bindings` endpoints, so every call fails.
+ */
 export class MobiusExternalIdentityBindingResource {
     readonly #client: MobiusProjectAuthenticationClient;
 
@@ -680,6 +687,9 @@ export class MobiusExternalIdentityBindingResource {
     };
 }
 
+/**
+ * @deprecated No Mobius service implements the `authentication-audit-events` endpoint, so every call fails.
+ */
 export class MobiusAuthenticationAuditResource {
     readonly #client: MobiusProjectAuthenticationClient;
 
@@ -703,6 +713,10 @@ export class MobiusAuthenticationAuditResource {
     };
 }
 
+/**
+ * @deprecated No Mobius service implements the endpoints this client calls (`v1/auth/exchanges`,
+ * `external-identity-bindings`, `authentication-audit-events`), so every request fails.
+ */
 export class MobiusProjectAuthenticationClient {
     readonly auditEvents: MobiusAuthenticationAuditResource;
     readonly externalIdentityBindings: MobiusExternalIdentityBindingResource;
