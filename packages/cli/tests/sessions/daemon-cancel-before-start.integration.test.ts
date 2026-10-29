@@ -12,9 +12,23 @@ import {
     SESSION_EVENT_KIND,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test, vi } from "vitest";
+import { z } from "zod";
 import { ControlledAcpAgentSpecification } from "../support/agents/controlled-acp.ts";
 import { withControlledDaemon } from "../support/agents/real-daemon.ts";
 import { writeControlledAcpExecutable } from "../support/controlled-acp-executable.ts";
+
+// Frozen completed-event reader from the SDK before execution-phase metadata was added.
+const legacyCompletion = z
+    .object({
+        commandId: z
+            .string()
+            .min(1)
+            .max(128)
+            .regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/),
+        kind: z.literal("prompt.completed"),
+        stopReason: z.string().max(2_048),
+    })
+    .readonly();
 
 test("Given a command already completed, When a delayed queue edit cancels it before start, Then the Runtime refuses to claim that it was withdrawn", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -168,6 +182,16 @@ test("Given running and queued work, When cancellation permits only unstarted wo
                         }
                         if (event.payload.kind === "prompt.completed") {
                             completed.set(event.payload.commandId, event.payload.stopReason);
+                            if (event.payload.commandId === queued) {
+                                expect(event.payload).toMatchObject({ execution: "not-started" });
+                            } else {
+                                expect(event.payload).not.toHaveProperty("execution");
+                            }
+                            expect(legacyCompletion.parse(event.payload)).toEqual({
+                                commandId: event.payload.commandId,
+                                kind: "prompt.completed",
+                                stopReason: "cancelled",
+                            });
                         }
                     }
                 }
