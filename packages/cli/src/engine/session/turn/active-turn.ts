@@ -29,6 +29,7 @@ type TurnDispatchState =
     | { readonly kind: "pending" }
     | { readonly kind: "queued"; readonly promotion: PromiseWithResolvers<void> }
     | { readonly kind: "promoted" }
+    | { readonly kind: "admitted"; readonly disposition: string }
     | { readonly kind: "running" };
 
 export class ActiveRuntimeTurn {
@@ -59,7 +60,10 @@ export class ActiveRuntimeTurn {
         this.#dispatch = { kind: "queued", promotion: Promise.withResolvers<void>() };
     };
 
-    readonly isQueued = (): boolean => this.#dispatch.kind === "queued" && !this.#controller.signal.aborted;
+    readonly isQueued = (): boolean =>
+        (this.#dispatch.kind === "queued" ||
+            (this.#dispatch.kind === "admitted" && this.#dispatch.disposition === SessionPromptDisposition.Queue)) &&
+        !this.#controller.signal.aborted;
 
     readonly abortRuntime = (): void => {
         this.#controller.abort();
@@ -74,18 +78,40 @@ export class ActiveRuntimeTurn {
         return { epoch: this.#epoch, sequence: 0 };
     };
 
-    readonly promoteQueuedPrompt = (command: SessionPromptDispositionCommand): boolean => {
+    readonly promoteQueuedPrompt = (
+        command: SessionPromptDispositionCommand,
+    ): "accepted" | "already-started" | "unavailable" => {
         if (
             command.commandId !== this.command.commandId ||
             command.sessionId !== this.command.sessionId ||
-            this.#dispatch.kind !== "queued"
+            this.#controller.signal.aborted
         ) {
-            return false;
+            return "unavailable";
         }
-        const promotion = this.#dispatch.promotion;
-        this.#dispatch = { kind: "promoted" };
-        promotion.resolve();
-        return true;
+        switch (this.#dispatch.kind) {
+            case "queued": {
+                const promotion = this.#dispatch.promotion;
+                this.#dispatch = { kind: "promoted" };
+                promotion.resolve();
+                return "accepted";
+            }
+            case "promoted":
+                return "accepted";
+            case "admitted":
+                return this.#dispatch.disposition === SessionPromptDisposition.Steer ? "accepted" : "already-started";
+            case "running":
+                return "already-started";
+            case "pending":
+                return "unavailable";
+        }
+    };
+
+    readonly admit = (): string => {
+        const disposition = this.effectiveDisposition();
+        // Claim the dispatch before asynchronous Agent preparation so a late promotion
+        // cannot change a disposition that execution has already selected.
+        this.#dispatch = { kind: "admitted", disposition };
+        return disposition;
     };
 
     readonly queuePromotion = (): Promise<void> | null => {
