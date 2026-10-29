@@ -534,9 +534,10 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
             }
             return;
         }
-        if (item.type === "agentMessage") {
+        if (item.type === "agentMessage" || item.type === "plan") {
             // An item/completed agent message carries the whole text and would duplicate the deltas
-            // already streamed for the same item.
+            // already streamed for the same item. Plans use only the completed item's canonical
+            // body: item/plan/delta text can differ and ACP message chunks are append-only.
             if (method === "item/started") {
                 this.#agentMessages.set(item.id, "started");
                 return;

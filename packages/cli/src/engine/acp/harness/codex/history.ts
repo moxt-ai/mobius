@@ -80,7 +80,7 @@ export async function replayCodexHistory(
                             });
                         }
                     }
-                } else if (item.type === "agentMessage") {
+                } else if (item.type === "agentMessage" || item.type === "plan") {
                     await emit(agentMessageUpdate(item.id, item.text));
                 } else if (item.type === "reasoning") {
                     const text = reasoningText(item);
