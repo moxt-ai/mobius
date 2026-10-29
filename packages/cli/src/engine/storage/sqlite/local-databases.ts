@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { acpSessionStoreMigrations } from "../../generated/acp-session-store-migrations.ts";
 import { sessionEventCacheMigrations } from "../../generated/session-event-cache-migrations.ts";
-import { LocalSqliteDatabase } from "./local-sqlite-database.ts";
+import { LocalSqliteDatabase, type LocalSqliteMigration } from "./local-sqlite-database.ts";
 
 export interface ChannelSessionDatabasePaths {
     readonly events: string;
@@ -19,7 +19,19 @@ export function channelSessionDatabasePaths(stateDirectory: string, channelId: s
 }
 
 export const openAcpSessionDatabase = (path: string): LocalSqliteDatabase =>
-    new LocalSqliteDatabase(path, "ACP Session database", acpSessionStoreMigrations);
+    new LocalSqliteDatabase(
+        path,
+        "ACP Session database",
+        acpSessionStoreMigrations.map(
+            (migration): LocalSqliteMigration =>
+                migration.name === "0009_receipt_admission_order.sql"
+                    ? {
+                          ...migration,
+                          compatibleColumn: { table: "execution_receipt", column: "admission_order" },
+                      }
+                    : migration,
+        ),
+    );
 
 export const openSessionEventCacheDatabase = (path: string): LocalSqliteDatabase =>
     new LocalSqliteDatabase(path, "V2 Session event cache", sessionEventCacheMigrations, [

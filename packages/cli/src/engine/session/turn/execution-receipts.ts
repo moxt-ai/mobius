@@ -28,6 +28,7 @@ export type RuntimeExecutionReceipt =
     | { readonly kind: "expired" };
 
 type StoredExecution = Readonly<{
+    admissionOrder: number;
     attemptId: string;
     commandHash: string;
     sessionId: string;
@@ -73,6 +74,13 @@ export class ExecutionReceipts {
         this.#activeCount += Number(receipt.outcome === null) - Number(wasActive);
         this.#onCount(this.#activeCount);
     };
+    readonly #nextAdmissionOrder = (): number => {
+        let latest = 0;
+        for (const receipt of this.#executions.values()) {
+            latest = Math.max(latest, receipt.admissionOrder);
+        }
+        return latest + 1;
+    };
     readonly beginShutdown = (): void => {
         this.#closing = true;
     };
@@ -111,13 +119,13 @@ export class ExecutionReceipts {
         }
     };
     /**
-     * How the Session's most recent started command ended. Receipts keep admission order, or the
-     * order they last changed after a restart; commands that never started (queued, or reserved for
-     * cancellation) are not turns, unless a restart failed them before they could start. Undefined
-     * while that command still runs, or when no turn is retained.
+     * How the Session's most recently admitted turn ended. Admission order survives updates and
+     * restarts. Commands that never started (queued, or reserved for cancellation) are not turns,
+     * unless they failed before starting. Undefined while the latest turn runs or none is retained.
      */
     readonly lastTurn = (sessionId: string): LastTurnOutcome | undefined => {
         let last: string | undefined;
+        let latestOrder = 0;
         for (const [commandId, receipt] of this.#executions) {
             if (receipt.sessionId !== sessionId) {
                 continue;
@@ -125,8 +133,9 @@ export class ExecutionReceipts {
             const outcome = receipt.outcome === null ? undefined : this.outcome(commandId);
             const failedBeforeStart =
                 outcome?.type === "lifecycle-metadata" && outcome.payload.kind === "prompt.failed-before-start";
-            if (receipt.started || failedBeforeStart) {
+            if ((receipt.started || failedBeforeStart) && receipt.admissionOrder > latestOrder) {
                 last = commandId;
+                latestOrder = receipt.admissionOrder;
             }
         }
         const outcome = last === undefined ? undefined : this.outcome(last);
@@ -172,6 +181,7 @@ export class ExecutionReceipts {
             )
             .digest("hex");
         this.#save(commandId, {
+            admissionOrder: this.#nextAdmissionOrder(),
             attemptId: randomUUID(),
             commandHash,
             sessionId,
@@ -284,6 +294,7 @@ export class ExecutionReceipts {
         }
         const attemptId = randomUUID();
         this.#save(commandId, {
+            admissionOrder: this.#nextAdmissionOrder(),
             attemptId,
             commandHash,
             sessionId,

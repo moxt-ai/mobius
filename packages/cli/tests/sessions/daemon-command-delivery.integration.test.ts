@@ -10,7 +10,7 @@ import {
     NATIVE_SESSION_RESULT_KIND,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { ControlledAcpAgentSpecification } from "../support/agents/controlled-acp.ts";
 import { type RealDaemonPeer, withControlledDaemon } from "../support/agents/real-daemon.ts";
 import { writeControlledAcpExecutable } from "../support/controlled-acp-executable.ts";
@@ -125,6 +125,74 @@ test("Given commands the Runtime finished, failed, is running or never received,
             },
         );
     } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+}, 90_000);
+
+test("Given a running turn and a later queued command, When the clock moves backwards and the daemon restarts twice, Then both reads report the queued command's restart failure", async () => {
+    vi.useFakeTimers({ now: new Date("2026-10-28T10:00:00Z"), toFake: ["Date"] });
+    const directory = await mkdtemp(join(tmpdir(), "mobius-last-turn-order-"));
+    try {
+        const executableDirectory = await writeControlledAcpExecutable(directory);
+        await withControlledDaemon(
+            new ControlledAcpAgentSpecification(),
+            { MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(directory, "agent"), PATH: executableDirectory },
+            async (peer) => {
+                const running = "a-running";
+                const queued = "z-queued";
+                submit(peer, running, "hold after first delta");
+                await waitForLifecycle(peer, running, "prompt.started");
+                vi.setSystemTime(new Date("2026-10-28T09:00:00Z"));
+                peer.send(
+                    encodeSessionPromptCommand({
+                        ...identity(peer),
+                        attachments: [],
+                        commandId: queued,
+                        disposition: SessionPromptDisposition.Queue,
+                        kind: "session.prompt",
+                        prompt: "Continue with the queued request",
+                        sessionId: peer.sessionId,
+                        targetCommandId: running,
+                    }),
+                );
+                for (;;) {
+                    const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
+                    if (event.type === "lifecycle-metadata" && event.payload.kind === "session.queue.changed") {
+                        break;
+                    }
+                }
+
+                vi.setSystemTime(new Date("2026-10-28T11:00:00Z"));
+                await peer.restart();
+                const first = (await readExecution(peer)).result.lastTurn;
+                await peer.restart();
+                const second = (await readExecution(peer)).result.lastTurn;
+                expect([first, second]).toMatchObject([
+                    {
+                        commandId: queued,
+                        state: "failed",
+                        code: "runtime_restarted",
+                    },
+                    {
+                        commandId: queued,
+                        state: "failed",
+                        code: "runtime_restarted",
+                    },
+                ]);
+                expect(first).toEqual(second);
+
+                // All three receipts now share a timestamp; command IDs cannot decide recency.
+                const next = "0-next";
+                submit(peer, next, "A newer turn replaces the restart failure");
+                await waitForLifecycle(peer, next, "prompt.completed");
+                const completed = (await readExecution(peer)).result.lastTurn;
+                expect(completed).toMatchObject({ commandId: next, state: "completed", stopReason: "end_turn" });
+                await peer.restart();
+                expect((await readExecution(peer)).result.lastTurn).toEqual(completed);
+            },
+        );
+    } finally {
+        vi.useRealTimers();
         await rm(directory, { recursive: true, force: true });
     }
 }, 90_000);
