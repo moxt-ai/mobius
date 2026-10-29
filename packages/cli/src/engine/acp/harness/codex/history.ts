@@ -3,7 +3,7 @@ import { AcpExecutionError } from "../../acp-error.ts";
 import { embedLocalHistoryImages } from "../../native-history/codex/history-images.ts";
 import type { CodexAppServerClient } from "./app-server-client.ts";
 import { CODEX_HISTORY_TURN_PAGE_LIMIT, threadTurnsPageSchema } from "./app-server-protocol.ts";
-import { decodeThreadItem, reasoningText, toolCallUpdate } from "./items.ts";
+import { decodeThreadItem, messageItemText, reasoningText, toolCallUpdate } from "./items.ts";
 import { agentMessageUpdate } from "./owned-agent.ts";
 import type { CodexSessionUpdate } from "./session-update.ts";
 
@@ -81,7 +81,7 @@ export async function replayCodexHistory(
                         }
                     }
                 } else if (item.type === "agentMessage" || item.type === "plan") {
-                    await emit(agentMessageUpdate(item.id, item.text));
+                    await emit(agentMessageUpdate(item.id, messageItemText(item)));
                 } else if (item.type === "reasoning") {
                     const text = reasoningText(item);
                     if (text !== null && text.length > 0) {

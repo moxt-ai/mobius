@@ -6,7 +6,7 @@ import { AcpExecutionError } from "../../acp-error.ts";
 import { type AcpEndpointTermination, acpEndpointTerminationError } from "../../agent/in-process-endpoint.ts";
 import type { CodexAppServerClient, CodexAppServerServerRequest } from "./app-server-client.ts";
 import { CODEX_HISTORY_TURN_PAGE_LIMIT, threadTurnsPageSchema } from "./app-server-protocol.ts";
-import { decodeThreadItem, reasoningText, toolCallUpdate } from "./items.ts";
+import { decodeThreadItem, messageItemText, reasoningText, toolCallUpdate } from "./items.ts";
 import type { CodexSessionAgent } from "./session-agent.ts";
 import type { CodexSessionUpdate } from "./session-update.ts";
 import { promptResultWithMessageId } from "./session-update.ts";
@@ -161,7 +161,7 @@ export class CodexBorrowedAcpAgent implements CodexSessionAgent {
                     const previous = this.#seen.get(key);
                     const value =
                         item.type === "agentMessage" || item.type === "plan"
-                            ? item.text
+                            ? messageItemText(item)
                             : (reasoningText(item) ?? JSON.stringify(item));
                     this.#seen.set(key, value);
                     if (baseline || value === previous) {

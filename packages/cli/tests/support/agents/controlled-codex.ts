@@ -19,6 +19,12 @@ export class ControlledCodexFixture implements AsyncDisposable {
     static async create(
         options: {
             readonly holdTurn?: boolean;
+            /** An `agentMessage` item the Agent emits during every turn, as the app-server sends it (raw JSON). */
+            readonly agentMessage?: Readonly<Record<string, unknown>>;
+            /** Sends the `agentMessage` text as a streamed delta before the item completes. */
+            readonly streamAgentMessage?: boolean;
+            /** An `agentMessage` item already saved in the thread, as `thread/turns/list` returns it (raw JSON). */
+            readonly savedAgentMessage?: Readonly<Record<string, unknown>>;
             readonly consumeSteeringAfterFirstTurn?: boolean;
             readonly endFirstTurnOnSteering?: "completed" | "failed";
             readonly failTurnWith?: string;
@@ -70,6 +76,14 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         send({ method: "thread/settings/updated", params: {
             threadId, threadSettings: { collaborationMode: { mode: "plan" } },
         } });
+        const agentMessage = ${JSON.stringify(options.agentMessage ?? null)};
+        if (agentMessage !== null) {
+            send({ method: "item/started", params: { threadId, turnId: turn.id, item: agentMessage } });
+            if (${options.streamAgentMessage === true}) {
+                send({ method: "item/agentMessage/delta", params: { threadId, turnId: turn.id, itemId: agentMessage.id, delta: agentMessage.text } });
+            }
+            send({ method: "item/completed", params: { threadId, turnId: turn.id, item: agentMessage } });
+        }
         if (${JSON.stringify(options.failTurnWith ?? null)} !== null) {
             send({ method: "turn/completed", params: { threadId, turn: { ...turn, status: "failed", error: { message: ${JSON.stringify(options.failTurnWith ?? null)} } } } });
         } else if (!${options.holdTurn === true}) {
@@ -89,6 +103,15 @@ createInterface({ input: process.stdin }).on("line", (line) => {
                 item: { type: "userMessage", id: "controlled-steering-user-" + turnNumber, clientId: request.params.clientUserMessageId, content: request.params.input },
             } });
         }
+        return;
+    }
+    const savedAgentMessage = ${JSON.stringify(options.savedAgentMessage ?? null)};
+    if (savedAgentMessage !== null && request.method === "thread/resume") {
+        send({ id: request.id, result: { thread: { id: request.params.threadId, turns: [] } } });
+        return;
+    }
+    if (savedAgentMessage !== null && request.method === "thread/turns/list") {
+        send({ id: request.id, result: { data: [{ id: "saved-turn", status: "completed", items: [savedAgentMessage] }], nextCursor: null } });
         return;
     }
     if (request.method === "turn/interrupt") {

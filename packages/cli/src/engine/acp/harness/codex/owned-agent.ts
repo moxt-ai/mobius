@@ -22,7 +22,7 @@ import {
     turnSteerResponseSchema,
     type UserInputQuestion,
 } from "./app-server-protocol.ts";
-import { decodeThreadItem, reasoningText, toolCallUpdate } from "./items.ts";
+import { askedQuestionsSuffix, decodeThreadItem, messageItemText, reasoningText, toolCallUpdate } from "./items.ts";
 import type { CodexSessionAgent } from "./session-agent.ts";
 import type { CodexMessageUpdate, CodexSessionUpdate } from "./session-update.ts";
 import { promptResultWithMessageId } from "./session-update.ts";
@@ -544,11 +544,14 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
             }
             const message = this.#agentMessages.get(item.id);
             this.#agentMessages.delete(item.id);
-            if (message === "streaming") {
+            // The streamed text already reached the client, but the questions it asked live only on
+            // the completed item.
+            const text = message === "streaming" ? askedQuestionsSuffix(item) : messageItemText(item);
+            if (message === "streaming" && text.length === 0) {
                 return;
             }
             await this.#enqueue(async () => {
-                await this.#context.emit(agentMessageUpdate(item.id, item.text));
+                await this.#context.emit(agentMessageUpdate(item.id, text));
             });
             return;
         }
