@@ -128,10 +128,12 @@ export class CodexAdapter implements Adapter {
                     request.nativeSessionId,
                     async (update) => {
                         const externalized = await this.#contentExternalizer.update(sessionId, update, signal);
-                        events.push({
-                            type: "acp",
-                            payload: decodeAcpSessionUpdate(JSON.stringify(fitCodexToolEvent(externalized.event))),
-                        });
+                        for (const event of externalized.events) {
+                            events.push({
+                                type: "acp",
+                                payload: decodeAcpSessionUpdate(JSON.stringify(fitCodexToolEvent(event))),
+                            });
+                        }
                     },
                     signal,
                 );

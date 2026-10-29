@@ -66,8 +66,12 @@ interface PreparedContent {
 
 export interface PreparedAcpUpdate {
     readonly agent: SessionUpdate;
-    readonly event: unknown;
+    readonly events: readonly unknown[];
 }
+
+type FindLinkedResources = (
+    text: string,
+) => readonly { readonly uri: string; readonly mediaType: string; readonly name: string }[];
 
 const embeddedImageSchema = z.looseObject({
     type: z.literal("image"),
@@ -112,9 +116,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** Stateless: it finds embedded media in Agent output and replaces it with content references. */
 export class AcpContentExternalizer {
     readonly #store: StoreExtractedContent;
+    readonly #linkedResources: FindLinkedResources;
 
-    constructor(store: StoreExtractedContent) {
+    constructor(store: StoreExtractedContent, linkedResources: FindLinkedResources = () => []) {
         this.#store = store;
+        this.#linkedResources = linkedResources;
+    }
+
+    #resourceLinks(text: string): readonly ContentBlock[] {
+        return this.#linkedResources(text).map((resource) => ({
+            type: "resource_link",
+            uri: resource.uri,
+            name: resource.name,
+            mimeType: resource.mediaType,
+        }));
     }
 
     async #content(sessionId: string, content: ContentBlock, signal: AbortSignal): Promise<PreparedContent> {
@@ -292,7 +307,7 @@ export class AcpContentExternalizer {
         const hasContent = (update.content !== undefined && update.content !== null) || agentContent.length > 0;
         return {
             agent: { ...update, ...meta, ...output, ...(hasContent ? { content: agentContent } : {}) },
-            event: { ...update, ...meta, ...output, ...(hasContent ? { content: eventContent } : {}) },
+            events: [{ ...update, ...meta, ...output, ...(hasContent ? { content: eventContent } : {}) }],
         };
     }
 
@@ -309,7 +324,14 @@ export class AcpContentExternalizer {
                 const content = await this.#content(sessionId, update.content, signal);
                 return {
                     agent: { ...update, content: content.agent },
-                    event: { ...update, content: content.event },
+                    events: [
+                        { ...update, content: content.event },
+                        // Keep native text intact. Only add cards for exact file URLs whose
+                        // original upload metadata is still known; arbitrary context stays text.
+                        ...(update.sessionUpdate === "user_message_chunk" && update.content.type === "text"
+                            ? this.#resourceLinks(update.content.text).map((content) => ({ ...update, content }))
+                            : []),
+                    ],
                 };
             }
             case "tool_call":
@@ -317,14 +339,14 @@ export class AcpContentExternalizer {
                 return await this.#toolUpdate(sessionId, update, signal);
             case "compaction_update": {
                 if (update.summary === undefined || update.summary === null) {
-                    return { agent: update, event: update };
+                    return { agent: update, events: [update] };
                 }
                 const content = await Promise.all(
                     update.summary.map(async (item) => await this.#content(sessionId, item, signal)),
                 );
                 return {
                     agent: { ...update, summary: content.map((item) => item.agent) },
-                    event: { ...update, summary: content.map((item) => item.event) },
+                    events: [{ ...update, summary: content.map((item) => item.event) }],
                 };
             }
             case "plan":
@@ -335,7 +357,7 @@ export class AcpContentExternalizer {
             case "config_option_update":
             case "session_info_update":
             case "usage_update":
-                return { agent: update, event: update };
+                return { agent: update, events: [update] };
         }
     };
 }

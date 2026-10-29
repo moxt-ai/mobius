@@ -85,71 +85,72 @@ export class AdapterSessionConnection {
             const externalized = await externalizer.update(options.sessionId(), notification.update, signal);
             signal.throwIfAborted();
             const update = externalized.agent;
-            const eventUpdate = externalized.event;
-            const backgroundTask = update._meta?.["mobius.backgroundTask"];
-            const payload = decodeAcpSessionUpdate(
-                JSON.stringify(
-                    normalizeEvent(
-                        (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") &&
-                            backgroundTask !== undefined &&
-                            typeof eventUpdate === "object" &&
-                            eventUpdate !== null
-                            ? { ...eventUpdate, backgroundTask }
-                            : eventUpdate,
+            for (const eventUpdate of externalized.events) {
+                const backgroundTask = update._meta?.["mobius.backgroundTask"];
+                const payload = decodeAcpSessionUpdate(
+                    JSON.stringify(
+                        normalizeEvent(
+                            (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") &&
+                                backgroundTask !== undefined &&
+                                typeof eventUpdate === "object" &&
+                                eventUpdate !== null
+                                ? { ...eventUpdate, backgroundTask }
+                                : eventUpdate,
+                        ),
                     ),
-                ),
-            );
-            let event: AdapterSessionEvent;
-            switch (update.sessionUpdate) {
-                case "available_commands_update":
-                    event = {
-                        kind: "commands",
-                        payload,
-                        commands: update.availableCommands
-                            .slice(0, 500)
-                            .map((command) => ({
-                                description: truncate(command.description, 500),
-                                inputHint: truncate(command.input?.hint ?? "", 255),
-                                name: truncate(command.name, 128),
-                            }))
-                            .filter((command) => command.name.length > 0),
-                    };
-                    break;
-                case "config_option_update":
-                    event = {
-                        kind: "configuration",
-                        payload,
-                        configOptions: protocol.normalizeUpdate(options.configOptions(), update.configOptions),
-                    };
-                    break;
-                case "current_mode_update":
-                    event = { kind: "mode", payload, modeId: update.currentModeId };
-                    break;
-                case "session_info_update": {
-                    const changes: SessionInfoChange[] = [];
-                    if (Object.hasOwn(update, "title")) {
-                        changes.push({ kind: "title", value: truncate(update.title ?? "", 500) });
+                );
+                let event: AdapterSessionEvent;
+                switch (update.sessionUpdate) {
+                    case "available_commands_update":
+                        event = {
+                            kind: "commands",
+                            payload,
+                            commands: update.availableCommands
+                                .slice(0, 500)
+                                .map((command) => ({
+                                    description: truncate(command.description, 500),
+                                    inputHint: truncate(command.input?.hint ?? "", 255),
+                                    name: truncate(command.name, 128),
+                                }))
+                                .filter((command) => command.name.length > 0),
+                        };
+                        break;
+                    case "config_option_update":
+                        event = {
+                            kind: "configuration",
+                            payload,
+                            configOptions: protocol.normalizeUpdate(options.configOptions(), update.configOptions),
+                        };
+                        break;
+                    case "current_mode_update":
+                        event = { kind: "mode", payload, modeId: update.currentModeId };
+                        break;
+                    case "session_info_update": {
+                        const changes: SessionInfoChange[] = [];
+                        if (Object.hasOwn(update, "title")) {
+                            changes.push({ kind: "title", value: truncate(update.title ?? "", 500) });
+                        }
+                        if (Object.hasOwn(update, "updatedAt")) {
+                            changes.push({ kind: "updated-at", value: truncate(update.updatedAt ?? "", 128) });
+                        }
+                        event = { kind: "info", payload, changes };
+                        break;
                     }
-                    if (Object.hasOwn(update, "updatedAt")) {
-                        changes.push({ kind: "updated-at", value: truncate(update.updatedAt ?? "", 128) });
-                    }
-                    event = { kind: "info", payload, changes };
-                    break;
+                    case "user_message_chunk":
+                    case "agent_message_chunk":
+                    case "agent_thought_chunk":
+                    case "tool_call":
+                    case "tool_call_update":
+                    case "plan":
+                    case "plan_update":
+                    case "plan_removed":
+                        event = { kind: "content", payload };
+                        break;
+                    default:
+                        event = { kind: "other", payload };
                 }
-                case "user_message_chunk":
-                case "agent_message_chunk":
-                case "agent_thought_chunk":
-                case "tool_call":
-                case "tool_call_update":
-                case "plan":
-                case "plan_update":
-                case "plan_removed":
-                    event = { kind: "content", payload };
-                    break;
-                default:
-                    event = { kind: "other", payload };
+                await options.onEvent(event);
             }
-            await options.onEvent(event);
         });
         this.events = this.#updates;
         const client: AcpClientHandler = {

@@ -45,7 +45,7 @@ import { type PiAcpSession, SessionManager } from "./session.js";
 import { SessionStore } from "./session-store.js";
 import { loadSlashCommands, parseCommandArgs, toAvailableCommands } from "./slash-commands.js";
 import { bashCommand, bashResultText, isBashTool } from "./translate/bash.js";
-import { normalizePiAssistantText, normalizePiMessageText } from "./translate/pi-messages.js";
+import { normalizePiAssistantText, piUserMessageContent } from "./translate/pi-messages.js";
 import { toolResultToText } from "./translate/pi-tools.js";
 import { promptToPiMessage } from "./translate/prompt.js";
 
@@ -1334,13 +1334,13 @@ export class PiAcpAgent {
             const role = String(m?.role ?? "");
 
             if (role === "user") {
-                const text = normalizePiMessageText(m?.content);
-                if (text) {
+                this.conn.startUserMessage();
+                for (const content of piUserMessageContent(m.content)) {
                     await this.conn.sessionUpdate({
                         sessionId: session.sessionId,
                         update: {
                             sessionUpdate: "user_message_chunk",
-                            content: { type: "text", text },
+                            content,
                         },
                     });
                 }
