@@ -1,6 +1,7 @@
 import {
     SESSION_CLOSE_NOTICE_KIND,
     SESSION_CLOSED_ERROR_CODE,
+    type SessionCapabilities,
     type SessionCloseNoticeEvent,
     type SessionEventPayload,
     type SessionStatus,
@@ -8,10 +9,12 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { AcpExecutionError } from "../../acp/acp-error.ts";
 import type { NativeSessionOrigin } from "../../acp/protocol/native-session.ts";
+import { unsupportedSessionCapabilities } from "../../acp/protocol/session-capabilities.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../../infra/operation-metrics.ts";
 import type { Timer } from "../../util/timer.ts";
 import { AgentSession } from "../live/agent-session.ts";
 import { isNativeChatSessionId } from "../native/native-chat-agent.ts";
+import { nativeSessionQuery } from "../native/native-query.ts";
 import type { AgentProcessPool, AgentProcessRetention } from "../process/agent-process-pool.ts";
 import { RetainedAgentProcesses } from "../process/retained-agent-processes.ts";
 import {
@@ -195,14 +198,24 @@ export class SessionManager {
 
     async #startRetainedSessionProcess(
         options: SessionPrepareOptions,
-        start: () => Promise<AgentSession>,
+        start: (capabilities: SessionCapabilities) => Promise<AgentSession>,
     ): Promise<AgentSession> {
         const retiring = this.#sessionRetirements.get(options.sessionId);
         if (retiring !== undefined) {
             // The old process may still own the native writer while graceful teardown runs.
             await waitForSharedOperation(retiring, options.signal);
         }
-        const runtime = await this.#processes.startRetained(options.signal, start, this.#retention(options.sessionId));
+        const stored = this.#store.read(options.sessionId);
+        // Discovery may acquire a pooled reader: do it before reserving execution capacity.
+        const capabilities =
+            options.origin !== undefined || (stored instanceof FoundStoredSession && stored.session.prompted)
+                ? await options.adapter.getCapabilities(nativeSessionQuery(options))
+                : unsupportedSessionCapabilities();
+        const runtime = await this.#processes.startRetained(
+            options.signal,
+            () => start(capabilities),
+            this.#retention(options.sessionId),
+        );
         this.#executionProcesses.retain(options.sessionId, runtime);
         return runtime;
     }
@@ -213,21 +226,24 @@ export class SessionManager {
         metrics: OperationMetrics = unmeasuredOperationMetrics,
     ): Promise<AgentSession> {
         return await this.#executionProcesses.prepare(options.sessionId, async () => {
+            const effectiveOptions: SessionPrepareOptions =
+                options.origin === undefined &&
+                this.#sessionIdentity === "native" &&
+                isNativeChatSessionId(options.agent.id, options.sessionId) &&
+                this.#store.read(options.sessionId) instanceof MissingStoredSession
+                    ? { ...options, origin: { kind: "import", nativeSessionId: options.sessionId, title: "" } }
+                    : options;
             return await this.#startRetainedSessionProcess(
-                options,
-                async () =>
+                effectiveOptions,
+                async (capabilities) =>
                     await AgentSession.start(
-                        options.origin === undefined &&
-                            this.#sessionIdentity === "native" &&
-                            isNativeChatSessionId(options.agent.id, options.sessionId) &&
-                            this.#store.read(options.sessionId) instanceof MissingStoredSession
-                            ? { ...options, origin: { kind: "import", nativeSessionId: options.sessionId, title: "" } }
-                            : options,
+                        effectiveOptions,
                         recovery,
                         () => this.#observer,
                         this.#store,
                         metrics,
                         options.adapter,
+                        capabilities,
                     ),
             );
         });
@@ -248,7 +264,7 @@ export class SessionManager {
             this.#store.remove(options.sessionId);
             return await this.#startRetainedSessionProcess(
                 options,
-                async () =>
+                async (capabilities) =>
                     await AgentSession.start(
                         options,
                         recovery,
@@ -256,6 +272,7 @@ export class SessionManager {
                         this.#store,
                         metrics,
                         options.adapter,
+                        capabilities,
                     ),
             );
         });
@@ -268,7 +285,7 @@ export class SessionManager {
             await this.#retireSessionProcess(options.sessionId, existing, async () => await existing.close());
             const runtime = await this.#startRetainedSessionProcess(
                 options,
-                async () =>
+                async (capabilities) =>
                     await AgentSession.start(
                         options,
                         recovery,
@@ -276,6 +293,7 @@ export class SessionManager {
                         this.#store,
                         unmeasuredOperationMetrics,
                         options.adapter,
+                        capabilities,
                     ),
             );
             try {

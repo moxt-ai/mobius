@@ -9,11 +9,14 @@ export function createRuntimeAdapterRegistry(
     processes: AdapterDependencies["processes"],
     externalize: ConstructorParameters<typeof AcpContentExternalizer>[0],
     linkedResources: ConstructorParameters<typeof AcpContentExternalizer>[1],
-): AdapterRegistry {
-    return new AdapterRegistry(adapters, {
-        processes,
-        contentExternalizer: new AcpContentExternalizer(externalize, linkedResources),
-    });
+) {
+    const contentExternalizer = new AcpContentExternalizer(externalize, linkedResources);
+    const externalizeSessionUpdate: AcpContentExternalizer["update"] = (sessionId, update, signal) =>
+        contentExternalizer.update(sessionId, update, signal);
+    return {
+        adapters: new AdapterRegistry(adapters, { processes, contentExternalizer }),
+        externalizeSessionUpdate,
+    };
 }
 
 /** Local Agent inventory and its explicitly registered harness adapters. */

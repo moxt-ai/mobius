@@ -1,5 +1,5 @@
-import { methods } from "@agentclientprotocol/sdk";
 import { AcpExecutionError } from "../../acp/acp-error.ts";
+import type { AdapterSessionOpened } from "../../acp/native-history/preview-contract.ts";
 import { type NativeSessionOrigin, nativeSessionIdSchema } from "../../acp/protocol/native-session.ts";
 import { arraysEqual } from "../../util/value-utils.ts";
 import type { SessionRecovery } from "../api/session-api.ts";
@@ -35,7 +35,6 @@ export async function restoreSession(
     if (origin !== undefined) {
         session.setSessionTitle(origin.title);
     }
-    await session.initializeAgent(signal);
     let stored = session.metrics.measureSync("session-state-read", () =>
         origin?.kind === "import"
             ? new FoundStoredSession(
@@ -60,7 +59,7 @@ export async function restoreSession(
     const forkSource =
         origin?.kind === "fork" ? session.store.findNative(session.agentId, origin.nativeSessionId)[0] : undefined;
 
-    let lifecycleResponse: unknown;
+    let opened: AdapterSessionOpened;
     if (origin?.kind === "fork") {
         if (!session.capabilities.unstableForkSession) {
             throw new AcpExecutionError(
@@ -78,23 +77,9 @@ export async function restoreSession(
         }
         const forked = await session.metrics.measure(
             "session-fork",
-            async () =>
-                await session.race(
-                    session.agentRequest<Record<string, unknown>, { sessionId: string }>(
-                        methods.agent.session.fork,
-                        {
-                            sessionId: nativeSessionIdSchema.parse(origin.nativeSessionId),
-                            cwd: session.cwd,
-                            additionalDirectories: [...session.additionalDirectories],
-                            mcpServers: [],
-                        },
-                        { cancellationSignal: signal },
-                    ),
-                    "ACP agent exited while forking a session",
-                    signal,
-                ),
+            async () => await session.forkSession(origin.nativeSessionId, signal),
         );
-        session.selectNativeSession(forked.sessionId);
+        session.selectNativeSession(forked.nativeSessionId);
         if (
             session.nativeSessionId() === origin.nativeSessionId ||
             session.store.findNative(session.agentId, session.nativeSessionId()).length > 0
@@ -110,7 +95,7 @@ export async function restoreSession(
         if (recovery.kind === "execution-only") {
             session.startExecutionOnlyCapture();
         }
-        lifecycleResponse = forked;
+        opened = forked;
     } else if (
         stored instanceof FoundStoredSession &&
         stored.session.agentId === session.agentId &&
@@ -129,30 +114,13 @@ export async function restoreSession(
                     "native_history_unsupported",
                 );
             }
-            lifecycleResponse = await session.metrics.measure(
+            opened = await session.metrics.measure(
                 "session-load",
-                async () => (await session.loadSession(signal, "ACP agent exited while loading a session")).response,
+                async () => await session.openSessionWithReplay(signal),
             );
         } else if (recovery.kind === "execution-only") {
             try {
-                lifecycleResponse = await session.metrics.measure(
-                    "session-resume",
-                    async () =>
-                        await session.race(
-                            session.agentRequest(
-                                methods.agent.session.resume,
-                                {
-                                    additionalDirectories: [...session.additionalDirectories],
-                                    cwd: session.cwd,
-                                    mcpServers: [],
-                                    sessionId: session.nativeSessionId(),
-                                },
-                                { cancellationSignal: signal },
-                            ),
-                            "ACP agent exited while resuming a session",
-                            signal,
-                        ),
-                );
+                opened = await session.metrics.measure("session-resume", async () => await session.openSession(signal));
             } catch (cause) {
                 signal.throwIfAborted();
                 if (cause instanceof AcpExecutionError && !hasMethodNotFoundCode(cause)) {
@@ -166,28 +134,11 @@ export async function restoreSession(
             }
             session.startExecutionOnlyCapture();
         } else if (session.capabilities.resumeSession) {
-            lifecycleResponse = await session.metrics.measure(
-                "session-resume",
-                async () =>
-                    await session.race(
-                        session.agentRequest(
-                            methods.agent.session.resume,
-                            {
-                                additionalDirectories: [...session.additionalDirectories],
-                                cwd: session.cwd,
-                                mcpServers: [],
-                                sessionId: session.nativeSessionId(),
-                            },
-                            { cancellationSignal: signal },
-                        ),
-                        "ACP agent exited while resuming a session",
-                        signal,
-                    ),
-            );
+            opened = await session.metrics.measure("session-resume", async () => await session.openSession(signal));
         } else if (session.capabilities.loadSession) {
-            lifecycleResponse = await session.metrics.measure(
+            opened = await session.metrics.measure(
                 "session-load",
-                async () => (await session.loadSession(signal, "ACP agent exited while loading a session")).response,
+                async () => await session.openSessionWithReplay(signal),
             );
         } else {
             throw new AcpExecutionError(
@@ -207,38 +158,20 @@ export async function restoreSession(
             }
             session.store.remove(session.sessionId);
         }
-        const created = await session.metrics.measure(
-            "session-new",
-            async () =>
-                await session.race(
-                    session.agentRequest<Record<string, unknown>, { sessionId: string }>(
-                        methods.agent.session.new,
-                        {
-                            additionalDirectories: [...session.additionalDirectories],
-                            cwd: session.cwd,
-                            mcpServers: [],
-                        },
-                        { cancellationSignal: signal },
-                    ),
-                    "ACP agent exited while starting a session",
-                    signal,
-                ),
-        );
-        session.selectNativeSession(created.sessionId);
+        const created = await session.metrics.measure("session-new", async () => await session.createSession(signal));
+        session.selectNativeSession(created.nativeSessionId);
         session.setNativeHistoryOwnership({ kind: "fresh-session" });
         if (recovery.kind === "execution-only") {
             session.startExecutionOnlyCapture();
         }
-        lifecycleResponse = created;
+        opened = created;
     }
-    session.restrictSessionCapabilities(lifecycleResponse);
-    session.setConfigOptions(session.sessionConfigProtocol.normalizeLifecycle(lifecycleResponse));
+    session.applySessionOpened(opened);
     if (forkSource !== undefined) {
         await session.restoreStoredConfigurations(forkSource, signal, "fork");
     } else if (stored instanceof FoundStoredSession && session.restored) {
         await session.restoreStoredConfigurations(stored.session, signal);
     }
-    await session.drained();
     signal.throwIfAborted();
     session.writeStoredSession(
         stored instanceof FoundStoredSession && session.restored ? stored.session.updatedAt : new Date().toISOString(),
