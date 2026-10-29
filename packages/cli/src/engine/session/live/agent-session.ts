@@ -754,13 +754,14 @@ export class AgentSession implements AgentSessionRestore {
         }
     };
 
-    readonly cancel = async (signal: AbortSignal): Promise<void> => {
+    readonly cancel = async (signal: AbortSignal): Promise<"retained" | "closed"> => {
         signal.throwIfAborted();
         await this.#interactions.cancelPendingInteractions();
         signal.throwIfAborted();
         if (this.#turn.running) {
-            await this.#adapter.cancel({ ...this.#target(), signal });
+            return await this.#adapter.cancel({ ...this.#target(), signal });
         }
+        return "retained";
     };
 
     readonly respondPermission = async (options: PermissionResponseOptions): Promise<void> => {

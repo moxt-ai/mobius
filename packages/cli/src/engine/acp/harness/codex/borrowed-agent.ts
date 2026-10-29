@@ -26,6 +26,7 @@ interface PendingPrompt {
     readonly content: readonly ContentBlock[];
     readonly clientId: string;
     readonly completion: PromiseWithResolvers<PromptResponse>;
+    readonly settled: PromiseWithResolvers<void>;
     input: { readonly kind: "awaiting" } | { readonly kind: "identified"; readonly messageId: string };
 }
 
@@ -215,6 +216,7 @@ export class CodexBorrowedAcpAgent implements CodexSessionAgent {
             content,
             clientId: randomUUID(),
             completion: Promise.withResolvers<PromptResponse>(),
+            settled: Promise.withResolvers<void>(),
             input: { kind: "awaiting" },
         };
         this.#pending = pending;
@@ -253,7 +255,6 @@ export class CodexBorrowedAcpAgent implements CodexSessionAgent {
             throw cause;
         } finally {
             signal.removeEventListener("abort", abort);
-            this.#pending = null;
             if (outcome === "cancelled") {
                 // Delete only this client's unconsumed submission. A claimed submission is already
                 // absent; neither turn/interrupt nor queue/start is safe against the local owner.
@@ -263,6 +264,8 @@ export class CodexBorrowedAcpAgent implements CodexSessionAgent {
                     console.error("The cancelled Codex queued input could not be removed", cause);
                 }
             }
+            this.#pending = null;
+            pending.settled.resolve();
         }
     };
 
@@ -326,7 +329,11 @@ export class CodexBorrowedAcpAgent implements CodexSessionAgent {
     };
 
     readonly cancel = async (): Promise<void> => {
-        this.#pending?.completion.resolve({ stopReason: "cancelled" });
+        const pending = this.#pending;
+        if (pending !== null) {
+            pending.completion.resolve({ stopReason: "cancelled" });
+            await pending.settled.promise;
+        }
     };
 
     readonly close = async (): Promise<void> => {

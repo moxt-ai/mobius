@@ -166,6 +166,7 @@ export class AcpExecutionConnections {
             "ACP agent exited while cancelling a prompt",
             bounded,
         );
+        return "retained";
     };
 
     readonly closeSession: Adapter["closeSession"] = async ({ signal, ...target }) => {

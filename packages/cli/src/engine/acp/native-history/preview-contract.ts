@@ -131,7 +131,7 @@ export interface Adapter {
     readonly forkSession: (params: AdapterSessionForkParams) => Promise<AdapterSessionOpened>;
     readonly openSession: (params: AdapterSessionOpenParams) => Promise<AdapterSessionOpened>;
     readonly openSessionWithReplay: (params: AdapterSessionOpenParams) => Promise<AdapterSessionOpened>;
-    readonly cancel: (params: AdapterSessionOperation) => Promise<void>;
+    readonly cancel: (params: AdapterSessionOperation) => Promise<"retained" | "closed">;
     readonly closeSession: (params: AdapterSessionOperation) => Promise<void>;
     /** Release a retained execution without changing the native conversation. */
     readonly releaseSession: (params: AdapterSessionOperation) => Promise<void>;

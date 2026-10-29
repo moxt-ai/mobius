@@ -138,7 +138,13 @@ export class CodexAdapter implements Adapter {
             await connection.race(connection.events.drained(), "ACP agent exited while loading a session", signal);
             return normalizeOpenedSession(execution, nativeSessionId, response, signal);
         });
-    readonly cancel: Adapter["cancel"] = (...args) => this.#executionConnections.cancel(...args);
+    readonly cancel: Adapter["cancel"] = async (params) => {
+        // turn/interrupt leaves unified-exec commands alive, including tools whose
+        // startup notification can arrive after the interrupted turn completes.
+        // The session's owned process tree is the authoritative stop boundary.
+        await this.#executionConnections.closeSession(params);
+        return "closed";
+    };
     readonly closeSession: Adapter["closeSession"] = (...args) => this.#executionConnections.closeSession(...args);
     readonly releaseSession: Adapter["releaseSession"] = (params) => this.#executionConnections.releaseSession(params);
     readonly prompt: Adapter["prompt"] = (...args) => this.#executionConnections.prompt(...args);

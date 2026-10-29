@@ -22,6 +22,7 @@
         "zod": "^4.6.5"
     },
     "devDependencies": {
+        "@moxt-ai/mobius-sdk-previous": "npm:@moxt-ai/mobius-sdk@0.0.136",
         "@cloudflare/vitest-plugin": "^1.1.12",
         "vitest": "^4.1.11",
         "@cloudflare/workers-types": "^5.20260918.1",
