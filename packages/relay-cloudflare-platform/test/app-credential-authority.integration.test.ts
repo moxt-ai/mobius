@@ -469,6 +469,40 @@ it("Given a scoped AppCredential whose scope only Project storage holds, When an
     expect((await app.authenticateApp(legacy.credential)).status).toBe(201);
 });
 
+it("Given a Tenant whose active Projects across its Apps reach the quota, When one of its Apps creates another Project, Then the quota rejects it", async () => {
+    const app = await application();
+    const { appId, tenantId } = v.parse(v.object({ appId: v.string(), tenantId: v.string() }), await app.readApp());
+    const { appId: otherAppId } = v.parse(
+        v.object({ appId: v.string() }),
+        await responseJson(await app.dashboard("apps", { displayName: "Second quota App", tenantId }), 201),
+    );
+    const createProject = async (projectAppId: string, idempotencyKey: string) =>
+        await app.dashboard(`apps/${projectAppId}/projects`, {
+            displayName: idempotencyKey,
+            idempotencyKey,
+            locationHint: "apac",
+        });
+    await responseJson(await createProject(otherAppId, "other-app-quota-project"), 201);
+    const { activeProjects } = v.parse(
+        v.object({ activeProjects: v.number() }),
+        await responseJson(await app.dashboard(`platform/tenants/${tenantId}/usage`), 200),
+    );
+    const setQuota = async (projects: number) =>
+        await env.PLATFORM_DIRECTORY_DATABASE.prepare("UPDATE platform_tenants SET quotas_json = ? WHERE tenant_id = ?")
+            .bind(JSON.stringify({ activeApps: 100, activeProjects: projects }), tenantId)
+            .run();
+    await setQuota(activeProjects);
+    try {
+        await expectRejected(
+            await createProject(appId, "quota-overflow-project"),
+            "tenant_project_quota_exceeded",
+            429,
+        );
+    } finally {
+        await setQuota(1_000);
+    }
+});
+
 it("Given an active AppCredential, When rotation storage fails, Then the credential and audit changes roll back and a retry succeeds", async () => {
     const app = await application();
     const credentials = await app.listCredentials();

@@ -57,6 +57,13 @@
             "when": 1793162556266,
             "tag": "0007_silky_starhawk",
             "breakpoints": true
+        },
+        {
+            "idx": 8,
+            "version": "6",
+            "when": 1793289338131,
+            "tag": "0008_fluffy_zeigeist",
+            "breakpoints": true
         }
     ]
 }
