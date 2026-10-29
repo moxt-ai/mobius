@@ -11,15 +11,14 @@ export const platformProject = sqliteTable(
         clientReference: text("client_reference").notNull(),
         idempotencyKey: text("idempotency_key").notNull(),
         requestDigest: text("request_digest").notNull(),
-        lifecycle: text("lifecycle", { enum: ["active", "suspended", "deleted"] }).notNull(),
+        lifecycle: text("lifecycle", { enum: ["active", "deleted"] }).notNull(),
         createdAt: integer("created_at").notNull(),
         updatedAt: integer("updated_at").notNull(),
-        suspendedAt: integer("suspended_at"),
         deletedAt: integer("deleted_at"),
         locationHint: text("location_hint", { enum: PROJECT_LOCATION_HINTS }).notNull().default("apac"),
     },
     (table) => [
-        check("platform_projects_lifecycle_check", sql`${table.lifecycle} in ('active', 'suspended', 'deleted')`),
+        check("platform_projects_lifecycle_check", sql`${table.lifecycle} in ('active', 'deleted')`),
         check(
             "platform_projects_location_hint_check",
             sql`${table.locationHint} in ('wnam', 'enam', 'sam', 'weur', 'eeur', 'apac', 'apac-ne', 'apac-se', 'oc', 'afr', 'me')`,

@@ -1,5 +1,5 @@
 import { relayDrizzle } from "@moxt-ai/mobius-relay-core/database";
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import {
     type ActiveCountRow,
     ActiveCountRowSchema,
@@ -126,12 +126,7 @@ export class PlatformControlPlaneStorage {
                         platformDrizzle(this.#database)
                             .update(platformApp)
                             .set({ lifecycle: "deleted", deletedAt, updatedAt: deletedAt })
-                            .where(
-                                and(
-                                    eq(platformApp.appId, appId),
-                                    inArray(platformApp.lifecycle, ["active", "suspended"]),
-                                ),
-                            ),
+                            .where(and(eq(platformApp.appId, appId), eq(platformApp.lifecycle, "active"))),
                     ),
                     this.auditOfPreviousChange(audit),
                     this.#database
