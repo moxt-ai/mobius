@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { methods } from "@agentclientprotocol/sdk";
 import { decodeAcpSessionUpdate, type SessionEventPayload } from "@moxt-ai/mobius-sdk/protocol";
 import { revalidateExecutable, stopProcessTree } from "../../../util/process/executable.ts";
 import { runCleanup } from "../../../util/run-cleanup.ts";
@@ -10,15 +11,17 @@ import { replayCodexHistory } from "../../harness/codex/history.ts";
 import type {
     Adapter,
     AdapterDependencies,
-    NativeSessionPreviewRequest,
+    AdapterSessionCreateParams,
+    NativeSessionQuery,
     SessionEventPage,
 } from "../../native-history/preview-contract.ts";
 import { nativeSessionIdSchema } from "../../protocol/native-session.ts";
-import { AcpLiveSessions } from "../live-sessions.ts";
+import { AcpExecutionConnections } from "../execution-connections.ts";
+import { createdNativeSessionId, normalizeOpenedSession, sessionWorkspace } from "../lifecycle-output.ts";
 import { findNativeSession } from "../native-session-lookup.ts";
 import { openPreviewEventCache, type PreviewEventCache } from "../preview-event-cache.ts";
 import { AgentQueryProcesses } from "../query-processes.ts";
-import { AcpSessionConnector, type LiveSessionConnectionOptions } from "../session-events.ts";
+import { AcpSessionConnector } from "../session-events.ts";
 import { fitCodexToolEvent, prepareCodexToolUpdate } from "./tool-event.ts";
 
 /**
@@ -30,7 +33,7 @@ export class CodexAdapter implements Adapter {
     #agent: AcpAgentDefinition;
     readonly #queryProcesses: AgentQueryProcesses;
     readonly #connector: AcpSessionConnector;
-    readonly #liveSessions: AcpLiveSessions;
+    readonly #executionConnections: AcpExecutionConnections;
     readonly #dependencies: AdapterDependencies;
     readonly #contentExternalizer: Pick<AcpContentExternalizer, "update">;
     #previewCache: PreviewEventCache | null = null;
@@ -47,7 +50,7 @@ export class CodexAdapter implements Adapter {
             },
         };
         this.#connector = new AcpSessionConnector(this.#contentExternalizer, fitCodexToolEvent);
-        this.#liveSessions = new AcpLiveSessions(this.#contentExternalizer, fitCodexToolEvent);
+        this.#executionConnections = new AcpExecutionConnections(this.#contentExternalizer, fitCodexToolEvent);
         this.#queryProcesses = new AgentQueryProcesses(agent, dependencies.processes, this.#connector);
     }
 
@@ -55,42 +58,119 @@ export class CodexAdapter implements Adapter {
         this.#agent = agent;
         this.#queryProcesses.refreshAgent(agent);
     };
-    readonly getCapabilities: Adapter["getCapabilities"] = (cwd, signal) =>
-        this.#queryProcesses.capabilities(cwd, signal);
-    readonly connectSession = (options: LiveSessionConnectionOptions) => this.#liveSessions.connectSession(options);
-    readonly cancel: Adapter["cancel"] = async (target, signal) => {
+    readonly getCapabilities = async (query: NativeSessionQuery) => await this.#queryProcesses.capabilities(query);
+    readonly #executionParams = (params: AdapterSessionCreateParams): AdapterSessionCreateParams => {
+        const externalize = params.scope.externalizeUpdate;
+        return externalize === undefined
+            ? params
+            : {
+                  ...params,
+                  scope: {
+                      ...params.scope,
+                      externalizeUpdate: (update, signal) => externalize(prepareCodexToolUpdate(update), signal),
+                  },
+              };
+    };
+
+    readonly createSession: Adapter["createSession"] = (params) =>
+        this.#executionConnections.withConnection(this.#executionParams(params), async (execution, signal) => {
+            const { connection } = execution;
+            const response: unknown = await connection.race(
+                connection.connection.agent.request(methods.agent.session.new, sessionWorkspace(params.scope), {
+                    cancellationSignal: signal,
+                }),
+                "ACP agent exited while starting a session",
+                signal,
+            );
+            const nativeSessionId = createdNativeSessionId(response);
+            this.#executionConnections.bind(execution, nativeSessionId);
+            return normalizeOpenedSession(execution, nativeSessionId, response, signal);
+        });
+    readonly forkSession: Adapter["forkSession"] = (params) =>
+        this.#executionConnections.withConnection(this.#executionParams(params), async (execution, signal) => {
+            const { connection } = execution;
+            const response: unknown = await connection.race(
+                connection.connection.agent.request(
+                    methods.agent.session.fork,
+                    {
+                        ...sessionWorkspace(params.scope),
+                        sessionId: nativeSessionIdSchema.parse(params.sourceNativeSessionId),
+                    },
+                    { cancellationSignal: signal },
+                ),
+                "ACP agent exited while forking a session",
+                signal,
+            );
+            const nativeSessionId = createdNativeSessionId(response);
+            this.#executionConnections.bind(execution, nativeSessionId);
+            return normalizeOpenedSession(execution, nativeSessionId, response, signal);
+        });
+    readonly openSession: Adapter["openSession"] = (params) =>
+        this.#executionConnections.withConnection(this.#executionParams(params), async (execution, signal) => {
+            const { connection } = execution;
+            const nativeSessionId = nativeSessionIdSchema.parse(params.nativeSessionId);
+            this.#executionConnections.bind(execution, nativeSessionId);
+            const response: unknown = await connection.race(
+                connection.connection.agent.request(
+                    methods.agent.session.resume,
+                    { ...sessionWorkspace(params.scope), sessionId: nativeSessionId },
+                    { cancellationSignal: signal },
+                ),
+                "ACP agent exited while resuming a session",
+                signal,
+            );
+            return normalizeOpenedSession(execution, nativeSessionId, response, signal);
+        });
+    readonly openSessionWithReplay: Adapter["openSessionWithReplay"] = (params) =>
+        this.#executionConnections.withConnection(this.#executionParams(params), async (execution, signal) => {
+            const { connection } = execution;
+            const nativeSessionId = nativeSessionIdSchema.parse(params.nativeSessionId);
+            this.#executionConnections.bind(execution, nativeSessionId);
+            const response: unknown = await connection.race(
+                connection.connection.agent.request(
+                    methods.agent.session.load,
+                    { ...sessionWorkspace(params.scope), sessionId: nativeSessionId },
+                    { cancellationSignal: signal },
+                ),
+                "ACP agent exited while loading a session",
+                signal,
+            );
+            await connection.race(connection.events.drained(), "ACP agent exited while loading a session", signal);
+            return normalizeOpenedSession(execution, nativeSessionId, response, signal);
+        });
+    readonly cancel: Adapter["cancel"] = async (params) => {
         // turn/interrupt leaves unified-exec commands alive, including tools whose
         // startup notification can arrive after the interrupted turn completes.
         // The session's owned process tree is the authoritative stop boundary.
-        await this.#liveSessions.closeSession(target, signal);
+        await this.#executionConnections.closeSession(params);
         return "closed";
     };
-    readonly closeSession: Adapter["closeSession"] = (...args) => this.#liveSessions.closeSession(...args);
-    readonly prompt: Adapter["prompt"] = (...args) => this.#liveSessions.prompt(...args);
-    readonly steer: Adapter["steer"] = (...args) => this.#liveSessions.steer(...args);
-    readonly renameSession: Adapter["renameSession"] = (...args) => this.#liveSessions.renameSession(...args);
-    readonly configureSession: Adapter["configureSession"] = (...args) => this.#liveSessions.configureSession(...args);
-    readonly listSessions: Adapter["listSessions"] = (cwd, cursor, signal) =>
-        this.#queryProcesses.listNativeSessions(cwd, cursor, signal);
-    readonly findSession: Adapter["findSession"] = (cwd, nativeSessionId, budget, signal) =>
-        findNativeSession(this.listSessions, cwd, nativeSessionId, budget, signal);
+    readonly closeSession: Adapter["closeSession"] = (...args) => this.#executionConnections.closeSession(...args);
+    readonly releaseSession: Adapter["releaseSession"] = (params) => this.#executionConnections.releaseSession(params);
+    readonly prompt: Adapter["prompt"] = (...args) => this.#executionConnections.prompt(...args);
+    readonly steer: Adapter["steer"] = (...args) => this.#executionConnections.steer(...args);
+    readonly renameSession: Adapter["renameSession"] = (...args) => this.#executionConnections.renameSession(...args);
+    readonly configureSession: Adapter["configureSession"] = (...args) =>
+        this.#executionConnections.configureSession(...args);
+    readonly listSessions: Adapter["listSessions"] = async ({ query, cursor }) =>
+        await this.#queryProcesses.listNativeSessions(query, cursor);
+    readonly findSession: Adapter["findSession"] = ({ query, nativeSessionId, budget }) =>
+        findNativeSession(this.listSessions, query, nativeSessionId, budget);
     readonly close = async (): Promise<void> => {
         await runCleanup(
             () => this.#queryProcesses.close(),
-            () => this.#liveSessions.close(),
+            () => this.#executionConnections.close(),
             () => this.#previewCache?.close(),
         );
     };
 
-    readonly readSessionHistory = async (
-        cwd: string,
-        _additionalDirectories: readonly string[],
-        request: NativeSessionPreviewRequest,
-        cancellation: AbortSignal,
-    ): Promise<SessionEventPage> => {
-        const agent = this.#agent;
-        const signal = AbortSignal.any([cancellation, AbortSignal.timeout(60_000)]);
-        const { sessionId } = request;
+    readonly readSessionHistory: Adapter["readSessionHistory"] = async ({
+        query,
+        request,
+    }): Promise<SessionEventPage> => {
+        const { agent, cwd } = query;
+        const signal = AbortSignal.any([query.signal, AbortSignal.timeout(60_000)]);
+        const sessionId = request.nativeSessionId;
         signal.throwIfAborted();
         nativeSessionIdSchema.parse(request.nativeSessionId);
         if (agent.id !== "codex") {
@@ -141,7 +221,10 @@ export class CodexAdapter implements Adapter {
                     client,
                     request.nativeSessionId,
                     async (update) => {
-                        const externalized = await this.#contentExternalizer.update(sessionId, update, signal);
+                        const externalized =
+                            query.externalizeUpdate === undefined
+                                ? await this.#contentExternalizer.update(sessionId, update, signal)
+                                : await query.externalizeUpdate(prepareCodexToolUpdate(update), signal);
                         for (const event of externalized.events) {
                             events.push({
                                 type: "acp",

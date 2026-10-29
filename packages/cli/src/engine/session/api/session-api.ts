@@ -20,6 +20,7 @@ import type {
 import type { AcpAgentDefinition } from "../../acp/agent/agent-definition.ts";
 import type { BackgroundActivity } from "../../acp/agent/in-process-endpoint.ts";
 import type { PromptImageInput, PromptResourceInput } from "../../acp/client/prompt-content.ts";
+import type { AcpContentExternalizer } from "../../acp/content/content-externalizer.ts";
 import type { Adapter } from "../../acp/native-history/preview-contract.ts";
 import type { NativeSessionOrigin } from "../../acp/protocol/native-session.ts";
 
@@ -33,6 +34,7 @@ export interface SessionPrepareOptions {
     readonly origin?: NativeSessionOrigin;
     /** The prompt's native-history behavior when this preparation starts a Session. */
     readonly recovery?: SessionRecovery;
+    readonly externalizeSessionUpdate?: AcpContentExternalizer["update"];
 }
 
 export type SessionRecovery =
@@ -193,6 +195,7 @@ export type ResolveAgent = (
 ) => Promise<{
     readonly agent: AcpAgentDefinition;
     readonly adapter: Adapter;
+    readonly externalizeSessionUpdate?: AcpContentExternalizer["update"];
 }>;
 
 /** Records a failure's code and correlation identifiers in the local diagnostics log, never its text. */

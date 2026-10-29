@@ -14,7 +14,11 @@ const cannedHistoryAdapter: AdapterResolver = (agent, dependencies) => {
     return {
         refreshAgent: acp.refreshAgent,
         getCapabilities: acp.getCapabilities,
-        connectSession: acp.connectSession,
+        releaseSession: acp.releaseSession,
+        createSession: acp.createSession,
+        forkSession: acp.forkSession,
+        openSession: acp.openSession,
+        openSessionWithReplay: acp.openSessionWithReplay,
         cancel: acp.cancel,
         closeSession: acp.closeSession,
         prompt: acp.prompt,
@@ -27,8 +31,8 @@ const cannedHistoryAdapter: AdapterResolver = (agent, dependencies) => {
             await acp.close();
             events.close();
         },
-        readSessionHistory: async (_cwd, _additionalDirectories, request) => {
-            events.materialize(request.sessionId, request.nativeSessionId, [
+        readSessionHistory: async ({ request }) => {
+            events.materialize(request.nativeSessionId, request.nativeSessionId, [
                 {
                     type: "acp",
                     payload: {
@@ -46,7 +50,7 @@ const cannedHistoryAdapter: AdapterResolver = (agent, dependencies) => {
                     },
                 },
             ]);
-            return events.page(request.sessionId, request.eventLimit, request.cursor);
+            return events.page(request.nativeSessionId, request.eventLimit, request.cursor);
         },
     };
 };

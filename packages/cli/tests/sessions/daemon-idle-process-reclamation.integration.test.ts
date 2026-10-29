@@ -481,6 +481,7 @@ test("Given idle process teardown is still releasing the native writer, When a n
             try {
                 const sessionId = await prepareNewRealSession(peer, "claude");
                 await prompt(peer, sessionId, "Before idle retirement");
+                const endpointsBeforeRetirement = specification.sessions.endpointCount();
                 const held = specification.sessions.closes.hold();
                 timer.advance(twoHours);
                 await held.entered;
@@ -493,11 +494,12 @@ test("Given idle process teardown is still releasing the native writer, When a n
                     }),
                 );
                 await nextResponse(peer, "session.queried");
-                // One discovery endpoint and one live process; a second writer must wait for teardown.
-                expect(specification.sessions.endpointCount()).toBe(2);
+                // Neither discovery nor a replacement writer may start before teardown finishes.
+                expect(specification.sessions.endpointCount()).toBe(endpointsBeforeRetirement);
                 held.release();
                 await readTurn(peer);
-                expect(specification.sessions.endpointCount()).toBe(3);
+                // Recovery starts one capability reader and one replacement execution process.
+                expect(specification.sessions.endpointCount()).toBe(endpointsBeforeRetirement + 2);
             } finally {
                 specification.sessions.releaseAll();
             }

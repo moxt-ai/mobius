@@ -72,6 +72,7 @@ export interface PreparedAcpUpdate {
 type FindLinkedResources = (
     text: string,
 ) => readonly { readonly uri: string; readonly mediaType: string; readonly name: string }[];
+export type ExternalizeSessionUpdate = (update: SessionUpdate, signal: AbortSignal) => Promise<PreparedAcpUpdate>;
 
 const embeddedImageSchema = z.looseObject({
     type: z.literal("image"),

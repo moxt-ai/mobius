@@ -2,7 +2,7 @@ import { methods } from "@agentclientprotocol/sdk";
 import type { SessionConfigOption, SessionConfigValue } from "@moxt-ai/mobius-sdk/protocol";
 
 export const AGENT_DEFAULT_REASONING_EFFORT = "agent_default";
-const MAXIMUM_CONFIG_OPTIONS = 100;
+export const MAXIMUM_CONFIG_OPTIONS = 100;
 
 export type SessionConfigurationSelection =
     | { readonly type: "boolean"; readonly configId: string; readonly booleanValue: boolean }

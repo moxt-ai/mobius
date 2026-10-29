@@ -20,6 +20,8 @@ import { prepareNewRealSession, type RealDaemonPeer, withRealDaemon } from "../s
 import { FakeAnthropicProvider } from "../support/llm/anthropic.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 
+const interruptedPrompt = "Begin work that will be interrupted by the runtime restart";
+
 async function journey(peer: RealDaemonPeer, agentId: string, reply: string): Promise<void> {
     const sessionId = await prepareNewRealSession(peer, agentId);
     const identity = { agentId, bindingId: peer.bindingId, directoryId: "default", additionalDirectoryIds: [] };
@@ -184,7 +186,6 @@ async function interruptedJourney(
                     targetCommandId: "",
                 }),
             );
-        const interruptedPrompt = "Begin work that will be interrupted by the runtime restart";
         sendPrompt(commandId, interruptedPrompt);
         stage = "waiting for the original provider request";
         await awaitPeerOperation(entered, peer.signal);
@@ -343,7 +344,13 @@ export function registerManagedCrashScenarios(agentId: "codex" | "claude" | "pi"
         test("Given a running real Claude request, When SIGKILL restarts its managed runtime, Then a continuation completes in the native session", async () => {
             const gate = firstRequestGate();
             await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-5", "RESTART_CONTINUED", {
-                beforeFirstText: (_scenario, signal) => gate.beforeFirstText(signal),
+                beforeFirstText: async (_scenario, signal, conversation) => {
+                    // Claude also sends startup probes to the model provider. Only the
+                    // user's running turn establishes the crash scenario's boundary.
+                    if (conversation.includes(interruptedPrompt)) {
+                        await gate.beforeFirstText(signal);
+                    }
+                },
             });
             await using agent = await ClaudeFixture.create(provider);
             try {

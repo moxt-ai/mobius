@@ -4,20 +4,23 @@ import { decodeAgentPromptResponse, type SessionConfigOption } from "@moxt-ai/mo
 import { z } from "zod";
 import { arraysEqual, isRecord, truncate } from "../../util/value-utils.ts";
 import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "../acp-error.ts";
-import { buildPromptContent, type PromptContent } from "../client/prompt-content.ts";
+import { buildPromptContent } from "../client/prompt-content.ts";
 import type { AcpContentExternalizer } from "../content/content-externalizer.ts";
-import type { AdapterPromptResult, AdapterSessionTarget } from "../native-history/preview-contract.ts";
+import type {
+    Adapter,
+    AdapterPromptResult,
+    AdapterSessionCreateParams,
+    AdapterSessionScope,
+    AdapterSessionTarget,
+} from "../native-history/preview-contract.ts";
 import { nativeSessionIdSchema } from "../protocol/native-session.ts";
-import {
-    SessionConfigProtocolError,
-    type SessionConfigurationSelection,
-    sessionConfigProtocolForAgent,
-} from "../protocol/session-config-protocol.ts";
-import { AdapterSessionConnection, type LiveSessionConnectionOptions } from "./session-events.ts";
+import { SessionConfigProtocolError, sessionConfigProtocolForAgent } from "../protocol/session-config-protocol.ts";
+import { AdapterSessionConnection } from "./session-events.ts";
 
-interface LiveSession {
+export interface AcpExecutionConnection {
     readonly connection: AdapterSessionConnection;
-    readonly scope: LiveSessionConnectionOptions;
+    readonly scope: AdapterSessionScope;
+    readonly subscriber: AdapterSessionCreateParams;
 }
 
 const absolutePathSchema = z.string().min(1).refine(isAbsolute);
@@ -28,8 +31,8 @@ const targetSchema = z.object({
 });
 
 /** Adapter-private active writers. Query sessions never enter this registry. */
-export class AcpLiveSessions {
-    readonly #sessions = new Set<LiveSession>();
+export class AcpExecutionConnections {
+    readonly #sessions = new Set<AcpExecutionConnection>();
     readonly #externalizer: Pick<AcpContentExternalizer, "update">;
     readonly #normalizeEvent: (event: unknown) => unknown;
 
@@ -41,16 +44,89 @@ export class AcpLiveSessions {
         this.#normalizeEvent = normalizeEvent;
     }
 
-    readonly connectSession = (scope: LiveSessionConnectionOptions): AdapterSessionConnection => {
-        const connection = new AdapterSessionConnection(scope, this.#externalizer, this.#normalizeEvent, () =>
-            this.#sessions.delete(session),
+    readonly acquire = (params: AdapterSessionCreateParams): AcpExecutionConnection => {
+        params.signal.throwIfAborted();
+        const existing = [...this.#sessions].find(
+            ({ subscriber }) => subscriber.onSessionEvent === params.onSessionEvent,
         );
-        const session = { connection, scope };
+        if (existing !== undefined) {
+            if (
+                existing.scope.agent !== params.scope.agent ||
+                existing.scope.cwd !== params.scope.cwd ||
+                !arraysEqual(existing.scope.additionalDirectories, params.scope.additionalDirectories)
+            ) {
+                throw new AcpExecutionError(
+                    "The agent or workspace cannot change after a conversation has started",
+                    {},
+                    "session_identity_mismatch",
+                );
+            }
+            return existing;
+        }
+        const connection = new AdapterSessionConnection(
+            {
+                agent: params.scope.agent,
+                cwd: params.scope.cwd,
+                ...(params.scope.externalizeUpdate === undefined
+                    ? {}
+                    : { externalizeUpdate: params.scope.externalizeUpdate }),
+                onEvent: (event) => params.onSessionEvent(connection.events.sessionId(), event),
+                ...(params.onBackgroundActivity === undefined
+                    ? {}
+                    : { onBackgroundActivity: params.onBackgroundActivity }),
+                interactions: params.interactions,
+            },
+            this.#externalizer,
+            this.#normalizeEvent,
+            () => this.#sessions.delete(session),
+        );
+        const session = { connection, scope: params.scope, subscriber: params };
         this.#sessions.add(session);
-        return connection;
+        return session;
     };
 
-    readonly #find = (target: AdapterSessionTarget): LiveSession | undefined => {
+    /** Resource scope only: the concrete adapter supplies the protocol operation. */
+    readonly withConnection = async <T>(
+        params: AdapterSessionCreateParams,
+        operation: (session: AcpExecutionConnection, signal: AbortSignal) => Promise<T>,
+    ): Promise<T> => {
+        const signal = AbortSignal.any([params.signal, AbortSignal.timeout(60_000)]);
+        signal.throwIfAborted();
+        const session = this.acquire(params);
+        const wasBound = session.connection.events.sessionId().length > 0;
+        try {
+            await session.connection.initializeAgent(signal);
+            session.connection.beginStateChange();
+            try {
+                const result = await operation(session, signal);
+                signal.throwIfAborted();
+                return result;
+            } catch (cause) {
+                // Only this invocation's successfully acquired state change may be rolled back.
+                session.connection.cancelStateChange();
+                throw cause;
+            }
+        } catch (cause) {
+            if (!wasBound) {
+                await session.connection.closeProcess();
+            }
+            throw cause;
+        }
+    };
+
+    readonly bind = (session: AcpExecutionConnection, nativeSessionId: string): void => {
+        const existing = this.#find({
+            nativeSessionId,
+            cwd: session.scope.cwd,
+            additionalDirectories: session.scope.additionalDirectories,
+        });
+        if (existing !== undefined && existing !== session) {
+            throw new AcpExecutionError("Another writer is using this native session", {}, "session_busy");
+        }
+        session.connection.events.select(nativeSessionId);
+    };
+
+    readonly #find = (target: AdapterSessionTarget): AcpExecutionConnection | undefined => {
         const decoded = targetSchema.safeParse(target);
         if (!decoded.success) {
             throw new AcpExecutionError(
@@ -76,7 +152,7 @@ export class AcpLiveSessions {
         return matches[0];
     };
 
-    readonly #resolve = (target: AdapterSessionTarget): LiveSession => {
+    readonly #resolve = (target: AdapterSessionTarget): AcpExecutionConnection => {
         const session = this.#find(target);
         if (session === undefined) {
             throw new AcpExecutionError("The native session is not active", {}, "invalid_agent_session");
@@ -84,7 +160,7 @@ export class AcpLiveSessions {
         return session;
     };
 
-    readonly cancel = async (target: AdapterSessionTarget, signal: AbortSignal): Promise<"retained"> => {
+    readonly cancel: Adapter["cancel"] = async ({ signal, ...target }) => {
         const bounded = AbortSignal.any([signal, AbortSignal.timeout(30_000)]);
         bounded.throwIfAborted();
         const { connection } = this.#resolve(target);
@@ -98,7 +174,7 @@ export class AcpLiveSessions {
         return "retained";
     };
 
-    readonly closeSession = async (target: AdapterSessionTarget, signal: AbortSignal): Promise<void> => {
+    readonly closeSession: Adapter["closeSession"] = async ({ signal, ...target }) => {
         // Once teardown is requested, release the writer even if its caller is
         // cancelled. Only the graceful protocol request is interruptible.
         const session = this.#find(target);
@@ -106,10 +182,10 @@ export class AcpLiveSessions {
             signal.throwIfAborted();
             return;
         }
-        const { connection, scope } = session;
+        const { connection } = session;
         try {
             signal.throwIfAborted();
-            if (scope.capabilities().closeSession) {
+            if (connection.snapshot().capabilities.closeSession) {
                 try {
                     await connection.connection.agent.request(
                         methods.agent.session.close,
@@ -128,14 +204,18 @@ export class AcpLiveSessions {
         signal.throwIfAborted();
     };
 
-    readonly prompt = async (
-        target: AdapterSessionTarget,
-        content: PromptContent,
-        signal: AbortSignal,
-    ): Promise<AdapterPromptResult> => {
+    readonly releaseSession: Adapter["releaseSession"] = async ({ signal, ...target }) => {
+        const session = this.#find(target);
+        if (session !== undefined) {
+            await session.connection.closeProcess();
+        }
         signal.throwIfAborted();
-        const { connection, scope } = this.#resolve(target);
-        const prompt = buildPromptContent(content, scope.capabilities());
+    };
+
+    readonly prompt: Adapter["prompt"] = async ({ content, signal, ...target }): Promise<AdapterPromptResult> => {
+        signal.throwIfAborted();
+        const { connection } = this.#resolve(target);
+        const prompt = buildPromptContent(content, connection.snapshot().capabilities);
         const response: unknown = await connection
             .race(
                 connection.connection.agent.request(
@@ -168,14 +248,10 @@ export class AcpLiveSessions {
         }
     };
 
-    readonly steer = async (
-        target: AdapterSessionTarget,
-        content: PromptContent,
-        signal: AbortSignal,
-    ): Promise<{ readonly outcome: "injected" } | { readonly outcome: "startedNewTurn" }> => {
+    readonly steer: Adapter["steer"] = async ({ content, signal, ...target }) => {
         signal.throwIfAborted();
-        const { connection, scope } = this.#resolve(target);
-        if (!scope.capabilities().steering) {
+        const { connection } = this.#resolve(target);
+        if (!connection.snapshot().capabilities.steering) {
             throw new AcpExecutionError(
                 "The selected agent does not support mid-turn steering",
                 {},
@@ -187,7 +263,7 @@ export class AcpLiveSessions {
                 "_session/steering",
                 {
                     _meta: { steering: { idleBehavior: "promptRequired" } },
-                    prompt: buildPromptContent(content, scope.capabilities()),
+                    prompt: buildPromptContent(content, connection.snapshot().capabilities),
                     sessionId: target.nativeSessionId,
                 },
                 { cancellationSignal: signal },
@@ -218,18 +294,14 @@ export class AcpLiveSessions {
         );
     };
 
-    readonly renameSession = async (
-        target: AdapterSessionTarget,
-        title: string,
-        signal: AbortSignal,
-    ): Promise<{ readonly nativeRenameApplied: boolean }> => {
+    readonly renameSession: Adapter["renameSession"] = async ({ title, signal, ...target }) => {
         signal.throwIfAborted();
-        const { connection, scope } = this.#resolve(target);
+        const { connection } = this.#resolve(target);
         const normalized = truncate(title, 500);
         if (normalized.length === 0) {
             throw new AcpExecutionError("The Session title cannot be empty", {}, "invalid_session_title");
         }
-        if (!scope.capabilities().renameSession) {
+        if (!connection.snapshot().capabilities.renameSession) {
             return { nativeRenameApplied: false };
         }
         try {
@@ -256,14 +328,14 @@ export class AcpLiveSessions {
         return { nativeRenameApplied: true };
     };
 
-    readonly configureSession = async (
-        target: AdapterSessionTarget,
-        selection: SessionConfigurationSelection,
-        signal: AbortSignal,
-    ): Promise<readonly SessionConfigOption[]> => {
+    readonly configureSession: Adapter["configureSession"] = async ({
+        selection,
+        signal,
+        ...target
+    }): Promise<readonly SessionConfigOption[]> => {
         signal.throwIfAborted();
         const { connection, scope } = this.#resolve(target);
-        const current = scope.configOptions();
+        const current = connection.snapshot().configOptions;
         const existing = current.find((option) => option.id === selection.configId);
         if (
             existing === undefined ||
@@ -287,6 +359,7 @@ export class AcpLiveSessions {
                 existing.values.map((entry) => entry.value),
             );
         }
+        connection.beginStateChange();
         try {
             const configured = await sessionConfigProtocolForAgent(scope.agent.id).configure(
                 current,
@@ -322,8 +395,9 @@ export class AcpLiveSessions {
                 );
             }
             await connection.events.drained();
-            return configured;
+            return connection.commitConfiguration(configured);
         } catch (error) {
+            connection.cancelStateChange();
             if (error instanceof SessionConfigProtocolError) {
                 throw new AcpExecutionError(error.message, { cause: error }, error.code);
             }

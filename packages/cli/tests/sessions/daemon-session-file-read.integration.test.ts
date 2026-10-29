@@ -8,14 +8,105 @@ import {
     decodeFileBeginEvent,
     decodeFileFailedEvent,
     decodeMessageKind,
+    decodeSessionLiveEvent,
     encodeFileReadCommand,
     encodeSessionPrepareCommand,
+    encodeSessionPromptCommand,
+    SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { ControlledAcpAgentSpecification } from "../support/agents/controlled-acp.ts";
+import { ControlledAcpSpecification } from "../support/agents/controlled-acp-specification.ts";
 import { withControlledDaemon as withRealDaemon } from "../support/agents/real-daemon.ts";
 
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
+
+class PromptMediaAgent extends ControlledAcpSpecification {
+    readonly adapterVersion = process.versions.node;
+    readonly agentExecutable = "node";
+    readonly id = "controlled-acp";
+    readonly label = "Controlled prompt media";
+    override readonly maximumTestedAgentVersion = process.versions.node;
+    override readonly minimumSupportedAgentVersion = process.versions.node;
+
+    constructor() {
+        super("MOBIUS_TEST_PROMPT_MEDIA_PATH", [fakeAgentPath]);
+    }
+}
+
+test("Given a persisted conversation with different product and native IDs, When a client prompts after restart without preparing first, Then its generated image is readable under the product Session ID", async () => {
+    vi.useFakeTimers({ now: new Date("2026-10-29T00:00:00Z"), toFake: ["Date"] });
+    const directory = await mkdtemp(join(tmpdir(), "mobius-prompt-media-"));
+    try {
+        await withRealDaemon(
+            new PromptMediaAgent(),
+            {
+                MOBIUS_TEST_PROMPT_MEDIA_PATH: process.execPath,
+                MOBIUS_FAKE_ACP_STATE_DIRECTORY: directory,
+            },
+            async (peer) => {
+                const prompt = async (text: string): Promise<string> => {
+                    const commandId = crypto.randomUUID();
+                    peer.send(
+                        encodeSessionPromptCommand({
+                            kind: "session.prompt",
+                            additionalDirectoryIds: [],
+                            agentId: "controlled-acp",
+                            bindingId: peer.bindingId,
+                            directoryId: "default",
+                            sessionId: peer.sessionId,
+                            commandId,
+                            disposition: SessionPromptDisposition.Reject,
+                            targetCommandId: "",
+                            attachments: [],
+                            prompt: text,
+                        }),
+                    );
+                    let imageKey = "";
+                    for (;;) {
+                        const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
+                        if (event.type === "acp" && event.payload.sessionUpdate === "tool_call_update") {
+                            for (const item of event.payload.content ?? []) {
+                                if (item.type === "content" && item.content.type === "external_image") {
+                                    imageKey = item.content.imageKey;
+                                }
+                            }
+                        }
+                        if (
+                            event.type === "lifecycle-metadata" &&
+                            event.payload.kind === "prompt.failed" &&
+                            event.payload.commandId === commandId
+                        ) {
+                            throw new Error(JSON.stringify(event.payload));
+                        }
+                        if (
+                            event.type === "lifecycle-metadata" &&
+                            event.payload.kind === "prompt.completed" &&
+                            event.payload.commandId === commandId
+                        ) {
+                            return imageKey;
+                        }
+                    }
+                };
+                await prompt("Remember this conversation");
+                await peer.restart();
+                const imageKey = await prompt("generate inline image");
+                expect(imageKey).toMatch(/^[a-f0-9]{64}$/u);
+                const image = await readSessionFile(peer, peer.sessionId, `mobius-content:image:${imageKey}`);
+                expect(image.kind).toBe("streamed");
+                expect(image.bytes).toEqual(
+                    Buffer.from(
+                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+                        "base64",
+                    ),
+                );
+            },
+        );
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+        vi.useRealTimers();
+    }
+});
 
 function executableSource(source: string): string {
     return `#!${process.execPath}\n${source}`;

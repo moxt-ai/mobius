@@ -1,47 +1,28 @@
 import { methods } from "@agentclientprotocol/sdk";
-import type { SessionCapabilities, SessionConfigOption } from "@moxt-ai/mobius-sdk/protocol";
+import type { SessionCapabilities } from "@moxt-ai/mobius-sdk/protocol";
 import { AcpExecutionError } from "../acp-error.ts";
-import type { AcpAgentDefinition } from "../agent/agent-definition.ts";
-import type { SessionEventPage, SessionEventStore } from "../native-history/preview-contract.ts";
+import type { NativeSessionQuery, SessionEventPage, SessionEventStore } from "../native-history/preview-contract.ts";
 import { type NativeSessionPage, nativeSessionPageSchema } from "../protocol/native-session.ts";
-import { unsupportedSessionCapabilities } from "../protocol/session-capabilities.ts";
-import {
-    initializeAgentConnection,
-    RetryableAcpInitializationError,
-    validateAgentRuntime,
-} from "./agent-initialization.ts";
+import { RetryableAcpInitializationError, validateAgentRuntime } from "./agent-initialization.ts";
 import type { AcpSessionConnector, AdapterSessionConnection } from "./session-events.ts";
 
 /** Adapter-owned ACP reader. It has neither a live observer nor interactive-session state. */
 export class AcpQuerySession {
-    readonly #cwd: string;
-    readonly #sessionId: string;
+    readonly #options: NativeSessionQuery;
     readonly #events: SessionEventStore;
     readonly #connection: AdapterSessionConnection;
     #lifecycle: { readonly kind: "open" } | { readonly kind: "terminated" } = { kind: "open" };
-    #capabilities: SessionCapabilities = unsupportedSessionCapabilities();
-    #configOptions: readonly SessionConfigOption[] = [];
+    #eventScope: string = crypto.randomUUID();
 
-    private constructor(
-        agent: AcpAgentDefinition,
-        cwd: string,
-        sessionId: string,
-        events: SessionEventStore,
-        connector: AcpSessionConnector,
-    ) {
-        this.#cwd = cwd;
-        this.#sessionId = sessionId;
+    private constructor(options: NativeSessionQuery, events: SessionEventStore, connector: AcpSessionConnector) {
+        this.#options = options;
         this.#events = events;
         this.#connection = connector.connectQuerySession({
-            agent,
-            cwd,
-            sessionId: () => sessionId,
-            configOptions: () => this.#configOptions,
+            agent: options.agent,
+            cwd: options.cwd,
+            ...(options.externalizeUpdate === undefined ? {} : { externalizeUpdate: options.externalizeUpdate }),
             onEvent: async (event) => {
-                this.#events.append(sessionId, { type: "acp", payload: event.payload });
-                if (event.kind === "configuration") {
-                    this.#configOptions = event.configOptions;
-                }
+                this.#events.append(this.#eventScope, { type: "acp", payload: event.payload });
             },
         });
         void this.#connection.termination.then(() => {
@@ -50,24 +31,16 @@ export class AcpQuerySession {
     }
 
     static readonly start = async (
-        agent: AcpAgentDefinition,
-        cwd: string,
-        sessionId: string,
+        options: NativeSessionQuery,
         events: SessionEventStore,
         connector: AcpSessionConnector,
-        signal: AbortSignal,
     ): Promise<AcpQuerySession> => {
+        const { agent, signal } = options;
         for (let attempt = 1; attempt <= 2; attempt += 1) {
             await validateAgentRuntime(agent, signal);
-            const runtime = new AcpQuerySession(agent, cwd, sessionId, events, connector);
+            const runtime = new AcpQuerySession(options, events, connector);
             try {
-                const initialized = await initializeAgentConnection(
-                    runtime.#connection,
-                    agent.id,
-                    agent.agentVersion,
-                    signal,
-                );
-                runtime.#capabilities = initialized.capabilities;
+                await runtime.#connection.initializeAgent(options.signal);
                 return runtime;
             } catch (error) {
                 await runtime.closeProcess();
@@ -85,7 +58,7 @@ export class AcpQuerySession {
         throw new AcpExecutionError("ACP agent initialization failed");
     };
 
-    readonly capabilities = (): SessionCapabilities => this.#capabilities;
+    readonly capabilities = (): SessionCapabilities => this.#connection.snapshot().capabilities;
     readonly hasTerminated = (): boolean => {
         switch (this.#lifecycle.kind) {
             case "open":
@@ -99,7 +72,7 @@ export class AcpQuerySession {
         }
     };
     readonly listNativeSessions = async (cursor: string | null, signal: AbortSignal): Promise<NativeSessionPage> => {
-        if (!this.#capabilities.listSessions) {
+        if (!this.capabilities().listSessions) {
             throw new AcpExecutionError(
                 "This Agent does not support native session listing",
                 {},
@@ -127,24 +100,25 @@ export class AcpQuerySession {
     readonly previewEvents = async (
         nativeSessionId: string,
         eventLimit: number,
-        additionalDirectories: readonly string[],
         signal: AbortSignal,
     ): Promise<SessionEventPage> => {
-        if (!this.#capabilities.loadSession) {
+        if (!this.capabilities().loadSession) {
             throw new AcpExecutionError(
                 "This Agent restores context but does not provide message history.",
                 {},
                 "native_history_unsupported",
             );
         }
-        this.#events.reset(this.#sessionId);
+        this.#eventScope = nativeSessionId;
+        this.#events.reset(nativeSessionId);
         this.#connection.events.select(nativeSessionId);
-        await this.#connection.race(
+        this.#connection.beginStateChange();
+        const response: unknown = await this.#connection.race(
             this.#connection.connection.agent.request(
                 methods.agent.session.load,
                 {
-                    additionalDirectories: [...additionalDirectories],
-                    cwd: this.#cwd,
+                    additionalDirectories: [...this.#options.additionalDirectories],
+                    cwd: this.#options.cwd,
                     mcpServers: [],
                     sessionId: nativeSessionId,
                 },
@@ -155,9 +129,10 @@ export class AcpQuerySession {
         );
         await this.#connection.events.drained();
         signal.throwIfAborted();
-        return this.#events.page(this.#sessionId, eventLimit, null);
+        this.#connection.commitLifecycle(response);
+        return this.#events.page(nativeSessionId, eventLimit, null);
     };
 
     readonly closeProcess = async (): Promise<void> => await this.#connection.closeProcess();
-    readonly discardEvents = (): void => this.#events.remove(this.#sessionId);
+    readonly discardEvents = (): void => this.#events.remove(this.#eventScope);
 }

@@ -33,6 +33,19 @@ export function registerNativeSessions(agent: ReturnType<typeof acp.agent>) {
             if (persistsEmptySessions()) {
                 persistState(sessionId, state);
             }
+            if (process.argv.includes("--announce-newer-settings-while-creating")) {
+                const updated = state.withConfig("model", "test-large").withConfig("fast_mode", true).withMode("plan");
+                sessions.set(sessionId, updated);
+                persistState(sessionId, updated);
+                await context.client.notify(acp.methods.client.session.update, {
+                    sessionId,
+                    update: { sessionUpdate: "config_option_update", configOptions: configOptions(updated) },
+                });
+                await context.client.notify(acp.methods.client.session.update, {
+                    sessionId,
+                    update: { sessionUpdate: "current_mode_update", currentModeId: updated.mode },
+                });
+            }
             if (process.argv.includes("--announce-config-while-creating")) {
                 await context.client.notify(acp.methods.client.session.update, {
                     sessionId: process.argv.includes("--announce-wrong-session-while-creating")
