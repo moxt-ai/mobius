@@ -1,9 +1,11 @@
 import {
+    decodeSessionRecordingCompaction,
     decodeSessionRecordingInteraction,
     decodeSessionRecordingTurnAttempt,
     decodeSessionRecordingTurnItem,
     decodeSessionRecordingTurnPreceding,
     decodeSessionRecordingTurnPrompt,
+    SESSION_RECORDING_TURN_COMPACTION_MAX_ELEMENTS,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { z } from "zod";
 
@@ -21,6 +23,7 @@ function decodedProtocolValue<T>(decode: (value: unknown) => T): z.ZodType<T> {
 }
 
 const sessionRecordingTurnAttempt = decodedProtocolValue(decodeSessionRecordingTurnAttempt);
+const sessionRecordingCompaction = decodedProtocolValue(decodeSessionRecordingCompaction);
 const sessionRecordingTurnItem = decodedProtocolValue(decodeSessionRecordingTurnItem);
 const sessionRecordingTurnPreceding = decodedProtocolValue(decodeSessionRecordingTurnPreceding);
 const sessionRecordingTurnPrompt = decodedProtocolValue(decodeSessionRecordingTurnPrompt);
@@ -32,6 +35,11 @@ export const storedTurnSchema = z
         answerLength: count,
         attempt: sessionRecordingTurnAttempt,
         commandId: z.string().min(1),
+        compactions: z
+            .array(sessionRecordingCompaction)
+            .max(SESSION_RECORDING_TURN_COMPACTION_MAX_ELEMENTS)
+            .readonly()
+            .default([]),
         createdAt: z.iso.datetime({ offset: true }),
         generationId: z.string().min(1),
         itemCount: count,
@@ -71,6 +79,8 @@ export const storedProjectionStateSchema = z
             .object({ commandIds: z.array(z.string().min(1)).readonly(), generationId: z.string().min(1) })
             .readonly()
             .nullable(),
+        // Missing on a projection that has not folded compaction lifecycle events yet.
+        compactionVersion: z.literal(1).optional(),
         // Generation of the last folded event; a different generation clears the active commands.
         generationId: z.string().min(1).nullable(),
         // Generations that a later one replaced. A batch from one of them arrives late and is not a restart.
@@ -103,7 +113,14 @@ export interface StoredProjection {
 export const emptyProjection: StoredProjection = {
     failure: null,
     foldedThroughOrdinal: 0,
-    state: { activeCommands: null, generationId: null, retiredGenerationIds: [], title: null, version: 2 },
+    state: {
+        activeCommands: null,
+        compactionVersion: 1,
+        generationId: null,
+        retiredGenerationIds: [],
+        title: null,
+        version: 2,
+    },
     turnCount: 0,
 };
 

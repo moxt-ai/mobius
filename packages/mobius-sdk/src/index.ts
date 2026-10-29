@@ -31,6 +31,7 @@ export type {
     SessionPermissionRequestedEvent,
     SessionPermissionResolvedEvent,
     SessionReadyEvent,
+    SessionRecordingCompaction,
     SessionRecordingDirectory,
     SessionRecordingDirectoryV2,
     SessionRecordingExecution,
