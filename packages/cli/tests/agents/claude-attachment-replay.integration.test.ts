@@ -17,7 +17,7 @@ import { ClaudeFixture } from "../support/agents/claude.ts";
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeAnthropicProvider } from "../support/llm/anthropic.ts";
 
-test("Given real Claude saves text and four resources, When its ACP history is replayed, Then the resources retain their order, URIs, full text and message identity", async () => {
+test("Given real Claude saves text and four resources, When its ACP history is replayed, Then saved links and context remain text with their message identity", async () => {
     await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "ATTACHMENT_REPLAY_REPLY");
     await using fixture = await ClaudeFixture.create(provider);
     const cwd = await mkdtemp(join(tmpdir(), "mobius-claude-attachment-replay-"));
@@ -81,7 +81,25 @@ test("Given real Claude saves text and four resources, When its ACP history is r
         const replay = updates.flatMap((update) =>
             update.sessionUpdate === "user_message_chunk" && update.messageId === messageId ? [update.content] : [],
         );
-        expect(replay).toEqual(prompt);
+        expect(replay).toEqual([
+            { type: "text", text: "Inspect the attached context, without tools" },
+            ...[
+                "attachment:///index.html",
+                "[@app.js](file:///workspace/app.js)",
+                "[@styles.css](zed://workspace/styles.css)",
+                "attachment:///notes.unknown",
+            ].map((text) => ({ type: "text", text })),
+            ...prompt.flatMap((block) =>
+                block.type === "resource" && "text" in block.resource
+                    ? [
+                          {
+                              type: "text",
+                              text: `\n<context ref="${block.resource.uri}">\n${block.resource.text}\n</context>`,
+                          },
+                      ]
+                    : [],
+            ),
+        ]);
         const saved = await getEnvironmentSessionMessages(fixture.environment, sessionId, signal);
         expect(saved.find((message) => message.uuid === messageId)?.message).toEqual(
             expect.objectContaining({
@@ -114,7 +132,7 @@ test("Given real Claude saves text and four resources, When its ACP history is r
     }
 });
 
-test("Given an old Claude transcript contains large attachments and ambiguous context-like text, When the daemon loads its history, Then paired attachments are externalized and unpaired text is preserved", async () => {
+test("Given an old Claude transcript contains large attachments and ambiguous context-like text, When the daemon loads its history, Then all context remains text and images are externalized", async () => {
     await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "UNUSED_ATTACHMENT_HISTORY_PROVIDER");
     await using fixture = await ClaudeFixture.create(provider);
     await withRealDaemon(new ClaudeCodeAgentSpecification(), fixture.environment, async (peer) => {
@@ -225,16 +243,8 @@ test("Given an old Claude transcript contains large attachments and ambiguous co
                 ]);
             }
             const restored = chunks.filter((chunk) => chunk.messageId === attachmentMessageId);
-            expect(restored.map((chunk) => chunk.content)).toEqual([
-                { type: "text", text: "Read these attachments" },
-                ...resources.map(({ uri, text, mimeType }) => ({
-                    type: "external_resource",
-                    resourceKey: createHash("sha256").update(text).digest("hex"),
-                    byteLength: Buffer.byteLength(text),
-                    encoding: "text",
-                    mimeType,
-                    uri,
-                })),
+            expect(restored.slice(0, 2).map((chunk) => chunk.content)).toEqual([
+                { type: "text", text: `Read these attachments${resources.map(({ uri }) => uri).join("")}` },
                 {
                     type: "external_image",
                     imageKey: createHash("sha256").update(image).digest("hex"),
@@ -242,7 +252,19 @@ test("Given an old Claude transcript contains large attachments and ambiguous co
                     mimeType: "image/png",
                 },
             ]);
-            expect(restored.every((chunk) => JSON.stringify(chunk).length < 1_000)).toBe(true);
+            const contextChunks = restored.slice(2).map((chunk) => chunk.content);
+            expect(contextChunks.every((content) => content.type === "text")).toBe(true);
+            expect(contextChunks.flatMap((content) => (content.type === "text" ? [content.text] : [])).join("")).toBe(
+                resources
+                    .map(({ uri, text }, index) => {
+                        const context = `\n<context ref="${uri}">\n${text}\n</context>`;
+                        // Historical context now follows the existing plain-text delivery bound.
+                        return index === 0
+                            ? `${context.slice(0, 999_959)}... [omit ${context.length - 999_959} characters since 999959]`
+                            : context;
+                    })
+                    .join(""),
+            );
             break;
         }
     });
