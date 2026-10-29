@@ -153,20 +153,27 @@ export class CodexBorrowedAcpAgent implements CodexSessionAgent {
                         this.#seen.set(key, text);
                         continue;
                     }
+                    // Proposed plans can change until completion; publish their final body once,
+                    // rather than append transient snapshots to the assistant message.
+                    if (item.type === "plan" && turn.status === "inProgress") {
+                        continue;
+                    }
                     const previous = this.#seen.get(key);
                     const value =
-                        item.type === "agentMessage" ? item.text : (reasoningText(item) ?? JSON.stringify(item));
+                        item.type === "agentMessage" || item.type === "plan"
+                            ? item.text
+                            : (reasoningText(item) ?? JSON.stringify(item));
                     this.#seen.set(key, value);
                     if (baseline || value === previous) {
                         continue;
                     }
-                    if (item.type === "agentMessage" || reasoningText(item) !== null) {
+                    if (item.type === "agentMessage" || item.type === "plan" || reasoningText(item) !== null) {
                         const text =
                             previous !== undefined && value.startsWith(previous) ? value.slice(previous.length) : value;
                         if (text.length > 0) {
                             await this.#emit({
                                 sessionUpdate:
-                                    item.type === "agentMessage" ? "agent_message_chunk" : "agent_thought_chunk",
+                                    item.type === "reasoning" ? "agent_thought_chunk" : "agent_message_chunk",
                                 messageId: item.id,
                                 content: { type: "text", text },
                             });

@@ -87,7 +87,7 @@ function collaborationStatus(status: "inProgress" | "completed" | "failed" | "in
 
 /**
  * Translates one app-server `ThreadItem` into the ACP tool-call framing, or returns null for an item
- * Mobius does not present (user messages, reasoning, plans, and item kinds a newer Codex added).
+ * that is not a tool (messages, reasoning, plans, and item kinds a newer Codex added).
  */
 function presentToolItem(item: ThreadItem): ToolCallPresentation | null {
     if (item.type === "imageView") {
