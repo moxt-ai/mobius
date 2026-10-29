@@ -6,7 +6,6 @@ export const platformProject = sqliteTable(
     "platform_projects",
     {
         projectId: text("project_id").primaryKey(),
-        tenantId: text("tenant_id").notNull(),
         appId: text("app_id").notNull(),
         displayName: text("display_name").notNull(),
         clientReference: text("client_reference").notNull(),
@@ -28,6 +27,5 @@ export const platformProject = sqliteTable(
         unique().on(table.appId, table.idempotencyKey),
         unique().on(table.appId, table.clientReference),
         index("platform_projects_app").on(table.appId, table.lifecycle, table.createdAt, table.projectId),
-        index("platform_projects_tenant").on(table.tenantId, table.lifecycle, table.createdAt, table.projectId),
     ],
 );

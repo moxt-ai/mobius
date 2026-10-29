@@ -220,7 +220,11 @@ export class PlatformControlPlaneStorage {
             await waitForD1(
                 () =>
                     this.#database
-                        .prepare("SELECT * FROM platform_projects WHERE app_id = ? AND idempotency_key = ?")
+                        .prepare(
+                            `SELECT projects.*, apps.tenant_id
+                               FROM platform_projects AS projects JOIN platform_apps AS apps ON apps.app_id = projects.app_id
+                              WHERE projects.app_id = ? AND projects.idempotency_key = ?`,
+                        )
                         .bind(appId, idempotencyKey)
                         .first(),
                 signal,
@@ -237,9 +241,9 @@ export class PlatformControlPlaneStorage {
                 () =>
                     this.#database
                         .prepare(
-                            `SELECT app_id, tenant_id, project_id, lifecycle
-                               FROM platform_projects
-                              WHERE project_id = ? AND lifecycle = 'active'`,
+                            `SELECT projects.app_id, apps.tenant_id, projects.project_id, projects.lifecycle
+                               FROM platform_projects AS projects JOIN platform_apps AS apps ON apps.app_id = projects.app_id
+                              WHERE projects.project_id = ? AND projects.lifecycle = 'active'`,
                         )
                         .bind(projectId)
                         .first(),
@@ -254,7 +258,9 @@ export class PlatformControlPlaneStorage {
                 () =>
                     this.#database
                         .prepare(
-                            "SELECT COUNT(*) AS active_count FROM platform_projects WHERE tenant_id = ? AND lifecycle = 'active'",
+                            `SELECT COUNT(*) AS active_count
+                               FROM platform_projects AS projects JOIN platform_apps AS apps ON apps.app_id = projects.app_id
+                              WHERE apps.tenant_id = ? AND projects.lifecycle = 'active'`,
                         )
                         .bind(tenantId)
                         .first(),
@@ -276,15 +282,14 @@ export class PlatformControlPlaneStorage {
                     this.#database
                         .prepare(
                             `INSERT INTO platform_projects (
-                                project_id, tenant_id, app_id, display_name, client_reference,
+                                project_id, app_id, display_name, client_reference,
                                 idempotency_key, request_digest, lifecycle, location_hint, created_at, updated_at
-                              ) SELECT ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?
-                               WHERE (SELECT COUNT(*) FROM platform_projects
-                                       WHERE tenant_id = ? AND lifecycle = 'active') < ?`,
+                              ) SELECT ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?
+                               WHERE (SELECT COUNT(*) FROM platform_projects AS projects JOIN platform_apps AS apps ON apps.app_id = projects.app_id
+                                       WHERE apps.tenant_id = ? AND projects.lifecycle = 'active') < ?`,
                         )
                         .bind(
                             project.project_id,
-                            project.tenant_id,
                             project.app_id,
                             project.display_name,
                             project.client_reference,
@@ -323,7 +328,12 @@ export class PlatformControlPlaneStorage {
         const rows = await waitForD1(
             () =>
                 this.#database
-                    .prepare("SELECT * FROM platform_projects WHERE app_id = ? ORDER BY created_at, project_id")
+                    .prepare(
+                        `SELECT projects.*, apps.tenant_id
+                           FROM platform_projects AS projects JOIN platform_apps AS apps ON apps.app_id = projects.app_id
+                          WHERE projects.app_id = ?
+                          ORDER BY projects.created_at, projects.project_id`,
+                    )
                     .bind(appId)
                     .all(),
             signal,
@@ -346,7 +356,9 @@ export class PlatformControlPlaneStorage {
                         .first(),
                     this.#database
                         .prepare(
-                            "SELECT COUNT(*) AS active_count FROM platform_projects WHERE tenant_id = ? AND lifecycle = 'active'",
+                            `SELECT COUNT(*) AS active_count
+                               FROM platform_projects AS projects JOIN platform_apps AS apps ON apps.app_id = projects.app_id
+                              WHERE apps.tenant_id = ? AND projects.lifecycle = 'active'`,
                         )
                         .bind(tenantId)
                         .first(),
