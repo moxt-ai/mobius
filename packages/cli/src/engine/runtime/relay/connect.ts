@@ -33,21 +33,61 @@ class RelayConnectionError extends Error {
     }
 }
 
-export function connectRelay(url: URL, signal: AbortSignal): Promise<RelayConnection> {
+export function connectRelay(
+    url: URL,
+    signal: AbortSignal,
+    transportFailed: (failure: Error, source: string) => void = () => undefined,
+): Promise<RelayConnection> {
     signal.throwIfAborted();
 
     return new Promise((resolve, reject) => {
         let releaseTransport: (reason: Error) => void = () => undefined;
+        let removeTransportObserver = (): void => undefined;
+        let released = false;
+        const observeFailure = (failure: Error, source: string): void => {
+            if (!released && !signal.aborted) {
+                transportFailed(failure, source);
+            }
+        };
+        const observeHandshake = (statusCode: number, expectedStatus: number): void => {
+            if (statusCode !== expectedStatus) {
+                observeFailure(
+                    Object.assign(new Error("Relay rejected the WebSocket handshake"), {
+                        code: "relay_handshake_rejected",
+                        statusCode,
+                    }),
+                    "handshake",
+                );
+            }
+        };
         const dispatcher = environmentProxyDispatcher.compose((dispatch) => (options, handler) => {
             const trackedHandler = Object.create(handler) as Dispatcher.DispatchHandler;
             trackedHandler.onRequestStart = (controller, context): void => {
                 releaseTransport = (reason) => controller.abort(reason);
                 handler.onRequestStart?.(controller, context);
             };
+            trackedHandler.onResponseError = (controller, failure) => {
+                observeFailure(failure, "request");
+                handler.onResponseError?.(controller, failure);
+            };
+            trackedHandler.onResponseStart = (controller, statusCode, responseHeaders, statusMessage) => {
+                observeHandshake(statusCode, 101);
+                handler.onResponseStart?.(controller, statusCode, responseHeaders, statusMessage);
+            };
             trackedHandler.onRequestUpgrade = (controller, statusCode, responseHeaders, transport) => {
+                observeHandshake(statusCode, Reflect.get(transport, "session") == null ? 101 : 200);
                 // An upgraded connection no longer belongs to the HTTP request controller.
                 // Its owner must release the socket even when the peer never acknowledges close.
                 releaseTransport = (reason) => transport.destroy(reason);
+                // The public WebSocket error event discards the original TCP/TLS error.
+                // Observe this connection's upgraded stream, never a process-global channel.
+                const onTransportError = (failure: Error): void => observeFailure(failure, "socket");
+                removeTransportObserver = (): void => {
+                    transport.off("error", onTransportError);
+                    transport.off("close", removeTransportObserver);
+                };
+                transport.on("error", onTransportError);
+                transport.once("close", removeTransportObserver);
                 return handler.onRequestUpgrade?.(controller, statusCode, responseHeaders, transport);
             };
             return dispatch(options, trackedHandler);
@@ -60,12 +100,12 @@ export function connectRelay(url: URL, signal: AbortSignal): Promise<RelayConnec
             headers,
         });
         socket.binaryType = "arraybuffer";
-        let released = false;
         const release = (reason: Error): void => {
             if (released) {
                 return;
             }
             released = true;
+            removeTransportObserver();
             releaseTransport(reason);
         };
         let finished = false;

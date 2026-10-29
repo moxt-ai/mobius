@@ -9,6 +9,7 @@ function sanitizeDiagnosticText(value: string): string {
         return code < 32 || code === 127 ? " " : character;
     }).join("");
     const withoutSecrets = printable
+        .replace(/\b(Bearer|Basic)\s+[^\s,;]+/giu, "$1 [redacted]")
         .replace(/([?&](?:access_token|authorization|credential|key|secret|token)=)[^&\s]*/giu, "$1[redacted]")
         .replace(/(?:https?|wss?):\/\/[^\s)]+/giu, (encodedUrl) => {
             try {
@@ -24,15 +25,22 @@ function addFailureDetails(details: Record<string, string>, failure: unknown): v
     let current = failure;
     for (let depth = 0; depth < 3 && current instanceof Error; depth += 1) {
         const prefix = depth === 0 ? "failure" : `cause${depth.toString()}`;
-        details[`${prefix}Name`] = current.name;
+        details[`${prefix}Name`] = sanitizeDiagnosticText(current.name);
         details[`${prefix}Message`] = sanitizeDiagnosticText(current.message);
         const code = Reflect.get(current, "code");
         if (typeof code === "string" || typeof code === "number") {
-            details[`${prefix}Code`] = String(code);
+            details[`${prefix}Code`] = sanitizeDiagnosticText(String(code));
         }
         const statusCode = Reflect.get(current, "statusCode");
         if (typeof statusCode === "string" || typeof statusCode === "number") {
-            details[`${prefix}StatusCode`] = String(statusCode);
+            details[`${prefix}StatusCode`] = sanitizeDiagnosticText(String(statusCode));
+        }
+        for (const field of ["syscall", "errno", "address", "port"]) {
+            const value: unknown = Reflect.get(current, field);
+            if (typeof value === "string" || typeof value === "number") {
+                const key = depth === 0 ? field : `${prefix}${field.slice(0, 1).toUpperCase()}${field.slice(1)}`;
+                details[key] = sanitizeDiagnosticText(String(value));
+            }
         }
         const diagnosticDetails = Reflect.get(current, "diagnosticDetails");
         if (typeof diagnosticDetails === "object" && diagnosticDetails !== null) {
@@ -44,6 +52,12 @@ function addFailureDetails(details: Record<string, string>, failure: unknown): v
         }
         current = current.cause;
     }
+}
+
+export function describeRelayFailure(failure: unknown): Readonly<Record<string, string>> {
+    const details: Record<string, string> = {};
+    addFailureDetails(details, failure);
+    return details;
 }
 
 export class RelayConnectionDiagnostics {
@@ -103,6 +117,17 @@ export class RelayConnectionDiagnostics {
         };
         addFailureDetails(details, failure);
         this.#record("relay_connection_failed", details, true);
+    };
+
+    readonly transportFailed = (connectionEpoch: number, failure: Error, source: string): void => {
+        const details: Record<string, string> = {
+            connectionEpoch: connectionEpoch.toString(),
+            relayOrigin: this.#relayOrigin,
+            source,
+            ...this.#route,
+        };
+        addFailureDetails(details, failure);
+        this.#record("relay_transport_failed", details, true);
     };
 
     readonly connectionOpened = (connectionEpoch: number): void => {
