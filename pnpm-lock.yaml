@@ -4,9 +4,6 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-overrides:
-  happy-dom: 20.14.3
-
 packageExtensionsChecksum: sha256-A6LwFSh/yhHYALTgYOl4ziesnQJ2yeAJ4QK9Pv6bRH8=
 
 importers:
@@ -29,8 +26,8 @@ importers:
         specifier: 0.31.10
         version: 0.31.10
       happy-dom:
-        specifier: 20.14.3
-        version: 20.14.3
+        specifier: 21.0.4
+        version: 21.0.4
       simple-git-hooks:
         specifier: ^2.13.1
         version: 2.14.0
@@ -39,7 +36,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: ^4.1.11
-        version: 4.1.11(@types/node@24.13.5)(@vitest/coverage-istanbul@4.1.11)(@vitest/coverage-v8@4.1.11)(happy-dom@20.14.3)(vite@8.3.0(@types/node@24.13.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.14)(yaml@2.9.0))
+        version: 4.1.11(@types/node@24.13.5)(@vitest/coverage-istanbul@4.1.11)(@vitest/coverage-v8@4.1.11)(happy-dom@21.0.4)(vite@8.3.0(@types/node@24.13.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.14)(yaml@2.9.0))
 
   packages/cli:
     dependencies:
@@ -128,8 +125,8 @@ importers:
         specifier: ^24.13.5
         version: 24.13.5
       happy-dom:
-        specifier: 20.14.3
-        version: 20.14.3
+        specifier: 21.0.4
+        version: 21.0.4
 
   packages/mobius-test-support:
     dependencies:
@@ -222,7 +219,7 @@ importers:
         version: '@moxt-ai/mobius-sdk@0.0.136(react@19.3.0)'
       vitest:
         specifier: ^4.1.11
-        version: 4.1.11(@types/node@24.13.5)(@vitest/coverage-istanbul@4.1.11)(@vitest/coverage-v8@4.1.11)(happy-dom@20.14.3)(vite@8.3.0(@types/node@24.13.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.14)(yaml@2.9.0))
+        version: 4.1.11(@types/node@24.13.5)(@vitest/coverage-istanbul@4.1.11)(@vitest/coverage-v8@4.1.11)(happy-dom@21.0.4)(vite@8.3.0(@types/node@24.13.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.14)(yaml@2.9.0))
       wrangler:
         specifier: ^4.134.0
         version: 4.148.0(@cloudflare/workers-types@5.20261007.1)(@types/node@24.13.5)
@@ -256,7 +253,7 @@ importers:
         version: 0.28.2
       vitest:
         specifier: ^4.1.11
-        version: 4.1.11(@types/node@24.13.5)(@vitest/coverage-istanbul@4.1.11)(@vitest/coverage-v8@4.1.11)(happy-dom@20.14.3)(vite@8.3.0(@types/node@24.13.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.14)(yaml@2.9.0))
+        version: 4.1.11(@types/node@24.13.5)(@vitest/coverage-istanbul@4.1.11)(@vitest/coverage-v8@4.1.11)(happy-dom@21.0.4)(vite@8.3.0(@types/node@24.13.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.14)(yaml@2.9.0))
       wrangler:
         specifier: ^4.134.0
         version: 4.148.0(@cloudflare/workers-types@5.20261007.1)(@types/node@24.13.5)
@@ -2947,8 +2944,8 @@ packages:
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
 
-  happy-dom@20.14.3:
-    resolution: {integrity: sha512-0KMb/Eh8rsd+aMNkOk5h8LkAjo9Na1aksnEGmsuZf+GXl6UkAdIi0VbUHU7d59lXhNmawODgwwuCMiZpCxwwCw==}
+  happy-dom@21.0.4:
+    resolution: {integrity: sha512-tFm+GaLBgo6o0awHnvHaNoraVo27qJ+2tZEtZ+cIa08hXbeitrxAJajLI05hsUy/2/YTKcUjQYzHe5mCcraLBw==}
     engines: {node: '>=20.0.0'}
 
   has-flag@4.0.0:
@@ -3867,7 +3864,7 @@ packages:
       '@vitest/coverage-istanbul': 4.1.11
       '@vitest/coverage-v8': 4.1.11
       '@vitest/ui': 4.1.11
-      happy-dom: 20.14.3
+      happy-dom: '*'
       jsdom: '*'
       vite: ^6.0.0 || ^7.0.0 || ^8.0.0
     peerDependenciesMeta:
@@ -4243,7 +4240,7 @@ snapshots:
       cjs-module-lexer: 1.2.3
       esbuild: 0.28.1
       miniflare: 5.20261006.0-alpha(@types/node@24.13.5)
-      vitest: 4.1.11(@types/node@24.13.5)(@vitest/coverage-istanbul@4.1.11)(@vitest/coverage-v8@4.1.11)(happy-dom@20.14.3)(vite@8.3.0(@types/node@24.13.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.14)(yaml@2.9.0))
+      vitest: 4.1.11(@types/node@24.13.5)(@vitest/coverage-istanbul@4.1.11)(@vitest/coverage-v8@4.1.11)(happy-dom@21.0.4)(vite@8.3.0(@types/node@24.13.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.14)(yaml@2.9.0))
       wrangler: 4.148.0(@cloudflare/workers-types@5.20261007.1)(@types/node@24.13.5)
       zod: 4.4.3
     transitivePeerDependencies:
@@ -5349,7 +5346,7 @@ snapshots:
       magicast: 0.5.4
       obug: 2.1.4
       tinyrainbow: 3.1.1
-      vitest: 4.1.11(@types/node@24.13.5)(@vitest/coverage-istanbul@4.1.11)(@vitest/coverage-v8@4.1.11)(happy-dom@20.14.3)(vite@8.3.0(@types/node@24.13.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.14)(yaml@2.9.0))
+      vitest: 4.1.11(@types/node@24.13.5)(@vitest/coverage-istanbul@4.1.11)(@vitest/coverage-v8@4.1.11)(happy-dom@21.0.4)(vite@8.3.0(@types/node@24.13.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.14)(yaml@2.9.0))
     transitivePeerDependencies:
       - supports-color
     optional: true
@@ -5366,7 +5363,7 @@ snapshots:
       obug: 2.1.4
       std-env: 4.2.0
       tinyrainbow: 3.1.1
-      vitest: 4.1.11(@types/node@24.13.5)(@vitest/coverage-istanbul@4.1.11)(@vitest/coverage-v8@4.1.11)(happy-dom@20.14.3)(vite@8.3.0(@types/node@24.13.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.14)(yaml@2.9.0))
+      vitest: 4.1.11(@types/node@24.13.5)(@vitest/coverage-istanbul@4.1.11)(@vitest/coverage-v8@4.1.11)(happy-dom@21.0.4)(vite@8.3.0(@types/node@24.13.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.14)(yaml@2.9.0))
     optional: true
 
   '@vitest/expect@4.1.11':
@@ -5520,7 +5517,7 @@ snapshots:
 
   buffer-image-size@0.6.4:
     dependencies:
-      '@types/node': 26.4.0
+      '@types/node': 24.13.5
 
   buffer@5.7.1:
     dependencies:
@@ -5966,9 +5963,9 @@ snapshots:
 
   graceful-fs@4.2.11: {}
 
-  happy-dom@20.14.3:
+  happy-dom@21.0.4:
     dependencies:
-      '@types/node': 26.4.0
+      '@types/node': 24.13.5
       '@types/whatwg-mimetype': 3.0.2
       '@types/ws': 8.18.1
       buffer-image-size: 0.6.4
@@ -6877,7 +6874,7 @@ snapshots:
       tsx: 4.23.14
       yaml: 2.9.0
 
-  vitest@4.1.11(@types/node@24.13.5)(@vitest/coverage-istanbul@4.1.11)(@vitest/coverage-v8@4.1.11)(happy-dom@20.14.3)(vite@8.3.0(@types/node@24.13.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.14)(yaml@2.9.0)):
+  vitest@4.1.11(@types/node@24.13.5)(@vitest/coverage-istanbul@4.1.11)(@vitest/coverage-v8@4.1.11)(happy-dom@21.0.4)(vite@8.3.0(@types/node@24.13.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.14)(yaml@2.9.0)):
     dependencies:
       '@vitest/expect': 4.1.11
       '@vitest/mocker': 4.1.11(vite@8.3.0(@types/node@24.13.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.14)(yaml@2.9.0))
@@ -6903,7 +6900,7 @@ snapshots:
       '@types/node': 24.13.5
       '@vitest/coverage-istanbul': 4.1.11(supports-color@10.2.2)(vitest@4.1.11)
       '@vitest/coverage-v8': 4.1.11(vitest@4.1.11)
-      happy-dom: 20.14.3
+      happy-dom: 21.0.4
     transitivePeerDependencies:
       - msw
 
