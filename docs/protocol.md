@@ -13,6 +13,9 @@ conversation through the relay. Its public protocol reuses ACP conversation
 semantics, with additions for remote observation and control; it is not an ACP
 JSON-RPC endpoint or a transparent tunnel.
 
+The [Mobius glossary](GLOSSARY.md) defines Runtime, Session, daemon, Relay, Recording,
+and the identity and credential terms used below.
+
 ## Relationship to ACP
 
 Use the official [ACP v1 overview](https://agentclientprotocol.com/protocol/v1/overview)

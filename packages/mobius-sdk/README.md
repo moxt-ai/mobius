@@ -18,6 +18,7 @@ environment where their projects and tools already live.
 **You build the product experience. Mobius connects it to the Agent.**
 
 [Start integrating](#start-building)
+· [Glossary](../../docs/GLOSSARY.md)
 · [See a real application: Morty](https://github.com/moxt-ai/morty)
 
 ## Why use Mobius?

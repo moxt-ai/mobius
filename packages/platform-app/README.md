@@ -10,6 +10,8 @@ metadata:
 
 After this, a user can sign in with Clerk, select or create an organization,
 and see that organization's apps, App IDs, and server credentials.
+See the [Mobius glossary](../../docs/GLOSSARY.md) for the relationship between
+Tenants, Apps, Projects, credentials, and Runtimes.
 
 ## Hosted app
 
