@@ -744,11 +744,13 @@ async function getCommand(directory: string, flags: ReadonlyMap<string, string>)
             return;
         }
         const seen = new Set<string>();
-        const followedCommandId = targetTurnId(session);
+        const followedCommandId = session.turns.at(-1)?.turnId;
         const terminal = Promise.withResolvers<void>();
         const isFollowedTerminal = (event: SessionLiveEvent): boolean =>
             event.type === "lifecycle-metadata" &&
-            (event.payload.kind === "prompt.completed" || event.payload.kind === "prompt.failed") &&
+            (event.payload.kind === "prompt.completed" ||
+                event.payload.kind === "prompt.failed" ||
+                event.payload.kind === "prompt.failed-before-start") &&
             event.payload.commandId === followedCommandId;
         const observer: MobiusSessionEventObserver = {
             reconcile: async (liveConnection) => {
@@ -757,6 +759,18 @@ async function getCommand(directory: string, flags: ReadonlyMap<string, string>)
                     seen.add(event.eventId);
                 }
                 output({ connection: liveConnection.kind, events, sessionId: session.sessionId });
+                if (followedCommandId !== undefined) {
+                    const execution = await service.sessions.readSessionExecution(
+                        session.sessionId,
+                        session,
+                        operationSignal(),
+                        followedCommandId,
+                    );
+                    output({ execution, sessionId: session.sessionId });
+                    if (execution.command?.state === "completed" || execution.command?.state === "failed") {
+                        terminal.resolve();
+                    }
+                }
             },
             receive: async (events) => {
                 const unseen = events.filter((event) => !seen.has(event.eventId));
