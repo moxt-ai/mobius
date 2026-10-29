@@ -17,6 +17,8 @@ packages/relay-core/src/generated/
 packages/relay-cloudflare-platform/src/generated/
 packages/recording-cloudflare/src/generated/
 packages/cli/src/engine/generated/
+packages/cli/NOTICE
+packages/cli/THIRD-PARTY-NOTICES.txt
 
 # Local-only agent instructions and skills; shared workspace skills
 # under .agents/skills are tracked in the repository and reach Claude
