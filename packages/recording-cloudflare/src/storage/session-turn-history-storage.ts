@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lt, or, type SQL, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/durable-sqlite";
 import {
     characterCount,
@@ -288,10 +288,10 @@ export class SessionTurnHistoryStorage {
         return row === undefined ? null : decodeItem(row.itemJson);
     };
 
-    /** Reads one item with at most `textCharacters` of its text. */
+    /** Reads one item with all of its fields and at most `textCharacters` of its text. */
     readonly itemRead = (commandId: string, itemId: string, textCharacters: number): StoredTurnItemRead | null => {
         const row = this.#database
-            .select(itemReadColumns(textCharacters))
+            .select(itemReadColumns(recordedTurnItem.itemJson, textCharacters))
             .from(recordedTurnItem)
             .where(and(eq(recordedTurnItem.commandId, commandId), eq(recordedTurnItem.itemId, itemId)))
             .all()[0];
@@ -299,8 +299,9 @@ export class SessionTurnHistoryStorage {
     };
 
     /**
-     * Reads a Turn's items in sequence order, strictly after `afterSequence` when it is given, with at
-     * most `textCharacters` of each item's text so a page never loads a whole merged answer.
+     * Reads a Turn's items as a page lists them, in sequence order, strictly after `afterSequence` when
+     * it is given, with at most `textCharacters` of each item's text so a page never loads a whole merged
+     * answer.
      */
     readonly itemReadsAfter = (
         commandId: string,
@@ -309,7 +310,7 @@ export class SessionTurnHistoryStorage {
         textCharacters: number,
     ): readonly StoredTurnItemRead[] =>
         this.#database
-            .select(itemReadColumns(textCharacters))
+            .select(itemReadColumns(listedItemJson(), textCharacters))
             .from(recordedTurnItem)
             .where(
                 and(
@@ -334,7 +335,7 @@ export class SessionTurnHistoryStorage {
         textCharacters: number,
     ): readonly StoredTurnItemRead[] =>
         this.#database
-            .select(itemReadColumns(textCharacters))
+            .select(itemReadColumns(listedItemJson(), textCharacters))
             .from(recordedTurnItem)
             .where(
                 and(
@@ -443,11 +444,18 @@ function appendedText(change: ItemTextChange) {
     };
 }
 
-function itemReadColumns(textCharacters: number) {
+/**
+ * The bounded listing of a tool that has one, else the item's fields. SQLite stops at the listing, so a
+ * page never decodes the full detail of a large tool call it lists without it.
+ */
+function listedItemJson(): SQL<string> {
+    return sql<string>`coalesce(${recordedTurnItem.listingJson}, ${recordedTurnItem.itemJson})`;
+}
+
+function itemReadColumns(itemJson: SQL<string> | typeof recordedTurnItem.itemJson, textCharacters: number) {
     return {
         droppedCharacters: recordedTurnItem.droppedCharacters,
-        itemJson: recordedTurnItem.itemJson,
-        listingJson: recordedTurnItem.listingJson,
+        itemJson,
         textLength: sql<number>`length(${recordedTurnItem.text})`,
         textPrefix: sql<string>`substr(${recordedTurnItem.text}, 1, ${textCharacters})`,
     };
@@ -456,14 +464,13 @@ function itemReadColumns(textCharacters: number) {
 function decodeItemRead(row: {
     readonly droppedCharacters: number;
     readonly itemJson: string;
-    readonly listingJson: string | null;
     readonly textLength: number;
     readonly textPrefix: string;
 }): StoredTurnItemRead {
     return {
         droppedCharacters: row.droppedCharacters,
+        encodedLength: row.itemJson.length,
         item: decodeItem(row.itemJson),
-        listing: row.listingJson === null ? null : decodeItem(row.listingJson),
         textLength: row.textLength,
         textPrefix: row.textPrefix,
     };

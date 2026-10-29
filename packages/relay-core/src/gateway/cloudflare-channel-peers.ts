@@ -58,7 +58,6 @@ const attachmentSchema = v.union([
         connectionId: v.pipe(v.string(), v.minLength(1)),
         runtimeId: v.string(),
         projectId: v.string(),
-        heartbeatAt: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(0))),
     }),
 ]);
 
@@ -174,11 +173,6 @@ export class CloudflareChannelSocket implements RuntimeSocket {
     readonly isOpen = (): boolean => this.#socket.readyState === WebSocket.OPEN;
     readonly isSame = (socket: ChannelSocket): boolean =>
         socket instanceof CloudflareChannelSocket && socket.#socket === this.#socket;
-    readonly recordHeartbeat = (at: number): void => {
-        this.#socket.serializeAttachment({ ...this.daemonAttachment(), heartbeatAt: at });
-    };
-    /** When the Relay itself last answered this daemon's heartbeat, if it ever has. */
-    readonly recordedHeartbeatAt = (): number | undefined => this.daemonAttachment().heartbeatAt;
     readonly permitsSessionHistory = (): boolean => {
         const identity = this.identity();
         return identity.role === "relay" || (identity.role === "host" && identity.credentialId.startsWith("ctl_"));
@@ -208,14 +202,6 @@ export class CloudflareChannelSocket implements RuntimeSocket {
         this.#socket.close(1012, "Daemon connection replaced");
     };
 
-    private readonly daemonAttachment = () => {
-        const attachment = v.parse(attachmentSchema, this.#socket.deserializeAttachment());
-        if (attachment.role !== "daemon" && attachment.role !== "replaced-daemon") {
-            throw new Error("Only a daemon socket carries heartbeats");
-        }
-        return attachment;
-    };
-
     private readonly hostAttachment = () => {
         const attachment = v.parse(attachmentSchema, this.#socket.deserializeAttachment());
         if (attachment.role !== "host") {
@@ -241,14 +227,9 @@ export class CloudflareChannelPeers implements RuntimePeers {
     readonly daemonConnections: RuntimePeers["daemonConnections"] = () =>
         this.#state.getWebSockets("daemon").map((webSocket) => {
             const socket = new CloudflareChannelSocket(webSocket);
-            // Cloudflare answers fixed-text heartbeats and records only when it last did so; the Relay
-            // records the identified heartbeats of older daemons itself.
-            const answered = [
-                this.#state.getWebSocketAutoResponseTimestamp(webSocket)?.getTime(),
-                socket.recordedHeartbeatAt(),
-            ].filter((at) => at !== undefined);
+            const answeredAt = this.#state.getWebSocketAutoResponseTimestamp(webSocket)?.getTime();
             const heartbeat: DaemonHeartbeat =
-                answered.length === 0 ? { kind: "none" } : { kind: "received", at: Math.max(...answered) };
+                answeredAt === undefined ? { kind: "none" } : { kind: "received", at: answeredAt };
             return { heartbeat, identity: socket.identity(), socket };
         });
 

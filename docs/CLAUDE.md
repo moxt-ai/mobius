@@ -6,4 +6,4 @@ metadata:
     and approval. The recommended reviewer is taowen-paraflow.
 ---
 
-@AGENTS.md
+@../AGENTS.md

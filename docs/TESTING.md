@@ -57,7 +57,7 @@ Successful live output alone does not establish history, file recovery, permissi
 rejection or reconnect behavior. Track missing coverage in issues rather than keeping
 a second coverage inventory in Markdown.
 
-Follow [AGENTS.md](AGENTS.md) for acceptance boundaries and resource cleanup.
+Follow [AGENTS.md](../AGENTS.md) for acceptance boundaries and resource cleanup.
 
 Record manual verification results in the relevant pull request and attach
 screenshots there. Do not commit one-off reports or screenshots to the repository.
