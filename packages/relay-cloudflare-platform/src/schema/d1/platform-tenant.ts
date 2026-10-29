@@ -6,14 +6,11 @@ export const platformTenant = sqliteTable(
     {
         tenantId: text("tenant_id").primaryKey(),
         displayName: text("display_name").notNull(),
-        lifecycle: text("lifecycle", { enum: ["active", "suspended", "deleted"] }).notNull(),
+        lifecycle: text("lifecycle", { enum: ["active", "deleted"] }).notNull(),
         quotasJson: text("quotas_json").notNull(),
         createdAt: integer("created_at").notNull(),
         updatedAt: integer("updated_at").notNull(),
-        suspendedAt: integer("suspended_at"),
         deletedAt: integer("deleted_at"),
     },
-    (table) => [
-        check("platform_tenants_lifecycle_check", sql`${table.lifecycle} in ('active', 'suspended', 'deleted')`),
-    ],
+    (table) => [check("platform_tenants_lifecycle_check", sql`${table.lifecycle} in ('active', 'deleted')`)],
 );

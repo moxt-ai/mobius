@@ -217,7 +217,6 @@ function tenantResource(row: TenantRow): object {
         displayName: row.display_name,
         lifecycle: row.lifecycle,
         quotas: decodeObject(row.quotas_json, "The Tenant quota record is invalid"),
-        suspendedAt: typeof row.suspended_at === "number" ? iso(row.suspended_at) : "",
         tenantId: row.tenant_id,
         updatedAt: iso(row.updated_at),
     };
@@ -281,7 +280,6 @@ function appResource(row: AppRow): object {
         displayName: row.display_name,
         initialCredentialId,
         lifecycle: row.lifecycle,
-        suspendedAt: typeof row.suspended_at === "number" ? iso(row.suspended_at) : "",
         tenantId: row.tenant_id,
         updatedAt: iso(row.updated_at),
     };
@@ -296,7 +294,6 @@ function projectResource(row: ProjectRow): object {
         displayName: row.display_name,
         lifecycle: row.lifecycle,
         projectId: row.project_id,
-        suspendedAt: typeof row.suspended_at === "number" ? iso(row.suspended_at) : "",
         tenantId: row.tenant_id,
         updatedAt: iso(row.updated_at),
     };
@@ -383,7 +380,6 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
             display_name: tenantId,
             lifecycle: "active",
             quotas_json: quotas,
-            suspended_at: null,
             tenant_id: tenantId,
             updated_at: now,
         };
@@ -511,7 +507,6 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
             deleted_at: null,
             display_name: normalizedDisplayName,
             lifecycle: "active",
-            suspended_at: null,
             tenant_id: access.tenantId,
             updated_at: now,
         };
@@ -762,7 +757,6 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
             location_hint: placement.locationHint,
             project_id: projectId,
             request_digest: digest,
-            suspended_at: null,
             tenant_id: app.tenant_id,
             updated_at: now,
         };

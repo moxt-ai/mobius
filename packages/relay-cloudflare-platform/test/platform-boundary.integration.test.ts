@@ -1684,8 +1684,6 @@ describe.sequential("Platform Recording policy configuration", () => {
     it.each([
         { lifecycle: "deleted", configured: false },
         { lifecycle: "deleted", configured: true },
-        { lifecycle: "suspended", configured: false },
-        { lifecycle: "suspended", configured: true },
     ] as const)(
         "Given a $lifecycle App with configured=$configured, When its policies or webhook are changed, Then no configuration, secret, or success audit is written",
         async ({ lifecycle, configured }) => {

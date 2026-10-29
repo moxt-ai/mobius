@@ -30,7 +30,6 @@ const legacyAppResource = v.object({
     deletedAt: legacyTimestamp,
     displayName: v.pipe(v.string(), v.maxLength(120)),
     lifecycle: v.pipe(v.string(), v.maxLength(32)),
-    suspendedAt: legacyTimestamp,
     tenantId: legacyIdentifier,
     updatedAt: legacyTimestamp,
 });
@@ -604,45 +603,15 @@ it("Given an active App and Project, When deletion rolls back and is retried, Th
     await expectRejected(await app.authenticateSession(), "credential_revoked");
 });
 
-it("Given an active Project with App and Session credentials, When its directory lifecycle is suspended, Then listing and every credential observe the suspension", async () => {
-    const app = await application();
-    const scoped = await app.issueScopedCredential();
-    expect((await app.authenticateApp(scoped.credential)).status).toBe(201);
-    await env.PLATFORM_DIRECTORY_DATABASE.prepare(
-        "UPDATE platform_projects SET lifecycle = 'suspended', suspended_at = ? WHERE project_id = ?",
-    )
-        .bind(Date.now(), app.projectId)
-        .run();
-
-    expect(await responseJson(await app.listProjects(), 200)).toMatchObject({
-        projects: [{ projectId: app.projectId, lifecycle: "suspended" }],
-    });
-    await expectRejected(await app.authenticateApp(), "project_access_denied", 403);
-    await expectRejected(await app.authenticateApp(scoped.credential), "project_access_denied", 403);
-    await expectRejected(await app.authenticateSession(), "project_access_denied", 403);
-});
-
-it("Given a suspended App with active and suspended Projects, When its owner deletes it, Then deletion is atomic, terminal and preserves suspension history", async () => {
+it("Given an App with two active Projects, When its owner deletes it, Then deletion is atomic and terminal", async () => {
     const app = await application();
     const activeProject = await app.createProject("active-project");
-    const suspendedAt = new Date().toISOString();
-    // Retain existing stored suspension states without introducing a management API.
-    await env.PLATFORM_DIRECTORY_DATABASE.batch([
-        env.PLATFORM_DIRECTORY_DATABASE.prepare(
-            "UPDATE platform_apps SET lifecycle = 'suspended', suspended_at = ? WHERE app_id = ?",
-        ).bind(Date.now(), app.appId),
-        env.PLATFORM_DIRECTORY_DATABASE.prepare(
-            "UPDATE platform_projects SET lifecycle = 'suspended', suspended_at = ? WHERE project_id = ?",
-        ).bind(Date.now(), app.projectId),
-    ]);
     const beforeDeletion = await app.readApp();
     const projectsBeforeDeletion = await responseJson(await app.listProjects(), 200);
     const auditsBeforeDeletion = await app.listAuditEvents();
-    await expectRejected(await app.authenticateApp(), "credential_revoked");
-    await expectRejected(await app.authenticateSession(), "credential_revoked");
 
     await env.PLATFORM_DIRECTORY_DATABASE.prepare(
-        `CREATE TRIGGER reject_suspended_app_deletion BEFORE UPDATE OF lifecycle ON platform_projects
+        `CREATE TRIGGER reject_app_deletion BEFORE UPDATE OF lifecycle ON platform_projects
          WHEN NEW.lifecycle = 'deleted'
          BEGIN SELECT RAISE(ABORT, 'Controlled deletion failure'); END`,
     ).run();
@@ -652,7 +621,7 @@ it("Given a suspended App with active and suspended Projects, When its owner del
         expect(await responseJson(await app.listProjects(), 200)).toEqual(projectsBeforeDeletion);
         expect(await app.listAuditEvents()).toEqual(auditsBeforeDeletion);
     } finally {
-        await env.PLATFORM_DIRECTORY_DATABASE.prepare("DROP TRIGGER reject_suspended_app_deletion").run();
+        await env.PLATFORM_DIRECTORY_DATABASE.prepare("DROP TRIGGER reject_app_deletion").run();
     }
 
     const deletedAt = "2026-10-27T00:01:00.000Z";
@@ -661,7 +630,6 @@ it("Given a suspended App with active and suspended Projects, When its owner del
     expect(v.parse(legacyAppResource, deleted)).toMatchObject({
         appId: app.appId,
         lifecycle: "deleted",
-        suspendedAt,
         deletedAt,
         updatedAt: deletedAt,
     });
@@ -671,13 +639,8 @@ it("Given a suspended App with active and suspended Projects, When its owner del
     });
     expect(await responseJson(await app.listProjects(), 200)).toMatchObject({
         projects: expect.arrayContaining([
-            expect.objectContaining({ projectId: app.projectId, lifecycle: "deleted", suspendedAt, deletedAt }),
-            expect.objectContaining({
-                projectId: activeProject.projectId,
-                lifecycle: "deleted",
-                suspendedAt: "",
-                deletedAt,
-            }),
+            expect.objectContaining({ projectId: app.projectId, lifecycle: "deleted", deletedAt }),
+            expect.objectContaining({ projectId: activeProject.projectId, lifecycle: "deleted", deletedAt }),
         ]),
     });
     await expectRejected(await app.authenticateApp(), "credential_revoked");
