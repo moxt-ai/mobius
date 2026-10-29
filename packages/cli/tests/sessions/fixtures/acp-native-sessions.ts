@@ -132,14 +132,28 @@ export function registerNativeSessions(agent: ReturnType<typeof acp.agent>) {
             });
             const sourceHistory = nativeHistory.get(context.params.sessionId) ?? [];
             const forkHistory = [...sourceHistory];
-            const forkedState = state.withTurnCount(
-                forkHistory.filter((message) => message.role === "assistant").length,
-            );
+            const turns = forkHistory.filter((message) => message.role === "assistant").length;
+            const forkedState = process.argv.includes("--reset-fork-settings")
+                ? new ControlledSessionState(turns)
+                : state.withTurnCount(turns);
             nativeHistory.set(sessionId, forkHistory);
             sessions.set(sessionId, forkedState);
             persistState(sessionId, forkedState);
             return {
-                ...sessionConfiguration(forkedState),
+                ...(process.argv.includes("--fork-omits-mode")
+                    ? { configOptions: configOptions(forkedState) }
+                    : sessionConfiguration(forkedState)),
+                ...(process.argv.includes("--fork-mode-unavailable")
+                    ? {
+                          modes: {
+                              availableModes: [
+                                  { id: "code", name: "Code" },
+                                  { id: "review", name: "Review" },
+                              ],
+                              currentModeId: "code",
+                          },
+                      }
+                    : {}),
                 sessionId,
             };
         })

@@ -326,13 +326,34 @@ export class AgentSession implements AgentSessionRestore {
         }
     };
 
-    readonly restoreStoredConfigurations = async (session: StoredSession, signal: AbortSignal): Promise<void> => {
+    readonly restoreStoredConfigurations = async (
+        session: StoredSession,
+        signal: AbortSignal,
+        intent: "restore" | "fork" = "restore",
+    ): Promise<void> => {
         await this.#sessionConfigurations.restore(
             session.configurations,
             this.#configOptions,
             this.#applyConfiguration,
             signal,
         );
+        if (intent === "fork") {
+            for (const selection of session.configurations) {
+                const current = this.#configOptions.find((option) => option.id === selection.configId);
+                if (
+                    current?.type !== selection.type ||
+                    (selection.type === "select"
+                        ? current.currentValue !== selection.value
+                        : current.booleanValue !== selection.booleanValue)
+                ) {
+                    throw new AcpExecutionError(
+                        "The Agent could not preserve the source Session settings for this Fork",
+                        {},
+                        "invalid_session_configuration",
+                    );
+                }
+            }
+        }
     };
 
     readonly restrictSessionCapabilities = (response: unknown): void => {
