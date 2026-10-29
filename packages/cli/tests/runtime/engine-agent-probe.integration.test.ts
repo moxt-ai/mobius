@@ -41,7 +41,9 @@ async function expectWriterStopped(writer: VersionWriter): Promise<void> {
     // An orphan's PID may remain until the runner's init reaps it. A zombie
     // cannot execute or retain the output pipe, even though kill(pid, 0) succeeds.
     const stat = await readFile(`/proc/${writer.pid.toString()}/stat`, "utf8").catch((error: unknown) => {
-        if (error instanceof Error && Reflect.get(error, "code") === "ENOENT") {
+        const code = error instanceof Error ? Reflect.get(error, "code") : undefined;
+        // Linux can reap the process between opening its proc entry and reading it.
+        if (code === "ENOENT" || code === "ESRCH") {
             return null;
         }
         throw error;
