@@ -176,7 +176,7 @@ export class ExecutionReceipts {
         }
         const outcome: SessionEventPayload = {
             type: "lifecycle-metadata",
-            payload: { kind: "prompt.completed", commandId, stopReason: "cancelled" },
+            payload: { kind: "prompt.completed", commandId, stopReason: "cancelled", execution: "not-started" },
         };
         // The identifier belongs to the cancellation, so a later prompt conflicts rather than executing.
         const commandHash = createHash("sha256")
