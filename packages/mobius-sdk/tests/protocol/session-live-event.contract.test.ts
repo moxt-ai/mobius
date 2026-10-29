@@ -52,6 +52,17 @@ describe("Session Event V2 contracts", () => {
         expect(decodeSessionLiveEvent({ ...history, position })).toEqual({ ...history, position });
     });
 
+    it("Given a completion from the legacy Runtime, When the new client decodes it, Then cancellation stays visible with unknown execution phase", () => {
+        // Retained payload from fee38cb2: cancellation carries no execution-phase field.
+        const event = {
+            ...sharedEvent,
+            type: "lifecycle-metadata",
+            position: "1",
+            payload: { kind: "prompt.completed", commandId: "command-1", stopReason: "cancelled" },
+        };
+        expect(decodeSessionLiveEvent(event)).toEqual(event);
+    });
+
     it("Given a large legacy inline image, When its recorded event crosses the protocol boundary, Then it is accepted", () => {
         const event = {
             ...sharedEvent,

@@ -194,7 +194,12 @@ export class PromptLifecycle {
         }
         const recorded = await this.#recordLifecycle(sessionId, {
             type: "lifecycle-metadata",
-            payload: { kind: "prompt.completed", commandId, stopReason },
+            payload: {
+                kind: "prompt.completed",
+                commandId,
+                stopReason,
+                ...(request.phase === "queued" ? { execution: "not-started" as const } : {}),
+            },
         });
         if (!recorded) {
             this.#sink.publishOperationFailure(

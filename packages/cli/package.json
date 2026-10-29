@@ -75,8 +75,8 @@
         "ws": "^8.21.3"
     },
     "keywords": [],
-    "author": "",
-    "license": "ISC",
+    "author": "Moxt",
+    "license": "Apache-2.0",
     "bugs": {
         "url": "https://github.com/moxt-ai/mobius/issues"
     },

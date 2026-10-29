@@ -160,9 +160,10 @@ export class ExecutionReceipts {
     /** Started identities remain authoritative after their detailed receipt is evicted. */
     readonly hasStarted = (commandId: string, sessionId: string): boolean => {
         const receipt = this.#executions.get(commandId);
-        return receipt === undefined
-            ? this.#table.identity(commandId)?.sessionId === sessionId
-            : receipt.sessionId === sessionId && receipt.started;
+        return (
+            (receipt?.sessionId === sessionId && receipt.started) ||
+            this.#table.identity(commandId)?.sessionId === sessionId
+        );
     };
 
     /** Reserves an unseen command for cancellation before a delayed prompt can claim its identity. */
@@ -174,9 +175,20 @@ export class ExecutionReceipts {
         if (existing !== undefined) {
             return existing.sessionId === sessionId ? this.outcome(commandId) : undefined;
         }
+        const identity = this.#table.identity(commandId);
+        if (identity !== undefined) {
+            // Preserve the legacy cancellation acknowledgement without replacing an executed
+            // identity with a before-admission reservation after its detailed receipt expired.
+            return identity.sessionId === sessionId
+                ? {
+                      type: "lifecycle-metadata",
+                      payload: { kind: "prompt.completed", commandId, stopReason: "cancelled" },
+                  }
+                : undefined;
+        }
         const outcome: SessionEventPayload = {
             type: "lifecycle-metadata",
-            payload: { kind: "prompt.completed", commandId, stopReason: "cancelled" },
+            payload: { kind: "prompt.completed", commandId, stopReason: "cancelled", execution: "not-started" },
         };
         // The identifier belongs to the cancellation, so a later prompt conflicts rather than executing.
         const commandHash = createHash("sha256")

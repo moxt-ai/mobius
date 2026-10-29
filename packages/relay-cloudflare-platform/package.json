@@ -1,6 +1,7 @@
 {
     "name": "@moxt-ai/mobius-relay-cloudflare-platform",
     "version": "0.0.1",
+    "license": "Apache-2.0",
     "type": "module",
     "exports": {
         ".": "./src/platform-worker.ts"

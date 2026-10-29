@@ -518,17 +518,6 @@ export class PiAcpAgent {
 
     private async promptSubmission(params: PromptRequest, submission: AbortSignal): Promise<PromptResponse> {
         const session = await this.restoreSession(params.sessionId);
-        this.conn.startUserMessage();
-        for (const content of params.prompt) {
-            if (submission.aborted) {
-                return { stopReason: "cancelled" };
-            }
-            await this.conn.sessionUpdate({
-                sessionId: params.sessionId,
-                update: { sessionUpdate: "user_message_chunk", content },
-            });
-        }
-
         if (submission.aborted) {
             return { stopReason: "cancelled" };
         }
@@ -542,6 +531,11 @@ export class PiAcpAgent {
             const cmd = space === -1 ? trimmed.slice(1) : trimmed.slice(1, space);
             const argsString = space === -1 ? "" : trimmed.slice(space + 1);
             const args = parseCommandArgs(argsString);
+
+            if (builtinAvailableCommands().some((command) => command.name === cmd)) {
+                // Reset local reply grouping without fabricating a user chunk.
+                this.conn.startUserMessage();
+            }
 
             if (cmd === "compact") {
                 const customInstructions = args.join(" ").trim() || undefined;
@@ -1071,14 +1065,6 @@ export class PiAcpAgent {
             case "idle":
                 return { outcome: "promptRequired", reason: "noRunningTurn" };
             case "injected": {
-                this.conn.startUserMessage();
-                for (const content of parsed.data.prompt) {
-                    signal.throwIfAborted();
-                    await this.conn.sessionUpdate({
-                        sessionId: parsed.data.sessionId,
-                        update: { sessionUpdate: "user_message_chunk", content },
-                    });
-                }
                 return { outcome: "injected" };
             }
         }

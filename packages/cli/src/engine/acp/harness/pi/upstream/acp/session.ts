@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { isAbsolute, resolve as resolvePath } from "node:path";
 import type { ContentBlock, McpServer, ToolCallContent, ToolCallLocation, ToolKind } from "@agentclientprotocol/sdk";
 import { RequestError } from "@agentclientprotocol/sdk";
+import { z } from "zod";
 import {
     type PiRpcEvent,
     PiRpcProcess,
@@ -47,6 +48,19 @@ type QueuedTurn = {
 };
 
 type PiSteerOutcome = { readonly kind: "idle" } | { readonly kind: "injected" };
+
+const nativeUserMessageSchema = z.object({
+    role: z.literal("user"),
+    content: z.union([
+        z.string().transform((text) => [{ type: "text" as const, text }]),
+        z.array(
+            z.discriminatedUnion("type", [
+                z.object({ type: z.literal("text"), text: z.string() }),
+                z.object({ type: z.literal("image"), data: z.string(), mimeType: z.string() }),
+            ]),
+        ),
+    ]),
+});
 
 /**
  * Map pi's `stats.contextUsage` to an ACP `usage_update`. Returns null whenever pi
@@ -744,6 +758,19 @@ export class PiAcpSession {
         const type = String((ev as any).type ?? "");
 
         switch (type) {
+            case "message_start": {
+                const message = nativeUserMessageSchema.safeParse(ev.message);
+                if (!message.success) {
+                    break;
+                }
+                // Reset identity in delivery order, not when the RPC event arrives:
+                // multiple native user messages can precede the queued notifications.
+                this.lastEmit = this.lastEmit.then(() => this.conn.startUserMessage());
+                for (const content of message.data.content) {
+                    this.emit({ sessionUpdate: "user_message_chunk", content });
+                }
+                break;
+            }
             case "message_update": {
                 const ame = (ev as any).assistantMessageEvent;
 
