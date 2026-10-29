@@ -107,6 +107,13 @@ pnpm exec tsx ./index.ts \
   --follow
 ```
 
+Before the first prompt, `--follow` watches the Session until you press Ctrl-C.
+After a prompt has been submitted through this mini-client, it follows that
+command and exits when its terminal outcome is observed. It also checks the
+Runtime's execution receipt when connecting, so an already completed command
+does not require a new live completion event. Older Runtimes that do not return
+command receipts may require Ctrl-C if their completion event was missed.
+
 In another terminal, start a Turn:
 
 ```sh
