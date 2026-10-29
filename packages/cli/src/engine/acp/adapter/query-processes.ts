@@ -1,22 +1,30 @@
-import { randomUUID } from "node:crypto";
 import type { SessionCapabilities } from "@moxt-ai/mobius-sdk/protocol";
 import { MemorySessionEventStore, type SessionEventPage } from "../../session/history/session-event-store.ts";
 import { waitForSharedOperation } from "../../session/manager/operation-drain.ts";
 import type { AgentProcessPool } from "../../session/process/agent-process-pool.ts";
 import { RetainedAgentProcesses } from "../../session/process/retained-agent-processes.ts";
 import type { AcpAgentDefinition } from "../agent/agent-definition.ts";
-import type { NativeSessionPreviewRequest } from "../native-history/preview-contract.ts";
+import type { NativeSessionPreviewRequest, NativeSessionQuery } from "../native-history/preview-contract.ts";
 import type { NativeSessionPage } from "../protocol/native-session.ts";
+import {
+    type NativeSessionPreviewKey,
+    type NativeSessionQueryKey,
+    nativeSessionPreviewKey,
+    nativeSessionQueryKey,
+} from "./query-scope.ts";
 import { AcpQuerySession } from "./query-session.ts";
 import type { AcpSessionConnector } from "./session-events.ts";
 
 /** Owns workspace-scoped readers, independently of execution conversations. */
 export class AgentQueryProcesses {
     readonly #eventPreviewsBySession = new Map<
-        string,
+        NativeSessionPreviewKey,
         { readonly nativeSessionId: string; readonly store: MemorySessionEventStore }
     >();
-    readonly #processesByAgent = new Map<AcpAgentDefinition, RetainedAgentProcesses<AcpQuerySession>>();
+    readonly #processesByAgent = new Map<
+        AcpAgentDefinition,
+        RetainedAgentProcesses<AcpQuerySession, NativeSessionQueryKey>
+    >();
     #agent: AcpAgentDefinition;
     readonly #processes: AgentProcessPool;
     readonly #store = new MemorySessionEventStore();
@@ -33,11 +41,11 @@ export class AgentQueryProcesses {
     };
 
     readonly retire = async (
-        readers: RetainedAgentProcesses<AcpQuerySession>,
-        cwd: string,
+        readers: RetainedAgentProcesses<AcpQuerySession, NativeSessionQueryKey>,
+        key: NativeSessionQueryKey,
         runtime: AcpQuerySession,
     ): Promise<void> => {
-        readers.detach(cwd, runtime);
+        readers.detach(key, runtime);
         try {
             await this.#processes.retire(runtime, () => runtime.closeProcess());
         } finally {
@@ -46,101 +54,97 @@ export class AgentQueryProcesses {
     };
 
     async #ensure(
-        agent: AcpAgentDefinition,
-        readers: RetainedAgentProcesses<AcpQuerySession>,
-        cwd: string,
-        signal: AbortSignal,
+        readers: RetainedAgentProcesses<AcpQuerySession, NativeSessionQueryKey>,
+        query: NativeSessionQuery,
     ): Promise<AcpQuerySession> {
-        signal.throwIfAborted();
-        const pending = readers.pending(cwd);
+        query.signal.throwIfAborted();
+        const key = nativeSessionQueryKey(query);
+        const pending = readers.pending(key);
         if (pending !== undefined) {
-            return await waitForSharedOperation(pending, signal);
+            return await waitForSharedOperation(pending, query.signal);
         }
-        const existing = readers.get(cwd);
+        const existing = readers.get(key);
         if (existing !== undefined && !existing.hasTerminated()) {
-            readers.touch(cwd, existing);
+            readers.touch(key, existing);
             return existing;
         }
-        return await readers.prepare(cwd, async () => {
+        return await readers.prepare(key, async () => {
             if (existing !== undefined) {
-                await this.retire(readers, cwd, existing);
+                await this.retire(readers, key, existing);
             }
-            // This ID belongs to the reader, never to a user's conversation.
-            const readerId = randomUUID();
             const runtime = await this.#processes.startRetained(
-                signal,
-                () => AcpQuerySession.start(agent, cwd, readerId, this.#store, this.#connector, signal),
+                query.signal,
+                () => AcpQuerySession.start(query, this.#store, this.#connector),
                 {
-                    isBusy: () => readers.isBusy(cwd),
-                    retire: (runtime) => this.retire(readers, cwd, runtime),
-                    retireIdle: (runtime) => this.retire(readers, cwd, runtime),
+                    isBusy: () => readers.isBusy(key),
+                    retire: (runtime) => this.retire(readers, key, runtime),
+                    retireIdle: (runtime) => this.retire(readers, key, runtime),
                 },
             );
-            readers.retain(cwd, runtime);
+            readers.retain(key, runtime);
             return runtime;
         });
     }
 
     readonly #use = async <T>(
-        cwd: string,
-        signal: AbortSignal,
+        query: NativeSessionQuery,
         operation: (runtime: AcpQuerySession) => Promise<T>,
     ): Promise<T> => {
-        // Capture one immutable definition for this operation, including while it waits for capacity.
+        // Capture one immutable catalog definition while waiting for capacity.
         const agent = this.#agent;
+        const scoped = { ...query, agent };
         let readers = this.#processesByAgent.get(agent);
         if (readers === undefined) {
-            readers = new RetainedAgentProcesses<AcpQuerySession>({
+            readers = new RetainedAgentProcesses<AcpQuerySession, NativeSessionQueryKey>({
                 touch: this.#processes.touch,
                 changed: this.#processes.notifyChanged,
             });
             this.#processesByAgent.set(agent, readers);
         }
         const current = readers;
-        return await current.use(cwd, async () => await operation(await this.#ensure(agent, current, cwd, signal)));
+        return await current.use(
+            nativeSessionQueryKey(scoped),
+            async () => await operation(await this.#ensure(current, scoped)),
+        );
     };
 
-    readonly capabilities = async (cwd: string, signal: AbortSignal): Promise<SessionCapabilities> =>
-        await this.#use(cwd, signal, async (runtime) => runtime.capabilities());
+    readonly capabilities = async (query: NativeSessionQuery): Promise<SessionCapabilities> =>
+        await this.#use(query, async (runtime) => runtime.capabilities());
 
     readonly listNativeSessions = async (
-        cwd: string,
+        query: NativeSessionQuery,
         cursor: string | null,
-        signal: AbortSignal,
     ): Promise<NativeSessionPage> =>
-        await this.#use(cwd, signal, async (runtime) => await runtime.listNativeSessions(cursor, signal));
+        await this.#use(query, async (runtime) => await runtime.listNativeSessions(cursor, query.signal));
 
     readonly previewSessionEvents = async (
-        cwd: string,
-        additionalDirectories: readonly string[],
+        query: NativeSessionQuery,
         request: NativeSessionPreviewRequest,
-        signal: AbortSignal,
     ): Promise<SessionEventPage> => {
-        signal.throwIfAborted();
-        const agent = this.#agent;
-        const { nativeSessionId, eventLimit, cursor, sessionId } = request;
+        query.signal.throwIfAborted();
+        const scoped = { ...query, agent: this.#agent };
+        const { nativeSessionId, eventLimit, cursor } = request;
+        const key = nativeSessionPreviewKey(nativeSessionQueryKey(scoped), nativeSessionId);
         if (cursor !== null) {
-            const preview = this.#eventPreviewsBySession.get(sessionId);
+            const preview = this.#eventPreviewsBySession.get(key);
             if (preview === undefined || preview.nativeSessionId !== nativeSessionId) {
                 throw new Error("The native event cursor is invalid");
             }
-            return preview.store.page(sessionId, eventLimit, cursor);
+            return preview.store.page(nativeSessionId, eventLimit, cursor);
         }
         const store = new MemorySessionEventStore();
-        const previous = this.#eventPreviewsBySession.get(sessionId);
-        previous?.store.close();
-        this.#eventPreviewsBySession.set(sessionId, { nativeSessionId, store });
+        this.#eventPreviewsBySession.get(key)?.store.close();
+        this.#eventPreviewsBySession.set(key, { nativeSessionId, store });
         try {
             return await this.#processes.runTransient(
-                signal,
-                async () => await AcpQuerySession.start(agent, cwd, sessionId, store, this.#connector, signal),
-                async (runtime) =>
-                    await runtime.previewEvents(nativeSessionId, eventLimit, additionalDirectories, signal),
-                async (runtime) => await runtime.closeProcess(),
+                query.signal,
+                () => AcpQuerySession.start(scoped, store, this.#connector),
+                (runtime) => runtime.previewEvents(nativeSessionId, eventLimit, query.signal),
+                (runtime) => runtime.closeProcess(),
             );
         } catch (error) {
-            if (this.#eventPreviewsBySession.get(sessionId)?.store === store) {
-                this.#eventPreviewsBySession.delete(sessionId);
+            if (this.#eventPreviewsBySession.get(key)?.store === store) {
+                this.#eventPreviewsBySession.delete(key);
             }
             store.close();
             throw error;
@@ -150,7 +154,7 @@ export class AgentQueryProcesses {
     readonly close = async (): Promise<void> => {
         await Promise.all(
             [...this.#processesByAgent.values()].flatMap((readers) =>
-                readers.entries().map(async ([cwd, runtime]) => await this.retire(readers, cwd, runtime)),
+                readers.entries().map(async ([key, runtime]) => await this.retire(readers, key, runtime)),
             ),
         );
         this.#processesByAgent.clear();

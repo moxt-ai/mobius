@@ -16,15 +16,15 @@ interface RetainedSessionEvents<P> {
 }
 
 /** Tracks reusable Agent processes and their preparation/borrow lifetimes. */
-export class RetainedAgentProcesses<P> {
-    readonly #entries = new Map<string, Entry<P>>();
+export class RetainedAgentProcesses<P, Key extends string = string> {
+    readonly #entries = new Map<Key, Entry<P>>();
     readonly #events: RetainedSessionEvents<P>;
     constructor(events: RetainedSessionEvents<P>) {
         this.#events = events;
     }
 
-    readonly #entry = (id: string): Entry<P> => this.#entries.get(id) ?? { lifecycle: { kind: "empty" }, users: 0 };
-    readonly #write = (id: string, entry: Entry<P>): void => {
+    readonly #entry = (id: Key): Entry<P> => this.#entries.get(id) ?? { lifecycle: { kind: "empty" }, users: 0 };
+    readonly #write = (id: Key, entry: Entry<P>): void => {
         if (entry.lifecycle.kind === "empty" && entry.users === 0) {
             this.#entries.delete(id);
         } else {
@@ -33,42 +33,42 @@ export class RetainedAgentProcesses<P> {
     };
     readonly #resource = (entry: Entry<P>): Resource<P> =>
         entry.lifecycle.kind === "preparing" ? entry.lifecycle.resource : entry.lifecycle;
-    readonly get = (id: string): P | undefined => {
+    readonly get = (id: Key): P | undefined => {
         const resource = this.#resource(this.#entry(id));
         return resource.kind === "ready" ? resource.runtime : undefined;
     };
-    readonly pending = (id: string): Promise<P> | undefined => {
+    readonly pending = (id: Key): Promise<P> | undefined => {
         const state = this.#entry(id).lifecycle;
         return state.kind === "preparing" ? state.completion : undefined;
     };
-    readonly isBusy = (id: string): boolean => {
+    readonly isBusy = (id: Key): boolean => {
         const entry = this.#entry(id);
         return entry.users > 0 || entry.lifecycle.kind === "preparing";
     };
-    readonly touch = (id: string, expected = this.get(id)): void => {
+    readonly touch = (id: Key, expected = this.get(id)): void => {
         if (expected !== undefined && this.get(id) === expected) {
             this.#events.touch(expected);
         }
     };
-    readonly #setResource = (id: string, resource: Resource<P>): void => {
+    readonly #setResource = (id: Key, resource: Resource<P>): void => {
         const entry = this.#entry(id);
         this.#write(id, {
             ...entry,
             lifecycle: entry.lifecycle.kind === "preparing" ? { ...entry.lifecycle, resource } : resource,
         });
     };
-    readonly retain = (id: string, runtime: P): void => {
+    readonly retain = (id: Key, runtime: P): void => {
         this.#setResource(id, { kind: "ready", runtime });
     };
-    readonly detach = (id: string, expected: P): boolean => {
+    readonly detach = (id: Key, expected: P): boolean => {
         if (this.get(id) !== expected) {
             return false;
         }
         this.#setResource(id, { kind: "empty" });
         return true;
     };
-    readonly entries = (): readonly (readonly [string, P])[] => {
-        const result: (readonly [string, P])[] = [];
+    readonly entries = (): readonly (readonly [Key, P])[] => {
+        const result: (readonly [Key, P])[] = [];
         for (const id of this.#entries.keys()) {
             const runtime = this.get(id);
             if (runtime !== undefined) {
@@ -77,7 +77,7 @@ export class RetainedAgentProcesses<P> {
         }
         return result;
     };
-    readonly prepare = (id: string, start: () => Promise<P>): Promise<P> => {
+    readonly prepare = (id: Key, start: () => Promise<P>): Promise<P> => {
         const pending = this.pending(id);
         if (pending !== undefined) {
             return pending;
@@ -106,7 +106,7 @@ export class RetainedAgentProcesses<P> {
         void run().then(completion.resolve, completion.reject);
         return completion.promise;
     };
-    readonly use = async <T>(id: string, operation: () => Promise<T>): Promise<T> => {
+    readonly use = async <T>(id: Key, operation: () => Promise<T>): Promise<T> => {
         const entry = this.#entry(id);
         this.#write(id, { ...entry, users: entry.users + 1 });
         this.touch(id);

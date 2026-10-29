@@ -166,7 +166,7 @@ export function sessionConfiguration(state: ControlledSessionState): Readonly<Re
 
 export function registerSettings(agent: ReturnType<typeof acp.agent>) {
     return agent
-        .onRequest(acp.methods.agent.session.setConfigOption, (context) => {
+        .onRequest(acp.methods.agent.session.setConfigOption, async (context) => {
             const state = sessions.get(context.params.sessionId);
             if (state === undefined) {
                 throw new Error("Unknown ACP session");
@@ -180,6 +180,19 @@ export function registerSettings(agent: ReturnType<typeof acp.agent>) {
                     : state.withConfig(context.params.configId, context.params.value);
             sessions.set(context.params.sessionId, updated);
             persistState(context.params.sessionId, updated);
+            if (process.argv.includes("--announce-newer-settings-while-configuring")) {
+                const newer = updated.withConfig("fast_mode", true).withMode("plan");
+                sessions.set(context.params.sessionId, newer);
+                persistState(context.params.sessionId, newer);
+                await context.client.notify(acp.methods.client.session.update, {
+                    sessionId: context.params.sessionId,
+                    update: { sessionUpdate: "config_option_update", configOptions: configOptions(newer) },
+                });
+                await context.client.notify(acp.methods.client.session.update, {
+                    sessionId: context.params.sessionId,
+                    update: { sessionUpdate: "current_mode_update", currentModeId: newer.mode },
+                });
+            }
             return { configOptions: configOptions(updated) };
         })
         .onRequest(acp.methods.agent.session.setMode, (context) => {

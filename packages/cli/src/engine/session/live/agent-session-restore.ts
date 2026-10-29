@@ -1,12 +1,8 @@
 import type { SessionCapabilities, SessionConfigOption } from "@moxt-ai/mobius-sdk/protocol";
-import type { SessionConfigProtocol } from "../../acp/protocol/session-config-protocol.ts";
+import type { AdapterSessionOpened } from "../../acp/native-history/preview-contract.ts";
 import type { OperationMetrics } from "../../infra/operation-metrics.ts";
 import type { SessionStore, StoredSession } from "../record/session-store.ts";
 
-/**
- * The state and operations session restore needs. AgentSession implements it; keeping it
- * declared beside the class documents exactly what the restore decision tree may touch.
- */
 /**
  * The state and operations session restore needs. AgentSession implements it; keeping it
  * declared beside the restore function documents exactly what the decision tree may touch.
@@ -19,25 +15,19 @@ export interface AgentSessionRestore {
     readonly metrics: OperationMetrics;
     readonly restored: boolean;
     readonly sessionId: string;
-    readonly sessionConfigProtocol: SessionConfigProtocol;
     readonly store: SessionStore;
-    agentRequest<Params, Result>(
-        method: string,
-        params: Params,
-        options?: { cancellationSignal?: AbortSignal },
-    ): Promise<Result>;
-    drained(): Promise<void>;
-    initializeAgent(signal: AbortSignal): Promise<void>;
-    loadSession(signal: AbortSignal, exitMessage: string): Promise<{ response: unknown }>;
+    readonly createSession: (signal: AbortSignal) => Promise<AdapterSessionOpened>;
+    readonly forkSession: (sourceSessionId: string, signal: AbortSignal) => Promise<AdapterSessionOpened>;
+    readonly openSession: (signal: AbortSignal) => Promise<AdapterSessionOpened>;
+    readonly openSessionWithReplay: (signal: AbortSignal) => Promise<AdapterSessionOpened>;
     nativeSessionId(): string;
-    race<T>(operation: Promise<T>, exitMessage: string, signal: AbortSignal): Promise<T>;
     readonly restoreStoredConfigurations: (
         session: StoredSession,
         signal: AbortSignal,
         intent?: "restore" | "fork",
     ) => Promise<void>;
     selectNativeSession(sessionId: string): void;
-    readonly restrictSessionCapabilities: (response: unknown) => void;
+    readonly applySessionOpened: (opened: AdapterSessionOpened) => void;
     setConfigOptions(options: readonly SessionConfigOption[]): void;
     setNativeHistoryOwnership(
         ownership: { kind: "unbound" } | { kind: "fresh-session" } | { kind: "agent-owned" },

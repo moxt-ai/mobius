@@ -31,7 +31,7 @@ import { type RealDaemonPeer, withControlledDaemon as withRealDaemon } from "../
 // Claude, Codex and Pi conversations.
 const NATIVE_AGENT_ID = "claude";
 
-/** Endpoint 0 serves discovery; each Agent process the daemon starts later gets the next index. */
+/** Each discovery or execution process receives the next endpoint index. */
 class ClosableAgentSpecification extends InProcessAcpAgentSpecification {
     readonly agentExecutable = "node";
     readonly id = NATIVE_AGENT_ID;
@@ -169,6 +169,7 @@ test("Given a client closes a Session, When the Runtime stops its Agent process,
     await withClosableDaemon(specification, async (peer) => {
         const sessionId = crypto.randomUUID();
         await prepare(peer, sessionId);
+        const endpointsBeforeClose = specification.sessions.endpointCount();
         const requestId = sendClose(peer, sessionId);
 
         const announcements: string[] = [];
@@ -191,7 +192,12 @@ test("Given a client closes a Session, When the Runtime stops its Agent process,
         }
 
         expect(announcements).toEqual(["session.close.notice", "session.closed"]);
-        expect(specification.sessions.operations.at(-1)).toEqual({ endpoint: 1, method: "session/close", sessionId });
+        expect(specification.sessions.operations.at(-1)).toEqual({
+            endpoint: endpointsBeforeClose - 1,
+            method: "session/close",
+            sessionId,
+        });
+        expect(specification.sessions.endpointCount()).toBe(endpointsBeforeClose);
     });
 });
 
@@ -199,6 +205,7 @@ test("Given a closed Session, When a client loads more history, Then the Runtime
     const specification = new ClosableAgentSpecification();
     await withClosableDaemon(specification, async (peer) => {
         const sessionId = await closedSession(peer, "Plan the release");
+        const endpointsBeforeHistory = specification.sessions.endpointCount();
 
         const requestId = crypto.randomUUID();
         peer.send(
@@ -212,7 +219,7 @@ test("Given a closed Session, When a client loads more history, Then the Runtime
         );
 
         expect(await nextFailure(peer, requestId)).toMatchObject({ code: SESSION_CLOSED_ERROR_CODE, sessionId });
-        expect(specification.sessions.endpointCount()).toBe(2);
+        expect(specification.sessions.endpointCount()).toBe(endpointsBeforeHistory);
     });
 });
 
@@ -220,11 +227,12 @@ test("Given a closed Session, When a client sends a prompt, Then the Runtime rep
     const specification = new ClosableAgentSpecification();
     await withClosableDaemon(specification, async (peer) => {
         const sessionId = await closedSession(peer, "Plan the release");
+        const endpointsBeforePrompt = specification.sessions.endpointCount();
 
         const commandId = sendPrompt(peer, sessionId, "Continue the plan");
 
         expect(await nextFailure(peer, commandId)).toMatchObject({ code: SESSION_CLOSED_ERROR_CODE, sessionId });
-        expect(specification.sessions.endpointCount()).toBe(2);
+        expect(specification.sessions.endpointCount()).toBe(endpointsBeforePrompt);
     });
 });
 
@@ -244,12 +252,13 @@ test("Given a closed Session, When a client reads its settings, Then the Runtime
     const specification = new ClosableAgentSpecification();
     await withClosableDaemon(specification, async (peer) => {
         const sessionId = await closedSession(peer, "Plan the release");
+        const endpointsBeforeRead = specification.sessions.endpointCount();
 
         const requestId = crypto.randomUUID();
         peer.send(encodeSessionConfigReadCommand({ kind: "session.config.read", requestId, sessionId }));
 
         expect(await nextFailure(peer, requestId)).toMatchObject({ code: SESSION_CLOSED_ERROR_CODE, sessionId });
-        expect(specification.sessions.endpointCount()).toBe(2);
+        expect(specification.sessions.endpointCount()).toBe(endpointsBeforeRead);
     });
 });
 
@@ -292,11 +301,12 @@ test("Given a Session whose Agent process is still stopping, When a client sends
         const teardown = specification.sessions.closes.hold();
         sendClose(peer, sessionId);
         await teardown.entered;
+        const endpointsBeforePrompt = specification.sessions.endpointCount();
 
         const commandId = sendPrompt(peer, sessionId, "Too late");
 
         expect(await nextFailure(peer, commandId)).toMatchObject({ code: SESSION_CLOSED_ERROR_CODE, sessionId });
-        expect(specification.sessions.endpointCount()).toBe(2);
+        expect(specification.sessions.endpointCount()).toBe(endpointsBeforePrompt);
         teardown.release();
         await nextMessageOfKind(peer, "session.closed");
     });
@@ -306,17 +316,20 @@ test("Given a closed Session, When a client prepares it again, Then the Runtime 
     const specification = new ClosableAgentSpecification();
     await withClosableDaemon(specification, async (peer) => {
         const sessionId = await closedSession(peer, "Plan the release");
+        const endpointsBeforeReopen = specification.sessions.endpointCount();
+        const originalEndpoint = endpointsBeforeReopen - 1;
 
         await prepare(peer, sessionId);
         await prompt(peer, sessionId, "Continue the plan");
 
         expect(specification.sessions.operations).toEqual([
-            { endpoint: 1, method: "session/resume", sessionId },
-            { endpoint: 1, method: "session/prompt", sessionId },
-            { endpoint: 1, method: "session/close", sessionId },
-            { endpoint: 2, method: "session/resume", sessionId },
-            { endpoint: 2, method: "session/prompt", sessionId },
+            { endpoint: originalEndpoint, method: "session/resume", sessionId },
+            { endpoint: originalEndpoint, method: "session/prompt", sessionId },
+            { endpoint: originalEndpoint, method: "session/close", sessionId },
+            { endpoint: endpointsBeforeReopen, method: "session/resume", sessionId },
+            { endpoint: endpointsBeforeReopen, method: "session/prompt", sessionId },
         ]);
+        expect(specification.sessions.endpointCount()).toBe(endpointsBeforeReopen + 1);
     });
 });
 

@@ -14,8 +14,17 @@ import type { AgentConnection } from "../connection/agent-connection.ts";
 import { AgentUpdateStream } from "../connection/agent-update-stream.ts";
 import type { AcpClientHandler } from "../connection/create-client.ts";
 import type { IdentifiedSessionNotification as SessionNotification } from "../connection/session-notification.ts";
-import type { AcpContentExternalizer } from "../content/content-externalizer.ts";
+import type { AcpContentExternalizer, ExternalizeSessionUpdate } from "../content/content-externalizer.ts";
+import { restrictAcpSessionCapabilities } from "../protocol/session-capabilities.ts";
 import { sessionConfigProtocolForAgent } from "../protocol/session-config-protocol.ts";
+import { initializeAgentConnection } from "./agent-initialization.ts";
+import {
+    applyConfigurationChanges,
+    applyConfigurationMode,
+    type ConfigurationChanges,
+    recordConfigurationMode,
+    recordConfigurationOptions,
+} from "./configuration-changes.ts";
 
 type SessionInfoChange =
     | { readonly kind: "title"; readonly value: string }
@@ -36,8 +45,7 @@ export type AdapterSessionEvent =
 interface SessionConnectionScope {
     readonly agent: AcpAgentDefinition;
     readonly cwd: string;
-    readonly sessionId: () => string;
-    readonly configOptions: () => readonly SessionConfigOption[];
+    readonly externalizeUpdate?: ExternalizeSessionUpdate;
     readonly onEvent: (event: AdapterSessionEvent) => Promise<void>;
 }
 
@@ -46,15 +54,33 @@ export interface AdapterSessionConnectionOptions extends SessionConnectionScope 
     readonly interactions: Pick<AcpClientHandler, "onPermission" | "onElicitation" | "onElicitationComplete">;
 }
 
-export interface LiveSessionConnectionOptions extends AdapterSessionConnectionOptions {
-    readonly additionalDirectories: readonly string[];
-    readonly capabilities: () => SessionCapabilities;
+export interface AdapterSessionSubscriber {
+    readonly onSessionEvent: (nativeSessionId: string, event: AdapterSessionEvent) => Promise<void>;
+    readonly onBackgroundActivity?: (activity: BackgroundActivity) => void;
+    readonly interactions: AdapterSessionConnectionOptions["interactions"];
 }
 
 /** Internal execution port shared by the live session and adapter-owned history capture. */
 export interface AdapterSessionConnector {
     readonly connectSession: (options: AdapterSessionConnectionOptions) => AdapterSessionConnection;
 }
+
+export interface AdapterSessionSnapshot {
+    readonly capabilities: SessionCapabilities;
+    readonly configOptions: readonly SessionConfigOption[];
+}
+
+type ConfigurationOperation =
+    | { readonly kind: "idle" }
+    | { readonly kind: "pending"; readonly changes: ConfigurationChanges };
+type ExecutionState =
+    | { readonly kind: "uninitialized" }
+    | {
+          readonly kind: "ready";
+          readonly snapshot: AdapterSessionSnapshot;
+          readonly operation: ConfigurationOperation;
+      }
+    | { readonly kind: "closed" };
 
 /** ACP subscription lifetime, ordered delivery and harness normalization belong to the adapter. */
 export class AdapterSessionConnection {
@@ -65,6 +91,13 @@ export class AdapterSessionConnection {
     readonly #updates: AgentUpdateStream;
     readonly #lifetime = new AbortController();
     readonly #onClosed: () => void;
+    readonly #agent: AcpAgentDefinition;
+    #state: ExecutionState = { kind: "uninitialized" };
+    #initialization:
+        | { readonly kind: "not-started" }
+        | { readonly kind: "started"; readonly result: ReturnType<typeof initializeAgentConnection> } = {
+        kind: "not-started",
+    };
     readonly events: Pick<AgentUpdateStream, "sessionId" | "select" | "drained">;
 
     constructor(
@@ -73,16 +106,19 @@ export class AdapterSessionConnection {
         normalizeEvent: (event: unknown) => unknown,
         onClosed: () => void = () => undefined,
     ) {
+        this.#agent = options.agent;
         this.#onClosed = onClosed;
         this.#onBackgroundActivity = options.onBackgroundActivity ?? (() => {});
-        const protocol = sessionConfigProtocolForAgent(options.agent.id);
         this.#updates = new AgentUpdateStream(async (notification: SessionNotification) => {
             this.#lifetime.signal.throwIfAborted();
             if (notification.sessionId !== this.#updates.sessionId()) {
                 throw new AcpExecutionError("ACP agent referenced an unknown session", {}, "invalid_agent_session");
             }
             const signal = AbortSignal.any([this.#lifetime.signal, AbortSignal.timeout(30_000)]);
-            const externalized = await externalizer.update(options.sessionId(), notification.update, signal);
+            const externalized =
+                options.externalizeUpdate === undefined
+                    ? await externalizer.update(notification.sessionId, notification.update, signal)
+                    : await options.externalizeUpdate(notification.update, signal);
             signal.throwIfAborted();
             const update = externalized.agent;
             for (const eventUpdate of externalized.events) {
@@ -116,13 +152,15 @@ export class AdapterSessionConnection {
                         };
                         break;
                     case "config_option_update":
+                        this.#applyConfigurationUpdate(update.configOptions);
                         event = {
                             kind: "configuration",
                             payload,
-                            configOptions: protocol.normalizeUpdate(options.configOptions(), update.configOptions),
+                            configOptions: this.snapshot().configOptions,
                         };
                         break;
                     case "current_mode_update":
+                        this.#applyModeUpdate(update.currentModeId);
                         event = { kind: "mode", payload, modeId: update.currentModeId };
                         break;
                     case "session_info_update": {
@@ -199,12 +237,108 @@ export class AdapterSessionConnection {
     get termination() {
         return this.#connection.termination;
     }
+
+    readonly #ready = (): Extract<ExecutionState, { readonly kind: "ready" }> => {
+        const state = this.#state;
+        if (state.kind !== "ready") {
+            throw new AcpExecutionError(
+                "The Agent session is not initialized or has closed",
+                {},
+                "invalid_agent_session",
+            );
+        }
+        return state;
+    };
+
+    readonly snapshot = (): AdapterSessionSnapshot => this.#ready().snapshot;
+
+    readonly beginStateChange = (): void => {
+        const state = this.#ready();
+        if (state.operation.kind !== "idle") {
+            throw new AcpExecutionError("Another session configuration operation is running", {}, "session_busy");
+        }
+        this.#state = { ...state, operation: { kind: "pending", changes: { kind: "unchanged" } } };
+    };
+
+    readonly cancelStateChange = (): void => {
+        if (this.#state.kind === "ready") {
+            this.#state = { ...this.#state, operation: { kind: "idle" } };
+        }
+    };
+
+    readonly commitConfiguration = (options: readonly SessionConfigOption[]): readonly SessionConfigOption[] => {
+        const state = this.#ready();
+        if (state.operation.kind !== "pending") {
+            throw new AcpExecutionError("No session configuration operation is running", {}, "invalid_agent_session");
+        }
+        const configOptions = applyConfigurationChanges(options, state.operation.changes);
+        this.#state = { ...state, snapshot: { ...state.snapshot, configOptions }, operation: { kind: "idle" } };
+        return configOptions;
+    };
+
+    readonly commitLifecycle = (response: unknown): AdapterSessionSnapshot => {
+        const state = this.#ready();
+        const capabilities = restrictAcpSessionCapabilities(state.snapshot.capabilities, response);
+        this.commitConfiguration(sessionConfigProtocolForAgent(this.#agent.id).normalizeLifecycle(response));
+        this.#state = { ...this.#ready(), snapshot: { capabilities, configOptions: this.snapshot().configOptions } };
+        return this.snapshot();
+    };
+
+    readonly #applyConfigurationUpdate = (value: unknown): void => {
+        const state = this.#ready();
+        const protocol = sessionConfigProtocolForAgent(this.#agent.id);
+        const configOptions = protocol.normalizeUpdate(state.snapshot.configOptions, value);
+        const operation: ConfigurationOperation =
+            state.operation.kind === "pending"
+                ? {
+                      kind: "pending",
+                      changes: recordConfigurationOptions(state.operation.changes, protocol.normalizeUpdate([], value)),
+                  }
+                : state.operation;
+        this.#state = { ...state, snapshot: { ...state.snapshot, configOptions }, operation };
+    };
+
+    readonly #applyModeUpdate = (modeId: string): void => {
+        const state = this.#ready();
+        const operation: ConfigurationOperation =
+            state.operation.kind === "pending"
+                ? { kind: "pending", changes: recordConfigurationMode(state.operation.changes, modeId) }
+                : state.operation;
+        this.#state = {
+            ...state,
+            snapshot: {
+                ...state.snapshot,
+                configOptions: applyConfigurationMode(state.snapshot.configOptions, modeId),
+            },
+            operation,
+        };
+    };
     readonly initialize = (signal: AbortSignal): Promise<void> => this.#connection.initialize(signal);
+    readonly initializeAgent = (signal: AbortSignal) => {
+        if (this.#initialization.kind === "not-started") {
+            this.#initialization = {
+                kind: "started",
+                result: initializeAgentConnection(this, this.#agent.id, this.#agent.agentVersion, signal).then(
+                    (agent) => {
+                        this.#lifetime.signal.throwIfAborted();
+                        this.#state = {
+                            kind: "ready",
+                            snapshot: { capabilities: agent.capabilities, configOptions: [] },
+                            operation: { kind: "idle" },
+                        };
+                        return agent;
+                    },
+                ),
+            };
+        }
+        return this.#initialization.result;
+    };
     readonly agentSettingsModelEffort = () => this.#connection.agentSettingsModelEffort();
     readonly race = <T>(operation: Promise<T>, exitMessage: string, signal: AbortSignal): Promise<T> =>
         this.#connection.race(operation, exitMessage, signal);
 
     readonly closeProcess = async (): Promise<void> => {
+        this.#state = { kind: "closed" };
         this.#lifetime.abort(new DOMException("The adapter event subscription closed", "AbortError"));
         try {
             await this.#connection.closeProcess();

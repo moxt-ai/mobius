@@ -1,4 +1,5 @@
 import type {
+    AgentModelEffort,
     PromptMetadata,
     PromptUsage,
     SessionCapabilities,
@@ -8,10 +9,10 @@ import type {
     SessionLiveEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { AgentProcessPool } from "../../session/process/agent-process-pool.ts";
-import type { AdapterSessionConnection, LiveSessionConnectionOptions } from "../adapter/session-events.ts";
+import type { AdapterSessionSubscriber } from "../adapter/session-events.ts";
 import type { AcpAgentDefinition } from "../agent/agent-definition.ts";
 import type { PromptContent } from "../client/prompt-content.ts";
-import type { AcpContentExternalizer } from "../content/content-externalizer.ts";
+import type { AcpContentExternalizer, ExternalizeSessionUpdate } from "../content/content-externalizer.ts";
 import type { NativeSessionInfo, NativeSessionPage } from "../protocol/native-session.ts";
 import type { SessionConfigurationSelection } from "../protocol/session-config-protocol.ts";
 import type { ProjectedToolCall } from "../tool-call-projection.ts";
@@ -51,8 +52,6 @@ export interface NativeSessionPreviewRequest {
     readonly nativeSessionId: string;
     readonly eventLimit: number;
     readonly cursor: string | null;
-    /** The Mobius session the previewed events are recorded under. */
-    readonly sessionId: string;
 }
 
 /** Shared runtime resources; each adapter owns the query resources it acquires. */
@@ -63,6 +62,15 @@ export interface AdapterDependencies {
 
 /** Constructs one harness adapter for a runtime. */
 export type AdapterResolver = (agent: AcpAgentDefinition, dependencies: AdapterDependencies) => Adapter;
+
+/** Validated query scope; contains no execution-session recovery or process controls. */
+export interface NativeSessionQuery {
+    readonly agent: AcpAgentDefinition;
+    readonly cwd: string;
+    readonly additionalDirectories: readonly string[];
+    readonly signal: AbortSignal;
+    readonly externalizeUpdate?: ExternalizeSessionUpdate;
+}
 
 /** Application lookup budget; null allows all entries within the page budget. */
 export interface NativeSessionLookupBudget {
@@ -82,45 +90,76 @@ export interface AdapterPromptResult {
     readonly _meta?: PromptMetadata | null;
 }
 
+/** Normalized lifecycle output; no harness response escapes into business state. */
+export interface AdapterSessionOpened {
+    readonly nativeSessionId: string;
+    readonly capabilities: SessionCapabilities;
+    readonly configOptions: readonly SessionConfigOption[];
+    readonly agentName: string;
+    readonly agentVersion: string;
+    readonly agentSettingsModelEffort: AgentModelEffort | null;
+}
+
+export interface AdapterSessionScope {
+    readonly agent: AcpAgentDefinition;
+    readonly cwd: string;
+    readonly additionalDirectories: readonly string[];
+    readonly externalizeUpdate?: ExternalizeSessionUpdate;
+}
+
+export interface AdapterSessionCreateParams extends AdapterSessionSubscriber {
+    readonly scope: AdapterSessionScope;
+    readonly signal: AbortSignal;
+}
+
+export interface AdapterSessionOpenParams extends AdapterSessionCreateParams {
+    readonly nativeSessionId: string;
+}
+
+export interface AdapterSessionForkParams extends AdapterSessionCreateParams {
+    readonly sourceNativeSessionId: string;
+}
+
+export interface AdapterSessionOperation extends AdapterSessionTarget {
+    readonly signal: AbortSignal;
+}
+
 /** Business-facing session operations. Transport and initialization belong to the adapter. */
 export interface Adapter {
     readonly refreshAgent: (agent: AcpAgentDefinition) => void;
-    readonly connectSession: (options: LiveSessionConnectionOptions) => AdapterSessionConnection;
-    readonly cancel: (target: AdapterSessionTarget, signal: AbortSignal) => Promise<void>;
-    readonly closeSession: (target: AdapterSessionTarget, signal: AbortSignal) => Promise<void>;
+    readonly createSession: (params: AdapterSessionCreateParams) => Promise<AdapterSessionOpened>;
+    readonly forkSession: (params: AdapterSessionForkParams) => Promise<AdapterSessionOpened>;
+    readonly openSession: (params: AdapterSessionOpenParams) => Promise<AdapterSessionOpened>;
+    readonly openSessionWithReplay: (params: AdapterSessionOpenParams) => Promise<AdapterSessionOpened>;
+    readonly cancel: (params: AdapterSessionOperation) => Promise<void>;
+    readonly closeSession: (params: AdapterSessionOperation) => Promise<void>;
+    /** Release a retained execution without changing the native conversation. */
+    readonly releaseSession: (params: AdapterSessionOperation) => Promise<void>;
     readonly prompt: (
-        target: AdapterSessionTarget,
-        content: PromptContent,
-        signal: AbortSignal,
+        params: AdapterSessionOperation & { readonly content: PromptContent },
     ) => Promise<AdapterPromptResult>;
     readonly steer: (
-        target: AdapterSessionTarget,
-        content: PromptContent,
-        signal: AbortSignal,
+        params: AdapterSessionOperation & { readonly content: PromptContent },
     ) => Promise<{ readonly outcome: "injected" } | { readonly outcome: "startedNewTurn" }>;
     readonly renameSession: (
-        target: AdapterSessionTarget,
-        title: string,
-        signal: AbortSignal,
+        params: AdapterSessionOperation & { readonly title: string },
     ) => Promise<{ readonly nativeRenameApplied: boolean }>;
     readonly configureSession: (
-        target: AdapterSessionTarget,
-        selection: SessionConfigurationSelection,
-        signal: AbortSignal,
+        params: AdapterSessionOperation & { readonly selection: SessionConfigurationSelection },
     ) => Promise<readonly SessionConfigOption[]>;
-    readonly getCapabilities: (cwd: string, signal: AbortSignal) => Promise<SessionCapabilities>;
-    readonly listSessions: (cwd: string, cursor: string | null, signal: AbortSignal) => Promise<NativeSessionPage>;
-    readonly findSession: (
-        cwd: string,
-        nativeSessionId: string,
-        budget: NativeSessionLookupBudget,
-        signal: AbortSignal,
-    ) => Promise<NativeSessionInfo>;
-    readonly readSessionHistory: (
-        cwd: string,
-        additionalDirectories: readonly string[],
-        request: NativeSessionPreviewRequest,
-        signal: AbortSignal,
-    ) => Promise<SessionEventPage>;
+    readonly getCapabilities: (query: NativeSessionQuery) => Promise<SessionCapabilities>;
+    readonly listSessions: (params: {
+        readonly query: NativeSessionQuery;
+        readonly cursor: string | null;
+    }) => Promise<NativeSessionPage>;
+    readonly findSession: (params: {
+        readonly query: NativeSessionQuery;
+        readonly nativeSessionId: string;
+        readonly budget: NativeSessionLookupBudget;
+    }) => Promise<NativeSessionInfo>;
+    readonly readSessionHistory: (params: {
+        readonly query: NativeSessionQuery;
+        readonly request: NativeSessionPreviewRequest;
+    }) => Promise<SessionEventPage>;
     readonly close: () => Promise<void>;
 }

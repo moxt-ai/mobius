@@ -10,6 +10,7 @@ import type {
     SessionTurnOptions,
 } from "../../src/engine/session/api/session-api.ts";
 import { type ClosedSessionHandling, SessionManager } from "../../src/engine/session/manager/session-manager.ts";
+import { nativeSessionQuery } from "../../src/engine/session/native/native-query.ts";
 import { AgentProcessPool } from "../../src/engine/session/process/agent-process-pool.ts";
 
 export type TestSessionPrepareOptions = Omit<SessionPrepareOptions, "adapter">;
@@ -76,10 +77,15 @@ export class SessionRuntimeFixture {
         this.sessions.steerPrompt({ ...options, adapter: this.adapters.resolve(options.agent) });
 
     readonly nativeSessionCapabilities = (options: TestSessionPrepareOptions) =>
-        this.adapters.resolve(options.agent).getCapabilities(options.cwd, options.signal);
+        this.adapters
+            .resolve(options.agent)
+            .getCapabilities(nativeSessionQuery({ ...options, adapter: this.adapters.resolve(options.agent) }));
 
     readonly listNativeSessions = (options: TestSessionPrepareOptions, cursor: string | null) =>
-        this.adapters.resolve(options.agent).listSessions(options.cwd, cursor, options.signal);
+        this.adapters.resolve(options.agent).listSessions({
+            query: nativeSessionQuery({ ...options, adapter: this.adapters.resolve(options.agent) }),
+            cursor,
+        });
 
     readonly previewNativeSessionEvents = (
         options: TestSessionPrepareOptions,
@@ -91,17 +97,14 @@ export class SessionRuntimeFixture {
             { ...options, adapter: this.adapters.resolve(options.agent) },
             nativeSessionId,
             (target) =>
-                target.adapter.readSessionHistory(
-                    target.cwd,
-                    target.additionalDirectories,
-                    {
+                target.adapter.readSessionHistory({
+                    query: nativeSessionQuery(target),
+                    request: {
                         nativeSessionId,
                         eventLimit,
                         cursor,
-                        sessionId: target.sessionId,
                     },
-                    target.signal,
-                ),
+                }),
         );
 
     readonly loadSessionEvents = (options: TestSessionPrepareOptions, eventLimit: number, cursor: string | null) =>
