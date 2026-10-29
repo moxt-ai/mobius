@@ -532,6 +532,11 @@ export class PiAcpAgent {
             const argsString = space === -1 ? "" : trimmed.slice(space + 1);
             const args = parseCommandArgs(argsString);
 
+            if (builtinAvailableCommands().some((command) => command.name === cmd)) {
+                // Reset local reply grouping without fabricating a user chunk.
+                this.conn.startUserMessage();
+            }
+
             if (cmd === "compact") {
                 const customInstructions = args.join(" ").trim() || undefined;
                 const compactionId = randomUUID();
