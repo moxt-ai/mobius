@@ -43,8 +43,8 @@ Use the Node and pnpm versions in [`.nvmrc`](../.nvmrc) and
 pnpm install
 ```
 
-Read [AGENTS.md](AGENTS.md) for the engineering and contribution rules before making
-changes. When working with a coding Agent, provide docs/AGENTS.md as repository
+Read [AGENTS.md](../AGENTS.md) for the engineering and contribution rules before making
+changes. When working with a coding Agent, provide AGENTS.md as repository
 instructions; the Claude entrypoint is docs/CLAUDE.md. Design and deployment
 constraints are included below.
 
@@ -87,7 +87,7 @@ pnpm build
 ```
 
 Before submitting a pull request, follow the scope, documentation separation, package
-versioning, and engineering requirements in [AGENTS.md](AGENTS.md). Include the relevant
+versioning, and engineering requirements in [AGENTS.md](../AGENTS.md). Include the relevant
 verification results and any limitations so reviewers can assess the change.
 
 ## Design rationale
