@@ -1,6 +1,6 @@
 {
     "name": "@moxt-ai/mobius",
-    "version": "0.0.368",
+    "version": "0.0.369",
     "description": "Mobius CLI for pairing and running local AI agent services.",
     "type": "module",
     "bin": {
@@ -14,7 +14,9 @@
         }
     },
     "files": [
-        "dist"
+        "dist",
+        "NOTICE",
+        "THIRD-PARTY-NOTICES.txt"
     ],
     "engines": {
         "node": ">=22.19.0"
@@ -36,7 +38,7 @@
     },
     "scripts": {
         "prebuild": "tsc --project src/engine/acp/harness/claude/upstream/tsconfig.json && tsc --project src/engine/acp/harness/pi/upstream/tsconfig.json",
-        "build": "tsc --project tsconfig.build.json && esbuild cli=src/cli/entrypoint.ts engine=src/exports/engine.ts --bundle --splitting --platform=node --target=node22.19.0 --format=esm --sourcemap --outbase=src --outdir=dist --external:@agentclientprotocol/sdk --external:undici",
+        "build": "node scripts/build.ts && tsc --project tsconfig.build.json",
         "dev": "node --watch src/cli/entrypoint.ts",
         "pretypecheck": "tsc --project src/engine/acp/harness/claude/upstream/tsconfig.json && tsc --project src/engine/acp/harness/pi/upstream/tsconfig.json",
         "prepack": "pnpm build",
