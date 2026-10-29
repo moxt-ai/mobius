@@ -570,7 +570,20 @@ export class SessionManager {
             await this.#executions.cancel(sessionId, async () => {
                 const runtime = this.#executionProcesses.get(sessionId);
                 if (runtime !== undefined) {
-                    await runtime.cancel(signal);
+                    const outcome = await runtime.cancel(signal);
+                    switch (outcome) {
+                        case "retained":
+                            break;
+                        case "closed":
+                            // Preserve the native conversation and effective settings for
+                            // the next prompt, but never reuse a cancelled endpoint.
+                            await this.#stopSessionProcess(sessionId, runtime);
+                            break;
+                        default: {
+                            const unreachable: never = outcome;
+                            throw new AcpExecutionError("Unexpected cancellation outcome", { cause: unreachable });
+                        }
+                    }
                 }
             });
         });

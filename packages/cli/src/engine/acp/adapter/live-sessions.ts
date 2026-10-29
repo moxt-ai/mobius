@@ -84,7 +84,7 @@ export class AcpLiveSessions {
         return session;
     };
 
-    readonly cancel = async (target: AdapterSessionTarget, signal: AbortSignal): Promise<void> => {
+    readonly cancel = async (target: AdapterSessionTarget, signal: AbortSignal): Promise<"retained"> => {
         const bounded = AbortSignal.any([signal, AbortSignal.timeout(30_000)]);
         bounded.throwIfAborted();
         const { connection } = this.#resolve(target);
@@ -95,6 +95,7 @@ export class AcpLiveSessions {
             "ACP agent exited while cancelling a prompt",
             bounded,
         );
+        return "retained";
     };
 
     readonly closeSession = async (target: AdapterSessionTarget, signal: AbortSignal): Promise<void> => {
