@@ -51,6 +51,7 @@ test("Given Claude Code compacts a conversation with content, When the daemon re
         const statuses: string[] = [];
         const summaryChunks: string[] = [];
         const bannerTexts: string[] = [];
+        const userTexts: string[] = [];
         for (;;) {
             const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
             if (event.type === "lifecycle-metadata") {
@@ -63,7 +64,9 @@ test("Given Claude Code compacts a conversation with content, When the daemon re
                 continue;
             }
             const update = event.payload;
-            if (update.sessionUpdate === "compaction_update") {
+            if (update.sessionUpdate === "user_message_chunk" && update.content.type === "text") {
+                userTexts.push(update.content.text);
+            } else if (update.sessionUpdate === "compaction_update") {
                 compactionIds.push(update.compactionId);
                 statuses.push(update.status);
                 if (update.error !== undefined && update.error !== null) {
@@ -84,6 +87,7 @@ test("Given Claude Code compacts a conversation with content, When the daemon re
         expect(statuses).toEqual(["in_progress", "completed"]);
         expect(new Set(compactionIds).size).toBe(1);
         expect(bannerTexts).toEqual([]);
+        expect(userTexts).toEqual(["/compact"]);
         // When the CLI streams the summary it produced, every chunk addresses the
         // same compaction.
         for (const chunk of summaryChunks) {

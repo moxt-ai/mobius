@@ -1237,6 +1237,14 @@ function stripMarkerTags(text: string): string {
  * message like `<command-name>…</command-name>hi` becomes `hi`.
  */
 export function stripLocalCommandMetadata(
+    content: string,
+    options?: { readonly preserveCompactionCommand: boolean },
+): string | null;
+export function stripLocalCommandMetadata(
+    content: unknown,
+    options?: { readonly preserveCompactionCommand: boolean },
+): unknown | null;
+export function stripLocalCommandMetadata(
     content: unknown,
     options?: { readonly preserveCompactionCommand: boolean },
 ): unknown | null {
@@ -4642,6 +4650,19 @@ export class ClaudeAcpAgent {
                             // Consumed: reset so the next message's blocks accumulate fresh and
                             // the record stays bounded to the in-flight message.
                             streamedBlocks.length = 0;
+                        } else if (message.type === "user" && isInputEcho) {
+                            // Native slash-command echoes use the same display metadata
+                            // as saved history. Render the command, not its XML wrappers.
+                            const options = { preserveCompactionCommand: true };
+                            const nativeContent = message.message.content;
+                            content =
+                                typeof nativeContent === "string"
+                                    ? (stripLocalCommandMetadata(nativeContent, options) ?? "")
+                                    : nativeContent.map((block) =>
+                                          block.type === "text"
+                                              ? { ...block, text: stripLocalCommandMetadata(block.text, options) ?? "" }
+                                              : block,
+                                      );
                         } else {
                             content = message.message.content;
                         }
