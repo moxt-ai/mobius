@@ -2711,15 +2711,14 @@ it("Given Chat reads the Session execution after missing a turn's outcome, When 
 });
 
 describe.sequential("Platform Turn submission", () => {
-    // Frozen legacy client request/response contract; no new SDK decoder participates.
     it.each(["app", "session"] as const)(
-        "Given an older %s client cancels a queued message, When the Runtime reports cancellation or prior completion, Then the existing turn contract preserves the actual outcome",
+        "Given %s access cancels a Turn, When the Runtime reports cancellation or prior completion, Then the response reports the Turn's actual stop reason",
         async (access) => {
             const runtime = await connectRuntimeDaemon(`legacy-queue-cancel-${access}`);
             try {
                 for (const stopReason of ["cancelled", "end_turn"] as const) {
                     const turnId = `legacy-${stopReason}`;
-                    const body = { idempotencyKey: `edit-${turnId}` };
+                    const body = {};
                     const path = `/turns/${turnId}/cancel`;
                     const response =
                         access === "app"
@@ -2746,22 +2745,7 @@ describe.sequential("Platform Turn submission", () => {
                             ],
                         }),
                     );
-                    expect(await responseJson(await response, 200)).toEqual({
-                        acceptedAt: expect.any(String),
-                        bindingId: "workspace",
-                        idempotencyKey: body.idempotencyKey,
-                        request: { kind: "prompt", content: "", sessionConfigurations: [] },
-                        sessionId: runtime.sessionId,
-                        turnId,
-                        state:
-                            stopReason === "cancelled"
-                                ? { kind: "cancelled", cancelledAt: expect.any(String) }
-                                : {
-                                      kind: "succeeded",
-                                      completedAt: expect.any(String),
-                                      result: { kind: "agent_result", stopReason },
-                                  },
-                    });
+                    expect(await responseJson(await response, 200)).toEqual({ turnId, stopReason });
                 }
             } finally {
                 runtime.daemon.close(1000, "Test complete");
@@ -2779,7 +2763,7 @@ describe.sequential("Platform Turn submission", () => {
         async ({ access, outcome }) => {
             const runtime = await connectRuntimeDaemon(`conditional-queue-cancel-${access}-${outcome}`);
             try {
-                const body = { idempotencyKey: "conditional-edit" };
+                const body = {};
                 const path = "/turns/queued-command/cancel-before-start";
                 const response =
                     access === "app"
@@ -2833,19 +2817,19 @@ describe.sequential("Platform Turn submission", () => {
             label: "cancels the selected message",
             path: "/turns/app-command/cancel",
             method: "POST",
-            body: { idempotencyKey: "cancel-app-command" },
+            body: {},
             command: { commandId: "app-command", kind: "session.cancel" },
             payload: { commandId: "app-command", kind: "prompt.completed", stopReason: "cancelled" },
-            expected: { turnId: "app-command", idempotencyKey: "cancel-app-command", state: { kind: "cancelled" } },
+            expected: { turnId: "app-command", stopReason: "cancelled" },
         },
         {
             label: "cancels the selected message only before it starts",
             path: "/turns/app-command/cancel-before-start",
             method: "POST",
-            body: { idempotencyKey: "cancel-app-command" },
+            body: {},
             command: { commandId: "app-command", kind: "session.cancel-before-start" },
             payload: { commandId: "app-command", kind: "prompt.completed", stopReason: "cancelled" },
-            expected: { turnId: "app-command", idempotencyKey: "cancel-app-command" },
+            expected: { turnId: "app-command" },
         },
         {
             label: "steers the selected queued message",
@@ -3029,7 +3013,7 @@ describe.sequential("Platform Turn submission", () => {
         try {
             const readOnly = await runtime.issueAppCredential(["session:read"]);
             for (const operation of [
-                { path: "/turns/app-command/cancel", method: "POST", body: { idempotencyKey: "cancel-app-command" } },
+                { path: "/turns/app-command/cancel", method: "POST", body: {} },
                 { path: "/turns/app-command/disposition", method: "PUT", body: { disposition: "steer" } },
                 {
                     path: "/interactions/app-interaction/responses",
@@ -3071,13 +3055,6 @@ describe.sequential("Platform Turn submission", () => {
 
     // @no-uc: Compatibility; malformed control requests must be distinguishable from retryable server failures.
     it.each([
-        { label: "missing cancellation key", path: "/turns/app-command/cancel", method: "POST", body: {} },
-        {
-            label: "numeric cancellation key",
-            path: "/turns/app-command/cancel",
-            method: "POST",
-            body: { idempotencyKey: 123 },
-        },
         {
             label: "unsupported queue disposition",
             path: "/turns/app-command/disposition",
@@ -3585,7 +3562,7 @@ describe.sequential("Platform Turn submission", () => {
                 new Request(
                     `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns/long-first-turn/cancel`,
                     {
-                        body: JSON.stringify({ idempotencyKey: "cancel-long-first" }),
+                        body: JSON.stringify({}),
                         headers: credentialHeaders(text(sessionAccess, "credential")),
                         method: "POST",
                     },
@@ -3635,8 +3612,8 @@ describe.sequential("Platform Turn submission", () => {
                     ],
                 }),
             );
-            expect(await responseJson(await cancelTurn, 200)).toMatchObject({
-                state: { kind: "cancelled" },
+            expect(await responseJson(await cancelTurn, 200)).toEqual({
+                stopReason: "cancelled",
                 turnId: "long-first-turn",
             });
 

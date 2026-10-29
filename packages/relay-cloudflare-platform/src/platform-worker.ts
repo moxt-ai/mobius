@@ -756,7 +756,6 @@ export function createPlatformApplication(
             );
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
             const turnId = v.parse(sessionIdentifier, context.req.param("turnId"));
-            const body = v.parse(v.strictObject({ idempotencyKey: sessionIdentifier }), await context.req.json());
             const completed = await sessionOperations(context).requestProjectScopeControl(
                 new ProjectScope(access.projectId),
                 access.runtimeId,
@@ -775,7 +774,7 @@ export function createPlatformApplication(
                 );
             }
             context.header("Cache-Control", "no-store");
-            return context.json({ turnId, idempotencyKey: body.idempotencyKey });
+            return context.json({ turnId });
         })
         .post("/:sessionId/turns/:turnId/cancel", sessionAccessTargetMiddleware, async (context) => {
             const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];
@@ -792,7 +791,6 @@ export function createPlatformApplication(
             );
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
             const turnId = v.parse(sessionIdentifier, context.req.param("turnId"));
-            const body = v.parse(v.strictObject({ idempotencyKey: sessionIdentifier }), await context.req.json());
             const completed = await sessionOperations(context).requestProjectScopeControl(
                 new ProjectScope(access.projectId),
                 access.runtimeId,
@@ -802,24 +800,8 @@ export function createPlatformApplication(
             if (completed.kind !== "turn.completed") {
                 throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid cancellation");
             }
-            const cancelledAt = new Date().toISOString();
             context.header("Cache-Control", "no-store");
-            return context.json({
-                acceptedAt: cancelledAt,
-                bindingId: "workspace",
-                idempotencyKey: body.idempotencyKey,
-                request: { content: "", kind: "prompt", sessionConfigurations: [] },
-                sessionId,
-                state:
-                    completed.stopReason === "cancelled"
-                        ? { cancelledAt, kind: "cancelled" }
-                        : {
-                              completedAt: cancelledAt,
-                              kind: "succeeded",
-                              result: { kind: "agent_result", stopReason: completed.stopReason },
-                          },
-                turnId,
-            });
+            return context.json({ turnId, stopReason: completed.stopReason });
         })
         .post("/:sessionId/interactions/:interactionId/responses", sessionAccessTargetMiddleware, async (context) => {
             const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];

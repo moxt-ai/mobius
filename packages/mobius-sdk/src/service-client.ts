@@ -60,7 +60,6 @@ import {
     decodeRuntimeDescriptor,
     type MobiusBrowserCredential,
     type MobiusBrowserCredentialRequest,
-    MobiusCancelledTurnState,
     type MobiusChannelAccessGrant,
     type MobiusChannelDescriptor,
     type MobiusInteractionResponseRequest,
@@ -75,7 +74,6 @@ import {
     type MobiusRuntimePairingStatus,
     type MobiusRuntimePairingWaitOptions,
     MobiusSessionAccess,
-    MobiusSucceededTurnState,
     type MobiusTurn,
     type MobiusTurnCancellation,
     type SubmitMobiusTurnRequest,
@@ -244,30 +242,16 @@ function normalizeEndpoint(value: string): URL {
     return endpoint;
 }
 
-// Relays before cancellation stopped taking a body require a key they only echo; cancellation is identified by the Turn.
-function legacyCancellationBody(): { readonly idempotencyKey: string } {
-    return { idempotencyKey: `cancel-${crypto.randomUUID()}` };
-}
-
-// Current Relays answer `{ turnId, stopReason }`; older ones answer with a Turn whose state carries the outcome.
 function decodeTurnCancellation(value: unknown, turnId: string): MobiusTurnCancellation {
-    if (typeof value === "object" && value !== null && typeof Reflect.get(value, "stopReason") === "string") {
-        if (Reflect.get(value, "turnId") !== turnId) {
-            throw new MobiusProtocolError("The service returned an invalid Turn cancellation");
-        }
-        return { turnId, stopReason: Reflect.get(value, "stopReason") };
-    }
-    const turn = decodeMobiusTurn(value);
-    if (turn === null || turn.turnId !== turnId) {
+    if (
+        typeof value !== "object" ||
+        value === null ||
+        Reflect.get(value, "turnId") !== turnId ||
+        typeof Reflect.get(value, "stopReason") !== "string"
+    ) {
         throw new MobiusProtocolError("The service returned an invalid Turn cancellation");
     }
-    if (turn.state instanceof MobiusCancelledTurnState) {
-        return { turnId, stopReason: "cancelled" };
-    }
-    if (turn.state instanceof MobiusSucceededTurnState) {
-        return { turnId, stopReason: turn.state.stopReason };
-    }
-    throw new MobiusProtocolError("The service returned an invalid Turn cancellation");
+    return { turnId, stopReason: Reflect.get(value, "stopReason") };
 }
 
 function projectPath(projectId: string, resourcePath: string): string {
@@ -1545,7 +1529,7 @@ export class MobiusTurnResources {
         decodeTurnCancellation(
             await this.#executor.post(
                 sessionPath(this.#projectId, sessionId, `turns/${encodeURIComponent(turnId)}/cancel`),
-                legacyCancellationBody(),
+                {},
                 signal,
             ),
             turnId,
@@ -1567,7 +1551,7 @@ export class MobiusTurnResources {
         if (before.queuedCancellation === "before-start") {
             const result = await this.#executor.post(
                 sessionPath(this.#projectId, sessionId, `turns/${encodeURIComponent(turnId)}/cancel-before-start`),
-                legacyCancellationBody(),
+                {},
                 signal,
             );
             if (typeof result !== "object" || result === null || Reflect.get(result, "turnId") !== turnId) {

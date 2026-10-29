@@ -6,8 +6,8 @@ import { MobiusClient, StaticMobiusCredentialProvider } from "../src/index.ts";
 const identity = { additionalDirectoryIds: [], agentId: "pi", directoryId: "default" };
 const timestamp = "2026-10-29T00:00:00.000Z";
 
-// Independently retained Relay contract from 826ab21d: no queuedCancellation capability,
-// and /cancel reports cancelled even when the command won the execution race.
+// A Relay serving an older Runtime: no queuedCancellation capability, and /cancel reports
+// cancelled even when the command won the execution race.
 class LegacyQueueRelay implements AsyncDisposable {
     readonly cancellationEntered = Promise.withResolvers<void>();
     readonly releaseCancellation = Promise.withResolvers<void>();
@@ -90,24 +90,6 @@ class LegacyQueueRelay implements AsyncDisposable {
             return;
         }
         if (request.method === "POST" && url.pathname.endsWith("/turns/queued/cancel")) {
-            let encoded = "";
-            for await (const chunk of request) {
-                encoded += String(chunk);
-            }
-            const body: unknown = JSON.parse(encoded);
-            if (
-                typeof body !== "object" ||
-                body === null ||
-                typeof Reflect.get(body, "idempotencyKey") !== "string" ||
-                Object.keys(body).length !== 1
-            ) {
-                response
-                    .writeHead(400)
-                    .end(
-                        JSON.stringify({ error: { code: "invalid_request", message: "Invalid legacy cancellation" } }),
-                    );
-                return;
-            }
             this.cancellationEntered.resolve();
             if (this.#holdCancellation) {
                 await this.releaseCancellation.promise;
@@ -115,17 +97,7 @@ class LegacyQueueRelay implements AsyncDisposable {
             if (this.#state === "queued") {
                 this.#state = "cancelled";
             }
-            response.end(
-                JSON.stringify({
-                    acceptedAt: timestamp,
-                    bindingId: "workspace",
-                    idempotencyKey: Reflect.get(body, "idempotencyKey"),
-                    request: { content: "", kind: "prompt", sessionConfigurations: [] },
-                    sessionId: "session-1",
-                    state: { cancelledAt: timestamp, kind: "cancelled" },
-                    turnId: "queued",
-                }),
-            );
+            response.end(JSON.stringify({ turnId: "queued", stopReason: "cancelled" }));
             return;
         }
         if (request.method === "GET" && url.pathname === "/observed-output") {
@@ -158,7 +130,7 @@ class LegacyQueueRelay implements AsyncDisposable {
 
 afterEach(() => vi.useRealTimers());
 
-test("Given an older Relay and Runtime, When the new SDK withdraws a queued prompt, Then the legacy request still removes it without running its content", async () => {
+test("Given an older Runtime, When the new SDK withdraws a queued prompt, Then the legacy request still removes it without running its content", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date(timestamp));
     await using relay = new LegacyQueueRelay(false);
@@ -178,7 +150,7 @@ test("Given an older Relay and Runtime, When the new SDK withdraws a queued prom
     }
 });
 
-test("Given an older Relay that labels a completed prompt cancelled, When execution wins the edit race, Then the new SDK reports withdrawal unconfirmed instead of allowing a duplicate edit", async () => {
+test("Given a cancellation reported for a prompt that already completed, When execution wins the edit race, Then the new SDK reports withdrawal unconfirmed instead of allowing a duplicate edit", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date(timestamp));
     await using relay = new LegacyQueueRelay(true);
