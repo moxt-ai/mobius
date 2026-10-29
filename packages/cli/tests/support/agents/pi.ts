@@ -2,6 +2,8 @@ import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PiAcpAgent } from "../../../src/engine/acp/harness/pi/upstream/dist/acp/agent.js";
+import type { PiAcpClient } from "../../../src/engine/acp/harness/pi/upstream/dist/acp/client.js";
 
 import { FakeOpenAiProvider } from "../llm/openai.ts";
 import { resolveTestExecutable } from "./executable.ts";
@@ -71,6 +73,12 @@ export class PiFixture implements AsyncDisposable {
         const extensions = join(this.#directory, ".pi", "agent", "extensions");
         await mkdir(extensions, { recursive: true });
         await writeFile(join(extensions, name), source, { mode: 0o600 });
+    }
+
+    createClient(callbacks: PiAcpClient): PiAcpAgent {
+        return new PiAcpAgent(callbacks, {
+            environment: { ...process.env, ...this.environment, PI_ACP_PI_COMMAND: this.executable },
+        });
     }
 
     async seedSession(cwd: string, prompt: string, signal: AbortSignal): Promise<void> {

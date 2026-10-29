@@ -112,6 +112,7 @@ export type PiSessionOrigin =
     | { readonly kind: "fork"; readonly sessionPath: string };
 
 type SpawnParams = {
+    readonly signal?: AbortSignal;
     readonly cwd: string;
     readonly environment: Readonly<NodeJS.ProcessEnv>;
     /** Optional override for `pi` executable name/path */
@@ -122,6 +123,8 @@ type SpawnParams = {
 export class PiRpcProcess {
     private readonly child: ChildProcessWithoutNullStreams;
     private readonly lifetime = new AbortController();
+    private readonly exited = Promise.withResolvers<void>();
+    private closing: Promise<void> | null = null;
 
     get signal(): AbortSignal {
         return this.lifetime.signal;
@@ -178,6 +181,7 @@ export class PiRpcProcess {
             }
             this.pending.clear();
         });
+        child.once("close", () => this.exited.resolve());
 
         child.on("error", (cause) => {
             const err = new PiRpcProcessError(cause);
@@ -190,6 +194,7 @@ export class PiRpcProcess {
     }
 
     static async spawn(params: SpawnParams): Promise<PiRpcProcess> {
+        params.signal?.throwIfAborted();
         // On Windows, npm commonly creates pi.cmd / pi.bat launcher scripts.
         const cmd = getPiCommand(params.piCommand);
 
@@ -222,6 +227,7 @@ export class PiRpcProcess {
             stdio: "pipe",
             env: params.environment,
             shell: shouldUseShellForPiCommand(cmd),
+            ...(params.signal === undefined ? {} : { signal: params.signal }),
         }) as ChildProcessWithoutNullStreams;
 
         // Ensure spawn failures (e.g. ENOENT when pi isn't installed) are surfaced as a
@@ -295,21 +301,29 @@ export class PiRpcProcess {
         };
     }
 
-    dispose(signal: NodeJS.Signals | number = "SIGTERM"): void {
+    dispose(signal: NodeJS.Signals | number = "SIGTERM"): Promise<void> {
+        if (this.closing !== null) {
+            return this.closing;
+        }
         this.lifetime.abort();
-        if (this.child.killed) {
-            return;
-        }
-        try {
-            this.child.kill(signal as any);
-        } catch {
-            // ignore
-        }
+        this.closing = (async () => {
+            const force = setTimeout(() => this.child.kill("SIGKILL"), 1_000);
+            force.unref();
+            try {
+                if (this.child.exitCode === null && this.child.signalCode === null) {
+                    this.child.kill(signal);
+                }
+                await this.exited.promise;
+            } finally {
+                clearTimeout(force);
+            }
+        })();
+        return this.closing;
     }
 
     terminateAfterFailure(cause: unknown): void {
         this.lifetime.abort(new PiRpcProcessError(cause));
-        this.dispose();
+        void this.dispose();
     }
 
     /**

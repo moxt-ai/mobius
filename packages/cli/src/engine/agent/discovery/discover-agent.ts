@@ -3,7 +3,6 @@ import { AcpAgentDefinition } from "../../acp/agent/agent-definition.ts";
 import { unsupportedSessionCapabilities } from "../../acp/protocol/session-capabilities.ts";
 import { ProcessExecutionError } from "../../util/process/executable.ts";
 import { InProcessAcpAgentSpecification, type LocalAgentSpecification } from "../specification/agent-specification.ts";
-import { probeAcpReadiness } from "./acp-readiness-probe.ts";
 import {
     type AgentDiscovery,
     AgentProbeFailed,
@@ -218,13 +217,12 @@ export async function discoverAgent(
                     specification,
                     "acp_readiness",
                     async () =>
-                        await probeAcpReadiness(
-                            specification,
-                            buildDefinition(adapterVersion, unsupportedSessionCapabilities()),
-                            context.environment,
-                            context.defaultWorkspace,
-                            context.signal,
-                        ),
+                        await specification.probeReadiness({
+                            agent: buildDefinition(adapterVersion, unsupportedSessionCapabilities()),
+                            environment: context.environment,
+                            defaultWorkspace: context.defaultWorkspace,
+                            signal: context.signal,
+                        }),
                 );
                 const verifiedAdapterVersion = adapterVersion.length > 0 ? adapterVersion : readiness.adapterVersion;
                 if (verifiedAdapterVersion.length === 0) {

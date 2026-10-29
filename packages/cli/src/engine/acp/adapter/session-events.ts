@@ -1,9 +1,7 @@
 import { setImmediate as yieldToRuntime } from "node:timers/promises";
 import {
-    type AcpSessionUpdate,
     decodeAcpSessionUpdate,
     type SessionCapabilities,
-    type SessionCommand,
     type SessionConfigOption,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { truncate } from "../../util/value-utils.ts";
@@ -25,39 +23,18 @@ import {
     recordConfigurationMode,
     recordConfigurationOptions,
 } from "./configuration-changes.ts";
-
-type SessionInfoChange =
-    | { readonly kind: "title"; readonly value: string }
-    | { readonly kind: "updated-at"; readonly value: string };
-
-/** Normalized adapter output. Session persistence and client publication remain with the consumer. */
-export type AdapterSessionEvent =
-    | { readonly kind: "content" | "other"; readonly payload: AcpSessionUpdate }
-    | { readonly kind: "commands"; readonly commands: readonly SessionCommand[]; readonly payload: AcpSessionUpdate }
-    | {
-          readonly kind: "configuration";
-          readonly configOptions: readonly SessionConfigOption[];
-          readonly payload: AcpSessionUpdate;
-      }
-    | { readonly kind: "mode"; readonly modeId: string; readonly payload: AcpSessionUpdate }
-    | { readonly kind: "info"; readonly changes: readonly SessionInfoChange[]; readonly payload: AcpSessionUpdate };
+import type { NativeSessionEvent, NativeSessionInfoChange, NativeSessionInteractions } from "./native-session-event.ts";
 
 interface SessionConnectionScope {
     readonly agent: AcpAgentDefinition;
     readonly cwd: string;
     readonly externalizeUpdate?: ExternalizeSessionUpdate;
-    readonly onEvent: (event: AdapterSessionEvent) => Promise<void>;
+    readonly onEvent: (event: NativeSessionEvent) => Promise<void>;
 }
 
 export interface AdapterSessionConnectionOptions extends SessionConnectionScope {
     readonly onBackgroundActivity?: (activity: BackgroundActivity) => void;
-    readonly interactions: Pick<AcpClientHandler, "onPermission" | "onElicitation" | "onElicitationComplete">;
-}
-
-export interface AdapterSessionSubscriber {
-    readonly onSessionEvent: (nativeSessionId: string, event: AdapterSessionEvent) => Promise<void>;
-    readonly onBackgroundActivity?: (activity: BackgroundActivity) => void;
-    readonly interactions: AdapterSessionConnectionOptions["interactions"];
+    readonly interactions: NativeSessionInteractions;
 }
 
 /** Internal execution port shared by the live session and adapter-owned history capture. */
@@ -135,7 +112,7 @@ export class AdapterSessionConnection {
                         ),
                     ),
                 );
-                let event: AdapterSessionEvent;
+                let event: NativeSessionEvent;
                 switch (update.sessionUpdate) {
                     case "available_commands_update":
                         event = {
@@ -164,7 +141,7 @@ export class AdapterSessionConnection {
                         event = { kind: "mode", payload, modeId: update.currentModeId };
                         break;
                     case "session_info_update": {
-                        const changes: SessionInfoChange[] = [];
+                        const changes: NativeSessionInfoChange[] = [];
                         if (Object.hasOwn(update, "title")) {
                             changes.push({ kind: "title", value: truncate(update.title ?? "", 500) });
                         }

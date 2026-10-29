@@ -1,7 +1,9 @@
 import {
+    type ClientConnection,
     type CompleteElicitationNotification,
     type CreateElicitationRequest,
     type CreateElicitationResponse,
+    type InitializeResponse,
     methods,
     PROTOCOL_VERSION,
     type RequestPermissionRequest,
@@ -13,7 +15,6 @@ import { AcpExecutionError } from "../../acp/acp-error.ts";
 import type { AcpAgentDefinition } from "../../acp/agent/agent-definition.ts";
 import type { AcpClientHandler } from "../../acp/connection/create-client.ts";
 import { normalizeAcpCapabilities } from "../../acp/protocol/session-capabilities.ts";
-import type { LocalAgentSpecification } from "../specification/agent-specification.ts";
 import { AgentProbeError } from "./agent-probe-error.ts";
 import { normalizeVersionOutput } from "./version-output.ts";
 
@@ -25,6 +26,13 @@ export class VerifiedAcpReadiness {
         this.adapterVersion = adapterVersion;
         this.capabilities = capabilities;
     }
+}
+
+export interface AgentReadinessProbeParams {
+    readonly agent: AcpAgentDefinition;
+    readonly environment: Readonly<NodeJS.ProcessEnv>;
+    readonly defaultWorkspace: string;
+    readonly signal: AbortSignal;
 }
 
 class DiscoveryAcpHandler implements AcpClientHandler {
@@ -44,7 +52,7 @@ class DiscoveryAcpHandler implements AcpClientHandler {
     readonly onUpdate = (_notification: SessionNotification): Promise<void> => Promise.resolve();
 }
 
-function filterEnvironment(environment: Readonly<NodeJS.ProcessEnv>): Readonly<Record<string, string>> {
+export function filterEnvironment(environment: Readonly<NodeJS.ProcessEnv>): Readonly<Record<string, string>> {
     const filtered: Record<string, string> = {};
     for (const [name, value] of Object.entries(environment)) {
         if (typeof value === "string") {
@@ -56,7 +64,16 @@ function filterEnvironment(environment: Readonly<NodeJS.ProcessEnv>): Readonly<R
 
 /** Exercises the same adapter-owned connection used by sessions, with a bounded probe lifetime. */
 export async function probeAcpReadiness(
-    specification: LocalAgentSpecification,
+    specification: {
+        readonly acpProbeTimeoutMilliseconds: number;
+        readonly authenticationCommand: () => string;
+        readonly verifyAcp: (
+            connection: ClientConnection,
+            initialized: InitializeResponse,
+            defaultWorkspace: string,
+            signal: AbortSignal,
+        ) => Promise<void>;
+    },
     agent: AcpAgentDefinition,
     environment: Readonly<NodeJS.ProcessEnv>,
     defaultWorkspace: string,
