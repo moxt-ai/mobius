@@ -143,6 +143,9 @@ export function registerNativeSessions(agent: ReturnType<typeof acp.agent>) {
                 ...(process.argv.includes("--fork-omits-mode")
                     ? { configOptions: configOptions(forkedState) }
                     : sessionConfiguration(forkedState)),
+                ...(process.argv.includes("--fork-omits-model")
+                    ? { configOptions: configOptions(forkedState).filter((option) => option.id !== "model") }
+                    : {}),
                 ...(process.argv.includes("--fork-mode-unavailable")
                     ? {
                           modes: {

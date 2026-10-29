@@ -34,7 +34,7 @@ class ForkSettingsAgent extends ControlledAcpSpecification {
     }
 }
 
-test.each(["", "--fork-mode-unavailable", "--fork-omits-mode"])(
+test.each(["", "--fork-mode-unavailable", "--fork-omits-mode", "--fork-omits-model"])(
     "Given source selections and a Fork Agent %s, When a retained client forks, Then settings are inherited or the Fork fails without changing its source",
     async (fault) => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-fork-settings-"));
@@ -107,12 +107,15 @@ test.each(["", "--fork-mode-unavailable", "--fork-omits-mode"])(
                             targetSessionId: childId,
                         }),
                     );
-                    const selections = [
+                    const modeAndSpeed = [
                         expect.objectContaining({ id: "mode", currentValue: "plan" }),
-                        expect.objectContaining({ id: "model", currentValue: "test-large" }),
                         expect.objectContaining({ id: "fast_mode", booleanValue: true }),
                     ];
-                    if (fault.length > 0) {
+                    const selections = [
+                        ...modeAndSpeed,
+                        expect.objectContaining({ id: "model", currentValue: "test-large" }),
+                    ];
+                    if (fault === "--fork-mode-unavailable" || fault === "--fork-omits-mode") {
                         const failure = decodeSessionOperationFailedEvent(
                             await nextMessage(peer, "session.operation.failed"),
                         );
@@ -122,7 +125,12 @@ test.each(["", "--fork-mode-unavailable", "--fork-omits-mode"])(
                         expect(fork).toMatchObject({
                             action: "fork",
                             requestId,
-                            ready: { sessionId: childId, configOptions: expect.arrayContaining(selections) },
+                            ready: {
+                                sessionId: childId,
+                                configOptions: expect.arrayContaining(
+                                    fault === "--fork-omits-model" ? modeAndSpeed : selections,
+                                ),
+                            },
                         });
                     }
                     peer.send(

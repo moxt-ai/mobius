@@ -339,6 +339,11 @@ export class AgentSession implements AgentSessionRestore {
         );
         if (intent === "fork") {
             for (const selection of session.configurations) {
+                // Mode carries the Agent's execution/approval constraint. Keep the existing
+                // best-effort behavior for model selections that disappear from a catalog.
+                if (selection.configId !== "mode") {
+                    continue;
+                }
                 const current = this.#configOptions.find((option) => option.id === selection.configId);
                 if (
                     current?.type !== selection.type ||
@@ -347,7 +352,7 @@ export class AgentSession implements AgentSessionRestore {
                         : current.booleanValue !== selection.booleanValue)
                 ) {
                     throw new AcpExecutionError(
-                        "The Agent could not preserve the source Session settings for this Fork",
+                        "The Agent could not preserve the source Session mode for this Fork",
                         {},
                         "invalid_session_configuration",
                     );
