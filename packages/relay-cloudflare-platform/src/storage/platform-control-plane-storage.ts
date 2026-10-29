@@ -7,8 +7,6 @@ import {
     AppRowSchema,
     type AuditRow,
     AuditRowSchema,
-    type CredentialRevisionRow,
-    CredentialRevisionRowSchema,
     type CredentialRow,
     CredentialRowSchema,
     type PlatformAppCredentialInsert,
@@ -595,10 +593,7 @@ export class PlatformControlPlaneStorage {
                                 secretDigest: sql<string>`${credential.secretDigest}`.as("secretDigest"),
                                 permissionsJson: sql<string>`${credential.permissionsJson}`.as("permissionsJson"),
                                 allProjects: sql<number>`${credential.allProjects ? 1 : 0}`.as("allProjects"),
-                                revision: sql<number>`${credential.revision}`.as("revision"),
                                 issuedAt: sql<number>`${credential.issuedAt}`.as("issuedAt"),
-                                lastUsedAt: sql<number>`${credential.issuedAt}`.as("lastUsedAt"),
-                                lastObservedUsedAt: sql<null>`NULL`.as("lastObservedUsedAt"),
                                 overlapEndsAt: sql<null>`NULL`.as("overlapEndsAt"),
                                 replacedByCredentialId: sql<null>`NULL`.as("replacedByCredentialId"),
                                 revokedAt: sql<null>`NULL`.as("revokedAt"),
@@ -764,23 +759,6 @@ export class PlatformControlPlaneStorage {
         return projects.map((project) => project.project_id);
     };
 
-    readonly nextCredentialRevision = async (appId: string, signal: AbortSignal): Promise<number | null> => {
-        const row: CredentialRevisionRow | null = decodeOptionalStorageRecord(
-            CredentialRevisionRowSchema,
-            await waitForD1(
-                () =>
-                    this.#database
-                        .prepare(
-                            "SELECT COALESCE(MAX(revision), 0) + 1 AS revision FROM platform_app_credentials WHERE app_id = ?",
-                        )
-                        .bind(appId)
-                        .first(),
-                signal,
-            ),
-        );
-        return row?.revision ?? null;
-    };
-
     readonly projectBelongsToApp = async (projectId: string, appId: string, signal: AbortSignal): Promise<boolean> => {
         const row = await waitForD1(
             () =>
@@ -828,8 +806,8 @@ export class PlatformControlPlaneStorage {
             .prepare(
                 `INSERT INTO platform_app_credentials (
                    credential_id, public_credential_id, app_id, secret_digest, permissions_json,
-                   all_projects, revision, issued_at, last_used_at
-                 ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+                   all_projects, issued_at
+                 ) SELECT ?, ?, ?, ?, ?, ?, ?
                    WHERE EXISTS (SELECT 1 FROM platform_apps WHERE app_id = ?)`,
             )
             .bind(
@@ -839,8 +817,6 @@ export class PlatformControlPlaneStorage {
                 credential.secretDigest,
                 credential.permissionsJson,
                 credential.allProjects ? 1 : 0,
-                credential.revision,
-                credential.issuedAt,
                 credential.issuedAt,
                 credential.appId,
             );
