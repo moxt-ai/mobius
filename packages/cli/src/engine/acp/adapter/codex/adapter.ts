@@ -27,7 +27,7 @@ import { fitCodexToolEvent, prepareCodexToolUpdate } from "./tool-event.ts";
  * `session/load` remains the fallback for resuming the conversation.
  */
 export class CodexAdapter implements Adapter {
-    readonly #agent: AcpAgentDefinition;
+    #agent: AcpAgentDefinition;
     readonly #queryProcesses: AgentQueryProcesses;
     readonly #connector: AcpSessionConnector;
     readonly #liveSessions: AcpLiveSessions;
@@ -51,6 +51,10 @@ export class CodexAdapter implements Adapter {
         this.#queryProcesses = new AgentQueryProcesses(agent, dependencies.processes, this.#connector);
     }
 
+    readonly refreshAgent: Adapter["refreshAgent"] = (agent) => {
+        this.#agent = agent;
+        this.#queryProcesses.refreshAgent(agent);
+    };
     readonly getCapabilities: Adapter["getCapabilities"] = (cwd, signal) =>
         this.#queryProcesses.capabilities(cwd, signal);
     readonly connectSession = (options: LiveSessionConnectionOptions) => this.#liveSessions.connectSession(options);

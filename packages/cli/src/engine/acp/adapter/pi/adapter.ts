@@ -21,6 +21,7 @@ export class PiAdapter implements Adapter {
         this.#queryProcesses = new AgentQueryProcesses(agent, dependencies.processes, this.#connector);
     }
 
+    readonly refreshAgent: Adapter["refreshAgent"] = (agent) => this.#queryProcesses.refreshAgent(agent);
     readonly getCapabilities: Adapter["getCapabilities"] = (cwd, signal) =>
         this.#queryProcesses.capabilities(cwd, signal);
     readonly connectSession = (options: LiveSessionConnectionOptions) => this.#liveSessions.connectSession(options);

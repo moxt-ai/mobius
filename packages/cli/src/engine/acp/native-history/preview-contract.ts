@@ -84,6 +84,7 @@ export interface AdapterPromptResult {
 
 /** Business-facing session operations. Transport and initialization belong to the adapter. */
 export interface Adapter {
+    readonly refreshAgent: (agent: AcpAgentDefinition) => void;
     readonly connectSession: (options: LiveSessionConnectionOptions) => AdapterSessionConnection;
     readonly cancel: (target: AdapterSessionTarget, signal: AbortSignal) => Promise<void>;
     readonly closeSession: (target: AdapterSessionTarget, signal: AbortSignal) => Promise<void>;

@@ -12,6 +12,7 @@ const cannedHistoryAdapter: AdapterResolver = (agent, dependencies) => {
     const acp = new ClaudeAdapter(agent, dependencies);
     const events = new MemorySessionEventStore();
     return {
+        refreshAgent: acp.refreshAgent,
         getCapabilities: acp.getCapabilities,
         connectSession: acp.connectSession,
         cancel: acp.cancel,

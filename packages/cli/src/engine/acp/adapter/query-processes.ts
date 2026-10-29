@@ -16,8 +16,8 @@ export class AgentQueryProcesses {
         string,
         { readonly nativeSessionId: string; readonly store: MemorySessionEventStore }
     >();
-    readonly #processesByQuery: RetainedAgentProcesses<AcpQuerySession>;
-    readonly #agent: AcpAgentDefinition;
+    readonly #processesByAgent = new Map<AcpAgentDefinition, RetainedAgentProcesses<AcpQuerySession>>();
+    #agent: AcpAgentDefinition;
     readonly #processes: AgentProcessPool;
     readonly #store = new MemorySessionEventStore();
     readonly #connector: AcpSessionConnector;
@@ -26,14 +26,18 @@ export class AgentQueryProcesses {
         this.#agent = agent;
         this.#processes = processes;
         this.#connector = connector;
-        this.#processesByQuery = new RetainedAgentProcesses<AcpQuerySession>({
-            touch: processes.touch,
-            changed: processes.notifyChanged,
-        });
     }
 
-    readonly retire = async (cwd: string, runtime: AcpQuerySession): Promise<void> => {
-        this.#processesByQuery.detach(cwd, runtime);
+    readonly refreshAgent = (agent: AcpAgentDefinition): void => {
+        this.#agent = agent;
+    };
+
+    readonly retire = async (
+        readers: RetainedAgentProcesses<AcpQuerySession>,
+        cwd: string,
+        runtime: AcpQuerySession,
+    ): Promise<void> => {
+        readers.detach(cwd, runtime);
         try {
             await this.#processes.retire(runtime, () => runtime.closeProcess());
         } finally {
@@ -41,30 +45,35 @@ export class AgentQueryProcesses {
         }
     };
 
-    async #ensure(cwd: string, signal: AbortSignal): Promise<AcpQuerySession> {
+    async #ensure(
+        agent: AcpAgentDefinition,
+        readers: RetainedAgentProcesses<AcpQuerySession>,
+        cwd: string,
+        signal: AbortSignal,
+    ): Promise<AcpQuerySession> {
         signal.throwIfAborted();
-        const pending = this.#processesByQuery.pending(cwd);
+        const pending = readers.pending(cwd);
         if (pending !== undefined) {
             return await waitForSharedOperation(pending, signal);
         }
-        const existing = this.#processesByQuery.get(cwd);
+        const existing = readers.get(cwd);
         if (existing !== undefined) {
-            this.#processesByQuery.touch(cwd, existing);
+            readers.touch(cwd, existing);
             return existing;
         }
-        return await this.#processesByQuery.prepare(cwd, async () => {
+        return await readers.prepare(cwd, async () => {
             // This ID belongs to the reader, never to a user's conversation.
             const readerId = randomUUID();
             const runtime = await this.#processes.startRetained(
                 signal,
-                () => AcpQuerySession.start(this.#agent, cwd, readerId, this.#store, this.#connector, signal),
+                () => AcpQuerySession.start(agent, cwd, readerId, this.#store, this.#connector, signal),
                 {
-                    isBusy: () => this.#processesByQuery.isBusy(cwd),
-                    retire: (runtime) => this.retire(cwd, runtime),
-                    retireIdle: (runtime) => this.retire(cwd, runtime),
+                    isBusy: () => readers.isBusy(cwd),
+                    retire: (runtime) => this.retire(readers, cwd, runtime),
+                    retireIdle: (runtime) => this.retire(readers, cwd, runtime),
                 },
             );
-            this.#processesByQuery.retain(cwd, runtime);
+            readers.retain(cwd, runtime);
             return runtime;
         });
     }
@@ -73,8 +82,20 @@ export class AgentQueryProcesses {
         cwd: string,
         signal: AbortSignal,
         operation: (runtime: AcpQuerySession) => Promise<T>,
-    ): Promise<T> =>
-        await this.#processesByQuery.use(cwd, async () => await operation(await this.#ensure(cwd, signal)));
+    ): Promise<T> => {
+        // Capture one immutable definition for this operation, including while it waits for capacity.
+        const agent = this.#agent;
+        let readers = this.#processesByAgent.get(agent);
+        if (readers === undefined) {
+            readers = new RetainedAgentProcesses<AcpQuerySession>({
+                touch: this.#processes.touch,
+                changed: this.#processes.notifyChanged,
+            });
+            this.#processesByAgent.set(agent, readers);
+        }
+        const current = readers;
+        return await current.use(cwd, async () => await operation(await this.#ensure(agent, current, cwd, signal)));
+    };
 
     readonly capabilities = async (cwd: string, signal: AbortSignal): Promise<SessionCapabilities> =>
         await this.#use(cwd, signal, async (runtime) => runtime.capabilities());
@@ -93,6 +114,7 @@ export class AgentQueryProcesses {
         signal: AbortSignal,
     ): Promise<SessionEventPage> => {
         signal.throwIfAborted();
+        const agent = this.#agent;
         const { nativeSessionId, eventLimit, cursor, sessionId } = request;
         if (cursor !== null) {
             const preview = this.#eventPreviewsBySession.get(sessionId);
@@ -108,7 +130,7 @@ export class AgentQueryProcesses {
         try {
             return await this.#processes.runTransient(
                 signal,
-                async () => await AcpQuerySession.start(this.#agent, cwd, sessionId, store, this.#connector, signal),
+                async () => await AcpQuerySession.start(agent, cwd, sessionId, store, this.#connector, signal),
                 async (runtime) =>
                     await runtime.previewEvents(nativeSessionId, eventLimit, additionalDirectories, signal),
                 async (runtime) => await runtime.closeProcess(),
@@ -124,8 +146,11 @@ export class AgentQueryProcesses {
 
     readonly close = async (): Promise<void> => {
         await Promise.all(
-            this.#processesByQuery.entries().map(async ([cwd, runtime]) => await this.retire(cwd, runtime)),
+            [...this.#processesByAgent.values()].flatMap((readers) =>
+                readers.entries().map(async ([cwd, runtime]) => await this.retire(readers, cwd, runtime)),
+            ),
         );
+        this.#processesByAgent.clear();
         for (const preview of this.#eventPreviewsBySession.values()) {
             preview.store.close();
         }
