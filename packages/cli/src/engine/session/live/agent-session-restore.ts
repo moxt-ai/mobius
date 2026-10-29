@@ -31,7 +31,11 @@ export interface AgentSessionRestore {
     loadSession(signal: AbortSignal, exitMessage: string): Promise<{ response: unknown }>;
     nativeSessionId(): string;
     race<T>(operation: Promise<T>, exitMessage: string, signal: AbortSignal): Promise<T>;
-    restoreStoredConfigurations(session: StoredSession, signal: AbortSignal): Promise<void>;
+    readonly restoreStoredConfigurations: (
+        session: StoredSession,
+        signal: AbortSignal,
+        intent?: "restore" | "fork",
+    ) => Promise<void>;
     selectNativeSession(sessionId: string): void;
     readonly restrictSessionCapabilities: (response: unknown) => void;
     setConfigOptions(options: readonly SessionConfigOption[]): void;

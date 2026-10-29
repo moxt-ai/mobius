@@ -326,13 +326,47 @@ export class AgentSession implements AgentSessionRestore {
         }
     };
 
-    readonly restoreStoredConfigurations = async (session: StoredSession, signal: AbortSignal): Promise<void> => {
+    readonly restoreStoredConfigurations = async (
+        session: StoredSession,
+        signal: AbortSignal,
+        intent: "restore" | "fork" = "restore",
+    ): Promise<void> => {
+        // A model can change the supported modes. Restore it before replaying
+        // the source mode, regardless of the order in which the user edited them.
+        const configurations =
+            intent === "fork"
+                ? session.configurations.toSorted(
+                      (left, right) => Number(right.configId === "model") - Number(left.configId === "model"),
+                  )
+                : session.configurations;
         await this.#sessionConfigurations.restore(
-            session.configurations,
-            this.#configOptions,
+            configurations,
+            () => this.#configOptions,
             this.#applyConfiguration,
             signal,
         );
+        if (intent === "fork") {
+            for (const selection of session.configurations) {
+                // Mode carries the Agent's execution/approval constraint. Keep the existing
+                // best-effort behavior for model selections that disappear from a catalog.
+                if (selection.configId !== "mode") {
+                    continue;
+                }
+                const current = this.#configOptions.find((option) => option.id === selection.configId);
+                if (
+                    current?.type !== selection.type ||
+                    (selection.type === "select"
+                        ? current.currentValue !== selection.value
+                        : current.booleanValue !== selection.booleanValue)
+                ) {
+                    throw new AcpExecutionError(
+                        "The Agent could not preserve the source Session mode for this Fork",
+                        {},
+                        "invalid_session_configuration",
+                    );
+                }
+            }
+        }
     };
 
     readonly restrictSessionCapabilities = (response: unknown): void => {

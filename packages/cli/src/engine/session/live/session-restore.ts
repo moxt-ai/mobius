@@ -55,6 +55,10 @@ export async function restoreSession(
         session.store.remove(session.sessionId);
         stored = session.metrics.measureSync("session-state-read", () => session.store.read(session.sessionId));
     }
+    // A fork has a new Runtime identity, so its destination has no saved selections.
+    // Snapshot the locally tracked source before opening the independent Agent session.
+    const forkSource =
+        origin?.kind === "fork" ? session.store.findNative(session.agentId, origin.nativeSessionId)[0] : undefined;
 
     let lifecycleResponse: unknown;
     if (origin?.kind === "fork") {
@@ -229,7 +233,9 @@ export async function restoreSession(
     }
     session.restrictSessionCapabilities(lifecycleResponse);
     session.setConfigOptions(session.sessionConfigProtocol.normalizeLifecycle(lifecycleResponse));
-    if (stored instanceof FoundStoredSession && session.restored) {
+    if (forkSource !== undefined) {
+        await session.restoreStoredConfigurations(forkSource, signal, "fork");
+    } else if (stored instanceof FoundStoredSession && session.restored) {
         await session.restoreStoredConfigurations(stored.session, signal);
     }
     await session.drained();
