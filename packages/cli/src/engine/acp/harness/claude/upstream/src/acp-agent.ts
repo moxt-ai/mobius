@@ -1879,6 +1879,10 @@ export class ClaudeAcpAgent {
     }
 
     async listSessions(params: ListSessionsRequest, signal: AbortSignal): Promise<ListSessionsResponse> {
+        const offset = params.cursor == null ? 0 : Number(params.cursor);
+        if (!Number.isSafeInteger(offset) || offset < 0) {
+            throw RequestError.invalidParams("Invalid native session cursor");
+        }
         const sdk_sessions = await listEnvironmentSessions(this.environment, params.cwd ?? undefined, signal);
         const sessions = [];
 
@@ -1893,8 +1897,16 @@ export class ClaudeAcpAgent {
                 updatedAt: new Date(session.lastModified).toISOString(),
             });
         }
+        // Keep equal timestamps deterministic across requests without relying on filesystem order.
+        sessions.sort(
+            (left, right) =>
+                right.updatedAt.localeCompare(left.updatedAt) || left.sessionId.localeCompare(right.sessionId),
+        );
+        const pageSize = 500;
+        const end = offset + pageSize;
         return {
-            sessions,
+            sessions: sessions.slice(offset, end),
+            ...(end < sessions.length ? { nextCursor: String(end) } : {}),
         };
     }
 
