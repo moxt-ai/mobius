@@ -97,11 +97,16 @@ export class AcpExecutionConnections {
         try {
             await session.connection.initializeAgent(signal);
             session.connection.beginStateChange();
-            const result = await operation(session, signal);
-            signal.throwIfAborted();
-            return result;
+            try {
+                const result = await operation(session, signal);
+                signal.throwIfAborted();
+                return result;
+            } catch (cause) {
+                // Only this invocation's successfully acquired state change may be rolled back.
+                session.connection.cancelStateChange();
+                throw cause;
+            }
         } catch (cause) {
-            session.connection.cancelStateChange();
             if (!wasBound) {
                 await session.connection.closeProcess();
             }

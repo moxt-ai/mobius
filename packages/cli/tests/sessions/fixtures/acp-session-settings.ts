@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, watch, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as acp from "@agentclientprotocol/sdk";
 import { type ControlledSessionState, persistState, sessions } from "./acp-session-state.ts";
@@ -173,6 +173,34 @@ export function registerSettings(agent: ReturnType<typeof acp.agent>) {
             }
             if (process.argv.includes("--ignore-config-update")) {
                 return { configOptions: configOptions(state) };
+            }
+            const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+            if (directory !== undefined && existsSync(join(directory, "pause-configuration"))) {
+                writeFileSync(join(directory, "configuration-paused"), context.params.sessionId);
+                await new Promise<void>((resolve, reject) => {
+                    const watcher = watch(directory, () => {
+                        if (!existsSync(join(directory, "pause-configuration"))) {
+                            cleanup();
+                            resolve();
+                        }
+                    });
+                    const abort = () => {
+                        cleanup();
+                        reject(context.signal.reason);
+                    };
+                    const cleanup = () => {
+                        watcher.close();
+                        context.signal.removeEventListener("abort", abort);
+                    };
+                    context.signal.addEventListener("abort", abort, { once: true });
+                    if (context.signal.aborted) {
+                        abort();
+                    } else if (!existsSync(join(directory, "pause-configuration"))) {
+                        cleanup();
+                        resolve();
+                    }
+                });
+                context.signal.throwIfAborted();
             }
             const updated =
                 context.params.configId === "mode" && typeof context.params.value === "string"
