@@ -17,6 +17,7 @@ import {
     sessionRecordingTurnItemCursor,
 } from "@moxt-ai/mobius-sdk/protocol";
 import {
+    characterCount,
     emptyProjection,
     type ItemTextChange,
     type ProjectedEventIdentity,
@@ -149,31 +150,86 @@ function storedItem(item: StoredTurnItem): { readonly item: StoredTurnItem; read
     return fits ? { item, listing: boundedTool(item) } : { item: boundedTool(item), listing: null };
 }
 
+/** The identity and timing of a recorded event, which every event a fold handles carries. */
+type FoldedEvent = Pick<SessionLiveEvent, "eventId" | "recordedAt" | "sessionGenerationId">;
+
+/** Answer or reasoning text a fold adds: readable text, or the size of a chunk this deployment cannot read. */
+type TextChunk =
+    | { readonly kind: "readable"; readonly text: string }
+    | { readonly kind: "unreadable"; readonly characters: number; readonly length: number };
+
+type FoldInput =
+    | { readonly kind: "event"; readonly event: SessionLiveEvent }
+    // An answer or reasoning chunk that fails its schema. Its text is never stored, but it still counts
+    // toward its item, so the item reports the characters it misses instead of reading as complete.
+    | {
+          readonly kind: "unreadable_text";
+          readonly event: SessionWireEvent;
+          readonly item: "answer" | "thought";
+          readonly messageId: string | null;
+          readonly chunk: Extract<TextChunk, { readonly kind: "unreadable" }>;
+      };
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The text chunk an unreadable event carries, when it is an answer or reasoning chunk with text. */
+function unreadableText(event: SessionWireEvent): FoldInput | null {
+    if (event.type !== "acp") {
+        return null;
+    }
+    const payload: Readonly<Record<string, unknown>> = event.payload;
+    const item =
+        payload["sessionUpdate"] === "agent_message_chunk"
+            ? "answer"
+            : payload["sessionUpdate"] === "agent_thought_chunk"
+              ? "thought"
+              : null;
+    const content = payload["content"];
+    if (item === null || !isRecord(content) || content["type"] !== "text" || typeof content["text"] !== "string") {
+        return null;
+    }
+    const text = content["text"];
+    const messageId = payload["messageId"];
+    return {
+        chunk: { characters: characterCount(text), kind: "unreadable", length: text.length },
+        event,
+        item,
+        kind: "unreadable_text",
+        messageId: typeof messageId === "string" ? messageId : null,
+    };
+}
+
 /**
  * The events of a batch this deployment can fold. One it has no schema for, such as an update kind from
  * a newer Runtime, is left out of Turn history rather than blocking every later Turn of the Session; the
- * raw Recording keeps it.
+ * raw Recording keeps it. An unreadable answer or reasoning chunk is folded as text its item is missing.
  */
-function readableEvents(wireEvents: readonly SessionWireEvent[]): readonly SessionLiveEvent[] {
-    const events: SessionLiveEvent[] = [];
+function foldInputs(wireEvents: readonly SessionWireEvent[]): readonly FoldInput[] {
+    const inputs: FoldInput[] = [];
     let unreadable = 0;
     for (const wireEvent of wireEvents) {
         try {
-            events.push(decodeSessionLiveEvent(wireEvent));
+            inputs.push({ event: decodeSessionLiveEvent(wireEvent), kind: "event" });
         } catch (cause) {
             if (!(cause instanceof ProtocolMessageError)) {
                 throw cause;
             }
             unreadable += 1;
+            const text = unreadableText(wireEvent);
+            if (text !== null) {
+                inputs.push(text);
+            }
         }
     }
     if (unreadable > 0) {
-        console.warn("Recording Turn history left out events it cannot read", {
+        console.warn("Recording Turn history could not read events", {
             code: "recording_event_unreadable",
             events: unreadable,
         });
     }
-    return events;
+    return inputs;
 }
 
 interface CachedItem {
@@ -207,10 +263,14 @@ class ProjectionFold {
     }
 
     readonly fold = (wireEvents: readonly SessionWireEvent[]): void => {
-        const events = readableEvents(wireEvents);
-        const identities = events.map((event) => ({ eventId: event.eventId, generationId: event.sessionGenerationId }));
+        const inputs = foldInputs(wireEvents);
+        const identities = inputs.map(({ event }) => ({
+            eventId: event.eventId,
+            generationId: event.sessionGenerationId,
+        }));
         const storedEvents = new Set(this.#storage.projectedEvents(identities).map(projectedEventKey));
-        for (const event of events) {
+        for (const input of inputs) {
+            const event = input.event;
             if (this.#state.retiredGenerationIds.includes(event.sessionGenerationId)) {
                 // A late batch of a replaced process; folding it would interrupt the current generation.
                 continue;
@@ -235,10 +295,12 @@ class ProjectionFold {
                 this.#markInterruptedAttempts(event);
             }
             this.#state = { ...this.#state, generationId: event.sessionGenerationId };
-            if (event.type === "lifecycle-metadata") {
-                this.#foldLifecycle(event, event.payload);
+            if (input.kind === "unreadable_text") {
+                this.#foldUnreadableText(input);
+            } else if (input.event.type === "lifecycle-metadata") {
+                this.#foldLifecycle(input.event, input.event.payload);
             } else {
-                this.#foldAcp(event, event.payload);
+                this.#foldAcp(input.event, input.event.payload);
             }
         }
     };
@@ -287,7 +349,7 @@ class ProjectionFold {
         return turn;
     }
 
-    #ensureTurn(commandId: string, event: SessionLiveEvent): StoredTurn {
+    #ensureTurn(commandId: string, event: FoldedEvent): StoredTurn {
         const existing = this.#turn(commandId);
         if (existing !== null) {
             return existing;
@@ -320,7 +382,11 @@ class ProjectionFold {
         if (stored === null) {
             return null;
         }
-        const loaded: CachedItem = { commandId, item: stored, text: { kind: "append", text: "" } };
+        const loaded: CachedItem = {
+            commandId,
+            item: stored,
+            text: { droppedCharacters: 0, kind: "append", text: "" },
+        };
         this.#items.set(key, loaded);
         return loaded;
     }
@@ -337,13 +403,32 @@ class ProjectionFold {
         kind: "answer" | "thought",
         itemId: string,
         sequence: number,
-        text: string,
+        chunk: TextChunk,
     ): void {
-        this.#putItem(commandId, { itemId, kind, omittedCharacters: 0, sequence, text: "" }, { kind: "set", text });
+        this.#putItem(
+            commandId,
+            { itemId, kind, omittedCharacters: 0, sequence, text: "" },
+            chunk.kind === "readable"
+                ? { droppedCharacters: 0, kind: "set", text: chunk.text }
+                : { droppedCharacters: chunk.characters, kind: "set", text: "" },
+        );
     }
 
-    #appendText(cached: CachedItem, text: string): void {
-        this.#putItem(cached.commandId, cached.item, { kind: cached.text.kind, text: `${cached.text.text}${text}` });
+    /** Adds text in order; once a chunk is missing, later text only counts as missing so none skips ahead. */
+    #appendText(cached: CachedItem, chunk: TextChunk): void {
+        const change = cached.text;
+        this.#putItem(
+            cached.commandId,
+            cached.item,
+            chunk.kind === "readable" && change.droppedCharacters === 0
+                ? { ...change, text: `${change.text}${chunk.text}` }
+                : {
+                      ...change,
+                      droppedCharacters:
+                          change.droppedCharacters +
+                          (chunk.kind === "readable" ? characterCount(chunk.text) : chunk.characters),
+                  },
+        );
     }
 
     #interaction(interactionId: string): StoredInteractionRecord | null {
@@ -399,7 +484,7 @@ class ProjectionFold {
             : { ...attemptTiming(turn.attempt), interactionIds: [first, ...rest], kind: "waiting_input" };
     }
 
-    #markInterruptedAttempts(event: SessionLiveEvent): void {
+    #markInterruptedAttempts(event: FoldedEvent): void {
         const candidates = new Map<string, StoredTurn>();
         for (const turn of this.#storage.openTurns()) {
             candidates.set(turn.commandId, turn);
@@ -594,7 +679,10 @@ class ProjectionFold {
         switch (update.sessionUpdate) {
             case "agent_message_chunk": {
                 if (update.content.type === "text") {
-                    this.#appendAnswer(event, commandId, update.messageId ?? null, update.content.text);
+                    this.#appendAnswer(event, commandId, update.messageId ?? null, {
+                        kind: "readable",
+                        text: update.content.text,
+                    });
                 }
                 const turn = this.#ensureTurn(commandId, event);
                 if (update.messageId !== undefined && update.messageId !== null) {
@@ -604,7 +692,10 @@ class ProjectionFold {
             }
             case "agent_thought_chunk":
                 if (update.content.type === "text") {
-                    this.#appendThought(event, commandId, update.messageId ?? null, update.content.text);
+                    this.#appendThought(event, commandId, update.messageId ?? null, {
+                        kind: "readable",
+                        text: update.content.text,
+                    });
                 }
                 return;
             case "tool_call":
@@ -616,23 +707,38 @@ class ProjectionFold {
         }
     }
 
-    #appendAnswer(event: SessionLiveEvent, commandId: string, messageId: string | null, text: string): void {
+    /** Folds an answer or reasoning chunk this deployment cannot read into the item it belongs to. */
+    #foldUnreadableText(input: Extract<FoldInput, { readonly kind: "unreadable_text" }>): void {
+        // Agent output belongs to the innermost command running in the current generation.
+        const commandId = this.#state.activeCommands?.commandIds.at(-1);
+        if (commandId === undefined) {
+            return;
+        }
+        if (input.item === "answer") {
+            this.#appendAnswer(input.event, commandId, input.messageId, input.chunk);
+        } else {
+            this.#appendThought(input.event, commandId, input.messageId, input.chunk);
+        }
+    }
+
+    #appendAnswer(event: FoldedEvent, commandId: string, messageId: string | null, chunk: TextChunk): void {
         const turn = this.#ensureTurn(commandId, event);
+        const length = chunk.kind === "readable" ? chunk.text.length : chunk.length;
         const open =
             turn.openAnswer !== null && turn.openAnswer.messageId === messageId
                 ? this.#item(commandId, turn.openAnswer.itemId)
                 : null;
         if (open !== null && open.item.kind === "answer") {
-            this.#appendText(open, text);
-            this.#putTurn({ ...turn, answerLength: turn.answerLength + text.length });
+            this.#appendText(open, chunk);
+            this.#putTurn({ ...turn, answerLength: turn.answerLength + length });
             return;
         }
         const itemId = `answer:${event.eventId}`;
-        this.#createTextItem(commandId, "answer", itemId, turn.nextSequence, text);
+        this.#createTextItem(commandId, "answer", itemId, turn.nextSequence, chunk);
         // Answer text interrupts reasoning, so later reasoning starts a new thought item.
         this.#putTurn({
             ...turn,
-            answerLength: turn.answerLength + text.length,
+            answerLength: turn.answerLength + length,
             itemCount: turn.itemCount + 1,
             nextSequence: turn.nextSequence + 1,
             openAnswer: { itemId, messageId },
@@ -640,7 +746,7 @@ class ProjectionFold {
         });
     }
 
-    #appendThought(event: SessionLiveEvent, commandId: string, messageId: string | null, text: string): void {
+    #appendThought(event: FoldedEvent, commandId: string, messageId: string | null, chunk: TextChunk): void {
         const turn = this.#ensureTurn(commandId, event);
         const open =
             turn.openThought !== null && turn.openThought.messageId === messageId
@@ -648,12 +754,12 @@ class ProjectionFold {
                 : null;
         // Reasoning interrupts the answer stream, so the next answer chunk opens a new item.
         if (open !== null && open.item.kind === "thought") {
-            this.#appendText(open, text);
+            this.#appendText(open, chunk);
             this.#putTurn({ ...turn, openAnswer: null });
             return;
         }
         const itemId = `thought:${event.eventId}`;
-        this.#createTextItem(commandId, "thought", itemId, turn.nextSequence, text);
+        this.#createTextItem(commandId, "thought", itemId, turn.nextSequence, chunk);
         this.#putTurn({
             ...turn,
             itemCount: turn.itemCount + 1,
@@ -673,6 +779,9 @@ class ProjectionFold {
         const turn = this.#ensureTurn(owner, event);
         const stored = this.#item(owner, itemId);
         const previous = stored !== null && stored.item.kind === "tool" ? stored.item : null;
+        // A tool stored without its detail cannot show complete detail again; later patches only update
+        // its labels, so a read keeps reporting the detail as omitted.
+        const omitted = previous !== null && previous.detail.kind === "omitted";
         const previousDetail = previous !== null && previous.detail.kind === "inline" ? previous.detail : null;
         const rawInput = update.rawInput === undefined ? previousDetail?.rawInput : update.rawInput;
         const rawOutput = update.rawOutput === undefined ? previousDetail?.rawOutput : update.rawOutput;
@@ -681,12 +790,14 @@ class ProjectionFold {
             owner,
             {
                 ...(attemptId === undefined ? {} : { attemptId }),
-                detail: {
-                    content: update.content ?? previousDetail?.content ?? [],
-                    kind: "inline",
-                    ...(rawInput === undefined ? {} : { rawInput }),
-                    ...(rawOutput === undefined ? {} : { rawOutput }),
-                },
+                detail: omitted
+                    ? { kind: "omitted" }
+                    : {
+                          content: update.content ?? previousDetail?.content ?? [],
+                          kind: "inline",
+                          ...(rawInput === undefined ? {} : { rawInput }),
+                          ...(rawOutput === undefined ? {} : { rawOutput }),
+                      },
                 itemId,
                 kind: "tool",
                 locations: update.locations ?? previous?.locations ?? [],
@@ -697,7 +808,7 @@ class ProjectionFold {
                 toolCallId: update.toolCallId,
                 toolKind: update.kind ?? previous?.toolKind ?? null,
             },
-            stored === null ? { kind: "set", text: "" } : stored.text,
+            stored === null ? { droppedCharacters: 0, kind: "set", text: "" } : stored.text,
         );
         // Tool work interrupts both the answer stream and the current run of reasoning.
         this.#putTurn({

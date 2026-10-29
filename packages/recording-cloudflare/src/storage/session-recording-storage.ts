@@ -25,6 +25,11 @@ interface SelectedEvent {
     readonly index: number;
 }
 
+/** Whether no later event of its batch repeats this event's position, so a cursor at it names it alone. */
+function isLastCopy({ batch, event, index }: SelectedEvent): boolean {
+    return batch.events.findLastIndex((candidate) => Number(candidate.position) === Number(event.position)) === index;
+}
+
 interface ResolvedCursor {
     readonly generation: string;
     readonly index: number;
@@ -389,7 +394,7 @@ export class SessionRecordingStorage {
         // replay the full durable history so clients replace reconstructed state instead of dropping it.
         const replay = cursor.legacy && this.#hasGenerationReset();
         const start: ResolvedCursor = replay ? { generation: "", index: -1, legacy: true, ordinal: 0 } : cursor;
-        const selected: SelectedEvent[] = [];
+        let selected: SelectedEvent[] = [];
         let truncated = false;
         for (const batch of this.#batchesFrom(start.ordinal)) {
             for (const [index, event] of batch.events.entries()) {
@@ -405,6 +410,24 @@ export class SessionRecordingStorage {
             if (truncated) {
                 break;
             }
+        }
+        // A batch stored before positions were kept increasing per batch can repeat a position, and a cursor
+        // resolves to its last copy. A page therefore ends on the last copy of its final position, so the
+        // next page continues exactly where this one stopped and never skips an event between the copies.
+        const end = selected.findLastIndex(isLastCopy) + 1;
+        const [first] = selected;
+        if (end === 0 && first !== undefined) {
+            // Every listed event repeats later in its batch, so the page reads through the last copy instead.
+            const lastCopy = first.batch.events.findLastIndex(
+                (candidate) => Number(candidate.position) === Number(first.event.position),
+            );
+            selected = first.batch.events
+                .slice(first.index, lastCopy + 1)
+                .map((event, offset) => ({ batch: first.batch, event, index: first.index + offset }));
+            truncated = lastCopy < first.batch.events.length - 1 || first.batch.ordinal < this.latestOrdinal();
+        } else if (end < selected.length) {
+            selected = selected.slice(0, end);
+            truncated = true;
         }
         const last = selected.at(-1);
         // A caller replaces its state only when this page carries events of a generation other than the one

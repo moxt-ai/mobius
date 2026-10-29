@@ -743,6 +743,43 @@ describe("Recording incremental reads", () => {
         expect(decodeSessionRecordingHistoryPage(await next.text()).events).toEqual([]);
     });
 
+    it("Given a stored batch that repeats a position around an unread event, When a caller pages through it at any page size, Then every stored event arrives once in order", async () => {
+        const [first, a, b, c] = numberedEvents(4, 1).map((candidate, index) => ({
+            ...candidate,
+            eventId: ["first", "a", "b", "c"][index] ?? candidate.eventId,
+        }));
+        expect(
+            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: [first] }), env)).status,
+        ).toBe(201);
+        // A batch recorded by an earlier deployment repeated a frame with an unread event between the copies.
+        await runInDurableObject(
+            env.SESSION_RECORDING.getByName(JSON.stringify([projectId, "live-session"])),
+            (_instance, state) => {
+                state.storage.sql.exec(
+                    "INSERT INTO recorded_session_events_v2 (envelope_json, first_position, last_position, recorded_at, session_generation_id) VALUES (?, 2, 4, 0, ?)",
+                    JSON.stringify({ kind: "session.event.v2", events: [a, b, a, c] }),
+                    event.sessionGenerationId,
+                );
+            },
+        );
+
+        for (const limit of [1, 2, 3, 10]) {
+            const received: string[] = [];
+            let cursor = "v2:1:1";
+            for (let attempt = 0; attempt < 10; attempt += 1) {
+                const page = decodeSessionRecordingHistoryPage(
+                    await (await worker.fetch(read(`?after=${cursor}&limit=${limit}`), env)).text(),
+                );
+                received.push(...page.events.map((candidate) => candidate.eventId));
+                if (page.nextCursor === null) {
+                    break;
+                }
+                cursor = page.nextCursor;
+            }
+            expect(received, `limit ${limit}`).toEqual(["a", "b", "a", "c"]);
+        }
+    });
+
     it("Given one generation that later restarts, When a caller pages from the start, Then only a page carrying the new generation asks it to reset", async () => {
         expect(
             (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: numberedEvents(2, 1) }), env))

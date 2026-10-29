@@ -113,10 +113,13 @@ export interface StoredInteractionRecord {
     readonly resolved: boolean;
 }
 
-/** How a write changes an item's stored answer or thought text. */
+/**
+ * How a write changes an item's stored answer or thought text: the text it adds in order, then the
+ * characters it folded but cannot store, such as an unreadable chunk and everything after it.
+ */
 export type ItemTextChange =
-    | { readonly kind: "append"; readonly text: string }
-    | { readonly kind: "set"; readonly text: string };
+    | { readonly kind: "append"; readonly text: string; readonly droppedCharacters: number }
+    | { readonly kind: "set"; readonly text: string; readonly droppedCharacters: number };
 
 export interface TurnItemWrite {
     readonly commandId: string;
@@ -146,9 +149,23 @@ export const projectedEventKey = (event: ProjectedEventIdentity): string =>
 /**
  * UTF-8 bytes an item's stored text or encoded fields may take. Durable Object SQLite rejects a string
  * or row larger than 2 MB, and a fold that cannot write an item blocks every later Turn of its Session,
- * so stored items stay well inside that limit.
+ * so stored items stay just inside that limit: anything a row could hold is still stored whole.
  */
-export const storedTurnItemBytes = 1_000_000;
+export const storedTurnItemBytes = 1_900_000;
+
+/** Characters as SQLite counts them in stored text: a surrogate pair is one character. */
+export function characterCount(text: string): number {
+    let pairs = 0;
+    for (let index = 0; index + 1 < text.length; index += 1) {
+        const unit = text.charCodeAt(index);
+        const next = text.charCodeAt(index + 1);
+        if (unit >= 0xd800 && unit <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
+            pairs += 1;
+            index += 1;
+        }
+    }
+    return text.length - pairs;
+}
 
 /** A stored item as a read sees it: its fields, its bounded listing, and a prefix of its text. */
 export interface StoredTurnItemRead {

@@ -691,9 +691,23 @@ describe("Recording Turn history", () => {
         expect(full.kind === "answer" ? full.text : "").toBe(chunk.repeat(10));
     });
 
-    it("Given an answer longer than a stored Turn item holds, When a client reads it, Then the stored text keeps its order and the rest is counted as omitted", async () => {
+    it("Given an answer a stored Turn item can hold whole, When a client reads it, Then none of it is omitted", async () => {
         await record([requested("command-1", "Write a lot"), started("command-1")]);
         const chunk = "abcdefghij".repeat(30_000);
+        for (let index = 0; index < 4; index += 1) {
+            await record([answer(chunk)]);
+        }
+        await record([completed("command-1")]);
+
+        const [item] = (await turnPage()).turns[0]?.items ?? [];
+        const full = await itemDetail("command-1", item?.itemId ?? "");
+        expect(full).toMatchObject({ kind: "answer", omittedCharacters: 0 });
+        expect(full.kind === "answer" ? full.text : "").toBe(chunk.repeat(4));
+    });
+
+    it("Given an answer longer than a stored Turn item holds, When a client reads it, Then the stored text keeps its order and the rest is counted as omitted", async () => {
+        await record([requested("command-1", "Write a lot"), started("command-1")]);
+        const chunk = "abcdefghij".repeat(60_000);
         for (let index = 0; index < 4; index += 1) {
             await record([answer(chunk)]);
         }
@@ -701,35 +715,49 @@ describe("Recording Turn history", () => {
         await record([answer("tail"), completed("command-1")]);
 
         const [turn] = (await turnPage()).turns;
-        expect(turn?.answerLength).toBe(1_200_004);
+        expect(turn?.answerLength).toBe(2_400_004);
         const [item] = turn?.items ?? [];
-        expect(item).toMatchObject({ kind: "answer", omittedCharacters: 1_100_004 });
+        expect(item).toMatchObject({ kind: "answer", omittedCharacters: 2_300_004 });
         const full = await itemDetail("command-1", item?.itemId ?? "");
-        expect(full).toMatchObject({ kind: "answer", omittedCharacters: 300_004 });
+        expect(full).toMatchObject({ kind: "answer", omittedCharacters: 600_004 });
         expect(full.kind === "answer" ? full.text : "").toBe(chunk.repeat(3));
     });
 
-    it("Given one reasoning chunk larger than a stored Turn item holds, When a client reads it, Then whole characters are stored and the rest is counted as omitted", async () => {
-        await record([
-            requested("command-1", "Think"),
-            started("command-1"),
-            thought("€".repeat(400_000)),
-            completed("command-1"),
-        ]);
+    it("Given reasoning longer than a stored Turn item holds, When Turn history is rebuilt from the Recording, Then whole characters are stored and the rest is counted as omitted", async () => {
+        await record([requested("command-1", "Think"), started("command-1")]);
+        // Each of these characters takes three bytes, so the stored part has to end on a whole character.
+        await record([thought("€".repeat(350_000))]);
+        await record([thought("€".repeat(350_000)), completed("command-1")]);
+        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]));
+        await runInDurableObject(stub, (_instance, state) => {
+            for (const table of [
+                "recording_projection",
+                "projected_session_events",
+                "recorded_turns",
+                "recorded_turn_items",
+                "recorded_interactions",
+            ]) {
+                state.storage.sql.exec(`DELETE FROM ${table}`);
+            }
+        });
+        // A read finds the projection behind and schedules the backfill that rebuilds it.
+        expect((await worker.fetch(new Request(sessionPath("turns")), env)).status).toBe(503);
+        while (await runDurableObjectAlarm(stub)) {
+            // One backfill step folds both chunks into the item it creates.
+        }
 
         const [item] = (await turnPage()).turns[0]?.items ?? [];
         const full = await itemDetail("command-1", item?.itemId ?? "");
-        // Each of these characters takes three bytes, so the stored part ends on a whole character.
         expect(full).toMatchObject({ kind: "thought", omittedCharacters: 66_667 });
-        expect(full.kind === "thought" ? full.text : "").toBe("€".repeat(333_333));
+        expect(full.kind === "thought" ? full.text : "").toBe("€".repeat(633_333));
     });
 
-    it("Given a tool call whose merged detail is larger than a stored Turn item holds, When a client reads it, Then the tool keeps its labels and reports its detail as omitted", async () => {
+    it("Given a tool call whose merged detail is larger than a stored Turn item holds, When later patches only change its status, Then the tool keeps its labels and still reports its detail as omitted", async () => {
         await record([
             requested("command-1", "Rewrite the notes"),
             started("command-1"),
             acp({
-                rawInput: { content: "x".repeat(600_000), path: "notes.txt" },
+                rawInput: { content: "x".repeat(1_000_000), path: "notes.txt" },
                 sessionUpdate: "tool_call",
                 status: "in_progress",
                 title: "Write notes.txt",
@@ -738,11 +766,14 @@ describe("Recording Turn history", () => {
         ]);
         await record([
             acp({
-                rawOutput: "y".repeat(600_000),
+                rawOutput: "y".repeat(1_000_000),
                 sessionUpdate: "tool_call_update",
-                status: "completed",
+                status: "in_progress",
                 toolCallId: "tool-1",
             }),
+        ]);
+        await record([
+            acp({ sessionUpdate: "tool_call_update", status: "completed", toolCallId: "tool-1" }),
             completed("command-1"),
         ]);
 
@@ -752,6 +783,28 @@ describe("Recording Turn history", () => {
             kind: "tool",
             status: "completed",
             title: "Write notes.txt",
+        });
+    });
+
+    it("Given an answer chunk this Recording cannot read, When later text is recorded, Then the answer reports the characters it misses instead of reading as complete", async () => {
+        await record([requested("command-1", "Answer"), started("command-1"), answer("A")]);
+        // The tolerant ingest schema accepts a chunk the live schema bounds to a million characters.
+        await record([
+            acp({
+                content: { text: "B".repeat(1_000_001), type: "text" },
+                messageId: "message-1",
+                sessionUpdate: "agent_message_chunk",
+            }),
+        ]);
+        await record([answer("C"), completed("command-1")]);
+
+        const [turn] = (await turnPage()).turns;
+        expect(turn).toMatchObject({ answerLength: 1_000_003, attempt: { kind: "succeeded" } });
+        expect(turn?.items).toMatchObject([{ kind: "answer", omittedCharacters: 1_000_002, text: "A" }]);
+        expect(await itemDetail("command-1", turn?.items[0]?.itemId ?? "")).toMatchObject({
+            kind: "answer",
+            omittedCharacters: 1_000_002,
+            text: "A",
         });
     });
 
