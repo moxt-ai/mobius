@@ -143,159 +143,212 @@ test("Given pi compacts the conversation, When the daemon relays the turn, Then 
     });
 });
 
-test("Given repeated native Pi compactions and a split tool turn, When history is previewed, Then the full active branch and compaction summaries remain visible", async () => {
-    await using provider = await FakeOpenAiProvider.start("gpt-4.1", "UNUSED_REPLY");
-    await using agent = await PiFixture.create(provider);
-    await withRealDaemon(new PiAgentSpecification(), agent.environment, async (peer) => {
-        const sessionId = randomUUID();
-        const directory = join(agent.environment["HOME"] ?? "", ".pi", "agent", "sessions");
-        await mkdir(directory, { recursive: true });
-        const timestamp = "2026-10-27T13:47:00.000Z";
-        const usage = {
-            input: 20,
-            output: 10,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 30,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        };
-        const rows = [
-            { type: "session", version: 3, id: sessionId, timestamp, cwd: peer.workspace },
-            {
-                type: "message",
-                id: "user1",
-                parentId: null,
-                timestamp,
-                message: {
-                    role: "user",
-                    content: [{ type: "text", text: "Before automatic compaction" }],
-                    timestamp: 1793108820000,
+test.each([false, true])(
+    "Given native Pi bash execution with compacted=%s and a split tool turn, When history is previewed, Then the full active branch and retained compactions remain visible",
+    async (compacted) => {
+        await using provider = await FakeOpenAiProvider.start("gpt-4.1", "UNUSED_REPLY");
+        await using agent = await PiFixture.create(provider);
+        await withRealDaemon(new PiAgentSpecification(), agent.environment, async (peer) => {
+            const sessionId = randomUUID();
+            const directory = join(agent.environment["HOME"] ?? "", ".pi", "agent", "sessions");
+            await mkdir(directory, { recursive: true });
+            const timestamp = "2026-10-27T13:47:00.000Z";
+            const usage = {
+                input: 20,
+                output: 10,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 30,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            };
+            const rows = [
+                { type: "session", version: 3, id: sessionId, timestamp, cwd: peer.workspace },
+                {
+                    type: "message",
+                    id: "user1",
+                    parentId: null,
+                    timestamp,
+                    message: {
+                        role: "user",
+                        content: [{ type: "text", text: "Before automatic compaction" }],
+                        timestamp: 1793108820000,
+                    },
                 },
-            },
-            {
-                type: "message",
-                id: "tool",
-                parentId: "user1",
-                timestamp,
-                message: {
-                    role: "assistant",
-                    api: "openai-completions",
-                    provider: "openai",
-                    model: "gpt-4.1",
-                    usage,
-                    stopReason: "toolUse",
-                    timestamp: 1793108820000,
-                    content: [{ type: "toolCall", id: "read1", name: "read", arguments: { path: "notes.txt" } }],
+                {
+                    type: "message",
+                    id: "bash",
+                    parentId: "user1",
+                    timestamp,
+                    message: {
+                        role: "bashExecution",
+                        command: "printf native-shell-output",
+                        output: "native-shell-output",
+                        exitCode: 0,
+                        cancelled: false,
+                        truncated: false,
+                        timestamp: 1793108820000,
+                    },
                 },
-            },
-            {
-                type: "message",
-                id: "result",
-                parentId: "tool",
-                timestamp,
-                message: {
-                    role: "toolResult",
-                    toolCallId: "read1",
-                    toolName: "read",
-                    content: [{ type: "text", text: "Saved notes" }],
-                    isError: false,
-                    timestamp: 1793108820000,
+                {
+                    type: "message",
+                    id: "tool",
+                    parentId: "bash",
+                    timestamp,
+                    message: {
+                        role: "assistant",
+                        api: "openai-completions",
+                        provider: "openai",
+                        model: "gpt-4.1",
+                        usage,
+                        stopReason: "toolUse",
+                        timestamp: 1793108820000,
+                        content: [{ type: "toolCall", id: "read1", name: "read", arguments: { path: "notes.txt" } }],
+                    },
                 },
-            },
-            {
-                type: "compaction",
-                id: "compact1",
-                parentId: "result",
-                timestamp,
-                summary: "First automatic summary",
-                firstKeptEntryId: "tool",
-                tokensBefore: 1000,
-            },
-            {
-                type: "message",
-                id: "abandoned",
-                parentId: "compact1",
-                timestamp,
-                message: { role: "user", content: "Abandoned branch", timestamp: 1793108820000 },
-            },
-            {
-                type: "message",
-                id: "user2",
-                parentId: "compact1",
-                timestamp,
-                message: { role: "user", content: "Between compactions", timestamp: 1793108820000 },
-            },
-            {
-                type: "compaction",
-                id: "compact2",
-                parentId: "user2",
-                timestamp,
-                summary: "Second automatic summary",
-                firstKeptEntryId: "user2",
-                tokensBefore: 2000,
-            },
-            {
-                type: "message",
-                id: "user3",
-                parentId: "compact2",
-                timestamp,
-                message: { role: "user", content: "After compaction", timestamp: 1793108820000 },
-            },
-        ];
-        await writeFile(
-            join(directory, `${sessionId}.jsonl`),
-            `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`,
-        );
-        const requestId = randomUUID();
-        peer.send(
-            encodeSessionPreviewHistoryPageLoad({
-                additionalDirectoryIds: [],
-                agentId: "pi",
-                bindingId: peer.bindingId,
-                directoryId: "default",
-                cursor: null,
-                eventLimit: 200,
-                kind: "session.preview-history.page.load",
-                requestId,
-                sessionId,
-            }),
-        );
-        for (;;) {
-            const message = await peer.nextMessage();
-            if (decodeMessageKind(message) !== "session.preview-history.page.loaded") {
-                continue;
-            }
-            const page = decodeSessionPreviewHistoryPageLoaded(message);
-            if (page.requestId !== requestId) {
-                continue;
-            }
-            const updates = page.events.events.events.flatMap((event) => (event.type === "acp" ? [event.payload] : []));
-            expect(
-                updates.flatMap((update) =>
-                    update.sessionUpdate === "user_message_chunk" && update.content.type === "text"
-                        ? [update.content.text]
-                        : [],
-                ),
-            ).toEqual(["Before automatic compaction", "Between compactions", "After compaction"]);
-            expect(updates.filter((update) => update.sessionUpdate === "compaction_update")).toEqual([
-                expect.objectContaining({ compactionId: "compact1", status: "completed" }),
-                expect.objectContaining({ compactionId: "compact2", status: "completed" }),
-            ]);
-            expect(
-                updates.flatMap((update) =>
-                    update.sessionUpdate === "compaction_summary_chunk" && update.content.type === "text"
-                        ? [update.content.text]
-                        : [],
-                ),
-            ).toEqual(["First automatic summary", "Second automatic summary"]);
-            expect(updates.filter((update) => update.sessionUpdate === "tool_call")).toEqual([
-                expect.objectContaining({
-                    toolCallId: "read1",
-                    status: "completed",
-                    content: [{ type: "content", content: { type: "text", text: "Saved notes" } }],
+                {
+                    type: "message",
+                    id: "result",
+                    parentId: "tool",
+                    timestamp,
+                    message: {
+                        role: "toolResult",
+                        toolCallId: "read1",
+                        toolName: "read",
+                        content: [{ type: "text", text: "Saved notes" }],
+                        isError: false,
+                        timestamp: 1793108820000,
+                    },
+                },
+                {
+                    type: "compaction",
+                    id: "compact1",
+                    parentId: "result",
+                    timestamp,
+                    summary: "First automatic summary",
+                    firstKeptEntryId: "tool",
+                    tokensBefore: 1000,
+                },
+                {
+                    type: "message",
+                    id: "abandoned",
+                    parentId: compacted ? "compact1" : "result",
+                    timestamp,
+                    message: { role: "user", content: "Abandoned branch", timestamp: 1793108820000 },
+                },
+                {
+                    type: "message",
+                    id: "user2",
+                    parentId: compacted ? "compact1" : "result",
+                    timestamp,
+                    message: { role: "user", content: "Between compactions", timestamp: 1793108820000 },
+                },
+                {
+                    type: "message",
+                    id: "reply2",
+                    parentId: "user2",
+                    timestamp,
+                    message: {
+                        role: "assistant",
+                        api: "openai-completions",
+                        provider: "openai",
+                        model: "gpt-4.1",
+                        usage,
+                        stopReason: "stop",
+                        timestamp: 1793108820000,
+                        content: [{ type: "text", text: "Retained assistant reply" }],
+                    },
+                },
+                {
+                    type: "compaction",
+                    id: "compact2",
+                    parentId: "reply2",
+                    timestamp,
+                    summary: "Second automatic summary",
+                    firstKeptEntryId: "user2",
+                    tokensBefore: 2000,
+                },
+                {
+                    type: "message",
+                    id: "user3",
+                    parentId: compacted ? "compact2" : "reply2",
+                    timestamp,
+                    message: { role: "user", content: "After compaction", timestamp: 1793108820000 },
+                },
+            ];
+            await writeFile(
+                join(directory, `${sessionId}.jsonl`),
+                `${rows
+                    .filter((row) => compacted || row.type !== "compaction")
+                    .map((row) => JSON.stringify(row))
+                    .join("\n")}\n`,
+            );
+            const requestId = randomUUID();
+            peer.send(
+                encodeSessionPreviewHistoryPageLoad({
+                    additionalDirectoryIds: [],
+                    agentId: "pi",
+                    bindingId: peer.bindingId,
+                    directoryId: "default",
+                    cursor: null,
+                    eventLimit: 200,
+                    kind: "session.preview-history.page.load",
+                    requestId,
+                    sessionId,
                 }),
-            ]);
-            break;
-        }
-    });
-});
+            );
+            for (;;) {
+                const message = await peer.nextMessage();
+                if (decodeMessageKind(message) !== "session.preview-history.page.loaded") {
+                    if (decodeMessageKind(message) === "session.operation.failed") {
+                        throw new Error(message);
+                    }
+                    continue;
+                }
+                const page = decodeSessionPreviewHistoryPageLoaded(message);
+                if (page.requestId !== requestId) {
+                    continue;
+                }
+                const updates = page.events.events.events.flatMap((event) =>
+                    event.type === "acp" ? [event.payload] : [],
+                );
+                expect(
+                    updates.flatMap((update) =>
+                        update.sessionUpdate === "user_message_chunk" && update.content.type === "text"
+                            ? [update.content.text]
+                            : [],
+                    ),
+                ).toEqual(["Before automatic compaction", "Between compactions", "After compaction"]);
+                expect(
+                    updates.flatMap((update) =>
+                        update.sessionUpdate === "agent_message_chunk" && update.content.type === "text"
+                            ? [update.content.text]
+                            : [],
+                    ),
+                ).toEqual(["Retained assistant reply"]);
+                expect(updates.filter((update) => update.sessionUpdate === "compaction_update")).toEqual(
+                    compacted
+                        ? [
+                              expect.objectContaining({ compactionId: "compact1", status: "completed" }),
+                              expect.objectContaining({ compactionId: "compact2", status: "completed" }),
+                          ]
+                        : [],
+                );
+                expect(
+                    updates.flatMap((update) =>
+                        update.sessionUpdate === "compaction_summary_chunk" && update.content.type === "text"
+                            ? [update.content.text]
+                            : [],
+                    ),
+                ).toEqual(compacted ? ["First automatic summary", "Second automatic summary"] : []);
+                expect(updates.filter((update) => update.sessionUpdate === "tool_call")).toEqual([
+                    expect.objectContaining({
+                        toolCallId: "read1",
+                        status: "completed",
+                        content: [{ type: "content", content: { type: "text", text: "Saved notes" } }],
+                    }),
+                ]);
+                break;
+            }
+        });
+    },
+);

@@ -12,7 +12,7 @@ const entrySchema = z
 
 const messageSchema = z
     .object({
-        role: z.string(),
+        role: z.enum(["user", "assistant", "toolResult"]),
         content: z.unknown(),
     })
     .passthrough();
@@ -47,7 +47,12 @@ export function readPiHistory(sessionFile: string): readonly PiHistoryEntry[] {
             }
             visited.add(leaf);
             if (entry.type === "message") {
-                history.push({ type: "message", message: messageSchema.parse(entry.message) });
+                const { role } = z.object({ role: z.string() }).parse(entry.message);
+                // Native-only roles such as bashExecution have no chat content.
+                // Match RPC replay's supported roles without rejecting their neighbours.
+                if (role === "user" || role === "assistant" || role === "toolResult") {
+                    history.push({ type: "message", message: messageSchema.parse(entry.message) });
+                }
             } else if (entry.type === "compaction") {
                 history.push({ type: "compaction", id: entry.id, summary: z.string().parse(entry.summary) });
             }
