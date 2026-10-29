@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { extname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { z } from "zod";
+import { OperationError } from "../../infra/operation-error.ts";
 import { ScratchDirectory } from "../../storage/files/scratch-directory.ts";
 
 const contentRequest = /^mobius-content:(image|audio|resource):([a-f0-9]{64})$/u;
@@ -126,8 +128,12 @@ export class LocalExternalContentStore implements ExternalContentStore, AsyncDis
         }
         await this.#expire();
         active.throwIfAborted();
-        const path = await this.#scratch.write(kind, contentFileName(key, metadata.name), bytes, active);
+        const writtenPath = await this.#scratch.write(kind, contentFileName(key, metadata.name), bytes, active);
+        const path = await this.#scratch.resolveFile(writtenPath);
         active.throwIfAborted();
+        if (path === null) {
+            throw new OperationError("content_unavailable", "The cached content file is unavailable");
+        }
         const retained = this.#entries.get(request);
         this.#entries.set(request, {
             byteLength: bytes.byteLength,
@@ -173,6 +179,34 @@ export class LocalExternalContentStore implements ExternalContentStore, AsyncDis
             const bytes = await this.#scratch.read(resolved.path, active);
             return bytes === null ? null : { ...resolved, bytes };
         });
+
+    /** Metadata for exact, still-cached file URLs. This does not grant content access. */
+    readonly linkedResources = (text: string): readonly (ResolvedExternalContent & { readonly uri: string })[] => {
+        if (!text.includes("file:///")) {
+            return [];
+        }
+        const resources: {
+            readonly index: number;
+            readonly resource: ResolvedExternalContent & { readonly uri: string };
+        }[] = [];
+        for (const [request, entry] of this.#entries) {
+            if (!request.startsWith("mobius-content:resource:") || entry.expiresAt <= Date.now()) {
+                continue;
+            }
+            const uri = pathToFileURL(entry.path).href;
+            for (let index = text.indexOf(uri); index >= 0; index = text.indexOf(uri, index + uri.length)) {
+                const following = text[index + uri.length];
+                if (following === undefined || /[\s<>"')\]]/u.test(following)) {
+                    resources.push({
+                        index,
+                        resource: { uri, mediaType: entry.mediaType, name: entry.name, path: entry.path },
+                    });
+                    break;
+                }
+            }
+        }
+        return resources.sort((left, right) => left.index - right.index).map(({ resource }) => resource);
+    };
 
     readonly [Symbol.asyncDispose] = async (): Promise<void> => {
         clearInterval(this.#expirationTimer);
