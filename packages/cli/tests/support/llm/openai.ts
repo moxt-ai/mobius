@@ -478,7 +478,8 @@ export class FakeOpenAiProvider implements AsyncDisposable {
         model: string,
         answer: string,
         options: {
-            readonly beforeFirstText?: (signal: AbortSignal) => Promise<void>;
+            /** Receives the conversation the model was asked to continue. */
+            readonly beforeFirstText?: (signal: AbortSignal, conversation: string) => Promise<void>;
             readonly fallbackPrompt?: string;
             readonly commentary?: string;
             readonly patch?: string;
@@ -539,6 +540,7 @@ export class FakeOpenAiProvider implements AsyncDisposable {
             const tools = availableTools(payload);
             const completedToolCalls = toolResultCount(payload);
             const userPrompt = latestUserPrompt(payload);
+            const conversation = JSON.stringify(payload["input"] ?? payload["messages"] ?? null);
             const requestedTool =
                 options.toolPrompt === userPrompt ? options.toolSequence?.[completedToolCalls] : undefined;
             const detectedScenario = selectFakeProviderScenario(payload);
@@ -594,7 +596,7 @@ export class FakeOpenAiProvider implements AsyncDisposable {
             if (request.url?.endsWith("/responses") === true) {
                 response.writeHead(200, responseHeaders());
                 if (tool === undefined) {
-                    await options.beforeFirstText?.(disconnected.signal);
+                    await options.beforeFirstText?.(disconnected.signal, conversation);
                     sendResponsesText(response, model, selectedAnswer, selectedChunks, options.commentary);
                 } else {
                     sendResponsesToolCall(response, model, tool);
@@ -602,7 +604,7 @@ export class FakeOpenAiProvider implements AsyncDisposable {
                 return;
             }
             if (tool === undefined) {
-                await options.beforeFirstText?.(disconnected.signal);
+                await options.beforeFirstText?.(disconnected.signal, conversation);
             }
             if (payload["stream"] === false) {
                 sendChatCompletion(response, model, selectedAnswer, tool);
