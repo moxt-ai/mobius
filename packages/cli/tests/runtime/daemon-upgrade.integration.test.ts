@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cp, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -147,6 +147,7 @@ describe("Daemon hourly npm upgrade", () => {
             const response = await fetch(`http://127.0.0.1:${clockPort}/${milliseconds}`, { signal });
             await response.text();
         };
+        let phase = "pack releases and start";
         try {
             packages.set(cliPackage.version, await packedRelease(directory, cliPackage.version, false, signal));
             packages.set(good, await packedRelease(directory, good, false, signal));
@@ -187,12 +188,14 @@ describe("Daemon hourly npm upgrade", () => {
             const manager = await readFile(join(control.stateDirectory, "manager.lock"), "utf8");
             const originalWorker = await readFile(join(control.stateDirectory, "worker.lock"), "utf8");
             const downloadsAtStart = downloads;
+            phase = "idempotent start";
             await cli(["start"]);
             expect(await readFile(join(control.stateDirectory, "worker.lock"), "utf8")).toBe(originalWorker);
             expect(downloads).toBe(downloadsAtStart);
             // A leftover file, even with a live PID, must not block this process.
             await writeFile(join(control.stateDirectory, "upgrade.lock"), String(process.pid));
             const startupQueries = queries;
+            phase = "first hourly upgrade";
             await tick(originalWorker, 3_599_999);
             expect(queries).toBe(startupQueries);
             await tick(originalWorker, 1);
@@ -213,6 +216,7 @@ describe("Daemon hourly npm upgrade", () => {
             // Equal, older and invalid latest values must leave the worker running.
             // Each subsequent query also proves the previous attempt completed.
             const goodWorker = await readFile(join(control.stateDirectory, "worker.lock"), "utf8");
+            phase = "ignore non-newer releases";
             const downloadsAfterUpgrade = downloads;
             for (const target of [good, cliPackage.version, "invalid-version"]) {
                 latest = target;
@@ -223,6 +227,7 @@ describe("Daemon hourly npm upgrade", () => {
             }
             // Data for the next version that is not current, as a CLI before 0.0.325 left when it ran before the switch.
             const reuse = "99.0.2";
+            phase = "upgrade with stale target data";
             packages.set(reuse, await packedRelease(directory, reuse, false, signal));
             await cp(join(stateRoot, "versions", good), join(stateRoot, "versions", reuse), { recursive: true });
             await writeFile(join(stateRoot, "versions", reuse, "retained-data"), "stale-target-data");
@@ -237,6 +242,7 @@ describe("Daemon hourly npm upgrade", () => {
             expect(await readFile(join(stateRoot, "versions", reuse, "retained-data"), "utf8")).toBe("upgraded-data");
             // Reject candidates before replacing the current worker or its data.
             const workerBeforePreflight = await readFile(join(control.stateDirectory, "worker.lock"), "utf8");
+            phase = "reject preflight candidates";
             for (const candidate of [
                 { version: "99.0.4", node: ">=99.0.0", broken: false, message: "requires Node.js" },
                 { version: "99.0.5", node: cliPackage.engines.node, broken: true, message: "startup check failed" },
@@ -258,6 +264,7 @@ describe("Daemon hourly npm upgrade", () => {
             }
             // Data for the failing version that is not current, as a CLI before 0.0.325 left when it ran before the switch.
             await cp(join(stateRoot, "versions", reuse), join(stateRoot, "versions", bad), { recursive: true });
+            phase = "roll back failed worker";
             latest = bad;
             await tick(manager, 2_000);
             await tick(await readFile(join(control.stateDirectory, "worker.lock"), "utf8"), 3_600_000);
@@ -280,6 +287,7 @@ describe("Daemon hourly npm upgrade", () => {
                 code: "ENOENT",
             });
             const worker = await readFile(join(control.stateDirectory, "worker.lock"), "utf8");
+            phase = "rollback cooldown";
             const queriesBeforeCooldown = queries;
             await tick(worker, 7 * 3_600_000);
             await sendLocalRequest(control.stateDirectory, "manager", { kind: "status" }, signal);
@@ -301,6 +309,7 @@ describe("Daemon hourly npm upgrade", () => {
                 code: "ENOENT",
             });
             await cli(["quit"]);
+            phase = "restart current release";
             await cli(["start"], signal, join(directory, `source-${reuse}`, "dist/cli.js"));
             expect(
                 await sendLocalRequest(
@@ -311,6 +320,7 @@ describe("Daemon hourly npm upgrade", () => {
                 ),
             ).toEqual({ kind: "switch-status", state: null });
             await cli(["quit"]);
+            phase = "upgrade from stopped older CLI";
             latest = reuse;
             // An older CLI starts the version that owns the current data instead of falling back to its own copy.
             await cli(["upgrade"]);
@@ -325,6 +335,13 @@ describe("Daemon hourly npm upgrade", () => {
                     signal,
                 ),
             ).toEqual({ kind: "switch-status", state: null });
+        } catch (cause) {
+            for (const file of await readdir(stateRoot, { recursive: true }).catch(() => [])) {
+                if (file.endsWith(".log") || file.endsWith(".lock")) {
+                    console.error(`${file}: ${await readFile(join(stateRoot, file), "utf8").catch(String)}`);
+                }
+            }
+            throw new Error(`Daemon upgrade journey failed during: ${phase}`, { cause });
         } finally {
             await cli(["quit"], AbortSignal.timeout(20_000)).catch(() => undefined);
             signal.removeEventListener("abort", aborted);
