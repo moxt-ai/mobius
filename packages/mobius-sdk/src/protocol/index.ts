@@ -27,8 +27,6 @@ export {
 } from "./runtime/diagnostics.ts";
 
 export type {
-    IdentifiedRuntimeHeartbeatAckEvent,
-    IdentifiedRuntimeHeartbeatEvent,
     RuntimeHeartbeatAckEvent,
     RuntimeHeartbeatEvent,
     RuntimeLivenessReadyEvent,
