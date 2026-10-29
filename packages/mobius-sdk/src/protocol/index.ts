@@ -493,6 +493,7 @@ export {
 } from "./session/recording/recording.ts";
 
 export type {
+    SessionRecordingCompaction,
     SessionRecordingExecution,
     SessionRecordingInteraction,
     SessionRecordingTurn,
@@ -524,10 +525,12 @@ export {
     parseSessionRecordingTurnCursor,
     parseSessionRecordingTurnItemCursor,
     SESSION_RECORDING_EXECUTION_COMMAND_MAX_LIMIT,
+    SESSION_RECORDING_TURN_COMPACTION_MAX_ELEMENTS,
     SESSION_RECORDING_TURN_ITEM_ID_MAX_LENGTH,
     SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT,
     SESSION_RECORDING_TURN_PAGE_DECODE_MAX_ELEMENTS,
     SESSION_RECORDING_TURN_PAGE_MAX_LIMIT,
+    sessionRecordingCompactionSchema,
     sessionRecordingTurnItemCursor,
 } from "./session/recording/turn-history.ts";
 

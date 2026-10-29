@@ -12,6 +12,29 @@ export async function runStreamingScenario(
     state: ControlledSessionState,
     transcript: NonNullable<ReturnType<typeof nativeHistory.get>>,
 ): Promise<acp.PromptResponse | undefined> {
+    if (prompt === "release after compaction") {
+        const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+        if (directory === undefined) {
+            throw new Error("The controlled Agent state directory is unavailable");
+        }
+        const compactionId = `context/${turnNumber.toString()}`;
+        await context.client.notify(acp.methods.client.session.update, {
+            sessionId: context.params.sessionId,
+            update: { sessionUpdate: "compaction_update", compactionId, status: "in_progress" },
+        });
+        await waitForFile(directory, "resume-compaction", cancellation.signal);
+        await context.client.notify(acp.methods.client.session.update, {
+            sessionId: context.params.sessionId,
+            update: {
+                sessionUpdate: "compaction_update",
+                compactionId,
+                status: cancellation.signal.aborted ? "cancelled" : "completed",
+            },
+        });
+        if (cancellation.signal.aborted) {
+            return { stopReason: "cancelled" };
+        }
+    }
     if (prompt.startsWith("stream merged text ")) {
         const sessionUpdate = prompt.slice("stream merged text ".length);
         if (sessionUpdate !== "user_message_chunk" && sessionUpdate !== "agent_message_chunk") {

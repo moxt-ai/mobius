@@ -37,6 +37,8 @@ export const SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT = 1_000;
  * A page's serialized-character budget is what bounds its actual size.
  */
 export const SESSION_RECORDING_TURN_PAGE_DECODE_MAX_ELEMENTS = 10_000;
+/** Recent compaction markers retained in a Turn summary; raw Recording keeps the full event history. */
+export const SESSION_RECORDING_TURN_COMPACTION_MAX_ELEMENTS = 1_000;
 /** Longest Turn item identifier. */
 export const SESSION_RECORDING_TURN_ITEM_ID_MAX_LENGTH = 4_200;
 
@@ -195,11 +197,28 @@ export const sessionRecordingTurnPrecedingSchema = z
     })
     .readonly();
 
+export const sessionRecordingCompactionSchema = z
+    .object({
+        // Agent-owned identity: retain the ACP contract rather than imposing Mobius identifier syntax.
+        compactionId: z.string().max(2_048),
+        sequence: z.number().int().nonnegative().safe(),
+        status: z.enum(["in_progress", "completed", "failed", "cancelled"]),
+    })
+    .readonly();
+
+export type SessionRecordingCompaction = z.infer<typeof sessionRecordingCompactionSchema>;
+
 const sessionRecordingTurnSchema = z
     .object({
         answerLength: z.number().int().nonnegative().safe(),
         attempt: sessionRecordingTurnAttemptSchema,
         commandId: identifierStringSchema,
+        // Optional for independently deployed Recordings and clients that predate compaction status.
+        compactions: z
+            .array(sessionRecordingCompactionSchema)
+            .max(SESSION_RECORDING_TURN_COMPACTION_MAX_ELEMENTS)
+            .readonly()
+            .optional(),
         createdAt: isoTimestamp,
         generationId: identifierStringSchema,
         itemCount: z.number().int().nonnegative().safe(),

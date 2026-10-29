@@ -8,6 +8,7 @@ import {
     type SessionRecordingTurnItem,
     type SessionRecordingTurnPage,
 } from "@moxt-ai/mobius-sdk/protocol";
+import { decodeSessionRecordingTurnPage as decodePreviousTurnPage } from "@moxt-ai/mobius-sdk-previous/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRecordingWorker } from "../src/worker.ts";
 
@@ -126,6 +127,147 @@ function promptText(page: SessionRecordingTurnPage): readonly string[] {
 }
 
 describe("Recording Turn history", () => {
+    it("Given context compaction, When a client reads during compaction and after completion, Then the same ordered status survives another read", async () => {
+        const compactionId = `native/context ${"x".repeat(130)}`;
+        await record([
+            requested("command-compact", "Continue the task"),
+            started("command-compact"),
+            answer("Earlier work"),
+            acp({ compactionId, sessionUpdate: "compaction_update", status: "in_progress" }),
+        ]);
+        expect((await turnPage()).turns[0]).toMatchObject({
+            answerLength: 12,
+            compactions: [{ compactionId, sequence: 1, status: "in_progress" }],
+            items: [{ kind: "answer", sequence: 0, text: "Earlier work" }],
+        });
+
+        await record([
+            acp({ compactionId, sessionUpdate: "compaction_update", status: "in_progress" }),
+            acp({ compactionId, sessionUpdate: "compaction_update", status: "completed" }),
+            answer("Continued work"),
+            completed("command-compact"),
+        ]);
+        const page = await turnPage();
+        expect(page.turns[0]).toMatchObject({
+            attempt: { kind: "succeeded" },
+            compactions: [{ compactionId, sequence: 1, status: "completed" }],
+            itemCount: 2,
+            items: [
+                { kind: "answer", sequence: 0, text: "Earlier work" },
+                { kind: "answer", sequence: 2, text: "Continued work" },
+            ],
+        });
+        expect(await turnPage()).toEqual(page);
+
+        const wire = await worker.fetch(new Request(sessionPath("turns")), env);
+        const previous = decodePreviousTurnPage(await wire.text());
+        expect(previous.turns[0]).toMatchObject({
+            attempt: { kind: "succeeded" },
+            items: [
+                { kind: "answer", text: "Earlier work" },
+                { kind: "answer", text: "Continued work" },
+            ],
+        });
+        // The released decoder serializes the independently retained old response contract.
+        expect(decodeSessionRecordingTurnPage(JSON.stringify(previous))).toMatchObject({
+            turns: [{ commandId: "command-compact", items: previous.turns[0]?.items }],
+        });
+    });
+
+    it("Given failed and interrupted compactions, When the Turn settles or its process restarts, Then history reports a terminal compaction status", async () => {
+        await record([
+            requested("command-failed", "Continue after compaction fails"),
+            started("command-failed"),
+            acp({ compactionId: "compact-failed", sessionUpdate: "compaction_update", status: "in_progress" }),
+            acp({ compactionId: "compact-failed", sessionUpdate: "compaction_update", status: "failed" }),
+            answer("The task can still finish"),
+            completed("command-failed"),
+            requested("command-interrupted", "Continue interrupted work"),
+            started("command-interrupted"),
+            acp({ compactionId: "compact-interrupted", sessionUpdate: "compaction_update", status: "in_progress" }),
+        ]);
+        generation = "generation-2";
+        await record([requested("command-next", "Read after restart"), started("command-next"), answer("Recovered")]);
+        const page = await turnPage();
+        expect(page.turns.find((turn) => turn.commandId === "command-failed")).toMatchObject({
+            compactions: [{ compactionId: "compact-failed", status: "failed" }],
+        });
+        expect(page.turns.find((turn) => turn.commandId === "command-interrupted")).toMatchObject({
+            attempt: { kind: "indeterminate" },
+            compactions: [{ compactionId: "compact-interrupted", status: "cancelled" }],
+        });
+    });
+
+    it("Given retained compactions and a completed update replay, When history is rebuilt, Then completed compactions stay complete and answers keep their order", async () => {
+        await record([
+            requested("command-replay", "Read retained context"),
+            started("command-replay"),
+            acp({ compactionId: "compact-replay", sessionUpdate: "compaction_update", status: "completed" }),
+            acp({ compactionId: "compact-replay", sessionUpdate: "compaction_update", status: "in_progress" }),
+            answer("Retained answer"),
+            completed("command-replay"),
+        ]);
+        const projected = await turnPage();
+        expect(projected.turns[0]).toMatchObject({
+            compactions: [{ compactionId: "compact-replay", sequence: 0, status: "completed" }],
+            items: [{ kind: "answer", sequence: 1, text: "Retained answer" }],
+        });
+        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]));
+        await runInDurableObject(stub, (_instance, state) => {
+            state.storage.sql.exec(
+                "UPDATE recording_projection SET state_json = json_remove(state_json, '$.compactionVersion')",
+            );
+        });
+        const building = await worker.fetch(new Request(sessionPath("turns")), env);
+        expect(building.status).toBe(503);
+        while (await runDurableObjectAlarm(stub)) {
+            // Existing Recordings recover compactions from their authoritative raw events.
+        }
+        expect(await turnPage()).toEqual(projected);
+    });
+
+    it("Given a compaction in an attempt that is replaced, When another attempt starts, Then the earlier compaction stops running", async () => {
+        await record([
+            requested("command-retry", "Continue the task"),
+            started("command-retry"),
+            acp({ compactionId: "compact-old-attempt", sessionUpdate: "compaction_update", status: "in_progress" }),
+            lifecycle({
+                attemptId: "attempt-replacement",
+                commandId: "command-retry",
+                epoch: "epoch-1",
+                kind: "prompt.started",
+            }),
+            answer("Continuing in a fresh attempt"),
+        ]);
+        expect((await turnPage()).turns[0]).toMatchObject({
+            attempt: { attemptId: "attempt-replacement", kind: "running" },
+            compactions: [{ compactionId: "compact-old-attempt", status: "cancelled" }],
+        });
+    });
+
+    it("Given more compactions than fit in a Turn summary, When history is read, Then recent compactions and subsequent answers remain readable", async () => {
+        const events = [
+            requested("command-bounded", "Continue a long task"),
+            started("command-bounded"),
+            ...Array.from({ length: 1_001 }, (_, index) =>
+                acp({
+                    compactionId: `compact-${index.toString()}`,
+                    sessionUpdate: "compaction_update",
+                    status: "completed",
+                }),
+            ),
+            answer("Still readable"),
+            completed("command-bounded"),
+        ];
+        await record(events.slice(0, 1_000));
+        await record(events.slice(1_000));
+        const turn = (await turnPage()).turns[0];
+        expect(turn?.compactions).toHaveLength(1_000);
+        expect(turn?.compactions?.[0]).toMatchObject({ compactionId: "compact-1", sequence: 1 });
+        expect(turn?.compactions?.at(-1)).toMatchObject({ compactionId: "compact-1000", sequence: 1_000 });
+        expect(turn?.items).toMatchObject([{ kind: "answer", sequence: 1_001, text: "Still readable" }]);
+    });
+
     it("Given duplicate event frames, When Turns are updated and rebuilt, Then each logical event contributes once while raw frames remain intact", async () => {
         const begin = [requested("command-1", "Say hello"), started("command-1")];
         const output = answer("Hello");

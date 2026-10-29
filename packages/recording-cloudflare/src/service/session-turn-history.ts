@@ -2,6 +2,7 @@ import type {
     AcpSessionUpdate,
     LifecycleMetadata,
     SessionLiveEvent,
+    SessionRecordingCompaction,
     SessionRecordingExecution,
     SessionRecordingTurn,
     SessionRecordingTurnAttempt,
@@ -13,6 +14,7 @@ import type {
 import {
     decodeSessionLiveEvent,
     ProtocolMessageError,
+    SESSION_RECORDING_TURN_COMPACTION_MAX_ELEMENTS,
     type SessionWireEvent,
     sessionRecordingTurnItemCursor,
 } from "@moxt-ai/mobius-sdk/protocol";
@@ -374,6 +376,7 @@ class ProjectionFold {
             answerLength: 0,
             attempt: { kind: "none" },
             commandId,
+            compactions: [],
             createdAt: event.recordedAt,
             generationId: event.sessionGenerationId,
             itemCount: 0,
@@ -514,6 +517,7 @@ class ProjectionFold {
             this.#turns.set(turn.commandId, turn);
             this.#putTurn({
                 ...turn,
+                compactions: this.#settledCompactions(turn, "cancelled"),
                 attempt: {
                     ...attemptTiming(turn.attempt),
                     detectedAt: event.recordedAt,
@@ -563,7 +567,9 @@ class ProjectionFold {
                 this.#putTurn({
                     ...turn,
                     preceding:
-                        preceding === null ? null : { commandId: preceding.commandId, itemCount: preceding.itemCount },
+                        preceding === null
+                            ? null
+                            : { commandId: preceding.commandId, itemCount: preceding.nextSequence },
                     createdAt: event.recordedAt,
                     generationId: event.sessionGenerationId,
                     prompt: {
@@ -579,6 +585,10 @@ class ProjectionFold {
                 // Output of a new attempt never extends items of the attempt it replaces.
                 this.#putTurn({
                     ...turn,
+                    compactions:
+                        attemptTiming(turn.attempt).attemptId === payload.attemptId
+                            ? turn.compactions
+                            : this.#settledCompactions(turn, "cancelled"),
                     attempt: { attemptId: payload.attemptId, kind: "running", startedAt: event.recordedAt },
                     generationId: event.sessionGenerationId,
                     openAnswer: null,
@@ -595,6 +605,7 @@ class ProjectionFold {
                 const cancelled = payload.stopReason === "cancelled" || payload.stopReason === "canceled";
                 this.#putTurn({
                     ...turn,
+                    compactions: this.#settledCompactions(turn, "cancelled"),
                     attempt: cancelled
                         ? { ...timing, cancelledAt: event.recordedAt, kind: "cancelled" }
                         : {
@@ -614,6 +625,7 @@ class ProjectionFold {
                 const { startedAt } = attemptTiming(turn.attempt);
                 this.#putTurn({
                     ...turn,
+                    compactions: this.#settledCompactions(turn, "failed"),
                     attempt: {
                         ...(payload.kind === "prompt.failed" ? { attemptId: payload.attemptId } : {}),
                         ...(startedAt === undefined ? {} : { startedAt }),
@@ -692,6 +704,9 @@ class ProjectionFold {
             return;
         }
         switch (update.sessionUpdate) {
+            case "compaction_update":
+                this.#mergeCompaction(event, commandId, update);
+                return;
             case "agent_message_chunk": {
                 if (update.content.type === "text") {
                     this.#appendAnswer(event, commandId, update.messageId ?? null, {
@@ -720,6 +735,46 @@ class ProjectionFold {
             default:
                 return;
         }
+    }
+
+    #settledCompactions(turn: StoredTurn, status: "failed" | "cancelled"): readonly SessionRecordingCompaction[] {
+        return turn.compactions.map((compaction) =>
+            compaction.status === "in_progress" ? { ...compaction, status } : compaction,
+        );
+    }
+
+    #mergeCompaction(
+        event: FoldedEvent,
+        commandId: string,
+        update: Extract<AcpSessionUpdate, { readonly sessionUpdate: "compaction_update" }>,
+    ): void {
+        const status = update.status;
+        if (status !== "in_progress" && status !== "completed" && status !== "failed" && status !== "cancelled") {
+            return;
+        }
+        const turn = this.#ensureTurn(commandId, event);
+        const previous = turn.compactions.find((compaction) => compaction.compactionId === update.compactionId);
+        // A repeated start or late frame cannot reopen a settled compaction.
+        if (previous !== undefined && previous.status !== "in_progress") {
+            return;
+        }
+        const compaction: SessionRecordingCompaction = {
+            compactionId: update.compactionId,
+            sequence: previous?.sequence ?? turn.nextSequence,
+            status,
+        };
+        this.#putTurn({
+            ...turn,
+            compactions: [
+                ...turn.compactions
+                    .filter((entry) => entry.compactionId !== update.compactionId)
+                    .slice(-(SESSION_RECORDING_TURN_COMPACTION_MAX_ELEMENTS - 1)),
+                compaction,
+            ],
+            nextSequence: turn.nextSequence + (previous === undefined ? 1 : 0),
+            openAnswer: null,
+            openThought: null,
+        });
     }
 
     /** Folds an answer or reasoning chunk this deployment cannot read into the item it belongs to. */
@@ -881,8 +936,8 @@ export class SessionTurnHistory {
 
     #projection(): StoredProjection | null {
         const projection = this.#history.projection();
-        if (projection !== null && projection.state.version === 1) {
-            // A pre-deduplication projection may already contain repeated text. Rebuild only its
+        if (projection !== null && (projection.state.version === 1 || projection.state.compactionVersion !== 1)) {
+            // Older projections may contain repeated text or omit compactions. Rebuild only their
             // derived tables from the unchanged raw Recording, using the existing bounded backfill.
             this.#history.resetProjection();
             return null;
@@ -1009,7 +1064,7 @@ export class SessionTurnHistory {
             for (const turn of chunk) {
                 // Only the first Turn may exceed the budget; any later Turn must fit with its first item.
                 const first = turns.length === 0;
-                const promptSize = JSON.stringify(turn.prompt).length;
+                const promptSize = JSON.stringify(turn.prompt).length + JSON.stringify(turn.compactions).length;
                 if (!first && promptSize >= budget) {
                     break reading;
                 }
@@ -1031,6 +1086,7 @@ export class SessionTurnHistory {
                     answerLength: turn.answerLength,
                     attempt: turn.attempt,
                     commandId: turn.commandId,
+                    compactions: turn.compactions,
                     createdAt: turn.createdAt,
                     generationId: turn.generationId,
                     itemCount: turn.itemCount,
