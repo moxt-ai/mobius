@@ -26,7 +26,7 @@ import { z } from "zod";
 
 afterEach(() => vi.useRealTimers());
 
-async function fixture(mode: "healthy" | "reject-http1" | "reject-http2" | "reset-pairing" = "healthy") {
+async function fixture(mode: "healthy" | "reject-http1" | "reject-http2" | "reset-pairing" | "ipv6" = "healthy") {
     const directory = await mkdtemp(join(tmpdir(), "mobius-relay-proxy-"));
     const key = join(directory, "key.pem");
     const certificate = join(directory, "certificate.pem");
@@ -47,7 +47,7 @@ async function fixture(mode: "healthy" | "reject-http1" | "reject-http2" | "rese
             "-subj",
             "/CN=localhost",
             "-addext",
-            "subjectAltName=DNS:localhost,IP:127.0.0.1",
+            "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1",
         ],
         { stdio: "ignore" },
     );
@@ -155,7 +155,7 @@ async function fixture(mode: "healthy" | "reject-http1" | "reject-http2" | "rese
     proxy.on("connect", (request, downstream, head) => {
         const target = new URL(`http://${request.url}`);
         tunnels.push(target.host);
-        const upstream = connect(Number(target.port), target.hostname, () => {
+        const upstream = connect(Number(target.port), target.hostname.replace(/^\[|\]$/gu, ""), () => {
             downstream.write("HTTP/1.1 200 Connection Established\r\n\r\n");
             if (head.length > 0) {
                 upstream.write(head);
@@ -174,12 +174,15 @@ async function fixture(mode: "healthy" | "reject-http1" | "reject-http2" | "rese
         });
         downstream.on("close", () => upstream.destroy());
     });
-    await Promise.all([new Promise<void>((done) => relay.listen(0, "127.0.0.1", done)), listen(proxy)]);
+    await Promise.all([
+        new Promise<void>((done) => relay.listen(0, mode === "ipv6" ? "::1" : "127.0.0.1", done)),
+        listen(proxy),
+    ]);
     const relayAddress = relay.address();
     if (relayAddress === null || typeof relayAddress === "string") {
         throw new Error("The Relay did not bind a TCP port");
     }
-    const origin = `https://127.0.0.1:${relayAddress.port}`;
+    const origin = `https://${mode === "ipv6" ? "[::1]" : "127.0.0.1"}:${relayAddress.port}`;
     const config = join(directory, "pairings.json");
     await writeFile(
         config,
@@ -421,3 +424,31 @@ test("Given an HTTP/2 Relay rejecting extended CONNECT, When the handshake fails
         ]),
     );
 });
+
+// @no-uc: Technical regression; macOS must query the IPv6 family so IPv6 targets retain their actual route and tunnel classification.
+test.runIf(process.platform === "darwin")(
+    "Given a macOS IPv6 Relay, When a comparison completes, Then both route snapshots identify the IPv6 loopback interface",
+    async () => {
+        await using peer = await fixture("ipv6");
+        const probe = peer.run();
+        await probe.online();
+        probe.stop();
+        expect(await probe.finished).toBe(0);
+        const report = await peer.report();
+        const targetRoute = {
+            addresses: ["::1"],
+            routes: [{ address: "::1", interface: "lo0", tunnelInterface: false }],
+            failures: [],
+        };
+        expect(report).toMatchObject({
+            legs: [
+                { role: "direct", routesBefore: [targetRoute], routesAfter: [targetRoute] },
+                {
+                    role: "proxy",
+                    routesBefore: [targetRoute, expect.anything()],
+                    routesAfter: [targetRoute, expect.anything()],
+                },
+            ],
+        });
+    },
+);

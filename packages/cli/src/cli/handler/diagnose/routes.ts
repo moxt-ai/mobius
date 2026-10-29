@@ -46,11 +46,15 @@ export async function collectRouteEvidence(hostname: string, cancellation: Abort
                     let networkInterface = "";
                     let gateway = "";
                     if (process.platform === "darwin") {
-                        const { stdout } = await execute("/sbin/route", ["-n", "get", address], {
-                            signal,
-                            timeout: 2_000,
-                            maxBuffer: 32_768,
-                        });
+                        const { stdout } = await execute(
+                            "/sbin/route",
+                            ["-n", "get", ...(isIP(address) === 6 ? ["-inet6"] : []), address],
+                            {
+                                signal,
+                                timeout: 2_000,
+                                maxBuffer: 32_768,
+                            },
+                        );
                         networkInterface = stdout.match(/^\s*interface:\s*(\S+)/mu)?.[1] ?? "";
                         gateway = stdout.match(/^\s*gateway:\s*(\S+)/mu)?.[1] ?? "";
                     } else if (process.platform === "linux") {
