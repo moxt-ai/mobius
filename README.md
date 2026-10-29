@@ -8,7 +8,7 @@
 
 SDK and infrastructure for remote access to Agents on users' machines.
 
-[Start building](docs/GUIDE.md#start-with-the-sdk) · [SDK reference](packages/mobius-sdk/README.md) · [Contributing](docs/CONTRIBUTING.md)
+[Start building](packages/mobius-sdk/README.md#start-building) · [Contributing](docs/CONTRIBUTING.md)
 
 <img src="docs/assets/readme-accent.svg" width="320" height="40" alt="" />
 
@@ -48,7 +48,7 @@ Keep Agent history on the connected machine, or enable optional cloud Recording
 for access to recorded history while that machine is offline. Choose the balance of
 privacy and availability that fits your application.
 
-[Explore history and storage options →](docs/GUIDE.md#data-ownership-and-recovery)
+[Explore history and storage options →](packages/mobius-sdk/README.md#history-and-reconnects)
 
 ## From your application to their machine
 
@@ -75,9 +75,8 @@ conversations, live replies, and history, built on Mobius.
 npm install @moxt-ai/mobius-sdk
 ```
 
-**[Follow the integration guide →](docs/GUIDE.md#start-with-the-sdk)**
+**[Read the SDK README →](packages/mobius-sdk/README.md#start-building)**
 
-Set up your connection and make your first SDK request. See the
-[SDK reference](packages/mobius-sdk/README.md) for browser and server integration.
+Set up your connection, run your first SDK request, and follow the complete Session example.
 
 Want to improve Mobius? Read the [contribution guide](docs/CONTRIBUTING.md).

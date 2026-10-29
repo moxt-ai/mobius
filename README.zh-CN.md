@@ -8,7 +8,7 @@
 
 为应用接入用户机器上的 Agent，提供 SDK 与远程连接基础设施。
 
-[开始构建](docs/GUIDE.md#start-with-the-sdk) · [SDK 参考](packages/mobius-sdk/README.md) · [参与贡献](docs/CONTRIBUTING.md)
+[开始构建](packages/mobius-sdk/README.md#start-building) · [参与贡献](docs/CONTRIBUTING.md)
 
 <img src="docs/assets/readme-accent.svg" width="320" height="40" alt="" />
 
@@ -40,7 +40,7 @@ Mobius 负责连接 Agent，用户继续使用自己的项目、工具和原生�
 将 Agent 历史记录保留在连接的机器上，或按需开启云端 Recording，
 在机器离线时查看已录制的历史。根据应用对隐私和可用性的需求，自由选择。
 
-[了解历史记录与存储选项 →](docs/GUIDE.md#data-ownership-and-recovery)
+[了解历史记录与存储选项 →](packages/mobius-sdk/README.md#history-and-reconnects)
 
 ## 从你的应用，连接到用户的机器
 
@@ -64,8 +64,8 @@ Mobius 负责连接 Agent，用户继续使用自己的项目、工具和原生�
 npm install @moxt-ai/mobius-sdk
 ```
 
-**[阅读接入指南 →](docs/GUIDE.md#start-with-the-sdk)**
+**[阅读 SDK README →](packages/mobius-sdk/README.md#start-building)**
 
-配置连接并发起第一次 SDK 请求。浏览器和服务端集成方式见 [SDK 参考](packages/mobius-sdk/README.md)。
+配置连接，发起第一次 SDK 请求，再运行完整的会话示例。
 
 想改进 Mobius？请阅读[贡献指南](docs/CONTRIBUTING.md)。
