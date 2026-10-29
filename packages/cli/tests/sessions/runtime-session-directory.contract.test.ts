@@ -1,82 +1,71 @@
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MobiusRecordingPolicy } from "@moxt-ai/mobius-sdk";
 import { RUNTIME_WORKSPACE_BINDING_ID } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, it } from "vitest";
 import { startTestPlatform } from "../support/platform.ts";
 
-it.each([
-    { name: "no legacy recording policy", legacy: {} },
-    {
-        name: "a legacy full recording policy",
-        legacy: { policy: new MobiusRecordingPolicy("full", 60_000, 10, 1_024) },
-    },
-])(
-    "Given $name, When the SDK creates and prompts a Session, Then its conversation is listed without enabling Recording",
-    async ({ legacy }) => {
-        const cancellation = new AbortController();
-        await using platform = await startTestPlatform();
-        try {
-            const project = await platform.developer.createProject(
-                platform.appId,
-                {
-                    clientReference: `client-${crypto.randomUUID()}`,
-                    displayName: "Runtime Session directory",
-                    idempotencyKey: `project-${crypto.randomUUID()}`,
-                    locationHint: "wnam",
-                },
-                cancellation.signal,
-            );
-            const runtime = await platform.connectAgent(project.projectId);
-            const sessionId = `session-${crypto.randomUUID()}`;
-            await runtime.client.sessions.create(
-                {
-                    additionalDirectoryIds: [],
-                    agentId: "claude",
-                    bindingId: RUNTIME_WORKSPACE_BINDING_ID,
-                    directoryId: "default",
-                    ...legacy,
-                    runtimeId: runtime.runtimeId,
-                    sessionId,
-                    title: "Remembered conversation",
-                },
-                cancellation.signal,
-            );
-            await runtime.client.turns.submitToRuntime(
-                runtime.runtimeId,
+it("Given a new Session, When the SDK creates and prompts it, Then its conversation is listed without enabling Recording", async () => {
+    const cancellation = new AbortController();
+    await using platform = await startTestPlatform();
+    try {
+        const project = await platform.developer.createProject(
+            platform.appId,
+            {
+                clientReference: `client-${crypto.randomUUID()}`,
+                displayName: "Runtime Session directory",
+                idempotencyKey: `project-${crypto.randomUUID()}`,
+                locationHint: "wnam",
+            },
+            cancellation.signal,
+        );
+        const runtime = await platform.connectAgent(project.projectId);
+        const sessionId = `session-${crypto.randomUUID()}`;
+        await runtime.client.sessions.create(
+            {
+                additionalDirectoryIds: [],
+                agentId: "claude",
+                bindingId: RUNTIME_WORKSPACE_BINDING_ID,
+                directoryId: "default",
+                runtimeId: runtime.runtimeId,
                 sessionId,
-                {
-                    additionalDirectoryIds: [],
-                    agentId: "claude",
-                    attachments: [],
-                    content: "Remember this conversation",
-                    directoryId: "default",
-                    idempotencyKey: `turn-${crypto.randomUUID()}`,
-                },
-                cancellation.signal,
-            );
+                title: "Remembered conversation",
+            },
+            cancellation.signal,
+        );
+        await runtime.client.turns.submitToRuntime(
+            runtime.runtimeId,
+            sessionId,
+            {
+                additionalDirectoryIds: [],
+                agentId: "claude",
+                attachments: [],
+                content: "Remember this conversation",
+                directoryId: "default",
+                idempotencyKey: `turn-${crypto.randomUUID()}`,
+            },
+            cancellation.signal,
+        );
 
-            await expect(
-                runtime.client.runtimes.listSessions(runtime.runtimeId, 100, cancellation.signal),
-            ).resolves.toEqual([
-                expect.objectContaining({
-                    agentId: "claude",
-                    directoryId: expect.any(String),
-                    prompted: true,
-                    sessionId,
-                    status: { kind: "idle" },
-                    title: "Remember this conversation",
-                }),
-            ]);
-            await expect(
-                platform.developer.readProjectRecordingPolicy(project.projectId, cancellation.signal),
-            ).resolves.toMatchObject({ effectiveMode: "disabled", inheritedFrom: "system", mode: "inherit" });
-        } finally {
-            cancellation.abort(new Error("Runtime Session directory test completed"));
-        }
-    },
-);
+        await expect(
+            runtime.client.runtimes.listSessions(runtime.runtimeId, 100, cancellation.signal),
+        ).resolves.toEqual([
+            expect.objectContaining({
+                agentId: "claude",
+                directoryId: expect.any(String),
+                prompted: true,
+                sessionId,
+                status: { kind: "idle" },
+                title: "Remember this conversation",
+            }),
+        ]);
+        await expect(
+            platform.developer.readProjectRecordingPolicy(project.projectId, cancellation.signal),
+        ).resolves.toMatchObject({ effectiveMode: "disabled", inheritedFrom: "system", mode: "inherit" });
+    } finally {
+        cancellation.abort(new Error("Runtime Session directory test completed"));
+    }
+});
 
 it("Given long ASCII and multibyte directory references, When the SDK browses them, Then the local filesystem remains the authority for directory availability", async () => {
     await using platform = await startTestPlatform();
@@ -140,7 +129,6 @@ it("Given a deeply nested multibyte project path, When the SDK browses it and ru
             {
                 ...identity,
                 bindingId: RUNTIME_WORKSPACE_BINDING_ID,
-                policy: new MobiusRecordingPolicy("full", 60_000, 10, 1_024),
                 runtimeId: runtime.runtimeId,
                 sessionId,
                 title: "Long workspace conversation",

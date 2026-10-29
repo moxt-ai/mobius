@@ -4,7 +4,6 @@ export type {
     AgentSetting,
     AgentSettingsDiscoveredEvent,
     Interaction,
-    MobiusSessionExport,
     NativeEventPageRequest,
     NativeSessionCommand,
     NativeSessionEntry,

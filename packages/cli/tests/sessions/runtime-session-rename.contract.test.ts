@@ -1,4 +1,3 @@
-import { MobiusRecordingPolicy } from "@moxt-ai/mobius-sdk";
 import { RUNTIME_WORKSPACE_BINDING_ID } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, it } from "vitest";
 import { startTestPlatform } from "../support/platform.ts";
@@ -25,7 +24,6 @@ it("Given a prompted local conversation, When the Session is renamed, Then the d
                 agentId: "claude",
                 bindingId: RUNTIME_WORKSPACE_BINDING_ID,
                 directoryId: "default",
-                policy: new MobiusRecordingPolicy("full", 60_000, 10, 1_024),
                 runtimeId: runtime.runtimeId,
                 sessionId,
                 title: "Remembered conversation",

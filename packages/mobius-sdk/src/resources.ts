@@ -80,14 +80,6 @@ function identifierField(value: Readonly<Record<string, unknown>>, field: string
     }
 }
 
-function integerField(value: Readonly<Record<string, unknown>>, field: string): number {
-    const candidate = value[field];
-    if (typeof candidate !== "number" || !Number.isSafeInteger(candidate) || candidate < 0) {
-        throw invalidResponse(`The service returned an invalid ${field}`);
-    }
-    return candidate;
-}
-
 function booleanField(value: Readonly<Record<string, unknown>>, field: string): boolean {
     const candidate = value[field];
     if (typeof candidate !== "boolean") {
@@ -115,77 +107,6 @@ function validateTimestamp(value: string, field: string): string {
     return value;
 }
 
-/**
- * @deprecated Legacy Session payload accepted for compatibility only. Platform Recording
- * is controlled by app/project policy; these fields do not enforce retention or limits.
- */
-export class MobiusRecordingPolicy {
-    readonly contentLimitBytes: number;
-    readonly hotEventLimit: number;
-    readonly idempotencyRetentionMilliseconds: number;
-    readonly level: string;
-    readonly retentionMilliseconds: number;
-
-    constructor(
-        level: string,
-        retentionMilliseconds: number,
-        hotEventLimit: number,
-        contentLimitBytes: number,
-        idempotencyRetentionMilliseconds = retentionMilliseconds,
-    ) {
-        if (
-            (level !== "full" && level !== "summary") ||
-            !Number.isSafeInteger(retentionMilliseconds) ||
-            retentionMilliseconds < 60_000 ||
-            !Number.isSafeInteger(hotEventLimit) ||
-            hotEventLimit < 10 ||
-            !Number.isSafeInteger(contentLimitBytes) ||
-            contentLimitBytes < 1_024 ||
-            !Number.isSafeInteger(idempotencyRetentionMilliseconds) ||
-            idempotencyRetentionMilliseconds < 60_000 ||
-            idempotencyRetentionMilliseconds > retentionMilliseconds
-        ) {
-            throw new MobiusValidationError("The Session recording policy is invalid");
-        }
-        this.contentLimitBytes = contentLimitBytes;
-        this.hotEventLimit = hotEventLimit;
-        this.idempotencyRetentionMilliseconds = idempotencyRetentionMilliseconds;
-        this.level = level;
-        this.retentionMilliseconds = retentionMilliseconds;
-    }
-
-    readonly toJSON = (): MobiusRecordingPolicyRequestPayload =>
-        new MobiusRecordingPolicyRequestPayload(
-            this.level,
-            this.retentionMilliseconds,
-            this.hotEventLimit,
-            this.contentLimitBytes,
-            this.idempotencyRetentionMilliseconds,
-        );
-}
-
-class MobiusRecordingPolicyRequestPayload {
-    readonly contentLimitBytes: number;
-    readonly hotEventLimit: number;
-    readonly idempotencyRetentionMilliseconds: number;
-    readonly level: string;
-    readonly retentionMilliseconds: number;
-
-    constructor(
-        level: string,
-        retentionMilliseconds: number,
-        hotEventLimit: number,
-        contentLimitBytes: number,
-        idempotencyRetentionMilliseconds: number,
-    ) {
-        this.contentLimitBytes = contentLimitBytes;
-        this.hotEventLimit = hotEventLimit;
-        this.idempotencyRetentionMilliseconds = idempotencyRetentionMilliseconds;
-        this.level = level;
-        this.retentionMilliseconds = retentionMilliseconds;
-    }
-}
-
 export class MobiusSessionAccess {
     readonly credential: string;
     readonly credentialId: string;
@@ -210,27 +131,9 @@ export interface CreateMobiusSessionRequest {
     readonly agentId: string;
     readonly bindingId: string;
     readonly directoryId: string;
-    /** @deprecated Ignored by Platform; configure Recording through app/project policy. */
-    readonly policy?: MobiusRecordingPolicy;
     readonly runtimeId: string;
     readonly sessionId: string;
     readonly title: string;
-}
-
-export class MobiusSessionImportBinding {
-    readonly agentRef: string;
-    readonly bindingId: string;
-    readonly configRevision: number;
-    readonly runtimeId: string;
-    readonly workspaceRef: string;
-
-    constructor(bindingId: string, runtimeId: string, agentRef: string, workspaceRef: string, configRevision = 1) {
-        this.agentRef = agentRef;
-        this.bindingId = bindingId;
-        this.configRevision = configRevision;
-        this.runtimeId = runtimeId;
-        this.workspaceRef = workspaceRef;
-    }
 }
 
 export interface SubmitMobiusTurnRequest {
@@ -760,170 +663,6 @@ export class MobiusPageRequest {
         this.cursor = cursor;
         this.limit = limit;
     }
-}
-
-export class MobiusSessionBinding {
-    readonly agentRef: string;
-    readonly bindingId: string;
-    readonly configRevision: number;
-    readonly createdAt: string;
-    readonly runtimeId: string;
-    readonly sessionId: string;
-    readonly workspaceRef: string;
-
-    constructor(
-        agentRef: string,
-        bindingId: string,
-        configRevision: number,
-        createdAt: string,
-        runtimeId: string,
-        sessionId: string,
-        workspaceRef: string,
-    ) {
-        this.agentRef = agentRef;
-        this.bindingId = bindingId;
-        this.configRevision = configRevision;
-        this.createdAt = createdAt;
-        this.runtimeId = runtimeId;
-        this.sessionId = sessionId;
-        this.workspaceRef = workspaceRef;
-    }
-}
-
-export abstract class MobiusSessionState {
-    abstract readonly kind: string;
-}
-
-export class MobiusReadySessionState extends MobiusSessionState {
-    readonly kind = "ready";
-}
-
-export class MobiusDeletingSessionState extends MobiusSessionState {
-    readonly kind = "deleting";
-    readonly requestedAt: string;
-
-    constructor(requestedAt: string) {
-        super();
-        this.requestedAt = requestedAt;
-    }
-}
-
-export class MobiusDeletedSessionState extends MobiusSessionState {
-    readonly completedAt: string;
-    readonly kind = "deleted";
-
-    constructor(completedAt: string) {
-        super();
-        this.completedAt = completedAt;
-    }
-}
-
-export class MobiusSession {
-    readonly agentId: string;
-    readonly createdAt: string;
-    readonly createdBy: string;
-    readonly defaultBinding: MobiusSessionBinding;
-    readonly hasNativeHistory: boolean;
-    readonly lastCommittedSequence: string;
-    readonly policy: MobiusRecordingPolicy;
-    readonly projectId: string;
-    readonly runtimeId: string;
-    readonly sessionId: string;
-    readonly state: MobiusSessionState;
-    readonly title: string;
-    readonly updatedAt: string;
-
-    constructor(
-        agentId: string,
-        createdAt: string,
-        createdBy: string,
-        defaultBinding: MobiusSessionBinding,
-        hasNativeHistory: boolean,
-        lastCommittedSequence: string,
-        policy: MobiusRecordingPolicy,
-        projectId: string,
-        runtimeId: string,
-        sessionId: string,
-        state: MobiusSessionState,
-        title: string,
-        updatedAt: string,
-    ) {
-        this.agentId = agentId;
-        this.createdAt = createdAt;
-        this.createdBy = createdBy;
-        this.defaultBinding = defaultBinding;
-        this.hasNativeHistory = hasNativeHistory;
-        this.lastCommittedSequence = lastCommittedSequence;
-        this.policy = policy;
-        this.projectId = projectId;
-        this.runtimeId = runtimeId;
-        this.sessionId = sessionId;
-        this.state = state;
-        this.title = title;
-        this.updatedAt = updatedAt;
-    }
-}
-
-export function decodeMobiusSessionState(value: unknown): MobiusSessionState {
-    const state = record(value, "Session lifecycle");
-    const kind = stringField(state, "kind", 32);
-    if (kind === "ready") {
-        return new MobiusReadySessionState();
-    }
-    if (kind === "deleting") {
-        return new MobiusDeletingSessionState(validateTimestamp(stringField(state, "requestedAt", 128), "requestedAt"));
-    }
-    if (kind === "deleted") {
-        return new MobiusDeletedSessionState(validateTimestamp(stringField(state, "completedAt", 128), "completedAt"));
-    }
-    throw invalidResponse("The service returned an unsupported Session lifecycle");
-}
-
-function decodeBinding(value: unknown): MobiusSessionBinding {
-    const binding = record(value, "Session binding");
-    return new MobiusSessionBinding(
-        identifierField(binding, "agentRef"),
-        identifierField(binding, "bindingId"),
-        integerField(binding, "configRevision"),
-        validateTimestamp(stringField(binding, "createdAt", 128), "createdAt"),
-        identifierField(binding, "runtimeId"),
-        identifierField(binding, "sessionId"),
-        identifierField(binding, "workspaceRef"),
-    );
-}
-
-function decodeRecordingPolicy(value: unknown): MobiusRecordingPolicy {
-    const policy = record(value, "Session recording policy");
-    return new MobiusRecordingPolicy(
-        stringField(policy, "level", 32),
-        integerField(policy, "retentionMilliseconds"),
-        integerField(policy, "hotEventLimit"),
-        integerField(policy, "contentLimitBytes"),
-        integerField(policy, "idempotencyRetentionMilliseconds"),
-    );
-}
-
-export function decodeMobiusSession(value: unknown): MobiusSession {
-    const session = record(value, "Session");
-    const sequence = stringField(session, "lastCommittedSeq", 40);
-    if (!/^(?:0|[1-9][0-9]*)$/.test(sequence)) {
-        throw invalidResponse("The service returned an invalid event sequence");
-    }
-    return new MobiusSession(
-        identifierField(session, "agentId"),
-        validateTimestamp(stringField(session, "createdAt", 128), "createdAt"),
-        identifierField(session, "createdBy"),
-        decodeBinding(session["defaultBinding"]),
-        booleanField(session, "hasNativeHistory"),
-        sequence,
-        decodeRecordingPolicy(session["policy"]),
-        identifierField(session, "projectId"),
-        identifierField(session, "runtimeId"),
-        identifierField(session, "sessionId"),
-        decodeMobiusSessionState(session["lifecycle"]),
-        stringField(session, "title", 500),
-        validateTimestamp(stringField(session, "updatedAt", 128), "updatedAt"),
-    );
 }
 
 export abstract class MobiusTurnState {

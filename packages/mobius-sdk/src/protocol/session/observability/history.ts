@@ -2,11 +2,7 @@ import { z } from "zod";
 import { DIRECTORY_IDENTIFIER as directoryIdentifier } from "../../shared/directory.ts";
 import { identifierStringSchema as identifier } from "../../shared/identifier.ts";
 import { ProtocolMessageError } from "../../shared/message-codec.ts";
-import {
-    decodeKnownNativeSessionEvents,
-    nativeSessionEventsSchema,
-    sessionEventOmissionSchema,
-} from "../events/index.ts";
+import { decodeKnownNativeSessionEvents, nativeSessionEventsSchema } from "../events/index.ts";
 
 export const SESSION_HISTORY_PAGE_LOAD_KIND = "session.live-history.v2.page.load";
 export const SESSION_HISTORY_PAGE_LOADED_KIND = "session.live-history.v2.page.loaded";
@@ -16,8 +12,6 @@ export const SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND = "session.preview-history
 const pageRequestFields = {
     cursor: z.string().min(1).max(512).nullable(),
     eventLimit: z.number().int().min(1).max(10_000),
-    // Decode old clients without rejecting their request; omission has no effect.
-    omit: z.array(sessionEventOmissionSchema).max(1).readonly().optional(),
     requestId: identifier,
     sessionId: identifier,
 };

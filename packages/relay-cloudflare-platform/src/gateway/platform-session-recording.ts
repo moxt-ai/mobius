@@ -87,29 +87,20 @@ export class PlatformSessionRecording implements SessionRecording {
                 }),
             );
             signal.throwIfAborted();
-            let results: readonly SessionRecordingBatchResult[];
-            if (response.status === 404) {
-                // An older Recording Worker has not appended anything at the missing batch route.
-                // This compatibility path is safe during rolling deployment; uncertain writes are never retried.
+            if (!response.ok) {
                 await response.body?.cancel();
-                results = await this.#deliverLegacy(target, envelope, signal);
-            } else {
-                if (!response.ok) {
-                    await response.body?.cancel();
-                    return failed("write_failed");
-                }
-                results = v.parse(batchResponseSchema, await response.json()).results;
+                return failed("write_failed");
             }
-            const decoded = { results };
-            const identifiers = new Set(decoded.results.map((result) => result.sessionId));
+            const results = v.parse(batchResponseSchema, await response.json()).results;
+            const identifiers = new Set(results.map((result) => result.sessionId));
             if (
                 identifiers.size !== sessions.length ||
-                decoded.results.length !== sessions.length ||
+                results.length !== sessions.length ||
                 sessions.some((id) => !identifiers.has(id))
             ) {
                 return failed("write_failed");
             }
-            return decoded.results;
+            return results;
         } catch {
             signal.throwIfAborted();
             return failed("write_failed");
@@ -135,64 +126,6 @@ export class PlatformSessionRecording implements SessionRecording {
             this.#reusablePolicies.set(projectId, { policy, readAt: now });
         }
         return policy;
-    }
-
-    async #deliverLegacy(
-        target: SessionRecordingScope,
-        envelope: SessionWireEnvelope,
-        signal: AbortSignal,
-    ): Promise<readonly SessionRecordingBatchResult[]> {
-        if (this.#provider.kind !== "available") {
-            throw new Error("The Recording provider is unavailable");
-        }
-        const provider = this.#provider.fetcher;
-        const grouped = new Map<string, SessionWireEnvelope["events"][number][]>();
-        for (const event of envelope.events) {
-            const events = grouped.get(event.sessionId) ?? [];
-            events.push(event);
-            grouped.set(event.sessionId, events);
-        }
-        const entries = [...grouped];
-        const results = new Map<string, SessionRecordingBatchResult>();
-        let next = 0;
-        await Promise.all(
-            Array.from({ length: Math.min(4, entries.length) }, async () => {
-                for (;;) {
-                    const item = entries[next++];
-                    if (item === undefined) {
-                        return;
-                    }
-                    const [sessionId, events] = item;
-                    let recorded = false;
-                    try {
-                        const response = await provider.fetch(
-                            new Request("https://recording.internal/v1/session-events", {
-                                method: "POST",
-                                headers: { "content-type": "application/json" },
-                                body: encodeSessionRecordingWireWrite({
-                                    ...target,
-                                    envelope: { kind: envelope.kind, events },
-                                }),
-                                signal,
-                            }),
-                        );
-                        recorded = response.ok;
-                        await response.body?.cancel();
-                    } catch {
-                        signal.throwIfAborted();
-                    }
-                    results.set(
-                        sessionId,
-                        recorded
-                            ? { sessionId, kind: "recorded" }
-                            : { sessionId, kind: "failed", code: "write_failed" },
-                    );
-                }
-            }),
-        );
-        return entries.map(
-            ([sessionId]) => results.get(sessionId) ?? { sessionId, kind: "failed", code: "write_failed" },
-        );
     }
 }
 

@@ -1,14 +1,12 @@
-import type { SessionRecordingSummaryV2, SessionRecordingWireWrite } from "@moxt-ai/mobius-sdk/protocol";
+import type { SessionRecordingSummaryV2 } from "@moxt-ai/mobius-sdk/protocol";
 import type { RecordingDirectoryUpdate } from "../entity/recording-directory-update.ts";
 import type { RecordingDirectoryStorage } from "../storage/recording-directory-storage.ts";
-import { projectDirectoryUpdate } from "./recording-directory-update.ts";
 
 export class RecordingDirectory {
     readonly #storage: RecordingDirectoryStorage;
     constructor(storage: RecordingDirectoryStorage) {
         this.#storage = storage;
     }
-    readonly record = (write: SessionRecordingWireWrite): void => this.apply(projectDirectoryUpdate(write));
     readonly apply = (write: RecordingDirectoryUpdate): void => {
         for (const { sessionId, operations } of write.updates) {
             const initial = this.#storage.find(sessionId);

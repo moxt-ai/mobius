@@ -497,46 +497,6 @@ export const sessionLiveEventBatchSchema = z
     .max(SESSION_EVENT_BATCH_MAX_SIZE)
     .readonly();
 export type SessionLiveEventBatch = z.infer<typeof sessionLiveEventBatchSchema>;
-const sessionExportSchema = z
-    .object({
-        binding: z
-            .object({
-                bindingId: identifier,
-                runtimeId: identifier,
-            })
-            .readonly(),
-        events: z.array(sessionEventSchema).max(MAX_EVENT_COUNT).readonly(),
-        sessionId: identifier,
-        truncated: z.boolean(),
-    })
-    .readonly()
-    .superRefine((session, context) => {
-        const eventIds = new Set<string>();
-        for (const [index, event] of session.events.entries()) {
-            if (event.sessionId !== session.sessionId) {
-                context.addIssue({
-                    code: "custom",
-                    message: "Exported event belongs to a different Session",
-                    path: ["events", index, "sessionId"],
-                });
-            }
-            if (eventIds.has(event.eventId)) {
-                context.addIssue({
-                    code: "custom",
-                    message: "Exported event identities are not unique",
-                    path: ["events", index, "eventId"],
-                });
-            }
-            eventIds.add(event.eventId);
-        }
-    });
-export const mobiusSessionExportSchema = z
-    .object({
-        formatVersion: z.literal("2"),
-        session: sessionExportSchema,
-    })
-    .readonly();
-export type MobiusSessionExport = z.infer<typeof mobiusSessionExportSchema>;
 export const sessionEventEnvelopeSchema = z
     .object({ events: sessionLiveEventBatchSchema, kind: z.literal(SESSION_EVENT_KIND) })
     .readonly();
@@ -555,16 +515,10 @@ export const sessionEventLogPageSchema = z
     })
     .readonly();
 export type SessionEventLogPage = z.infer<typeof sessionEventLogPageSchema>;
-/** @deprecated Accepted for wire compatibility only; reasoning is always included. */
-export const sessionEventOmissionSchema = z.literal("agent-reasoning");
-/** @deprecated Reasoning omission is no longer supported. */
-export type SessionEventOmission = z.infer<typeof sessionEventOmissionSchema>;
 export const nativeEventPageRequestSchema = z
     .object({
         cursor: z.string().min(1).max(512).nullable(),
         eventLimit: z.number().int().min(1).max(10_000),
-        // Legacy callers may still send this option; readers must ignore it.
-        omit: z.array(sessionEventOmissionSchema).max(1).readonly().optional(),
     })
     .readonly();
 export type NativeEventPageRequest = z.infer<typeof nativeEventPageRequestSchema>;
@@ -666,10 +620,6 @@ export const decodeKnownSessionLiveEventBatch = (value: unknown): SessionLiveEve
     );
 export const encodeSessionLiveEventBatch = (value: SessionLiveEventBatch): string =>
     encode(value, sessionLiveEventBatchSchema);
-export const decodeMobiusSessionExport = (value: unknown): MobiusSessionExport =>
-    decode(value, mobiusSessionExportSchema);
-export const encodeMobiusSessionExport = (value: MobiusSessionExport): string =>
-    encode(value, mobiusSessionExportSchema);
 export const decodeSessionEventEnvelope = (value: unknown): SessionEventEnvelope =>
     decode(value, sessionEventEnvelopeSchema);
 export const encodeSessionEventEnvelope = (value: SessionEventEnvelope): string =>

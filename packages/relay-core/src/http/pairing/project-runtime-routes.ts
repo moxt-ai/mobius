@@ -43,17 +43,6 @@ const sessionIdentitySchema = v.strictObject({
 const createSessionSchema = v.strictObject({
     ...sessionIdentitySchema.entries,
     bindingId: identifier,
-    // Legacy clients send this field. Recording is controlled by app/project policy;
-    // these Session fields do not configure recording or enforce retention and limits.
-    policy: v.optional(
-        v.strictObject({
-            contentLimitBytes: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
-            hotEventLimit: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
-            idempotencyRetentionMilliseconds: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
-            level: v.string(),
-            retentionMilliseconds: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
-        }),
-    ),
     runtimeId: identifier,
     sessionId: identifier,
     title: v.pipe(v.string(), v.maxLength(512)),
@@ -73,8 +62,6 @@ const nativeEventsSchema = v.strictObject({
     ...sessionIdentitySchema.entries,
     cursor: v.nullable(v.string()),
     eventLimit: v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(10_000)),
-    // Accepted only for older clients; never forward it to a Runtime.
-    omit: v.optional(v.pipe(v.array(v.literal("agent-reasoning")), v.maxLength(1))),
 });
 const nativeForkSchema = v.strictObject({
     ...sessionIdentitySchema.entries,
