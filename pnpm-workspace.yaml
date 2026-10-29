@@ -18,6 +18,11 @@ packageExtensions:
   dependency-cruiser@18:
     dependencies:
       typescript: 6.0.3
+  # drizzle-kit 0.31 loads drizzle-orm from the directories above its own. Without a copy of its
+  # own it finds the CLI's hoisted drizzle-orm 1.0 and refuses to generate the relay migrations.
+  drizzle-kit@0.31:
+    dependencies:
+      drizzle-orm: 0.45.2
 
 allowBuilds:
   '@clerk/shared': true
