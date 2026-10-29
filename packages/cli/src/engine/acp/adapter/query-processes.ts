@@ -57,11 +57,14 @@ export class AgentQueryProcesses {
             return await waitForSharedOperation(pending, signal);
         }
         const existing = readers.get(cwd);
-        if (existing !== undefined) {
+        if (existing !== undefined && !existing.hasTerminated()) {
             readers.touch(cwd, existing);
             return existing;
         }
         return await readers.prepare(cwd, async () => {
+            if (existing !== undefined) {
+                await this.retire(readers, cwd, existing);
+            }
             // This ID belongs to the reader, never to a user's conversation.
             const readerId = randomUUID();
             const runtime = await this.#processes.startRetained(

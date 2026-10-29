@@ -104,6 +104,62 @@ test("Given an execution Session has scoped environment, When other conversation
     }
 });
 
+// @no-uc: Technical regression; a failed shared reader must not block the next native-browser request.
+test("Given a shared native reader crashes while listing, When a fresh conversation and the original conversation browse again, Then both see saved history without restarting", async ({
+    signal,
+}) => {
+    const peer = await runtimePeer(signal);
+    const list = async (sessionId: string, requestId: string) => {
+        peer.send(
+            encodeNativeSessionCommand({
+                ...peer.base(sessionId),
+                kind: NATIVE_SESSION_REQUEST_KIND,
+                requestId,
+                action: "list",
+                cursor: null,
+            }),
+        );
+        return decodeDaemonToServiceMessage(
+            await peer.next(requestId, ["native.session.result", "session.operation.failed"]),
+        );
+    };
+    try {
+        peer.send(
+            encodeSessionPrepareCommand({ ...peer.base("seed"), kind: "session.prepare", requestId: "prepare-seed" }),
+        );
+        await peer.next("prepare-seed", ["session.ready"]);
+        await peer.prompt("seed", "seed-history");
+        const original = await list("first-browser", "list-before-crash");
+        if (
+            original.kind !== "native.session.result" ||
+            original.action !== "list" ||
+            original.entries[0] === undefined
+        ) {
+            throw new Error("Expected the seeded native conversation");
+        }
+        await peer.crashNextNativeList();
+        expect(await list("first-browser", "list-that-crashes")).toMatchObject({
+            kind: "session.operation.failed",
+            code: "session_operation_failed",
+        });
+        for (const sessionId of ["new-browser", "first-browser"]) {
+            const result = await list(sessionId, `retry-after-crash-${sessionId}`);
+            expect(result).toMatchObject({
+                kind: "native.session.result",
+                action: "list",
+                entries: [
+                    expect.objectContaining({
+                        nativeSessionId: original.entries[0].nativeSessionId,
+                        title: original.entries[0].title,
+                    }),
+                ],
+            });
+        }
+    } finally {
+        await peer.close();
+    }
+});
+
 // @no-uc: Technical regression; native discovery, new destinations and canonical reimports must not share identity.
 test("Given native history, When it is imported, reopened and forked, Then execution uses the destination or canonical Session", async ({
     signal,
@@ -429,6 +485,7 @@ await import(${JSON.stringify(agentPeer)});
         next,
         send,
         launches: () => readContexts(launches),
+        crashNextNativeList: () => writeFile(join(harnessState, "crash-next-list"), ""),
         nativeRequests: () => readContexts(nativeRequests),
         prompt: async (sessionId: string, commandId: string, agentId = "codex") => {
             send(

@@ -18,6 +18,7 @@ export class AcpQuerySession {
     readonly #sessionId: string;
     readonly #events: SessionEventStore;
     readonly #connection: AdapterSessionConnection;
+    #lifecycle: { readonly kind: "open" } | { readonly kind: "terminated" } = { kind: "open" };
     #capabilities: SessionCapabilities = unsupportedSessionCapabilities();
     #configOptions: readonly SessionConfigOption[] = [];
 
@@ -42,6 +43,9 @@ export class AcpQuerySession {
                     this.#configOptions = event.configOptions;
                 }
             },
+        });
+        void this.#connection.termination.then(() => {
+            this.#lifecycle = { kind: "terminated" };
         });
     }
 
@@ -82,6 +86,18 @@ export class AcpQuerySession {
     };
 
     readonly capabilities = (): SessionCapabilities => this.#capabilities;
+    readonly hasTerminated = (): boolean => {
+        switch (this.#lifecycle.kind) {
+            case "open":
+                return false;
+            case "terminated":
+                return true;
+            default: {
+                const unreachable: never = this.#lifecycle;
+                return unreachable;
+            }
+        }
+    };
     readonly listNativeSessions = async (cursor: string | null, signal: AbortSignal): Promise<NativeSessionPage> => {
         if (!this.#capabilities.listSessions) {
             throw new AcpExecutionError(

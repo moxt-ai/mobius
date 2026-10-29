@@ -195,6 +195,9 @@ export class AdapterSessionConnection {
     get connection() {
         return this.#connection.connection;
     }
+    get termination() {
+        return this.#connection.termination;
+    }
     readonly initialize = (signal: AbortSignal): Promise<void> => this.#connection.initialize(signal);
     readonly agentSettingsModelEffort = () => this.#connection.agentSettingsModelEffort();
     readonly race = <T>(operation: Promise<T>, exitMessage: string, signal: AbortSignal): Promise<T> =>
