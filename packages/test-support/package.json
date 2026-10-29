@@ -25,7 +25,7 @@
         "esbuild": "0.28.2",
         "hono": "^4.13.8",
         "miniflare": "5.20260903.0-alpha",
-        "undici": "8.10.2",
+        "undici": "8.12.2",
         "valibot": "1.5.0",
         "wrangler": "^4.134.0",
         "ws": "^8.21.3"

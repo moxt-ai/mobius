@@ -37,12 +37,18 @@ export function connectRelay(url: URL, signal: AbortSignal): Promise<RelayConnec
     signal.throwIfAborted();
 
     return new Promise((resolve, reject) => {
-        let dispatchController: Dispatcher.DispatchController | undefined;
+        let releaseTransport: (reason: Error) => void = () => undefined;
         const dispatcher = environmentProxyDispatcher.compose((dispatch) => (options, handler) => {
             const trackedHandler = Object.create(handler) as Dispatcher.DispatchHandler;
             trackedHandler.onRequestStart = (controller, context): void => {
-                dispatchController = controller;
+                releaseTransport = (reason) => controller.abort(reason);
                 handler.onRequestStart?.(controller, context);
+            };
+            trackedHandler.onRequestUpgrade = (controller, statusCode, responseHeaders, transport) => {
+                // An upgraded connection no longer belongs to the HTTP request controller.
+                // Its owner must release the socket even when the peer never acknowledges close.
+                releaseTransport = (reason) => transport.destroy(reason);
+                return handler.onRequestUpgrade?.(controller, statusCode, responseHeaders, transport);
             };
             return dispatch(options, trackedHandler);
         });
@@ -60,7 +66,7 @@ export function connectRelay(url: URL, signal: AbortSignal): Promise<RelayConnec
                 return;
             }
             released = true;
-            dispatchController?.abort(reason);
+            releaseTransport(reason);
         };
         let finished = false;
         const timeout = setTimeout(onTimeout, CONNECTION_TIMEOUT_MILLISECONDS);
