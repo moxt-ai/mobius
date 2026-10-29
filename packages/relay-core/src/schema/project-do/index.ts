@@ -1,9 +1,6 @@
 export { authenticationAuditEvent } from "./authentication-audit-event.ts";
 export { channelAccessGrant } from "./channel-access-grant.ts";
 export { channelHostCredential } from "./channel-host-credential.ts";
-export { externalIdentityBinding } from "./external-identity-binding.ts";
-export { externalIdentityProjectGrant } from "./external-identity-project-grant.ts";
-export { mobiusAccessCredential } from "./mobius-access-credential.ts";
 export { projectBrowserCredential } from "./project-browser-credential.ts";
 export { runtimeDaemonCredential } from "./runtime-daemon-credential.ts";
 export { runtimeIdentity } from "./runtime-identity.ts";
