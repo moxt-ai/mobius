@@ -975,16 +975,7 @@ export function createPlatformApplication(
             const projectDatabases = execution === null ? [] : [execution.database];
             const controlStorage = new PlatformControlPlaneStorage(environment.PLATFORM_DIRECTORY_DATABASE, databases);
             const storageRegistry = new PlatformStorageRegistry(environment);
-            const appAuthentication = new AppCredentialAuthenticationService(controlStorage, {
-                waitUntil: (operation) => {
-                    try {
-                        context.executionCtx.waitUntil(operation);
-                    } catch {
-                        // Direct application callers do not provide a Worker execution context.
-                        // The already-started operation remains best-effort for those adapters.
-                    }
-                },
-            });
+            const appAuthentication = new AppCredentialAuthenticationService(controlStorage);
             const control = new PlatformControlPlaneService(
                 controlStorage,
                 authentication,

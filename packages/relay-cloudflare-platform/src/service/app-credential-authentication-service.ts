@@ -4,24 +4,11 @@ import { type PlatformApplicationIdentity, PlatformControlPlaneError } from "../
 import type { CredentialRow } from "../entity/platform-records.ts";
 import type { PlatformControlPlaneStorage } from "../storage/platform-control-plane-storage.ts";
 
-// A use observed within this long of the recorded one is not written again, so authorizing every request,
-// such as each long-poll page of a Recording read, does not write D1 for the same credential each time.
-const USAGE_OBSERVATION_INTERVAL_MILLISECONDS = 60_000;
-
-export interface AppCredentialBackgroundTasks {
-    readonly waitUntil: (operation: Promise<void>) => void;
-}
-
 export class AppCredentialAuthenticationService {
-    readonly #storage: Pick<PlatformControlPlaneStorage, "readCredentialByPublicId" | "touchCredential">;
-    readonly #backgroundTasks: AppCredentialBackgroundTasks;
+    readonly #storage: Pick<PlatformControlPlaneStorage, "readCredentialByPublicId">;
 
-    constructor(
-        storage: Pick<PlatformControlPlaneStorage, "readCredentialByPublicId" | "touchCredential">,
-        backgroundTasks: AppCredentialBackgroundTasks,
-    ) {
+    constructor(storage: Pick<PlatformControlPlaneStorage, "readCredentialByPublicId">) {
         this.#storage = storage;
-        this.#backgroundTasks = backgroundTasks;
     }
 
     readonly authenticate = async (credential: string, signal: AbortSignal): Promise<PlatformApplicationIdentity> => {
@@ -61,7 +48,6 @@ export class AppCredentialAuthenticationService {
         }
         const now = Date.now();
         requireActiveCredential(row, now);
-        this.touchLater(row, now);
         return row;
     };
 
@@ -72,7 +58,6 @@ export class AppCredentialAuthenticationService {
         const credential = await this.readCredential(publicCredentialId, signal);
         const now = Date.now();
         requireActiveCredential(credential, now);
-        this.touchLater(credential, now);
         return credential;
     };
 
@@ -99,44 +84,6 @@ export class AppCredentialAuthenticationService {
             }
             throw cause;
         }
-    };
-
-    private readonly touchLater = (credential: CredentialRow, usedAt: number): void => {
-        const observedAt = credential.last_observed_used_at;
-        if (
-            observedAt !== null &&
-            usedAt >= observedAt &&
-            usedAt - observedAt < USAGE_OBSERVATION_INTERVAL_MILLISECONDS
-        ) {
-            return;
-        }
-        const credentialId = credential.credential_id;
-        // Authorization runs in RuntimeRelay too; an uncancellable AbortSignal.timeout would keep it awake
-        // for the whole deadline after a fast update.
-        const timeout = new AbortController();
-        const timer = setTimeout(
-            () => timeout.abort(new DOMException("The last-used update timed out", "TimeoutError")),
-            15_000,
-        );
-        const operation = this.#storage
-            .touchCredential(credentialId, usedAt, timeout.signal)
-            .then((updated) => {
-                if (!updated) {
-                    console.warn("App credential last-used update skipped", {
-                        code: "app_credential_inactive",
-                        credentialId,
-                    });
-                }
-            })
-            .catch((cause: unknown) => {
-                console.warn("App credential last-used update failed", {
-                    code: "app_credential_last_used_update_failed",
-                    credentialId,
-                    cause,
-                });
-            })
-            .finally(() => clearTimeout(timer));
-        this.#backgroundTasks.waitUntil(operation);
     };
 }
 
