@@ -36,7 +36,7 @@
     },
     "scripts": {
         "prebuild": "tsc --project src/engine/acp/harness/claude/upstream/tsconfig.json && tsc --project src/engine/acp/harness/pi/upstream/tsconfig.json",
-        "build": "tsc --project tsconfig.build.json && esbuild cli=src/cli/entrypoint.ts engine=src/exports/engine.ts --bundle --platform=node --target=node22.19.0 --format=esm --sourcemap --outbase=src --outdir=dist --external:@agentclientprotocol/sdk --external:undici",
+        "build": "tsc --project tsconfig.build.json && esbuild cli=src/cli/entrypoint.ts engine=src/exports/engine.ts --bundle --splitting --platform=node --target=node22.19.0 --format=esm --sourcemap --outbase=src --outdir=dist --external:@agentclientprotocol/sdk --external:undici",
         "dev": "node --watch src/cli/entrypoint.ts",
         "pretypecheck": "tsc --project src/engine/acp/harness/claude/upstream/tsconfig.json && tsc --project src/engine/acp/harness/pi/upstream/tsconfig.json",
         "prepack": "pnpm build",
@@ -58,7 +58,7 @@
         "@anthropic-ai/claude-agent-sdk": "0.3.257",
         "commander": "15.0.0",
         "semver": "^7.8.5",
-        "undici": "8.10.2",
+        "undici": "8.12.2",
         "zod": "^4.6.5"
     },
     "devDependencies": {
