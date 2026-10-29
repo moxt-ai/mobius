@@ -18,6 +18,64 @@ import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 import { fakeProviderPrompts } from "../support/llm/scenarios.ts";
 
+test("Given real Pi transforms user input, When a prompt runs through the daemon, Then live user chunks show only the native consumed content", async () => {
+    await using provider = await FakeOpenAiProvider.start("gpt-4.1", "PI_NATIVE_INPUT_REPLY");
+    await using agent = await PiFixture.create(provider);
+    await agent.installExtension(
+        "transform-input.js",
+        `export default function (pi) {
+            pi.on("input", async () => ({ action: "transform", text: "PI_NATIVE_CONSUMED_INPUT" }));
+        }`,
+    );
+    await withRealDaemon(new PiAgentSpecification(), agent.environment, async (peer) => {
+        const commandId = randomUUID();
+        peer.send(
+            encodeSessionPromptCommand({
+                additionalDirectoryIds: [],
+                agentId: "pi",
+                bindingId: peer.bindingId,
+                commandId,
+                directoryId: "default",
+                disposition: SessionPromptDisposition.Reject,
+                attachments: [],
+                kind: "session.prompt",
+                prompt: "Original request before native transformation",
+                sessionId: peer.sessionId,
+                targetCommandId: "",
+            }),
+        );
+        const userContent: unknown[] = [];
+        let text = "";
+        for (;;) {
+            const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
+            if (event.type === "acp" && event.payload.sessionUpdate === "user_message_chunk") {
+                userContent.push(event.payload.content);
+                expect(event.payload.messageId).toEqual(expect.any(String));
+            } else if (
+                event.type === "acp" &&
+                event.payload.sessionUpdate === "agent_message_chunk" &&
+                event.payload.content.type === "text"
+            ) {
+                text += event.payload.content.text;
+            } else if (
+                event.type === "lifecycle-metadata" &&
+                (event.payload.kind === "prompt.failed" || event.payload.kind === "prompt.failed-before-start")
+            ) {
+                throw new Error(JSON.stringify(event));
+            } else if (
+                event.type === "lifecycle-metadata" &&
+                event.payload.kind === "prompt.completed" &&
+                event.payload.commandId === commandId
+            ) {
+                expect(event.payload.stopReason).toBe("end_turn");
+                break;
+            }
+        }
+        expect(userContent).toEqual([{ type: "text", text: "PI_NATIVE_CONSUMED_INPUT" }]);
+        expect(text).toContain("PI_NATIVE_INPUT_REPLY: plain response");
+    });
+});
+
 test("Given real Pi has an active SDK turn, When the user steers it, Then Pi continues the same turn with the steering prompt", async () => {
     const activeEntered = Promise.withResolvers<void>();
     const releaseActive = Promise.withResolvers<void>();

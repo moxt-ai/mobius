@@ -2,17 +2,18 @@ import { addAbortListener } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { methods, PROTOCOL_VERSION, type SessionUpdate } from "@agentclientprotocol/sdk";
+import { type ContentBlock, methods, PROTOCOL_VERSION, type SessionUpdate } from "@agentclientprotocol/sdk";
 import { expect, test } from "vitest";
 import { z } from "zod";
 import { PiAgentConnection } from "../../src/engine/acp/adapter/pi/agent-connection.ts";
 import { createAcpClient } from "../../src/engine/acp/connection/create-client.ts";
 import type { IdentifiedSessionUpdate } from "../../src/engine/acp/connection/session-notification.ts";
 import { PiAcpEndpoint } from "../../src/engine/acp/harness/pi/endpoint.ts";
+import { imageFixture } from "../support/agents/image-fixture.ts";
 import { PiFixture } from "../support/agents/pi.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 
-test("Given real Pi is waiting for model output, When two multi-block steers are accepted consecutively, Then each submission has a distinct user message identity", async () => {
+test("Given real Pi is waiting for model output, When two multi-block steers are accepted, Then user chunks arrive only when Pi consumes them with distinct message identities", async () => {
     const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     const signal = AbortSignal.timeout(60_000);
@@ -88,21 +89,7 @@ test("Given real Pi is waiting for model output, When two multi-block steers are
                 );
                 expect(response).toMatchObject({ outcome: "injected" });
             }
-            const firstUser = updates.findIndex((update) => update.sessionUpdate === "user_message_chunk");
-            expect(updates.slice(firstUser).map((update) => update.sessionUpdate)).toEqual(
-                Array(4).fill("user_message_chunk"),
-            );
-            const chunks = updates.filter((update) => update.sessionUpdate === "user_message_chunk");
-            expect(chunks.map((update) => update.content)).toEqual([
-                { type: "text", text: "First steering" },
-                { type: "text", text: "First steering detail" },
-                { type: "text", text: "Second steering" },
-                { type: "text", text: "Second steering detail" },
-            ]);
-            expect(chunks[0]?.messageId).toEqual(expect.any(String));
-            expect(chunks[0]?.messageId).toBe(chunks[1]?.messageId);
-            expect(chunks[2]?.messageId).toBe(chunks[3]?.messageId);
-            expect(chunks[0]?.messageId).not.toBe(chunks[2]?.messageId);
+            expect(updates.filter((update) => update.sessionUpdate === "user_message_chunk")).toEqual([]);
         } finally {
             release.resolve();
             await finished;
@@ -111,6 +98,14 @@ test("Given real Pi is waiting for model output, When two multi-block steers are
         if (outcome.kind === "failed") {
             throw outcome.cause;
         }
+        const chunks = updates.filter((update) => update.sessionUpdate === "user_message_chunk");
+        expect(chunks.map((update) => update.content)).toEqual([
+            { type: "text", text: "First steeringFirst steering detail" },
+            { type: "text", text: "Second steeringSecond steering detail" },
+        ]);
+        expect(chunks[0]?.messageId).toEqual(expect.any(String));
+        expect(chunks[1]?.messageId).toEqual(expect.any(String));
+        expect(chunks[0]?.messageId).not.toBe(chunks[1]?.messageId);
     } finally {
         release.resolve();
         await endpoint.closeProcess();
@@ -118,11 +113,20 @@ test("Given real Pi is waiting for model output, When two multi-block steers are
     }
 });
 
-test("Given the raw Pi harness, When a user submits a prompt, Then its chunks and result contain no adapter-generated message identity", async () => {
+test("Given real Pi transforms input, When a user submits a prompt, Then raw user chunks contain Pi's consumed content without adapter-generated identity", async () => {
     await using provider = await FakeOpenAiProvider.start("gpt-4.1", "PI_RAW_REPLY");
     await using fixture = await PiFixture.create(provider);
+    await fixture.installExtension(
+        "transform-input.js",
+        `export default function (pi) {
+            pi.on("input", async (event) => event.text === "Reply without tools"
+                ? { action: "transform", text: "PI_NATIVE_TRANSFORMED_INPUT" }
+                : { action: "continue" });
+        }`,
+    );
     const cwd = await mkdtemp(join(tmpdir(), "mobius-pi-raw-identity-"));
     const updates: SessionUpdate[] = [];
+    const image: ContentBlock = { type: "image", data: imageFixture(128).toString("base64"), mimeType: "image/png" };
     const endpoint = new PiAcpEndpoint({
         command: fixture.executable,
         environment: fixture.environment,
@@ -132,7 +136,7 @@ test("Given the raw Pi harness, When a user submits a prompt, Then its chunks an
             if (
                 update.sessionUpdate === "user_message_chunk" &&
                 update.content.type === "text" &&
-                update.content.text === "Cancel during echo"
+                update.content.text.startsWith("Cancel during echo")
             ) {
                 await connection.agent.notify(methods.agent.session.cancel, { sessionId: cancelledSessionId });
                 await connection.agent.request(methods.agent.session.list, {}, { cancellationSignal: signal });
@@ -164,13 +168,17 @@ test("Given the raw Pi harness, When a user submits a prompt, Then its chunks an
         );
         const response = await connection.agent.request(
             methods.agent.session.prompt,
-            { sessionId: session.sessionId, prompt: [{ type: "text", text: "Reply without tools" }] },
+            { sessionId: session.sessionId, prompt: [{ type: "text", text: "Reply without tools" }, image] },
             { cancellationSignal: signal },
         );
         const chunks = updates.filter(
             (update) => update.sessionUpdate === "user_message_chunk" || update.sessionUpdate === "agent_message_chunk",
         );
         expect(chunks.length).toBeGreaterThan(1);
+        expect(chunks.filter((update) => update.sessionUpdate === "user_message_chunk")).toEqual([
+            { sessionUpdate: "user_message_chunk", content: { type: "text", text: "PI_NATIVE_TRANSFORMED_INPUT" } },
+            { sessionUpdate: "user_message_chunk", content: image },
+        ]);
         for (const chunk of chunks) {
             expect(chunk).not.toHaveProperty("messageId");
         }
