@@ -414,14 +414,26 @@ it("Given an active AppCredential, When two rotations compete, Then only the ret
     expect((await app.authenticateApp(replacement.credential)).status).toBe(201);
 });
 
-it("Given a scoped AppCredential whose scope only Project storage holds, When it is used, listed and rotated, Then it keeps exactly that scope, D1 answers for it, and Project storage keeps what a rolled-back Worker reads", async () => {
+// Workers before D1 owned AppCredential scope wrote it only to Project storage.
+async function moveScopeToProjectStorage(credentialId: string, projectId: string): Promise<void> {
+    await runInDurableObject(env.PROJECT_RELAY.getByName(projectId), (_instance, state) =>
+        state.storage.sql.exec(
+            "INSERT INTO platform_app_credential_projects (credential_id, project_id, created_at) VALUES (?, ?, ?)",
+            credentialId,
+            projectId,
+            Date.now(),
+        ),
+    );
+    await env.PLATFORM_DIRECTORY_DATABASE.prepare("DELETE FROM platform_app_credential_scopes WHERE credential_id = ?")
+        .bind(credentialId)
+        .run();
+}
+
+it("Given a scoped AppCredential whose scope only Project storage holds, When it is used, listed and rotated, Then it keeps exactly that scope", async () => {
     const app = await application();
     await app.createProject("credential-authority-other-project");
     const legacy = await app.issueScopedCredential();
-    // Workers before D1 owned AppCredential scope wrote it only to Project storage.
-    await env.PLATFORM_DIRECTORY_DATABASE.prepare("DELETE FROM platform_app_credential_scopes WHERE credential_id = ?")
-        .bind(legacy.credentialId)
-        .run();
+    await moveScopeToProjectStorage(legacy.credentialId, app.projectId);
 
     expect((await app.authenticateApp(legacy.credential)).status).toBe(201);
     expect(await app.listCredentials()).toMatchObject({
@@ -435,33 +447,13 @@ it("Given a scoped AppCredential whose scope only Project storage holds, When it
     expect(await app.listCredentials()).toMatchObject({
         credentials: expect.arrayContaining([expectedScope(replacement.credentialId, [app.projectId])]),
     });
-
-    // D1 alone answers for credentials issued now; the Project storage copy only serves a rollback.
-    const current = await app.issueScopedCredential();
-    await runInDurableObject(env.PROJECT_RELAY.getByName(app.projectId), (_instance, state) =>
-        state.storage.sql.exec(
-            "DELETE FROM platform_app_credential_projects WHERE credential_id = ?",
-            current.credentialId,
-        ),
-    );
-    expect((await app.authenticateApp(current.credential)).status).toBe(201);
-
-    const rollbackScope = await runInDurableObject(env.PROJECT_RELAY.getByName(app.projectId), (_instance, state) =>
-        state.storage.sql
-            .exec("SELECT credential_id FROM platform_app_credential_projects ORDER BY credential_id")
-            .toArray()
-            .map((row) => row["credential_id"]),
-    );
-    expect(rollbackScope).toEqual([legacy.credentialId, replacement.credentialId].sort());
 });
 
 it("Given a scoped AppCredential whose scope only Project storage holds, When an unrelated Project's storage fails, Then it is still authorized for its own Project", async () => {
     const app = await application();
     const other = await app.createProject("credential-authority-failing-project");
     const legacy = await app.issueScopedCredential();
-    await env.PLATFORM_DIRECTORY_DATABASE.prepare("DELETE FROM platform_app_credential_scopes WHERE credential_id = ?")
-        .bind(legacy.credentialId)
-        .run();
+    await moveScopeToProjectStorage(legacy.credentialId, app.projectId);
     await runInDurableObject(env.PROJECT_RELAY.getByName(other.projectId), (_instance, state) =>
         state.storage.sql.exec("DROP TABLE platform_app_credential_projects"),
     );

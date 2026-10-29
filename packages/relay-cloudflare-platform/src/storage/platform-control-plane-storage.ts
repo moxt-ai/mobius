@@ -437,7 +437,6 @@ export class PlatformControlPlaneStorage {
         audit: PlatformAuditRecord,
         signal: AbortSignal,
     ): Promise<boolean> => {
-        await this.writeRollbackScope(credential, projectIds, signal);
         const scope = projectIds.map((projectId) =>
             this.statement(this.scopeInsert(credential.credentialId, projectId, credential.issuedAt)),
         );
@@ -557,7 +556,6 @@ export class PlatformControlPlaneStorage {
         readonly credentialInserted: boolean;
         readonly sourceRotated: boolean;
     }> => {
-        await this.writeRollbackScope(credential, projectIds, signal);
         const database = platformDrizzle(this.#database);
         // A zero-row update does not abort a D1 batch. Gate every insert on this
         // attempt's replacement ID within the same transaction.
@@ -674,30 +672,6 @@ export class PlatformControlPlaneStorage {
             signal,
         );
         return row === null ? null : decodeStorageRecord(ProjectStorageScopeRowSchema, row).created_at;
-    };
-
-    /**
-     * A rolled-back Worker reads AppCredential scope from Project storage, so keep writing it there. This Worker never
-     * reads it back; a copy left by an attempt that then fails names a credential that does not exist.
-     */
-    private readonly writeRollbackScope = async (
-        credential: PlatformAppCredentialInsert,
-        projectIds: readonly string[],
-        signal: AbortSignal,
-    ): Promise<void> => {
-        for (const projectId of projectIds) {
-            await waitForD1(
-                () =>
-                    projectDatabase(this.#databases, projectId)
-                        .prepare(
-                            `INSERT INTO platform_app_credential_projects (credential_id, project_id, created_at)
-                         VALUES (?, ?, ?)`,
-                        )
-                        .bind(credential.credentialId, projectId, credential.issuedAt)
-                        .run(),
-                signal,
-            );
-        }
     };
 
     /** A scope row exists only when its credential was inserted in the same batch. */
