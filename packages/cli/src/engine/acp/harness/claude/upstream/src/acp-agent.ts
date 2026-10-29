@@ -1236,9 +1236,26 @@ function stripMarkerTags(text: string): string {
  * Preserves real prose that's mixed in alongside the markers — e.g. a
  * message like `<command-name>…</command-name>hi` becomes `hi`.
  */
-export function stripLocalCommandMetadata(content: unknown): unknown | null {
+export function stripLocalCommandMetadata(
+    content: unknown,
+    options?: { readonly preserveCompactionCommand: boolean },
+): unknown | null {
+    const strip = (text: string): string => {
+        // Claude persists manual compaction as local-command markup rather than
+        // a normal user echo. Keep the user's command in historical replay;
+        // command output and other local metadata must still stay hidden.
+        if (options?.preserveCompactionCommand === true && /<command-name>\/compact<\/command-name>/u.test(text)) {
+            const args = /<command-args>([\s\S]*?)<\/command-args>/u.exec(text)?.[1]?.trim() ?? "";
+            return stripMarkerTags(
+                text.replace(/<command-name>\/compact<\/command-name>/u, () =>
+                    args.length > 0 ? `/compact ${args}` : "/compact",
+                ),
+            ).trim();
+        }
+        return stripMarkerTags(text);
+    };
     if (typeof content === "string") {
-        const stripped = stripMarkerTags(content);
+        const stripped = strip(content);
         return stripped.trim() === "" ? null : stripped;
     }
     if (!Array.isArray(content)) {
@@ -1255,7 +1272,7 @@ export function stripLocalCommandMetadata(content: unknown): unknown | null {
             "text" in block &&
             typeof (block as { text: unknown }).text === "string"
         ) {
-            const stripped = stripMarkerTags((block as { text: string }).text);
+            const stripped = strip((block as { text: string }).text);
             if (stripped.trim() === "") {
                 continue;
             }
@@ -5233,6 +5250,52 @@ export class ClaudeAcpAgent {
 
         const seenTools = new Set<string>();
         for (const message of messages) {
+            signal.throwIfAborted();
+            if (message.nativeCompaction !== undefined) {
+                const compaction = message.nativeCompaction;
+                if (compaction.kind === "boundary") {
+                    await this.client.sessionUpdate({
+                        sessionId,
+                        update: {
+                            sessionUpdate: "compaction_update",
+                            compactionId: compaction.id,
+                            status: "completed",
+                        },
+                    });
+                } else {
+                    const body = message.message;
+                    const content =
+                        typeof body === "object" && body !== null && "content" in body ? body.content : undefined;
+                    const text =
+                        typeof content === "string"
+                            ? content
+                            : Array.isArray(content)
+                              ? content
+                                    .flatMap((block: unknown) =>
+                                        typeof block === "object" &&
+                                        block !== null &&
+                                        "type" in block &&
+                                        block.type === "text" &&
+                                        "text" in block &&
+                                        typeof block.text === "string"
+                                            ? [block.text]
+                                            : [],
+                                    )
+                                    .join("\n")
+                              : "";
+                    if (text.length > 0) {
+                        await this.client.sessionUpdate({
+                            sessionId,
+                            update: {
+                                sessionUpdate: "compaction_summary_chunk",
+                                compactionId: compaction.id,
+                                content: { type: "text", text },
+                            },
+                        });
+                    }
+                }
+                continue;
+            }
             if (isTaskNotificationOrigin(message.nativeOrigin)) {
                 const body = message.message;
                 const content =
@@ -5265,7 +5328,7 @@ export class ClaudeAcpAgent {
             let content: unknown = message.message.content;
             // @ts-expect-error - untyped in SDK but we handle all of these
             if (message.message.role === "user") {
-                content = stripLocalCommandMetadata(content);
+                content = stripLocalCommandMetadata(content, { preserveCompactionCommand: true });
                 if (content === null) {
                     continue;
                 }
