@@ -115,6 +115,7 @@ export async function executePrompt({
             );
             prepared = await sessions.prepareExecutionSession(preparation);
         }
+        signal.throwIfAborted();
         operations.markExecutionStarted(command.commandId);
         if (availability.disposition === SessionPromptDisposition.Steer) {
             if (!recordSteeringPrompt()) {

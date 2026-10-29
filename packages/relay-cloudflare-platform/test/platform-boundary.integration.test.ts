@@ -2274,6 +2274,18 @@ async function connectRuntimeDaemon(slug: string, options: { readonly anchorCloc
                 ),
                 environment,
             ),
+        sessionControlRequest: async (path: string, body: unknown) =>
+            await worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}${path}`,
+                    {
+                        method: "POST",
+                        headers: credentialHeaders(text(sessionAccess, "credential")),
+                        body: JSON.stringify(body),
+                    },
+                ),
+                environment,
+            ),
         uploadContent: async (
             contentKey: string,
             bytes: Uint8Array,
@@ -2671,6 +2683,7 @@ it("Given Chat reads the Session execution after missing a turn's outcome, When 
                     queued: [],
                     ...(runtimeVersion === "current"
                         ? {
+                              queuedCancellation: "before-start" as const,
                               lastTurn: {
                                   code: "model_unavailable",
                                   commandId: "failed-command",
@@ -2684,10 +2697,12 @@ it("Given Chat reads the Session execution after missing a turn's outcome, When 
             const body = await responseJson(await response, 200);
             if (runtimeVersion === "current") {
                 expect(body).toMatchObject({
+                    queuedCancellation: "before-start",
                     lastTurn: { commandId: "failed-command", state: "failed", code: "model_unavailable" },
                 });
             } else {
                 expect(body).not.toHaveProperty("lastTurn");
+                expect(body).not.toHaveProperty("queuedCancellation");
             }
         }
     } finally {
@@ -2696,6 +2711,122 @@ it("Given Chat reads the Session execution after missing a turn's outcome, When 
 });
 
 describe.sequential("Platform Turn submission", () => {
+    // Frozen legacy client request/response contract; no new SDK decoder participates.
+    it.each(["app", "session"] as const)(
+        "Given an older %s client cancels a queued message, When the Runtime reports cancellation or prior completion, Then the existing turn contract preserves the actual outcome",
+        async (access) => {
+            const runtime = await connectRuntimeDaemon(`legacy-queue-cancel-${access}`);
+            try {
+                for (const stopReason of ["cancelled", "end_turn"] as const) {
+                    const turnId = `legacy-${stopReason}`;
+                    const body = { idempotencyKey: `edit-${turnId}` };
+                    const path = `/turns/${turnId}/cancel`;
+                    const response =
+                        access === "app"
+                            ? runtime.appSessionRequest(path, { method: "POST", body })
+                            : runtime.sessionControlRequest(path, body);
+                    expect(JSON.parse(await runtime.daemonMessages.next())).toEqual({
+                        commandId: turnId,
+                        kind: "session.cancel",
+                        sessionId: runtime.sessionId,
+                    });
+                    runtime.daemon.send(
+                        encodeSessionEventEnvelope({
+                            kind: "session.event.v2",
+                            events: [
+                                {
+                                    eventId: `legacy-${stopReason}`,
+                                    position: stopReason === "cancelled" ? "1" : "2",
+                                    recordedAt: "2026-10-29T00:00:00.000Z",
+                                    sessionGenerationId: "legacy-generation",
+                                    sessionId: runtime.sessionId,
+                                    type: "lifecycle-metadata",
+                                    payload: { kind: "prompt.completed", commandId: turnId, stopReason },
+                                },
+                            ],
+                        }),
+                    );
+                    expect(await responseJson(await response, 200)).toEqual({
+                        acceptedAt: expect.any(String),
+                        bindingId: "workspace",
+                        idempotencyKey: body.idempotencyKey,
+                        request: { kind: "prompt", content: "", sessionConfigurations: [] },
+                        sessionId: runtime.sessionId,
+                        turnId,
+                        state:
+                            stopReason === "cancelled"
+                                ? { kind: "cancelled", cancelledAt: expect.any(String) }
+                                : {
+                                      kind: "succeeded",
+                                      completedAt: expect.any(String),
+                                      result: { kind: "agent_result", stopReason },
+                                  },
+                    });
+                }
+            } finally {
+                runtime.daemon.close(1000, "Test complete");
+            }
+        },
+    );
+
+    it.each([
+        { access: "app", outcome: "completed" },
+        { access: "session", outcome: "completed" },
+        { access: "app", outcome: "refused" },
+        { access: "session", outcome: "refused" },
+    ] as const)(
+        "Given $access access withdraws a queued message, When a Runtime reports $outcome prior execution, Then the conditional endpoint rejects the edit",
+        async ({ access, outcome }) => {
+            const runtime = await connectRuntimeDaemon(`conditional-queue-cancel-${access}-${outcome}`);
+            try {
+                const body = { idempotencyKey: "conditional-edit" };
+                const path = "/turns/queued-command/cancel-before-start";
+                const response =
+                    access === "app"
+                        ? runtime.appSessionRequest(path, { method: "POST", body })
+                        : runtime.sessionControlRequest(path, body);
+                expect(JSON.parse(await runtime.daemonMessages.next())).toEqual({
+                    commandId: "queued-command",
+                    kind: "session.cancel-before-start",
+                    sessionId: runtime.sessionId,
+                });
+                runtime.daemon.send(
+                    outcome === "refused"
+                        ? encodeSessionOperationFailedEvent({
+                              kind: "session.operation.failed",
+                              requestId: "queued-command",
+                              sessionId: runtime.sessionId,
+                              code: "turn_already_started",
+                              message: "The message already started and could not be withdrawn",
+                          })
+                        : encodeSessionEventEnvelope({
+                              kind: "session.event.v2",
+                              events: [
+                                  {
+                                      eventId: "already-executed",
+                                      position: "1",
+                                      recordedAt: "2026-10-29T00:00:00.000Z",
+                                      sessionGenerationId: "conditional-generation",
+                                      sessionId: runtime.sessionId,
+                                      type: "lifecycle-metadata",
+                                      payload: {
+                                          kind: "prompt.completed",
+                                          commandId: "queued-command",
+                                          stopReason: "end_turn",
+                                      },
+                                  },
+                              ],
+                          }),
+                );
+                expect(await responseJson(await response, 409)).toMatchObject({
+                    error: { code: "turn_already_started" },
+                });
+            } finally {
+                runtime.daemon.close(1000, "Test complete");
+            }
+        },
+    );
+
     // @no-uc: Compatibility; trusted backends must control a Runtime Session without delegated Session access.
     it.each([
         {

@@ -83,7 +83,14 @@ export function createProjectRuntimeSessionControlRoutes() {
                     idempotencyKey: body.idempotencyKey,
                     request: { content: "", kind: "prompt", sessionConfigurations: [] },
                     sessionId,
-                    state: { cancelledAt, kind: "cancelled" },
+                    state:
+                        completed.stopReason === "cancelled"
+                            ? { cancelledAt, kind: "cancelled" }
+                            : {
+                                  completedAt: cancelledAt,
+                                  kind: "succeeded",
+                                  result: { kind: "agent_result", stopReason: completed.stopReason },
+                              },
                     turnId,
                 });
             },
@@ -103,6 +110,12 @@ export function createProjectRuntimeSessionControlRoutes() {
                 );
                 if (completed.kind !== "turn.completed" || completed.commandId !== turnId) {
                     throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid cancellation");
+                }
+                if (completed.stopReason !== "cancelled") {
+                    throw new PairingDirectoryError(
+                        "turn_already_started",
+                        "The message already executed and could not be withdrawn",
+                    );
                 }
                 context.header("Cache-Control", "no-store");
                 return context.json({ turnId, idempotencyKey: body.idempotencyKey });

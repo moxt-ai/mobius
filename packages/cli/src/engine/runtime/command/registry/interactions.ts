@@ -41,10 +41,23 @@ export const sessionCancelBeforeStartCommand: RuntimeCommand = {
         if (message.kind !== SESSION_CANCEL_BEFORE_START_KIND) {
             throw new Error("Command kind mismatch");
         }
+        if (operations.hasStarted(message.commandId, message.sessionId)) {
+            reportOperationFailure(
+                socket,
+                message.commandId,
+                message.sessionId,
+                new SessionError("turn_already_started", "The message already started and could not be withdrawn"),
+            );
+            return;
+        }
         const turn = sessionTurns.get(message.commandId, message.sessionId);
         if (turn === undefined) {
             const outcome = operations.recordCancellationBeforeAdmission(message.commandId, message.sessionId);
-            if (outcome !== undefined) {
+            if (
+                outcome?.type === "lifecycle-metadata" &&
+                outcome.payload.kind === "prompt.completed" &&
+                outcome.payload.stopReason === "cancelled"
+            ) {
                 void eventProjection.replayOutcome(message.sessionId, outcome).catch((error: unknown) => {
                     reportOperationFailure(socket, message.commandId, message.sessionId, error);
                 });

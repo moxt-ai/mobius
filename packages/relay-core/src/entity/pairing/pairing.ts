@@ -266,6 +266,7 @@ function pairingDirectoryErrorStatus(code: string): number {
         case "session_turn_configuration_unsupported":
         case "idempotency_conflict":
         case "session_configuration_conflict":
+        case "turn_already_started":
         case "native_fork_outcome_unknown":
         case "native_fork_recovery_unsupported":
             return 409;
