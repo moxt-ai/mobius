@@ -277,17 +277,22 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
      */
     readonly close = (): Promise<void> => {
         if (this.#closePromise === null) {
-            // Publish closure immediately, but keep stdio intact until the process tree is captured.
-            this.#appServer.detach();
             this.#closePromise = (async () => {
-                await this.#sessionAgent.close();
-                const child = this.#appServer.child();
                 try {
-                    const captured: readonly ProcessTreeIdentity[] = await captureProcessTree(child);
-                    await stopProcessTree(child, captured);
+                    // Borrowed prompts must withdraw their queued input while this client can
+                    // still reach the native owner, including after graceful close times out.
+                    await this.#sessionAgent.close();
                 } finally {
-                    this.#connection?.close();
-                    this.#onBackgroundActivity?.("none");
+                    // Keep stdio intact until the process tree has been captured.
+                    this.#appServer.detach();
+                    const child = this.#appServer.child();
+                    try {
+                        const captured: readonly ProcessTreeIdentity[] = await captureProcessTree(child);
+                        await stopProcessTree(child, captured);
+                    } finally {
+                        this.#connection?.close();
+                        this.#onBackgroundActivity?.("none");
+                    }
                 }
             })();
         }

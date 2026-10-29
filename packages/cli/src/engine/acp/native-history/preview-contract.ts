@@ -86,7 +86,7 @@ export interface AdapterPromptResult {
 export interface Adapter {
     readonly refreshAgent: (agent: AcpAgentDefinition) => void;
     readonly connectSession: (options: LiveSessionConnectionOptions) => AdapterSessionConnection;
-    readonly cancel: (target: AdapterSessionTarget, signal: AbortSignal) => Promise<void>;
+    readonly cancel: (target: AdapterSessionTarget, signal: AbortSignal) => Promise<"retained" | "closed">;
     readonly closeSession: (target: AdapterSessionTarget, signal: AbortSignal) => Promise<void>;
     readonly prompt: (
         target: AdapterSessionTarget,
