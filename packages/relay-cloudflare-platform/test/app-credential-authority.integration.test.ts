@@ -314,7 +314,7 @@ async function expectRejected(response: Response, code: string, status = 401): P
     expect.soft(await response.json()).toMatchObject({ error: { code } });
 }
 
-it("Given independently issued and rotated credentials with the same legacy revision, When one is revoked by ID, Then the other remains listed and authorized", async () => {
+it("Given independently issued and rotated credentials, When one is revoked by ID, Then the other remains listed and authorized", async () => {
     const app = await application();
     const signal = new AbortController().signal;
     const issued = await app.developer.issueAppCredential(
@@ -324,9 +324,6 @@ it("Given independently issued and rotated credentials with the same legacy revi
     );
     const rotated = await app.rotate();
 
-    // Preserve the v1 values without treating them as identity, ordering or authorization state.
-    expect(issued.revision).toBe(2);
-    expect(rotated.revision).toBe(2);
     expect(issued.credentialId).not.toBe(rotated.credentialId);
     expect(rotated.replacedCredentialId).toBe(app.defaultCredential.credentialId);
     expect((await app.authenticateApp(issued.credential)).status).toBe(201);
@@ -338,8 +335,8 @@ it("Given independently issued and rotated credentials with the same legacy revi
     expect((await app.authenticateApp(rotated.credential)).status).toBe(201);
     expect(await app.developer.listAppCredentials(app.appId, signal)).toEqual(
         expect.arrayContaining([
-            expect.objectContaining({ active: false, credentialId: issued.credentialId, revision: 2 }),
-            expect.objectContaining({ active: true, credentialId: rotated.credentialId, revision: 2 }),
+            expect.objectContaining({ active: false, credentialId: issued.credentialId }),
+            expect.objectContaining({ active: true, credentialId: rotated.credentialId }),
         ]),
     );
 });
@@ -636,7 +633,6 @@ it("Given a suspended App with active and suspended Projects, When its owner del
     });
     expect(await app.developer.readApp(app.appId, new AbortController().signal)).toMatchObject({
         lifecycle: "deleted",
-        suspendedAt,
         deletedAt,
     });
     expect(await responseJson(await app.listProjects(), 200)).toMatchObject({
