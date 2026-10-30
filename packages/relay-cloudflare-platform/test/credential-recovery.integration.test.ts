@@ -133,10 +133,10 @@ it("Given App creation commits but its response is lost, When the caller reconci
     );
     expect(await app.developer.listApps(app.tenantId, signal)).toHaveLength(before.size + 1);
     expect(await app.developer.listAppCredentials(lost.appId, signal)).toEqual([
-        expect.objectContaining({ credentialId: lost.defaultCredentialId }),
+        expect.objectContaining({ credentialId: lost.initialCredentialId }),
     ]);
 
-    const recovered = await app.developer.rotateAppCredential(lost.defaultCredentialId, 0, signal);
+    const recovered = await app.developer.rotateAppCredential(lost.initialCredentialId, 0, signal);
     const project = await app.appClient(recovered.credential).createProject(
         lost.appId,
         {
@@ -150,7 +150,7 @@ it("Given App creation commits but its response is lost, When the caller reconci
     expect(project.appId).toBe(lost.appId);
     const credentials = await app.developer.listAppCredentials(lost.appId, signal);
     expect(credentials).toHaveLength(2);
-    expect(credentials.find((item) => item.credentialId === lost.defaultCredentialId)).toMatchObject({
+    expect(credentials.find((item) => item.credentialId === lost.initialCredentialId)).toMatchObject({
         overlapEndsAt: new Date().toISOString(),
         replacedByCredentialId: recovered.credentialId,
     });

@@ -260,7 +260,6 @@ describe("daemon relay connection liveness", () => {
         const upgradeWaiters: Array<() => void> = [];
         const clientFrames: Array<Promise<ClientWebSocketFrame>> = [];
         const daemonSockets: Duplex[] = [];
-        let livenessRequested = false;
         const waitForUpgrade = (): Promise<void> => new Promise((resolve) => upgradeWaiters.push(resolve));
         relay.on("connection", (socket) => {
             sockets.add(socket);
@@ -280,8 +279,6 @@ describe("daemon relay connection liveness", () => {
                     "Upgrade: websocket\r\n" +
                     `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
             );
-            const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
-            livenessRequested = requestUrl.searchParams.get("liveness") === "1";
             daemonSockets.push(socket);
             clientFrames.push(readClientFrame(socket));
             respondToClientClose(socket);
@@ -331,7 +328,6 @@ describe("daemon relay connection liveness", () => {
                 throw new Error("Test relay did not observe the daemon connection");
             }
             const heartbeatFrame = await firstFrame;
-            expect(livenessRequested).toBe(true);
             expect(heartbeatFrame.opcode).toBe(1);
             // The Relay's host answers only this exact text, without waking the Relay.
             expect(heartbeatFrame.text).toBe(RUNTIME_HEARTBEAT_MESSAGE);
@@ -661,7 +657,7 @@ describe("daemon relay connection liveness", () => {
             expect({ catalogRequestCount, connectionCount, requestedUrls }).toEqual({
                 catalogRequestCount: 2,
                 connectionCount: 1,
-                requestedUrls: [`${MOBIUS_API_PREFIX}/channels/liveness-channel/daemon?liveness=1`],
+                requestedUrls: [`${MOBIUS_API_PREFIX}/channels/liveness-channel/daemon`],
             });
         } finally {
             cancellation.abort();

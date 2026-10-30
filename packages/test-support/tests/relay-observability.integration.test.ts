@@ -2,7 +2,11 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readD1Migrations } from "@cloudflare/vitest-plugin";
-import { RUNTIME_HEARTBEAT_ACK_MESSAGE, RUNTIME_HEARTBEAT_MESSAGE } from "@moxt-ai/mobius-sdk/protocol";
+import {
+    RUNTIME_HEARTBEAT_ACK_MESSAGE,
+    RUNTIME_HEARTBEAT_MESSAGE,
+    RUNTIME_LIVENESS_READY_KIND,
+} from "@moxt-ai/mobius-sdk/protocol";
 import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, beforeAll, expect, it } from "vitest";
@@ -229,7 +233,7 @@ it("identifies the failing Runtime Durable Object through the public pairing and
         200,
     );
     const start = logs.length;
-    const response = await runtime.dispatchFetch("https://relay.test/mobius/api/v1/runtimes/connect?liveness=1", {
+    const response = await runtime.dispatchFetch("https://relay.test/mobius/api/v1/runtimes/connect", {
         headers: {
             authorization: `Bearer ${text(claimed, "runtimeCredential")}`,
             Upgrade: "websocket",
@@ -366,11 +370,15 @@ async function daemon() {
     if (socket === null) {
         throw new Error("Expected a daemon WebSocket");
     }
+    const ready = new Promise((resolve) =>
+        socket.addEventListener("message", (event) => resolve(event.data), { once: true }),
+    );
     socket.accept();
     try {
         await expect
             .poll(() => logs.slice(start).find((log) => log["event"] === "runtime_websocket_accepted"))
             .toBeDefined();
+        expect(JSON.parse(String(await ready))).toEqual({ kind: RUNTIME_LIVENESS_READY_KIND });
         return socket;
     } catch (error) {
         if (socket.readyState === 1) {

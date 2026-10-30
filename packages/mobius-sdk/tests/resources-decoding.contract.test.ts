@@ -41,10 +41,6 @@ describe("Runtime descriptor decoding contracts", () => {
         expect(decoded[0]?.nativeForkRecovery).toBe(false);
     });
 
-    it("Given a Runtime list from a Relay that still echoes retired fields, When it is decoded, Then it is accepted", () => {
-        expect(() => decodeMobiusRuntimeList({ runtimes: [{ ...runtime, installableAgents: [] }] })).not.toThrow();
-    });
-
     it("Given a Runtime list whose Agents carry fields from a newer service, When it is decoded, Then its Agents are available", () => {
         const agents = runtime.agents.map((agent) => ({ ...agent, futureAgentField: { format: 2 } }));
         const decoded = decodeMobiusRuntimeList({ runtimes: [{ ...runtime, agents }] });

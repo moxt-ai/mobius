@@ -37,6 +37,7 @@ describe("Session config read contracts", () => {
                     ],
                 },
             ],
+            configurationRevision: "revision-1",
             kind: SESSION_CONFIG_READ_RESULT_KIND,
             requestId: "request-config-1",
             sessionId: "session-1",
@@ -50,6 +51,7 @@ describe("Session execution read contracts", () => {
         action: "active-turn",
         kind: "native.session.result",
         queued: [],
+        queuedCancellation: "before-start",
         requestId: "request-execution-1",
         sessionId: "session-1",
         targetSessionId: "session-1",
@@ -72,17 +74,6 @@ describe("Session execution read contracts", () => {
         );
         expect(decoded).toMatchObject({ action: "active-turn", turn: null, queued: [] });
         expect(decoded.action === "active-turn" ? decoded.lastTurn : null).toBeUndefined();
-    });
-
-    it("Given an older Runtime's generic failed last turn, When it is decoded, Then the original outcome is kept", () => {
-        // Retained pre-fix wire contract: an old Runtime cannot recover the Agent's original reason.
-        const lastTurn = {
-            code: "acp_agent_error",
-            commandId: "command-1",
-            message: "The local Agent could not complete the request",
-            state: "failed",
-        };
-        expect(decodeNativeSessionResult(JSON.stringify({ ...execution, lastTurn }))).toMatchObject({ lastTurn });
     });
 
     it("Given an execution with a known command delivery, When it is decoded, Then the delivery is kept", () => {

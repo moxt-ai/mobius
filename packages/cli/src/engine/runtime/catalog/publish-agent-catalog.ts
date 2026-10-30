@@ -84,11 +84,9 @@ export async function publishAgentCatalog(config: RuntimeConfig, signal: AbortSi
                 agents: catalog.agents.map((agent) => ({
                     agentPath: agent.agentIdentity.requestedPath,
                     agentVersion: agent.agentVersion,
-                    agentSettingsDiscovery: true,
                     capabilities: agent.capabilities,
                     id: agent.id,
                     label: agent.label,
-                    sessionTurnConfiguration: true,
                 })),
             }),
             dispatcher: environmentProxyDispatcher,

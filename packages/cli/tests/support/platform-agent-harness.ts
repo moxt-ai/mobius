@@ -26,8 +26,6 @@ const runtimePairingSchema = v.object({
 
 export function fakeAgentHarnessCatalog(definitions: readonly FakeAgentHarnessDefinition[]) {
     return definitions.map((agent) => ({
-        agentSettingsDiscovery: true,
-        sessionTurnConfiguration: true,
         agentPath: `/controlled-harness/${agent.id}`,
         agentVersion: "controlled-harness",
         capabilities: fakeAgentHarnessCapabilities(agent),
