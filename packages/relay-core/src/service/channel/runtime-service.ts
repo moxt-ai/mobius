@@ -9,7 +9,7 @@ import {
     SESSION_EVENT_KIND,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { ProjectScope } from "../../entity/do/session.ts";
-import { PairingDirectoryError } from "../../entity/pairing/pairing.ts";
+import { type HostCredential, PairingDirectoryError } from "../../entity/pairing/pairing.ts";
 import { logger } from "../../infra/logger.ts";
 import type { ChannelActor, ChannelPeers, ChannelSocket } from "./channel-actor.ts";
 import type { ChannelCredentialService } from "./channel-credential-service.ts";
@@ -46,7 +46,7 @@ export type RuntimeSocketIdentity =
     | {
           readonly role: "host";
           readonly channelId: string;
-          readonly credentialId: string;
+          readonly credential: HostCredential;
           readonly nativeRequestId?: string;
           readonly sessionFilter?: string;
           readonly runtimeId: string;
@@ -83,7 +83,14 @@ type RuntimePeer = ReturnType<RuntimePeers["sockets"]>[number];
 interface RuntimeContext {
     readonly services: {
         readonly connections: RuntimeConnectionService;
-        readonly credentials: Pick<ChannelCredentialService, "isActive" | "isRuntimeActive">;
+        readonly credentials: {
+            readonly isRuntimeActive: ChannelCredentialService["isRuntimeActive"];
+            /** Whether the credential that opened a host connection still authorizes it. */
+            readonly isHostActive: (
+                identity: Extract<RuntimeSocketIdentity, { readonly role: "host" }>,
+                signal: AbortSignal,
+            ) => Promise<boolean>;
+        };
         readonly channel: (runtimeId: string, scope: ProjectScope) => ChannelActor;
     };
     readonly gateways: {
@@ -93,6 +100,8 @@ interface RuntimeContext {
         readonly waitUntil: (operation: Promise<void>) => void;
     };
 }
+
+export type RuntimeCredentials = RuntimeContext["services"]["credentials"];
 
 export type RuntimeAdmission =
     | { readonly kind: "revoked" }
@@ -260,7 +269,8 @@ export class RuntimeService {
             if (
                 identity.role === "host" &&
                 identity.channelId === channelId &&
-                identity.credentialId === credentialId &&
+                identity.credential.kind === "channel" &&
+                identity.credential.credentialId === credentialId &&
                 identity.runtimeId === runtimeId &&
                 identity.projectId === scope.projectId
             ) {
@@ -398,7 +408,7 @@ export class RuntimeService {
                     socket.close(1008, "A live subscription cannot send commands");
                     return;
                 }
-                if (!(await this.#cx.services.credentials.isActive(identity, signal))) {
+                if (!(await this.#cx.services.credentials.isHostActive(identity, signal))) {
                     socket.close(1008, "Channel access revoked");
                     return;
                 }

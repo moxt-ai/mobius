@@ -1,4 +1,6 @@
+import { PROJECT_HOST_PERMISSION } from "../entity/authentication/project-authentication.ts";
 import { ProjectScope } from "../entity/do/session.ts";
+import type { ProjectCredentialAuthority } from "../gateway/project-access-authorizer.ts";
 import { createRuntimeRoutes } from "../http/do/runtime-routes.ts";
 import type { DoSqlDatabase } from "../infra/do-sql-database.ts";
 import type { ProjectStorageDirectory } from "../infra/project-storage-directory.ts";
@@ -11,7 +13,7 @@ import { ChannelCredentialService } from "../service/channel/channel-credential-
 import { LocalRuntimeRequests } from "../service/channel/local-runtime-requests.ts";
 import { NativeSessionForks } from "../service/channel/native-session-forks.ts";
 import { RuntimeConnectionService } from "../service/channel/runtime-connection-service.ts";
-import { type RuntimePeers, RuntimeService } from "../service/channel/runtime-service.ts";
+import { type RuntimeCredentials, type RuntimePeers, RuntimeService } from "../service/channel/runtime-service.ts";
 import { NativeSessionForkStorage } from "../storage/native-session-fork-storage.ts";
 import { RuntimeConnectionStorage } from "../storage/runtime-connection-storage.ts";
 
@@ -23,6 +25,7 @@ function createRuntimeRelayDependencies(cx: {
     };
     readonly gateways: {
         readonly peers: RuntimePeers;
+        readonly projectCredentials: ProjectCredentialAuthority;
         readonly recording: SessionRecording;
         readonly notifications?: SessionStatusNotifications;
     };
@@ -42,10 +45,29 @@ function createRuntimeRelayDependencies(cx: {
         }
         return new ChannelCredentialService(cx.storages.projectStores.resolve(project.storagePlacement));
     };
-    const credentials: Pick<ChannelCredentialService, "isActive" | "isRuntimeActive"> = {
-        isActive: async (identity, signal) => {
+    const credentials: RuntimeCredentials = {
+        isHostActive: async (identity, signal) => {
             const service = await credentialService(new ProjectScope(identity.projectId), signal);
-            return service !== null && (await service.isActive(identity, signal));
+            if (service === null) {
+                return false;
+            }
+            switch (identity.credential.kind) {
+                case "channel":
+                    return await service.isActive(
+                        { ...identity, credentialId: identity.credential.credentialId },
+                        signal,
+                    );
+                case "project":
+                    return (
+                        (await service.isRuntimeActive(identity, signal)) &&
+                        (await cx.gateways.projectCredentials.grants(
+                            identity.projectId,
+                            identity.credential.credentialId,
+                            PROJECT_HOST_PERMISSION,
+                            signal,
+                        ))
+                    );
+            }
         },
         isRuntimeActive: async (identity, signal) => {
             const service = await credentialService(new ProjectScope(identity.projectId), signal);
@@ -92,6 +114,7 @@ export function createDurableObjectDependencies(cx: {
     };
     readonly gateways: {
         readonly peers: RuntimePeers;
+        readonly projectCredentials: ProjectCredentialAuthority;
         readonly recording?: SessionRecording;
         readonly notifications?: SessionStatusNotifications;
     };
@@ -116,6 +139,7 @@ export function createDurableObjectDependencies(cx: {
         database: cx.doDatabase,
         gateways: {
             peers,
+            projectCredentials: cx.gateways.projectCredentials,
             recording: cx.gateways.recording ?? new DisabledSessionRecording(),
             ...(cx.gateways.notifications === undefined ? {} : { notifications: cx.gateways.notifications }),
         },

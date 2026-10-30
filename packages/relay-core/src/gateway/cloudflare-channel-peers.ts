@@ -33,6 +33,8 @@ const attachmentSchema = v.union([
         role: v.literal("host"),
         channelId: v.string(),
         credentialId: v.string(),
+        // Attachments written before credential kinds name only stored Channel host credentials.
+        credentialKind: v.optional(v.picklist(["channel", "project"]), "channel"),
         nativeRequestId: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(128))),
         sessionFilter: v.optional(
             v.pipe(
@@ -78,7 +80,7 @@ export class CloudflareChannelSocket implements RuntimeSocket {
         if (attachment.role === "host") {
             return {
                 channelId: attachment.channelId,
-                credentialId: attachment.credentialId,
+                credential: { kind: attachment.credentialKind, credentialId: attachment.credentialId },
                 ...(attachment.nativeRequestId === undefined ? {} : { nativeRequestId: attachment.nativeRequestId }),
                 ...(attachment.sessionFilter === undefined ? {} : { sessionFilter: attachment.sessionFilter }),
                 projectId: attachment.projectId,
@@ -175,7 +177,13 @@ export class CloudflareChannelSocket implements RuntimeSocket {
         socket instanceof CloudflareChannelSocket && socket.#socket === this.#socket;
     readonly permitsSessionHistory = (): boolean => {
         const identity = this.identity();
-        return identity.role === "relay" || (identity.role === "host" && identity.credentialId.startsWith("ctl_"));
+        // Control hosts read Session history: a project credential's connection, and a Relay-internal control host,
+        // whose stored Channel credential the Relay issues with the `ctl_` prefix.
+        return (
+            identity.role === "relay" ||
+            (identity.role === "host" &&
+                (identity.credential.kind === "project" || identity.credential.credentialId.startsWith("ctl_")))
+        );
     };
     readonly send = (message: string | ArrayBuffer): void => this.#socket.send(message);
     readonly trackAgentSettingsDiscovery = (requestId: string, agentId: string): "tracked" | "duplicate" | "busy" => {
@@ -275,7 +283,7 @@ export class CloudflareChannelPeers implements RuntimePeers {
     readonly accept: RuntimePeers["accept"] = (identity) => {
         const pair = new WebSocketPair();
         const server = pair[1];
-        server.serializeAttachment(identity);
+        server.serializeAttachment(attachment(identity));
         this.#state.acceptWebSocket(server, [
             identity.role === "host" && identity.nativeRequestId !== undefined ? "native-request" : identity.role,
         ]);
@@ -284,4 +292,13 @@ export class CloudflareChannelPeers implements RuntimePeers {
             response: new Response(null, { status: 101, webSocket: pair[0] }),
         };
     };
+}
+
+/** Host attachments keep the flat `credentialId` that earlier Relay versions read. */
+function attachment(identity: RuntimeSocketIdentity): v.InferInput<typeof attachmentSchema> {
+    if (identity.role !== "host") {
+        return identity;
+    }
+    const { credential, ...connection } = identity;
+    return { ...connection, credentialId: credential.credentialId, credentialKind: credential.kind };
 }

@@ -1,4 +1,5 @@
 import { CloudflareChannelPeers } from "../gateway/cloudflare-channel-peers.ts";
+import type { ProjectCredentialAuthority } from "../gateway/project-access-authorizer.ts";
 import type { DoSqlDatabase } from "../infra/do-sql-database.ts";
 import { DurableObjectSqlDatabase } from "../infra/durable-object-sql-database.ts";
 import type { ProjectStorageDirectory } from "../infra/project-storage-directory.ts";
@@ -12,6 +13,7 @@ export function createDurableObjectContext(
     options: {
         readonly stores: ProjectStoreResolver;
         readonly projects: ProjectStorageDirectory;
+        readonly projectCredentials: ProjectCredentialAuthority;
         readonly doDatabase?: DoSqlDatabase;
         readonly recording?: SessionRecording;
         readonly notifications?: SessionStatusNotifications;
@@ -25,6 +27,7 @@ export function createDurableObjectContext(
         },
         gateways: {
             peers: new CloudflareChannelPeers(state),
+            projectCredentials: options.projectCredentials,
             ...(options.recording === undefined ? {} : { recording: options.recording }),
             ...(options.notifications === undefined ? {} : { notifications: options.notifications }),
         },

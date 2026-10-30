@@ -6,6 +6,8 @@ import { MobiusPlatformDeveloperClient } from "@moxt-ai/mobius-sdk/platform";
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-sdk/protocol";
 import * as v from "valibot";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { relayDrizzle } from "../../relay-core/src/infra/drizzle-database.ts";
+import { channelHostCredential } from "../../relay-core/src/schema/project-do/index.ts";
 import { createTestMobiusPlatformApp } from "../../test-support/src/app.ts";
 import { FakeClerk } from "../../test-support/src/clerk.ts";
 import { RuntimeRelay } from "../src/durable-objects/runtime-relay.ts";
@@ -13,6 +15,7 @@ import { ProjectDurableObjectStores } from "../src/gateway/project-durable-objec
 import { PlatformControlPlaneStorage } from "../src/storage/platform-control-plane-storage.ts";
 import { SqlitePlatformProjectStore } from "../src/storage/sqlite-platform-project-store.ts";
 import { createPlatformGateways, PlatformAuthenticationConfiguration } from "../src/worker.ts";
+import { registerRuntimeFixture } from "./registered-runtime.ts";
 
 const origin = `https://platform.test${MOBIUS_API_PREFIX}`;
 const clerk = new FakeClerk();
@@ -186,6 +189,14 @@ async function application() {
                     ),
                 );
             }),
+        openRuntimeHost: async (hostRuntimeId: string) =>
+            await worker.fetch(
+                new Request(
+                    `${origin}/v1/projects/${projectId}/runtimes/${hostRuntimeId}/host?token=${defaultCredential.credential}`,
+                    { headers: { Upgrade: "websocket" } },
+                ),
+                env,
+            ),
         revoke: async () =>
             await responseJson(
                 await dashboard(`platform/app-credentials/${defaultCredential.credentialId}/revoke`, {}),
@@ -669,4 +680,34 @@ it("Given a Project created through the dashboard, When its developer lists the 
             }),
         ]),
     });
+});
+
+it("Given a Runtime host connection opened with an AppCredential, When the AppCredential is revoked, Then the connection's next message is refused and the Relay kept no copy of that authority", async () => {
+    const app = await application();
+    const hostRuntimeId = "credential-authority-host-runtime";
+    await registerRuntimeFixture(app.projectId, hostRuntimeId);
+    const opened = await app.openRuntimeHost(hostRuntimeId);
+    expect(opened.status).toBe(101);
+    const host = opened.webSocket;
+    if (host === null) {
+        throw new Error("Expected a Runtime host connection");
+    }
+    const closed = Promise.withResolvers<{ readonly code: number; readonly reason: string }>();
+    host.addEventListener("close", (event) => closed.resolve({ code: event.code, reason: event.reason }), {
+        once: true,
+    });
+    host.accept();
+    const storedHostCredentials = await runInDurableObject(
+        env.PROJECT_RELAY.getByName(app.projectId),
+        async (_instance, state) =>
+            await relayDrizzle(new DurableObjectDatabaseAdapter(state.storage), AbortSignal.timeout(10_000))
+                .select({ credentialId: channelHostCredential.credentialId })
+                .from(channelHostCredential),
+    );
+
+    await app.revoke();
+    host.send(JSON.stringify({ kind: "runtime.ping", requestId: "ping_after_revocation" }));
+
+    expect(storedHostCredentials).toEqual([]);
+    expect(await closed.promise).toEqual({ code: 1008, reason: "Channel access revoked" });
 });

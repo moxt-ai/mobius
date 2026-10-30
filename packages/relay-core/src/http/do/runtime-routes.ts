@@ -1,10 +1,27 @@
 import { isIdentifier } from "@moxt-ai/mobius-sdk/protocol";
 import { Hono } from "hono";
 import { ProjectScope } from "../../entity/do/session.ts";
+import type { HostCredential } from "../../entity/pairing/pairing.ts";
 import type { RuntimeAdmission, RuntimeService } from "../../service/channel/runtime-service.ts";
 
 function unauthorized(message: string): Response {
     return Response.json({ error: { code: "unauthorized", message } }, { status: 401 });
+}
+
+/** A Worker that predates credential kinds forwards only stored Channel host credentials. */
+function hostCredential(credentialId: string | null, kind: string | null): HostCredential | null {
+    if (credentialId === null) {
+        return null;
+    }
+    switch (kind) {
+        case null:
+        case "channel":
+            return { kind: "channel", credentialId };
+        case "project":
+            return { kind: "project", credentialId };
+        default:
+            return null;
+    }
 }
 
 export function createRuntimeRoutes(runtime: RuntimeService) {
@@ -65,7 +82,8 @@ export function createRuntimeRoutes(runtime: RuntimeService) {
             return unreachable;
         }
         if (url.pathname.endsWith("/host")) {
-            if (credentialId === null) {
+            const credential = hostCredential(credentialId, request.headers.get("x-mobius-host-credential-kind"));
+            if (credential === null) {
                 return unauthorized("Verified host credential access is required");
             }
             const nativeRequestId = url.searchParams.get("nativeRequestId");
@@ -81,7 +99,7 @@ export function createRuntimeRoutes(runtime: RuntimeService) {
                     {
                         role: "host",
                         channelId,
-                        credentialId,
+                        credential,
                         runtimeId,
                         projectId,
                         ...(nativeRequestId === null ? {} : { nativeRequestId }),

@@ -123,6 +123,27 @@ export class ChannelHostCredential extends VerifiedChannelAccess {
     }
 }
 
+/**
+ * A host connection opened with a project credential. The Relay stores no copy of that authority: the connection
+ * names the credential, and every message it sends re-reads whether the credential still grants
+ * `PROJECT_HOST_PERMISSION` in the Project.
+ */
+export class ProjectCredentialHostAccess extends VerifiedChannelAccess {
+    readonly credentialId: string;
+
+    constructor(channelId: string, runtimeId: string, projectId: string, credentialId: string) {
+        super(channelId, runtimeId, projectId, []);
+        this.credentialId = credentialId;
+    }
+}
+
+/** The credential whose authority keeps a host connection open. */
+export type HostCredential =
+    /** A Channel host credential stored in the Project: a linked device or a Relay-internal control host. */
+    | { readonly kind: "channel"; readonly credentialId: string }
+    /** The project credential that opened the connection. */
+    | { readonly kind: "project"; readonly credentialId: string };
+
 export class ChannelDescriptor {
     readonly agents: readonly AgentDescriptor[];
     readonly channelId: string;

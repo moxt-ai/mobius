@@ -14,6 +14,7 @@ import type {
     CreatedRuntimePairing,
     LinkedChannelDevice,
     PairingStatus,
+    ProjectCredentialHostAccess,
     RedeemedChannelAccessGrant,
     RevokedProjectRuntime,
     VerifiedChannelAccess,
@@ -40,7 +41,7 @@ export interface PairingOperations {
         runtimeId: string,
         token: string,
         signal: AbortSignal,
-    ) => Promise<ChannelHostCredential>;
+    ) => Promise<ProjectCredentialHostAccess>;
     readonly authorizeProject: (
         projectId: string,
         token: string,
