@@ -223,18 +223,18 @@ export class RuntimeSessionEventPublisher implements SessionEventSink {
         if (connection.kind !== "connected" || connection.socket !== socket || socket.readyState !== WebSocket.OPEN) {
             return;
         }
-        let attempted = 0;
+        let sent = 0;
         for (const batch of this.#pending) {
             const encoded = encodeDaemonToServiceMessage({ events: batch.events, kind: SESSION_EVENT_KIND });
             if (socket.bufferedAmount + Buffer.byteLength(encoded, "utf8") > MAX_BUFFERED_BYTES) {
                 socket.close(LOCAL_BACKPRESSURE_CLOSE_CODE, "Live event transport overloaded");
                 break;
             }
-            // Once handed to the socket, a batch cannot be safely resent without acknowledgements.
-            attempted += 1;
-            this.#pendingBytes -= batch.bytes;
+            // Only discard a batch after the local socket accepts it; cloud delivery remains best effort.
             try {
                 socket.send(encoded);
+                sent += 1;
+                this.#pendingBytes -= batch.bytes;
                 for (const answer of batch.firstAnswers) {
                     console.info(
                         JSON.stringify({
@@ -250,10 +250,11 @@ export class RuntimeSessionEventPublisher implements SessionEventSink {
                 }
             } catch {
                 console.warn("Live Session output could not be sent", { code: "live_event_send_failed" });
+                socket.close(LOCAL_BACKPRESSURE_CLOSE_CODE, "Live event handoff failed");
                 break;
             }
         }
-        this.#pending.splice(0, attempted);
+        this.#pending.splice(0, sent);
         if (this.#pending.length === 0) {
             this.#overflowReported = false;
         }

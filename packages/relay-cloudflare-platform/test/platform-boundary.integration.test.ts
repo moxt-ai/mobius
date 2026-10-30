@@ -4248,3 +4248,69 @@ it.each(["completed", "interrupted"] as const)(
         }
     },
 );
+
+// @no-uc: Bound a recovery delivery's external Session fanout so late terminal facts are not stranded behind one large write.
+it("Given a recovery frame spans 164 Sessions, When Recording has a bounded per-request fanout, Then every recovered failure is recorded", async () => {
+    const runtime = await connectRuntimeDaemon("bulk-recovery-recording");
+    const events = Array.from({ length: 164 }, (_, index) => ({
+        eventId: `recovered-${index}`,
+        position: "30000",
+        recordedAt: "2026-10-29T04:16:06.783Z",
+        sessionGenerationId: `restarted-${index}`,
+        sessionId: `recovered-session-${index}`,
+        type: "lifecycle-metadata" as const,
+        payload: {
+            kind: "prompt.failed" as const,
+            commandId: `recovered-command-${index}`,
+            attemptId: `attempt-${index}`,
+            code: "runtime_restarted",
+            message: "The Runtime restarted",
+        },
+    }));
+    const recorded = await runInDurableObject(
+        env.RUNTIME_RELAY.getByName(runtime.runtimeId),
+        async (_instance, state) => {
+            const persisted: string[] = [];
+            const recording: SessionRecording = {
+                deliverBatch: async (_target, envelope, signal) => {
+                    signal.throwIfAborted();
+                    const sessions = [...new Set(envelope.events.map((event) => event.sessionId))];
+                    // A stateful provider with a finite fanout budget models expensive per-Session storage requests.
+                    if (sessions.length > 32) {
+                        return sessions.map((sessionId) => ({ sessionId, kind: "failed", code: "write_failed" }));
+                    }
+                    persisted.push(...envelope.events.map((event) => event.eventId));
+                    return sessions.map((sessionId) => ({ sessionId, kind: "recorded" }));
+                },
+            };
+            const pending: Promise<void>[] = [];
+            const database = new DurableObjectSqlDatabase(state.storage);
+            const context = createPlatformDurableObjectContext(state, bindings(), { database });
+            const relay = new RuntimeRelay(
+                createDurableObjectDependencies({
+                    doDatabase: database,
+                    storages: context.storages,
+                    gateways: { ...context.gateways, recording },
+                    utilities: {
+                        waitUntil: (operation) => {
+                            pending.push(operation);
+                        },
+                    },
+                }),
+            );
+            const daemon = state.getWebSockets("daemon")[0];
+            if (daemon === undefined) {
+                throw new Error("Expected the Runtime connection");
+            }
+            await relay.webSocketMessage(daemon, encodeSessionEventEnvelope({ kind: "session.event.v2", events }));
+            // Completing a delivery can schedule another one through the same production waitUntil port.
+            for (let offset = 0; offset < pending.length; ) {
+                const batch = pending.slice(offset);
+                offset = pending.length;
+                await Promise.all(batch);
+            }
+            return persisted;
+        },
+    );
+    expect(recorded).toEqual(events.map((event) => event.eventId));
+});

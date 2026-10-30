@@ -15,7 +15,9 @@ const MAX_PENDING_BYTES = 32 * 1024 * 1024;
 const DEADLINE_MILLISECONDS = 10_000;
 const DELIVERY_CONCURRENCY = 4;
 const MAX_DELIVERY_BYTES = 1024 * 1024;
-const MAX_DELIVERY_SESSIONS = 256;
+// Each Session needs a separate storage request within the delivery deadline.
+// Keep recovery bursts in small independent deliveries so their tail can make progress.
+const MAX_DELIVERY_SESSIONS = 32;
 
 interface BufferedEvent {
     readonly event: SessionWireEvent;
