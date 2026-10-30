@@ -26,7 +26,7 @@ import { z } from "zod";
 import { decodeKnownDirectoryUpdate } from "./entity/recording-directory-update.ts";
 import { RecordingSqlMetrics } from "./infra/recording-sql-metrics.ts";
 import { RecordingDirectory } from "./service/recording-directory.ts";
-import { RecordingDirectoryOutbox } from "./service/recording-directory-outbox.ts";
+import { RecordingDirectoryOutbox, type SendDirectoryUpdate } from "./service/recording-directory-outbox.ts";
 import { projectDirectoryChange } from "./service/recording-directory-update.ts";
 import { RecordingEventWaiters } from "./service/recording-event-waiters.ts";
 import { resolveRecordingLocation } from "./service/session-recording-location.ts";
@@ -125,10 +125,11 @@ function sessionRecordingRoutes(
             const before = metrics.snapshot();
             let projected = true;
             let appended: AppendOutcome;
+            const change = projectDirectoryChange(write);
             try {
                 // Folding never throws out of `project`, so an error here is the envelope itself.
                 // The directory changes commit with the batch, so the index can always catch up with the history.
-                appended = storage.append(write, projectDirectoryChange(write), (ordinal, events, receivedAt) => {
+                appended = storage.append(write, change, (ordinal, events, receivedAt) => {
                     // Every stored batch is folded in order; one left for backfill leaves the rest to it too.
                     const folded = history.project(ordinal, events, receivedAt);
                     projected = projected && folded;
@@ -157,7 +158,22 @@ function sessionRecordingRoutes(
                     await scheduleBackfill(new Date(deadline));
                 }
             }
-            await indexDirectory();
+            const indexing = indexDirectory();
+            if (change.operations.some(({ kind }) => kind !== "activity")) {
+                // A change that lists or renames the Session is indexed first, so the Session is listed by the time
+                // its batch is acknowledged.
+                await indexing;
+            } else {
+                // Activity only moves the Session's update time. Indexing it after answering keeps a slow directory
+                // from delaying or failing a committed batch. The outbox keeps the order, and the alarm retries
+                // whatever the directory does not confirm.
+                indexing.catch((cause: unknown) => {
+                    console.warn("Recording directory update failed", {
+                        code: "recording_directory_update_failed",
+                        cause,
+                    });
+                });
+            }
             const after = metrics.snapshot();
             console.info(
                 JSON.stringify({
@@ -817,10 +833,49 @@ interface OpenedSessionRecording {
     readonly routes: Hono<RecordingEnvironment>;
 }
 
+/** Sends a Session's directory updates to the directory object of the update's Runtime. */
+export function runtimeDirectorySender(
+    directories: RecordingWorkerBindings["RECORDING_DIRECTORY"],
+): SendDirectoryUpdate {
+    return async (update) => {
+        try {
+            const response = await durableObjectFetch(
+                directories,
+                JSON.stringify([update.projectId, update.runtimeId]),
+                new Request("https://directory.internal/updates", {
+                    method: "POST",
+                    body: JSON.stringify(update),
+                    signal: AbortSignal.timeout(10_000),
+                }),
+            );
+            await response.body?.cancel();
+            if (!response.ok) {
+                console.warn("Recording directory update failed", {
+                    code: "recording_directory_update_failed",
+                    status: response.status,
+                });
+            }
+            return response.ok;
+        } catch (cause) {
+            console.warn("Recording directory update failed", { code: "recording_directory_update_failed", cause });
+            return false;
+        }
+    };
+}
+
 export class SessionRecordingDurableObject extends DurableObject<RecordingWorkerBindings> {
     readonly #waiters = new RecordingEventWaiters();
+    readonly #sendDirectoryUpdate: SendDirectoryUpdate;
     // Opened on first use, so probing a Session's legacy object that never recorded leaves it without storage.
     #session: OpenedSessionRecording | undefined;
+    constructor(
+        state: DurableObjectState,
+        environment: RecordingWorkerBindings,
+        sendDirectoryUpdate: SendDirectoryUpdate = runtimeDirectorySender(environment.RECORDING_DIRECTORY),
+    ) {
+        super(state, environment);
+        this.#sendDirectoryUpdate = sendDirectoryUpdate;
+    }
     override async fetch(request: Request): Promise<Response> {
         const url = new URL(request.url);
         if (url.hostname === legacyRecordingHost) {
@@ -872,31 +927,7 @@ export class SessionRecordingDurableObject extends DurableObject<RecordingWorker
         const metrics = new RecordingSqlMetrics();
         const recording = new SessionRecordingStorage(this.ctx.storage, metrics);
         const history = new SessionTurnHistory(recording, new SessionTurnHistoryStorage(this.ctx.storage, metrics));
-        const environment = this.env;
-        const directory = new RecordingDirectoryOutbox(recording, async (update) => {
-            try {
-                const response = await durableObjectFetch(
-                    environment.RECORDING_DIRECTORY,
-                    JSON.stringify([update.projectId, update.runtimeId]),
-                    new Request("https://directory.internal/updates", {
-                        method: "POST",
-                        body: JSON.stringify(update),
-                        signal: AbortSignal.timeout(10_000),
-                    }),
-                );
-                await response.body?.cancel();
-                if (!response.ok) {
-                    console.warn("Recording directory update failed", {
-                        code: "recording_directory_update_failed",
-                        status: response.status,
-                    });
-                }
-                return response.ok;
-            } catch (cause) {
-                console.warn("Recording directory update failed", { code: "recording_directory_update_failed", cause });
-                return false;
-            }
-        });
+        const directory = new RecordingDirectoryOutbox(recording, this.#sendDirectoryUpdate);
         const routes = sessionRecordingRoutes(
             recording,
             history,
