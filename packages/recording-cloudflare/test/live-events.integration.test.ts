@@ -133,14 +133,6 @@ describe("Recording live V2 events", () => {
         );
         expect(response.status).toBe(400);
     });
-    it("Given a recorded session belongs to a Runtime, When another Runtime submits an event for it, Then its history is protected", async () => {
-        expect((await worker.fetch(write(), env)).status).toBe(201);
-        const rejected = await worker.fetch(write("runtime-other"), env);
-        expect(rejected.status).toBe(201);
-        expect(await rejected.json()).toEqual({
-            results: [{ sessionId: event.sessionId, kind: "failed", code: "write_failed" }],
-        });
-    });
 });
 
 it("Given a recording exists, When a different Runtime reads it, Then its contents are unavailable", async () => {
@@ -532,7 +524,7 @@ describe("Recording incremental reads", () => {
         ).toBe(201);
         // A batch recorded by an earlier deployment kept a repeated frame inside one stored row.
         await runInDurableObject(
-            env.SESSION_RECORDING.getByName(JSON.stringify([projectId, "live-session"])),
+            env.SESSION_RECORDING.getByName(JSON.stringify([projectId, "runtime-live", "live-session"])),
             (_instance, state) => {
                 state.storage.sql.exec(
                     "INSERT INTO recorded_session_events_v2 (envelope_json, first_position, last_position, recorded_at, session_generation_id) VALUES (?, 2, 2, 0, ?)",
@@ -561,7 +553,7 @@ describe("Recording incremental reads", () => {
         ).toBe(201);
         // A batch recorded by an earlier deployment repeated a frame with an unread event between the copies.
         await runInDurableObject(
-            env.SESSION_RECORDING.getByName(JSON.stringify([projectId, "live-session"])),
+            env.SESSION_RECORDING.getByName(JSON.stringify([projectId, "runtime-live", "live-session"])),
             (_instance, state) => {
                 state.storage.sql.exec(
                     "INSERT INTO recorded_session_events_v2 (envelope_json, first_position, last_position, recorded_at, session_generation_id) VALUES (?, 2, 4, 0, ?)",
@@ -595,7 +587,7 @@ describe("Recording incremental reads", () => {
         ).toBe(201);
         // Rows written before the position and generation columns existed carry only their envelope.
         await runInDurableObject(
-            env.SESSION_RECORDING.getByName(JSON.stringify([projectId, "live-session"])),
+            env.SESSION_RECORDING.getByName(JSON.stringify([projectId, "runtime-live", "live-session"])),
             (_instance, state) => {
                 for (const events of [later.slice(0, 3), later.slice(3)]) {
                     state.storage.sql.exec(

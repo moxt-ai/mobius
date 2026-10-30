@@ -116,7 +116,7 @@ async function execution(...commandIds: string[]) {
     return decodeSessionRecordingExecution(await response.text());
 }
 
-const stub = () => env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]));
+const stub = () => env.SESSION_RECORDING.getByName(JSON.stringify([projectId, runtimeId, sessionId]));
 
 describe("Recording execution inactivity", () => {
     // Lossy display bounds must not lose progress or make identical detail patches renew activity.

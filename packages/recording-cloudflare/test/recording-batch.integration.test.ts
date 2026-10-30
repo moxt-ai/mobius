@@ -107,7 +107,7 @@ describe("Recording multi-Session batches", () => {
         });
     });
 
-    it("Given an identity conflict in one Session, When a mixed batch arrives, Then the healthy Session records and the conflicting history stays unchanged", async () => {
+    it("Given a Session another Runtime recorded, When a mixed batch records it too, Then every Session records and the earlier history stays unchanged", async () => {
         expect((await write("partial-project", "old-runtime", [requested("owned-session")])).status).toBe(201);
         const response = await write("partial-project", "new-runtime", [
             requested("owned-session", 2),
@@ -117,12 +117,9 @@ describe("Recording multi-Session batches", () => {
         expect(response.status).toBe(201);
         expect(await response.json()).toEqual({
             results: [
-                { sessionId: "owned-session", kind: "failed", code: "write_failed" },
+                { sessionId: "owned-session", kind: "recorded" },
                 { sessionId: "healthy-session", kind: "recorded" },
             ],
-        });
-        expect(await directory("partial-project", "new-runtime")).toMatchObject({
-            sessions: [{ sessionId: "healthy-session" }],
         });
         const old = await worker.fetch(
             new Request(
@@ -183,7 +180,9 @@ describe("Recording multi-Session batches", () => {
         expect(await directory(projectId, runtimeId)).toEqual({ sessions: [] });
 
         expect(
-            await runDurableObjectAlarm(env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]))),
+            await runDurableObjectAlarm(
+                env.SESSION_RECORDING.getByName(JSON.stringify([projectId, runtimeId, sessionId])),
+            ),
         ).toBe(true);
 
         expect(await directory(projectId, runtimeId)).toEqual({
