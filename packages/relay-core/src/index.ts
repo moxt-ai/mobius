@@ -43,7 +43,7 @@ export {
 } from "./entity/pairing/pairing.ts";
 export { CloudflareChannelRuntime } from "./gateway/cloudflare-channel-runtime.ts";
 export type { ChannelGateway } from "./gateway/index.ts";
-export type { ProjectAccessAuthorizer } from "./gateway/project-access-authorizer.ts";
+export type { ProjectAccessAuthorizer, ProjectCredentialAuthority } from "./gateway/project-access-authorizer.ts";
 export type { SessionRuntimeOperations } from "./gateway/session-runtime-operations.ts";
 export { errorMiddleware, rethrowHonoError } from "./http/middleware/error-middleware.ts";
 export { requestTimeoutMiddleware } from "./http/middleware/request-timeout-middleware.ts";

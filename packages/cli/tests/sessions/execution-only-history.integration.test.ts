@@ -139,7 +139,6 @@ test("execution-only prompt propagation keeps the run path out of eager recovery
         epoch: "epoch-1",
         waitForSessionAvailability: async () => ({ kind: "available", disposition: "reject" }),
         signal: new AbortController().signal,
-        steerTargetStarted: () => false,
         cancellationRequested: () => false,
     } as never);
 

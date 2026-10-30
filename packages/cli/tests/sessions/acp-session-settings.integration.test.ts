@@ -78,11 +78,10 @@ describe("Agent setting capabilities", () => {
                 "medium",
                 "high",
             ]);
-            const configured = await manager.configureSession({
+            const configured = await manager.applySessionConfiguration({
                 ...session,
                 booleanValue: false,
                 configId: "reasoning_effort",
-                expectedConfigurationRevision: null,
                 requestId: "provider-default-to-high",
                 value: "high",
                 valueType: "select",
@@ -146,11 +145,10 @@ describe("Agent setting capabilities", () => {
                 expect.arrayContaining([expect.objectContaining({ id: "reasoning_effort" })]),
             );
             await expect(
-                manager.configureSession({
+                manager.applySessionConfiguration({
                     ...session,
                     booleanValue: false,
                     configId: "reasoning_effort",
-                    expectedConfigurationRevision: null,
                     requestId: "unavailable-effort",
                     value: "high",
                     valueType: "select",
@@ -263,11 +261,10 @@ describe("Agent setting capabilities", () => {
         try {
             await manager.prepareSession(session);
             await expect(
-                manager.configureSession({
+                manager.applySessionConfiguration({
                     ...session,
                     booleanValue: false,
                     configId: "model",
-                    expectedConfigurationRevision: null,
                     requestId: "ignored-model-update",
                     value: "test-large",
                     valueType: "select",
@@ -312,10 +309,9 @@ it("Given ACP exposes select and boolean settings, When a user configures the co
         ["mode", "plan"],
         ["reasoning_effort", "high"],
     ] as const) {
-        const configured = await session.manager.configureSession({
+        const configured = await session.manager.applySessionConfiguration({
             ...session.request,
             configId,
-            expectedConfigurationRevision: null,
             value,
             booleanValue: false,
             valueType: "select",
@@ -325,10 +321,9 @@ it("Given ACP exposes select and boolean settings, When a user configures the co
             expect.arrayContaining([expect.objectContaining({ id: configId, currentValue: value })]),
         );
     }
-    await session.manager.configureSession({
+    await session.manager.applySessionConfiguration({
         ...session.request,
         configId: "fast_mode",
-        expectedConfigurationRevision: null,
         value: "",
         booleanValue: true,
         valueType: "boolean",

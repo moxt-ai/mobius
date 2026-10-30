@@ -51,14 +51,18 @@ export interface AgentSettingsInspectionOptions {
     readonly signal: AbortSignal;
 }
 
-export interface SessionConfigureOptions extends SessionPrepareOptions {
+/** A setting the Runtime applies on its own authority: a launch, stored or prompt-requested selection. */
+export interface SessionConfigurationChange extends SessionPrepareOptions {
     readonly booleanValue: boolean;
     readonly configId: string;
-    /** The snapshot an explicit edit was chosen from; null when the Runtime applies settings it owns. */
-    readonly expectedConfigurationRevision: string | null;
     readonly requestId: string;
     readonly value: string;
     readonly valueType: SessionConfigOption["type"];
+}
+
+/** A client's edit, which applies only while the configuration still has the revision it was chosen from. */
+export interface SessionConfigureOptions extends SessionConfigurationChange {
+    readonly expectedConfigurationRevision: string;
 }
 
 export interface PromptContentOptions {

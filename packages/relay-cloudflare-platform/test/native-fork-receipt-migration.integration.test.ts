@@ -23,6 +23,15 @@ it("Given pre-recovery Fork receipts, When upgraded and written by either deploy
                 throw new Error("Missing retained schema");
             }
             state.storage.sql.exec(legacySchema.sql);
+            // The 0005 schema still had the Runtime revocation table that a later migration drops.
+            const revocations = runtimeConnectionDurableObjectMigrations
+                .find((migration) => migration.name === "0000_nebulous_molten_man.sql")
+                ?.sql.split("--> statement-breakpoint")
+                .find((statement) => statement.includes("CREATE TABLE `runtime_revocations`"));
+            if (revocations === undefined) {
+                throw new Error("Missing retained Runtime revocation schema");
+            }
+            state.storage.sql.exec(revocations);
             state.storage.sql.exec(
                 "DELETE FROM _mobius_do_schema_migrations WHERE namespace = 'runtime-connection-do' AND name > '0005_glamorous_stick.sql'",
             );

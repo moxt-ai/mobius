@@ -3,6 +3,7 @@ import { PlatformSessionRecording, platformRecordingProvider } from "../gateway/
 import { PlatformSessionStatusNotifications } from "../gateway/platform-session-status-notifications.ts";
 import { ProjectDurableObjectStores } from "../gateway/project-durable-object-store.ts";
 import { PlatformProjectStorageDirectory } from "../infra/platform-project-storage-directory.ts";
+import { AppCredentialProjectAccess } from "../service/app-credential-project-access.ts";
 import { AppSessionStatusWebhookService } from "../service/app-session-status-webhook-service.ts";
 import { AppSessionStatusWebhookStorage } from "../storage/app-session-status-webhook-storage.ts";
 import { PlatformControlPlaneStorage } from "../storage/platform-control-plane-storage.ts";
@@ -26,10 +27,8 @@ export function createPlatformDurableObjectContext(
 ) {
     const stores = new ProjectDurableObjectStores(environment.PROJECT_RELAY);
     const registry = new PlatformStorageRegistry(environment);
-    const projects = new PlatformProjectStorageDirectory(
-        registry,
-        new PlatformControlPlaneStorage(environment.PLATFORM_DIRECTORY_DATABASE, stores),
-    );
+    const controlStorage = new PlatformControlPlaneStorage(environment.PLATFORM_DIRECTORY_DATABASE, stores);
+    const projects = new PlatformProjectStorageDirectory(registry, controlStorage);
     const webhookStorage = new AppSessionStatusWebhookStorage(environment.PLATFORM_DIRECTORY_DATABASE);
     const webhookService = new AppSessionStatusWebhookService(
         null,
@@ -39,6 +38,7 @@ export function createPlatformDurableObjectContext(
     return createDurableObjectContext(state, {
         stores,
         projects,
+        projectCredentials: new AppCredentialProjectAccess(controlStorage),
         doDatabase: storage.database,
         recording: new PlatformSessionRecording(
             new RecordingPolicyStorage(environment.PLATFORM_DIRECTORY_DATABASE),

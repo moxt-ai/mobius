@@ -50,6 +50,13 @@
             "when": 1793155486157,
             "tag": "0006_purple_lorna_dane",
             "breakpoints": true
+        },
+        {
+            "idx": 7,
+            "version": "6",
+            "when": 1793353639685,
+            "tag": "0007_drop_runtime_revocations",
+            "breakpoints": true
         }
     ]
 }

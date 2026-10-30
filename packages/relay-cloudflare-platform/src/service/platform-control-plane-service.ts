@@ -1,17 +1,14 @@
 import {
-    AuditActor,
     createRandomToken,
     type decodeProjectCredential,
     decodeProjectPermissions,
     type ExternalIdentityCredential,
     hashSecret,
-    PerpetualProjectAccessLifetime,
     type ProjectAccessAuthorizer,
-    ProjectAccessContext,
+    type ProjectAccessContext,
     type ProjectApplicationResolver,
     ProjectAuthenticationError,
     type ProjectPermission,
-    ProjectScope,
     type VerifiedExternalIdentity,
     validateIdentifier,
 } from "@moxt-ai/mobius-relay-core";
@@ -19,7 +16,6 @@ import type { ProjectLocationHint } from "@moxt-ai/mobius-sdk/protocol";
 import {
     hasControlCharacters,
     PlatformAppCredentialAccess,
-    PlatformAuditActorKind,
     type PlatformAuthenticationConfiguration,
     PlatformControlPlaneError,
     PlatformDeveloperAccess,
@@ -45,6 +41,7 @@ import {
     type AppCredentialAuthenticationService,
     appCredentialActive,
 } from "./app-credential-authentication-service.ts";
+import { AppCredentialProjectAccess, credentialPermissions } from "./app-credential-project-access.ts";
 import type { OrganizationAdministrators } from "./organization-administrators.ts";
 
 const MAXIMUM_CREDENTIAL_OVERLAP_MILLISECONDS = 60 * 60 * 1_000;
@@ -168,20 +165,6 @@ function iso(value: number): string {
 
 function permissionValues(permissions: ReadonlySet<ProjectPermission>): readonly string[] {
     return Object.freeze([...permissions].map((permission) => permission.value).sort());
-}
-
-function permissions(encoded: string): ReadonlySet<ProjectPermission> {
-    let value: unknown;
-    try {
-        value = JSON.parse(encoded);
-    } catch (cause) {
-        throw new ProjectAuthenticationError(
-            "project_authorization_record_invalid",
-            "The AppCredential authorization record is invalid",
-            { cause },
-        );
-    }
-    return decodeProjectPermissions(value);
 }
 
 function appPermissions(value: unknown): ReadonlySet<ProjectPermission> {
@@ -325,6 +308,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
     readonly #placements: PlatformProjectPlacementRegistry;
     readonly #appAuthentication: AppCredentialAuthenticationService;
     readonly #administrators: OrganizationAdministrators;
+    readonly #projectAccess: AppCredentialProjectAccess;
 
     constructor(
         storage: PlatformControlPlaneStorage,
@@ -338,6 +322,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         this.#authentication = authentication;
         this.#placements = placements;
         this.#appAuthentication = appAuthentication;
+        this.#projectAccess = new AppCredentialProjectAccess(storage);
     }
 
     readonly authenticateDeveloper = async (
@@ -971,7 +956,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
                 credentialId: row.credential_id,
                 issuedAt: iso(row.issued_at),
                 overlapEndsAt: typeof row.overlap_ends_at === "number" ? iso(row.overlap_ends_at) : "",
-                permissions: permissionValues(permissions(row.permissions_json)),
+                permissions: permissionValues(credentialPermissions(row.permissions_json)),
                 projectIds: await this.#storage.credentialProjectIds(row, signal),
                 publicCredentialId: row.public_credential_id,
                 replacedByCredentialId: row.replaced_by_credential_id ?? "",
@@ -993,7 +978,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         const app = await this.readApp(source.app_id, signal);
         const access = await this.requireTenantDeveloper(identity, app.tenant_id, signal);
         const now = Date.now();
-        const created = await this.createCredential(source.app_id, permissions(source.permissions_json), now);
+        const created = await this.createCredential(source.app_id, credentialPermissions(source.permissions_json), now);
         const overlapEndsAt = now + overlapMilliseconds(overlapSeconds);
         const rotated = await this.#storage.rotateAppCredential(
             created.storageRecord(source.all_projects === 1),
@@ -1156,41 +1141,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         requiredPermission: ProjectPermission,
         _actorRef: string,
         signal: AbortSignal,
-    ): Promise<ProjectAccessContext> => {
-        const project = await this.#storage.readActiveProjectScope(projectId, signal);
-        if (project === null || project.app_id !== row.app_id) {
-            throw new ProjectAuthenticationError(
-                "project_access_denied",
-                "The AppCredential is not authorized for this Project",
-            );
-        }
-        if (row.all_projects !== 1) {
-            const hasProject =
-                (await this.#storage.scopedProjects(row.credential_id, [projectId], signal)).length === 1;
-            if (!hasProject) {
-                throw new ProjectAuthenticationError(
-                    "project_access_denied",
-                    "The AppCredential is not authorized for this Project",
-                );
-            }
-        }
-        const granted = permissions(row.permissions_json);
-        if (!granted.has(requiredPermission)) {
-            throw new ProjectAuthenticationError(
-                "project_permission_denied",
-                "The AppCredential does not grant this Project permission",
-            );
-        }
-        const now = Date.now();
-        return new ProjectAccessContext(
-            new ProjectScope(project.project_id),
-            granted,
-            new AuditActor(PlatformAuditActorKind.Application, row.app_id),
-            row.credential_id,
-            now,
-            new PerpetualProjectAccessLifetime(),
-        );
-    };
+    ): Promise<ProjectAccessContext> => await this.#projectAccess.authorize(row, projectId, requiredPermission, signal);
 
     private readonly authenticatedCredential = async (
         credentialValue: string,

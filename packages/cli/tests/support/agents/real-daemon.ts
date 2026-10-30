@@ -40,7 +40,8 @@ import { acpAdapters } from "../acp-adapters.ts";
 export interface RealDaemonPeer {
     /** Runs a `mobius` command against this daemon's installation, as the user's terminal would. */
     readonly cli: (args: readonly string[]) => Promise<void>;
-    readonly restart: (mode?: "crash") => Promise<void>;
+    readonly restart: (mode?: "crash", restoreFiles?: () => Promise<void>) => Promise<void>;
+    readonly stateDirectory: string;
     readonly send: (message: string | Uint8Array) => void;
     readonly sessionId: string;
     readonly workspace: string;
@@ -240,7 +241,7 @@ export async function withRealDaemon(
         const pendingEvents: string[] = [];
         const sessionId = `real_${specification.id}_${randomUUID()}`;
         await scenario({
-            restart: async (mode) => {
+            restart: async (mode, restoreFiles) => {
                 messages.length = 0;
                 pendingEvents.length = 0;
                 connected = Promise.withResolvers<void>();
@@ -261,9 +262,11 @@ export async function withRealDaemon(
                     execution.abort();
                     await runtime;
                 }
+                await restoreFiles?.();
                 await start();
                 await connected.promise;
             },
+            stateDirectory: directory,
             bindingId: RUNTIME_WORKSPACE_BINDING_ID,
             cli: async (args) => await cli(args),
             readDiagnostics: async () => await readFile(join(directory, "logs", "daemon.log"), "utf8"),

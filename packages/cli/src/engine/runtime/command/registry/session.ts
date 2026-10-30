@@ -74,11 +74,10 @@ async function prepareSession(
                 : await metrics.measure(
                       "configuration",
                       async () =>
-                          await sessions.configureSession({
+                          await sessions.applySessionConfiguration({
                               ...preparation,
                               booleanValue: configuration.booleanValue,
                               configId: configuration.configId,
-                              expectedConfigurationRevision: null,
                               requestId: command.requestId,
                               value: configuration.value,
                               valueType: configuration.valueType,

@@ -4,6 +4,7 @@ import type { AdapterResolver } from "../../src/engine/acp/native-history/previe
 import type { OperationMetrics } from "../../src/engine/infra/operation-metrics.ts";
 import type {
     AgentSettingsInspectionOptions,
+    SessionConfigurationChange,
     SessionConfigureOptions,
     SessionPrepareOptions,
     SessionSteerOptions,
@@ -69,6 +70,9 @@ export class SessionRuntimeFixture {
 
     readonly configureSession = (options: Omit<SessionConfigureOptions, "adapter">) =>
         this.sessions.configureSession({ ...options, adapter: this.adapters.resolve(options.agent) });
+
+    readonly applySessionConfiguration = (options: Omit<SessionConfigurationChange, "adapter">) =>
+        this.sessions.applySessionConfiguration({ ...options, adapter: this.adapters.resolve(options.agent) });
 
     readonly runPrompt = (options: Omit<SessionTurnOptions, "adapter">) =>
         this.sessions.runPrompt({ ...options, adapter: this.adapters.resolve(options.agent) });

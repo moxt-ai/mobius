@@ -42,6 +42,7 @@ import {
     type PreparedSession,
     type PromptResult,
     type ResolveAgent,
+    type SessionConfigurationChange,
     type SessionConfigurationSnapshot,
     type SessionConfigureOptions,
     type SessionObserver,
@@ -62,7 +63,7 @@ export class SessionManager {
         touch: (runtime) => this.#processes.touch(runtime),
         changed: () => this.#processes.notifyChanged(),
     });
-    readonly #executions = new ActiveExecutions();
+    readonly #executions: ActiveExecutions;
     readonly #agentSettingsObserver = new NullSessionObserver();
     readonly #nativeOperations = new Set<string>();
     readonly #sessionClosures = new Map<string, Promise<void>>();
@@ -71,7 +72,6 @@ export class SessionManager {
     readonly #closedSessions = new Set<string>();
     readonly #store: SessionStore;
     readonly #sessionIdentity: "assigned" | "native";
-    readonly #onSessionStatusChanged: (event: SessionStatusChangedEvent) => void;
     readonly #onSessionClosed: (event: SessionCloseNoticeEvent) => void;
     readonly #timer: Timer;
     #observer: SessionObserver;
@@ -98,7 +98,9 @@ export class SessionManager {
         this.#processes = processes;
         this.#store = store;
         this.#sessionIdentity = sessionIdentity;
-        this.#onSessionStatusChanged = onSessionStatusChanged;
+        this.#executions = new ActiveExecutions((sessionId, status) =>
+            onSessionStatusChanged({ kind: "session.status.changed", sessionId, status }),
+        );
         this.#onSessionClosed = onSessionClosed;
         this.#timer = timer;
     }
@@ -244,6 +246,7 @@ export class SessionManager {
                         effectiveOptions,
                         recovery,
                         () => this.#observer,
+                        this.#executions.agentCommand,
                         this.#store,
                         metrics,
                         options.adapter,
@@ -273,6 +276,7 @@ export class SessionManager {
                         options,
                         recovery,
                         () => this.#observer,
+                        this.#executions.agentCommand,
                         this.#store,
                         metrics,
                         options.adapter,
@@ -294,6 +298,7 @@ export class SessionManager {
                         options,
                         recovery,
                         () => this.#observer,
+                        this.#executions.agentCommand,
                         this.#store,
                         unmeasuredOperationMetrics,
                         options.adapter,
@@ -308,11 +313,10 @@ export class SessionManager {
                     }
                     if (desired.type === "boolean") {
                         if (current.booleanValue !== desired.booleanValue) {
-                            await runtime.configure({
+                            await runtime.applyConfiguration({
                                 ...options,
                                 booleanValue: desired.booleanValue,
                                 configId: desired.id,
-                                expectedConfigurationRevision: null,
                                 requestId: `execution-prepare-${desired.id}`,
                                 value: "",
                                 valueType: "boolean",
@@ -324,11 +328,10 @@ export class SessionManager {
                         current.currentValue !== desired.currentValue &&
                         current.values.some((value) => value.value === desired.currentValue)
                     ) {
-                        await runtime.configure({
+                        await runtime.applyConfiguration({
                             ...options,
                             booleanValue: false,
                             configId: desired.id,
-                            expectedConfigurationRevision: null,
                             requestId: `execution-prepare-${desired.id}`,
                             value: desired.currentValue,
                             valueType: "select",
@@ -377,6 +380,7 @@ export class SessionManager {
                         options,
                         recovery,
                         () => this.#observer,
+                        this.#executions.agentCommand,
                         this.#store,
                         unmeasuredOperationMetrics,
                         options.adapter,
@@ -442,7 +446,8 @@ export class SessionManager {
                         }
                         return runtime.prepared();
                     }
-                    if (!existing.canRebind()) {
+                    // A process that served a prompt, or is preparing one, keeps its agent and workspace.
+                    if (existing.prepared().prompted || this.#executions.isBusy(options.sessionId)) {
                         throw new AcpExecutionError(
                             "The agent or workspace cannot change after a conversation has started",
                             {},
@@ -487,6 +492,7 @@ export class SessionManager {
                         },
                         { kind: "interactive-only" },
                         () => this.#agentSettingsObserver,
+                        () => undefined,
                         new MemorySessionStore(),
                         unmeasuredOperationMetrics,
                         options.adapter,
@@ -508,11 +514,10 @@ export class SessionManager {
                         model === undefined || modelIsFixed
                             ? prepared.configOptions
                             : (
-                                  await runtime.configure({
+                                  await runtime.applyConfiguration({
                                       ...options,
                                       booleanValue: false,
                                       configId: modelOption?.id ?? "model",
-                                      expectedConfigurationRevision: null,
                                       requestId: "agent-settings-model",
                                       sessionId: `agent-settings-${crypto.randomUUID()}`,
                                       value: model,
@@ -593,7 +598,7 @@ export class SessionManager {
                 this.#executionProcesses.touch(options.sessionId, runtime);
                 return runtime.prepared();
             }
-            if (existing.hasRunningTurn()) {
+            if (this.#executions.isBusy(options.sessionId)) {
                 throw new AcpExecutionError(
                     "The execution environment cannot change while a conversation turn is running",
                     {},
@@ -603,11 +608,23 @@ export class SessionManager {
             return (await this.#replaceExecutionPreparation(existing, options)).prepared();
         });
 
+    /** Applies a client's edit only while the Session's configuration still has the revision the client read. */
     readonly configureSession = async (options: SessionConfigureOptions): Promise<SessionConfigurationSnapshot> =>
         this.#operations.run(options, async (options) => {
             return await this.#executionProcesses.use(options.sessionId, async () => {
                 const runtime = await this.ensureSession(options);
                 return await runtime.configure(options);
+            });
+        });
+
+    /** Applies a setting the Runtime owns, such as one a prompt or a preparation requested. */
+    readonly applySessionConfiguration = async (
+        change: SessionConfigurationChange,
+    ): Promise<SessionConfigurationSnapshot> =>
+        this.#operations.run(change, async (change) => {
+            return await this.#executionProcesses.use(change.sessionId, async () => {
+                const runtime = await this.ensureSession(change);
+                return await runtime.applyConfiguration(change);
             });
         });
 
@@ -662,16 +679,21 @@ export class SessionManager {
             });
         });
 
+    /** Whether a steering prompt can join the named execution: the one rule every steering check asks. */
+    readonly acceptsSteering = (sessionId: string, targetCommandId: string): boolean =>
+        this.#executions.acceptsSteering(sessionId, targetCommandId);
+
     readonly steerPrompt = async (options: SessionSteerOptions): Promise<string> =>
         this.#operations.run(options, async (options) => {
-            if (this.#executions.command(options.sessionId) !== options.targetCommandId) {
+            if (!this.acceptsSteering(options.sessionId, options.targetCommandId)) {
                 throw new AcpExecutionError("The target turn is no longer active", {}, "steering_target_unavailable");
             }
             const pending = this.#executionProcesses.pending(options.sessionId);
             if (pending !== undefined) {
                 await waitForSharedOperation(pending, options.signal);
             }
-            if (this.#executions.command(options.sessionId) !== options.targetCommandId) {
+            // Nothing below awaits before the Agent receives the steer, so this check holds at the handoff.
+            if (!this.acceptsSteering(options.sessionId, options.targetCommandId)) {
                 throw new AcpExecutionError("The target turn is no longer active", {}, "steering_target_unavailable");
             }
             const runtime = this.#executionProcesses.get(options.sessionId);
@@ -720,13 +742,8 @@ export class SessionManager {
             // The command's own turn records a cancellation that arrives before its execution begins.
             const cancelled = (): boolean =>
                 options.cancellationRequested?.() === true ||
-                this.#executions.cancellation(options.sessionId) !== undefined;
+                this.#executions.cancellationRequested(options.sessionId, options.commandId);
             try {
-                this.#onSessionStatusChanged({
-                    kind: "session.status.changed",
-                    sessionId: options.sessionId,
-                    status: { commandId: options.commandId, kind: "working" },
-                });
                 if (cancelled()) {
                     return { stopReason: "cancelled" };
                 }
@@ -738,6 +755,12 @@ export class SessionManager {
                     return { stopReason: "cancelled" };
                 }
                 try {
+                    await runtime.preparePrompt(options.signal);
+                    // Nothing awaits between this check and the Agent receiving the prompt.
+                    if (cancelled()) {
+                        return { stopReason: "cancelled" };
+                    }
+                    this.#executions.start(options.sessionId, options.commandId);
                     const result = await runtime.prompt({
                         ...options,
                         cancellationRequested: cancelled,
@@ -749,6 +772,8 @@ export class SessionManager {
                         return { stopReason: "cancelled" };
                     }
                     throw error;
+                } finally {
+                    this.#executions.settle(options.sessionId, options.commandId);
                 }
             } catch (error) {
                 const failedRuntime = this.#executionProcesses.get(options.sessionId);
@@ -773,11 +798,6 @@ export class SessionManager {
                     await this.#executions.cancellation(options.sessionId);
                 } finally {
                     this.#executions.finish(options.sessionId, options.commandId);
-                    this.#onSessionStatusChanged({
-                        kind: "session.status.changed",
-                        sessionId: options.sessionId,
-                        status: { kind: "idle" },
-                    });
                     this.#executionProcesses.touch(options.sessionId);
                     this.#processes.notifyChanged();
                 }
@@ -866,10 +886,7 @@ export class SessionManager {
             return stored instanceof FoundStoredSession ? [stored.session] : [];
         });
 
-    readonly sessionStatus = (sessionId: string): SessionStatus => {
-        const commandId = this.#executions.command(sessionId);
-        return commandId === undefined ? { kind: "idle" } : { commandId, kind: "working" };
-    };
+    readonly sessionStatus = (sessionId: string): SessionStatus => this.#executions.status(sessionId);
 
     readonly listSessions = (limit: number) =>
         this.#store
@@ -1077,7 +1094,7 @@ export class SessionManager {
             if (
                 linked.some(
                     (entry) =>
-                        this.#executions.command(entry.sessionId) !== undefined ||
+                        this.#executions.isBusy(entry.sessionId) ||
                         this.#executionProcesses.pending(entry.sessionId) !== undefined,
                 )
             ) {

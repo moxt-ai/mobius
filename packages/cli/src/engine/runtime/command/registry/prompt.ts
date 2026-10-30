@@ -93,7 +93,6 @@ export const sessionPromptCommand: RuntimeCommand = {
                     queueChanged();
                 }),
             signal: turn.signal,
-            steerTargetStarted: () => context.sessionTurns.steerTargetStarted(message),
             cancellationRequested: turn.cancellationRequested,
         })
             .catch((error: unknown) => {

@@ -177,6 +177,7 @@ export type {
     LifecycleMetadata,
     NativeEventPageRequest,
     NativeSessionEvents,
+    PromptCompletion,
     PromptExecutionContext,
     PromptTerminalLifecycle,
     QueuedPromptRequestEventLog,
@@ -215,6 +216,7 @@ export {
     encodeSessionWireEnvelope,
     isPromptTerminal,
     isSessionLiveEvent,
+    promptCompletion,
     SESSION_EVENT_BATCH_MAX_SIZE,
     SESSION_EVENT_KIND,
 } from "./session/events/index.ts";

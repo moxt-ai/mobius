@@ -3,6 +3,7 @@ import {
     encodeSessionStatusWebhookBody,
     isSessionLiveEvent,
     lastRecordedLifecycleStatus,
+    promptCompletion,
     type SessionLiveEvent,
     type SessionStatusWebhookCommand,
 } from "@moxt-ai/mobius-sdk/protocol";
@@ -143,10 +144,9 @@ function terminatedCommands(events: readonly SessionLiveEvent[]): SessionStatusW
         }
         const payload = event.payload;
         if (payload.kind === "prompt.completed") {
-            const cancelled = payload.stopReason === "cancelled" || payload.stopReason === "canceled";
             byCommand.set(
                 payload.commandId,
-                cancelled
+                promptCompletion(payload).kind === "cancelled"
                     ? { cancelledAt: event.recordedAt, commandId: payload.commandId, outcome: "cancelled" }
                     : {
                           commandId: payload.commandId,

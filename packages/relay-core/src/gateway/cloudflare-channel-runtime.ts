@@ -1,5 +1,9 @@
 import type { RuntimeAccessContext } from "../entity/authentication/project-authentication.ts";
-import type { ChannelHostCredential, VerifiedChannelAccess } from "../entity/pairing/pairing.ts";
+import {
+    type ChannelHostCredential,
+    ProjectCredentialHostAccess,
+    type VerifiedChannelAccess,
+} from "../entity/pairing/pairing.ts";
 import { requestLogContext } from "../infra/log-diagnostics.ts";
 import { logger } from "../infra/logger.ts";
 import { RuntimeStatus } from "../service/channel/channel.ts";
@@ -7,6 +11,7 @@ import type { ChannelGateway } from "./channel-gateway.ts";
 
 const INTERNAL_CHANNEL_ID_HEADER = "x-mobius-channel-id";
 const INTERNAL_HOST_CREDENTIAL_ID_HEADER = "x-mobius-host-credential-id";
+const INTERNAL_HOST_CREDENTIAL_KIND_HEADER = "x-mobius-host-credential-kind";
 const INTERNAL_RUNTIME_ID_HEADER = "x-mobius-runtime-id";
 
 export class CloudflareChannelRuntime implements ChannelGateway {
@@ -31,12 +36,12 @@ export class CloudflareChannelRuntime implements ChannelGateway {
     };
 
     readonly acceptHost = async (
-        access: ChannelHostCredential,
+        access: ChannelHostCredential | ProjectCredentialHostAccess,
         request: Request,
         signal: AbortSignal,
     ): Promise<Response> => {
         const headers = new Headers(request.headers);
-        headers.set(INTERNAL_HOST_CREDENTIAL_ID_HEADER, access.credentialId);
+        setHostCredential(headers, access);
         const endpoint = new URL(request.url);
         // Public viewers cannot opt into the private request-reply routing mode.
         endpoint.searchParams.delete("nativeRequestId");
@@ -50,14 +55,9 @@ export class CloudflareChannelRuntime implements ChannelGateway {
     ): Promise<Response> => {
         const endpoint = new URL("https://runtime.internal/host");
         endpoint.searchParams.set("nativeRequestId", requestId);
-        return await this.forward(
-            access,
-            new Request(endpoint, {
-                headers: { Upgrade: "websocket", [INTERNAL_HOST_CREDENTIAL_ID_HEADER]: access.credentialId },
-                signal,
-            }),
-            signal,
-        );
+        const headers = new Headers({ Upgrade: "websocket" });
+        setHostCredential(headers, access);
+        return await this.forward(access, new Request(endpoint, { headers, signal }), signal);
     };
 
     readonly disconnectHost = async (access: ChannelHostCredential, signal: AbortSignal): Promise<void> => {
@@ -170,4 +170,13 @@ export class CloudflareChannelRuntime implements ChannelGateway {
             throw error;
         }
     };
+}
+
+/** Replaces whatever a caller sent: only this Worker states which credential authorizes a host connection. */
+function setHostCredential(headers: Headers, access: ChannelHostCredential | ProjectCredentialHostAccess): void {
+    headers.set(INTERNAL_HOST_CREDENTIAL_ID_HEADER, access.credentialId);
+    headers.set(
+        INTERNAL_HOST_CREDENTIAL_KIND_HEADER,
+        access instanceof ProjectCredentialHostAccess ? "project" : "channel",
+    );
 }

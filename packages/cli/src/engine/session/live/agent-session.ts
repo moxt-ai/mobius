@@ -35,6 +35,7 @@ import {
     type PermissionResponseOptions,
     PreparedSession,
     type PromptResult,
+    type SessionConfigurationChange,
     type SessionConfigurationSnapshot,
     type SessionConfigureOptions,
     type SessionObserver,
@@ -49,11 +50,17 @@ import { SessionInteractions } from "../interaction/session-interactions.ts";
 import { waitForSharedOperation } from "../manager/operation-drain.ts";
 import { type SessionStore, StoredSession } from "../record/session-store.ts";
 import type { AgentSessionRestore } from "./agent-session-restore.ts";
-import { type AgentTurnState, IdleAgentTurn, RunningAgentTurn } from "./agent-turn.ts";
+import { configurationRevision } from "./configuration-revision.ts";
 import { SessionConfigurations } from "./session-configurations.ts";
 import { restoreSession } from "./session-restore.ts";
 
 export { AcpConfigurationValueUnavailableError, AcpExecutionError } from "../../acp/acp-error.ts";
+
+/** Attributes Agent requests that arrive while the Agent holds no prompt of this Session. */
+const SESSION_CONTROL_COMMAND_ID = "session-control";
+
+/** Reads, from the Session's execution authority, the command whose prompt the Session's Agent holds. */
+export type AgentCommand = (sessionId: string) => string | undefined;
 
 type SessionLoadState =
     | { readonly kind: "not-requested" }
@@ -130,6 +137,7 @@ export class AgentSession implements AgentSessionRestore {
     readonly #cwd: string;
     readonly #environment: Readonly<Record<string, string>>;
     readonly #getObserver: () => SessionObserver;
+    readonly #agentCommand: () => string | undefined;
     readonly #interactions: SessionInteractions;
     #mobiusSessionId: string;
     readonly #metrics: OperationMetrics;
@@ -138,7 +146,6 @@ export class AgentSession implements AgentSessionRestore {
     #agentVersion = "";
     #capabilities: SessionCapabilities = unsupportedSessionCapabilities();
     #commands: readonly SessionCommand[] = [];
-    #configRevision = crypto.randomUUID();
     readonly #configurationChanges = new SerialTaskQueue();
     #configOptions: readonly SessionConfigOption[] = [];
     readonly #sessionConfigurations = new SessionConfigurations();
@@ -150,7 +157,6 @@ export class AgentSession implements AgentSessionRestore {
     #restored = false;
     #sessionTitle: string | null = null;
     #sessionUpdatedAt = "";
-    #turn: AgentTurnState = new IdleAgentTurn();
 
     private constructor(
         agent: AcpAgentDefinition,
@@ -158,11 +164,13 @@ export class AgentSession implements AgentSessionRestore {
         additionalDirectories: readonly string[],
         mobiusSessionId: string,
         getObserver: () => SessionObserver,
+        agentCommand: AgentCommand,
         store: SessionStore,
         metrics: OperationMetrics,
         adapter: Adapter,
         externalize: SessionPrepareOptions["externalizeSessionUpdate"],
     ) {
+        this.#agentCommand = () => agentCommand(this.#mobiusSessionId);
         this.#additionalDirectories = [...additionalDirectories];
         this.#adapter = adapter;
         this.#agentId = agent.id;
@@ -177,7 +185,7 @@ export class AgentSession implements AgentSessionRestore {
             cwd: () => this.#cwd,
             getToolCall: (toolCallId) => this.#store.events.getToolCall(this.#mobiusSessionId, toolCallId),
             sessionId: () => this.#mobiusSessionId,
-            commandId: () => this.#turn.commandId,
+            commandId: () => this.#agentCommand() ?? SESSION_CONTROL_COMMAND_ID,
             assertNativeSession: this.assertNativeSession,
             observer: getObserver,
             recordSessionEvent: this.recordLifecycleEvent,
@@ -219,6 +227,7 @@ export class AgentSession implements AgentSessionRestore {
     static async #start(
         options: SessionPrepareOptions,
         getObserver: () => SessionObserver,
+        agentCommand: AgentCommand,
         store: SessionStore,
         initialize: (runtime: AgentSession) => Promise<void>,
         metrics: OperationMetrics,
@@ -238,6 +247,7 @@ export class AgentSession implements AgentSessionRestore {
                         options.additionalDirectories,
                         options.sessionId,
                         getObserver,
+                        agentCommand,
                         store,
                         metrics,
                         adapter,
@@ -269,6 +279,7 @@ export class AgentSession implements AgentSessionRestore {
         options: SessionPrepareOptions,
         recovery: SessionRecovery,
         getObserver: () => SessionObserver,
+        agentCommand: AgentCommand,
         store: SessionStore,
         metrics: OperationMetrics,
         adapter: Adapter,
@@ -277,6 +288,7 @@ export class AgentSession implements AgentSessionRestore {
         await AgentSession.#start(
             options,
             getObserver,
+            agentCommand,
             store,
             async (runtime) => {
                 runtime.#capabilities = capabilities;
@@ -293,10 +305,6 @@ export class AgentSession implements AgentSessionRestore {
 
     readonly usesEnvironment = (environment: Readonly<Record<string, string>>): boolean =>
         recordsEqual(this.#environment, environment);
-
-    readonly canRebind = (): boolean => !this.#prompted && !this.#turn.running;
-
-    readonly hasRunningTurn = (): boolean => this.#turn.running;
 
     readonly writeStoredSession = (updatedAt: string): void => {
         this.#store.write(
@@ -414,7 +422,7 @@ export class AgentSession implements AgentSessionRestore {
             this.#configOptions,
             this.#prompted,
             this.#restored,
-            this.#configRevision,
+            configurationRevision(this.#configOptions),
         );
 
     readonly ensureHistoryLoaded = async (signal: AbortSignal): Promise<void> => {
@@ -637,45 +645,56 @@ export class AgentSession implements AgentSessionRestore {
         selection: SessionConfigurationSelection,
         signal: AbortSignal,
     ): Promise<void> => {
-        const configRevision = this.#configRevision;
+        const before = this.#configOptions;
         const configured = await this.#writeNativeHistory(
             async () => await this.#adapter.configureSession({ ...this.#target(), selection, signal }),
         );
-        if (this.#configRevision === configRevision) {
+        // An Agent update that arrived meanwhile is newer than this response.
+        if (this.#configOptions === before) {
             this.#configOptions = configured;
-            this.#configRevision = crypto.randomUUID();
             await this.#publishConfiguration();
         }
     };
 
-    // The revision check and Agent mutation share one queue, including settings the Runtime applies itself.
+    // The revision check and Agent mutation share one queue with the settings the Runtime applies itself.
     // A lost response may have committed: reread after a conflict, never replay an edit blindly.
     readonly configure = async (options: SessionConfigureOptions): Promise<SessionConfigurationSnapshot> =>
         this.#configurationChanges.run(async (signal) => {
-            if (
-                options.expectedConfigurationRevision !== null &&
-                options.expectedConfigurationRevision !== this.#configRevision
-            ) {
+            if (options.expectedConfigurationRevision !== configurationRevision(this.#configOptions)) {
                 throw new AcpExecutionError(
                     "Session settings changed. Review the current settings before applying your selection again.",
                     {},
                     "session_configuration_conflict",
                 );
             }
-            await this.#applyConfiguration(
-                options.valueType === "boolean"
-                    ? { type: "boolean", configId: options.configId, booleanValue: options.booleanValue }
-                    : { type: "select", configId: options.configId, value: options.value },
-                signal,
-            );
-            const applied = this.#configOptions.find((option) => option.id === options.configId);
-            if (applied === undefined) {
-                throw new AcpExecutionError("The requested ACP configuration option is unavailable");
-            }
-            this.#sessionConfigurations.select(applied);
-            this.writeStoredSession(new Date().toISOString());
-            return { configOptions: this.#configOptions, configurationRevision: this.#configRevision };
+            return await this.#change(options, signal);
         }, options.signal);
+
+    /** Applies a setting the Runtime owns, whatever the configuration's current revision. */
+    readonly applyConfiguration = async (change: SessionConfigurationChange): Promise<SessionConfigurationSnapshot> =>
+        this.#configurationChanges.run(async (signal) => await this.#change(change, signal), change.signal);
+
+    readonly #change = async (
+        change: SessionConfigurationChange,
+        signal: AbortSignal,
+    ): Promise<SessionConfigurationSnapshot> => {
+        await this.#applyConfiguration(
+            change.valueType === "boolean"
+                ? { type: "boolean", configId: change.configId, booleanValue: change.booleanValue }
+                : { type: "select", configId: change.configId, value: change.value },
+            signal,
+        );
+        const applied = this.#configOptions.find((option) => option.id === change.configId);
+        if (applied === undefined) {
+            throw new AcpExecutionError("The requested ACP configuration option is unavailable");
+        }
+        this.#sessionConfigurations.select(applied);
+        this.writeStoredSession(new Date().toISOString());
+        return {
+            configOptions: this.#configOptions,
+            configurationRevision: configurationRevision(this.#configOptions),
+        };
+    };
 
     readonly #publishConfiguration = async (): Promise<void> => {
         // Use the existing v2 ACP event vocabulary so old observers can still decode the stream.
@@ -704,7 +723,8 @@ export class AgentSession implements AgentSessionRestore {
         additionalDirectories: this.#additionalDirectories,
     });
 
-    readonly prompt = async (options: SessionTurnOptions): Promise<PromptResult> => {
+    /** Loads what the Agent needs before it can receive a prompt; the Agent does not receive it yet. */
+    readonly preparePrompt = async (signal: AbortSignal): Promise<void> => {
         if (!this.#capabilities.loadSession && this.#sessionLoad.kind === "not-requested") {
             this.#sessionLoad = {
                 kind: "loaded",
@@ -720,8 +740,15 @@ export class AgentSession implements AgentSessionRestore {
             };
         }
         if (this.#capabilities.loadSession && this.#sessionLoad.kind !== "execution-only") {
-            await this.#completedHistory(options.signal);
+            await this.#completedHistory(signal);
         }
+    };
+
+    /**
+     * Hands a prepared prompt to the Agent. Precondition: `preparePrompt` completed and the Session's execution
+     * authority records this command as started.
+     */
+    readonly prompt = async (options: SessionTurnOptions): Promise<PromptResult> => {
         validatePromptContent(options, this.#capabilities);
         // Recording prompt.started below is the command's start; a cancellation that arrived first withdraws it.
         options.signal.throwIfAborted();
@@ -730,8 +757,6 @@ export class AgentSession implements AgentSessionRestore {
         }
         this.#prompted = true;
         this.writeStoredSession(new Date().toISOString());
-        const running = new RunningAgentTurn(options.commandId);
-        this.#turn = running;
         const lifecycle = options.lifecycle;
         if (lifecycle !== undefined) {
             await this.recordLifecycleEvent({
@@ -795,11 +820,13 @@ export class AgentSession implements AgentSessionRestore {
                 throw error;
             }
             throw failure;
-        } finally {
-            this.#turn = new IdleAgentTurn();
         }
     };
 
+    /**
+     * Adds a steering prompt to the prompt the Agent holds. Precondition: the Session's execution authority accepts
+     * steering into `options.targetCommandId`.
+     */
     readonly steer = async (options: SessionSteerOptions): Promise<string> => {
         if (!this.#capabilities.steering) {
             throw new AcpExecutionError(
@@ -807,9 +834,6 @@ export class AgentSession implements AgentSessionRestore {
                 {},
                 "steering_unsupported",
             );
-        }
-        if (!this.#turn.running || this.#turn.commandId !== options.targetCommandId) {
-            throw new AcpExecutionError("The target turn is no longer active", {}, "steering_target_unavailable");
         }
         validatePromptContent(options, this.#capabilities);
         // Recording prompt.started below is the command's start; a cancellation that arrived first withdraws it.
@@ -875,7 +899,7 @@ export class AgentSession implements AgentSessionRestore {
         signal.throwIfAborted();
         await this.#interactions.cancelPendingInteractions();
         signal.throwIfAborted();
-        if (this.#turn.running) {
+        if (this.#agentCommand() !== undefined) {
             return await this.#adapter.cancel({ ...this.#target(), signal });
         }
         return "retained";
@@ -932,7 +956,6 @@ export class AgentSession implements AgentSessionRestore {
                     : this.#configOptions.map((option) =>
                           option.category === "mode" ? { ...option, currentValue: event.modeId } : option,
                       );
-            this.#configRevision = crypto.randomUUID();
             this.#captureSelectedConfigurationValues();
         }
         if (this.#sessionLoad.kind === "capturing") {
@@ -1026,7 +1049,6 @@ export class AgentSession implements AgentSessionRestore {
 
     setConfigOptions(options: readonly SessionConfigOption[]): void {
         this.#configOptions = options;
-        this.#configRevision = crypto.randomUUID();
     }
 
     setNativeHistoryOwnership(ownership: NativeHistoryOwnership): void {
@@ -1054,7 +1076,7 @@ export class AgentSession implements AgentSessionRestore {
     readonly emitConfigUpdate = async (): Promise<void> => {
         await this.#getObserver().onConfig({
             configOptions: this.#configOptions,
-            configurationRevision: this.#configRevision,
+            configurationRevision: configurationRevision(this.#configOptions),
             kind: SESSION_CONFIG_UPDATED_KIND,
             requestId: `agent-update-${crypto.randomUUID()}`,
             sessionId: this.#mobiusSessionId,
