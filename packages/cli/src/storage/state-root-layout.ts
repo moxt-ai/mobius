@@ -4,8 +4,6 @@ export const STATE_ROOT_LAYOUT = Object.freeze({
     currentData: "current-data.txt",
     /** Applications' installations: `installations/<application>/<installation>`. */
     installations: "installations",
-    /** Managed CLI releases: `npm/<version>`. */
-    releases: "npm",
     /** Each CLI version's data: `versions/<version>`. */
     versions: "versions",
 });

@@ -1,11 +1,11 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-
 import cliPackage from "../../package.json" with { type: "json" };
-import { installWorkspaceDaemonRelease } from "../support/installed-daemon-release.ts";
+import { sendLocalRequest } from "../../src/daemon/control/local-client.ts";
+import { openMobiusControlInstallation } from "../../src/daemon/pairing/pair-local-machine.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -58,15 +58,50 @@ describe("Mobius version command", () => {
         temporaryDirectories.push(directory);
         const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: join(directory, "state") };
         const signal = AbortSignal.timeout(60_000);
-        await installWorkspaceDaemonRelease(environment.MOBIUS_STATE_DIRECTORY);
+
         try {
-            const started = await runCli(["start"], environment, signal);
-            expect(started.code).toBe(0);
+            const started = await Promise.all(
+                Array.from({ length: 4 }, async () => await runCli(["start"], environment, signal)),
+            );
+            for (const result of started) {
+                expect(result.code, result.stderr).toBe(0);
+            }
+            const control = await openMobiusControlInstallation(signal, environment);
+            expect(await sendLocalRequest(control.stateDirectory, "worker", { kind: "reload" }, signal)).toEqual({
+                kind: "reloaded",
+            });
+            expect(await sendLocalRequest(control.stateDirectory, "worker", { kind: "release" }, signal)).toEqual({
+                kind: "released",
+            });
+            expect(
+                await sendLocalRequest(
+                    control.stateDirectory,
+                    "manager",
+                    {
+                        kind: "ensure",
+                        launch: {
+                            executable: process.execPath,
+                            entry: resolve(import.meta.dirname, "../../dist/cli.js"),
+                            version: cliPackage.version,
+                        },
+                    },
+                    signal,
+                ),
+            ).toMatchObject({ kind: "status", worker: { version: cliPackage.version } });
+            const daemonPid = await readFile(join(control.stateDirectory, "manager.lock"), "utf8");
+            await expect(access(join(control.stateDirectory, "worker.lock"))).rejects.toMatchObject({ code: "ENOENT" });
+            expect((await runCli(["start"], environment, signal)).code).toBe(0);
+            expect(await readFile(join(control.stateDirectory, "manager.lock"), "utf8")).toBe(daemonPid);
+            await expect(access(join(environment.MOBIUS_STATE_DIRECTORY, "npm"))).rejects.toMatchObject({
+                code: "ENOENT",
+            });
 
             const reported = await runCli(["--version"], environment, signal);
             expect(reported.code).toBe(0);
             expect(reported.stderr).toBe("");
             expect(reported.stdout).toBe(`CLI: ${cliPackage.version}\nDaemon: ${cliPackage.version}\n`);
+            expect((await runCli(["restart"], environment, signal)).code).toBe(0);
+            expect(await readFile(join(control.stateDirectory, "manager.lock"), "utf8")).not.toBe(daemonPid);
         } finally {
             await runCli(["quit"], environment, AbortSignal.timeout(10_000)).catch(() => undefined);
         }

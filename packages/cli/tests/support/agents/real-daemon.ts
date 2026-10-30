@@ -36,7 +36,6 @@ import { createRuntimeConfig, RuntimeLocalContext } from "../../../src/engine/ru
 import { runRuntime } from "../../../src/engine/runtime/run.ts";
 import { systemTimer, type Timer } from "../../../src/engine/util/timer.ts";
 import { acpAdapters } from "../acp-adapters.ts";
-import { installWorkspaceDaemonRelease } from "../installed-daemon-release.ts";
 
 export interface RealDaemonPeer {
     /** Runs a `mobius` command against this daemon's installation, as the user's terminal would. */
@@ -190,7 +189,6 @@ export async function withRealDaemon(
                   })()
                 : null;
         if (launch === "managed") {
-            await installWorkspaceDaemonRelease(directory);
             const installation = await openMobiusCliInstallation(signal, cliEnvironment);
             await installation.saveConnection(
                 {

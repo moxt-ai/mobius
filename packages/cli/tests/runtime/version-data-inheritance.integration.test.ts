@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import packageMetadata from "../../package.json" with { type: "json" };
-import { installWorkspaceDaemonRelease } from "../support/installed-daemon-release.ts";
 
 const temporaryDirectories: string[] = [];
 const runningRoots: Readonly<NodeJS.ProcessEnv>[] = [];
@@ -48,8 +47,6 @@ async function runCli(
 
 // The daemon of a newer version inherits the current data when it starts; CLI commands only use the current data.
 async function startNewerDaemon(environment: Readonly<NodeJS.ProcessEnv>) {
-    const root = environment["MOBIUS_STATE_DIRECTORY"] ?? "";
-    await installWorkspaceDaemonRelease(root);
     runningRoots.push(environment);
     return await runCli(["start"], environment);
 }

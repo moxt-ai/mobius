@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import packageMetadata from "../../package.json" with { type: "json" };
-import { installWorkspaceDaemonRelease } from "../support/installed-daemon-release.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -83,7 +82,6 @@ describe("Mobius state root", () => {
 
             const env = environment(home, root);
             if (command === "start") {
-                await installWorkspaceDaemonRelease(root);
                 // Startup must validate the container even when no inheritance is needed.
                 await writeFile(join(root, "current-data.txt"), `versions/${packageMetadata.version}\n`, {
                     mode: 0o600,

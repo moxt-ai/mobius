@@ -6,7 +6,6 @@ import { dirname, join, resolve } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { openMobiusCliInstallation } from "../../src/daemon/pairing/pair-local-machine.ts";
-import { installWorkspaceDaemonRelease } from "../support/installed-daemon-release.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -97,7 +96,7 @@ it("Given a running daemon whose Agent catalog was read at startup, When the use
         TMPDIR: directory,
     };
     const relay = await catalogRelay();
-    await installWorkspaceDaemonRelease(environment.MOBIUS_STATE_DIRECTORY);
+
     const installation = await openMobiusCliInstallation(AbortSignal.timeout(10_000), environment);
     await installation.saveConnection(
         {

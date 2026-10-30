@@ -4,14 +4,14 @@ import type { InstallationDirectory } from "../../engine/storage/installation/in
 import { isNodeError } from "../../engine/util/node-error.ts";
 
 /**
- * Takes the lock file that makes this process the only holder of a daemon role. A lock left by a
+ * Takes the lock file that makes this process the only daemon. A lock left by a
  * process that is gone is replaced. Returns the release function, or null when a live process holds it.
  */
-export async function acquireManagerLock(
+export async function acquireDaemonLock(
     stateDirectory: InstallationDirectory,
-    name = "manager.lock",
+    filename: "manager.lock" | "worker.lock" = "manager.lock",
 ): Promise<(() => Promise<void>) | null> {
-    const path = join(stateDirectory, name);
+    const path = join(stateDirectory, filename);
     for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
             await writeFile(path, `${process.pid.toString()}\n`, { flag: "wx", mode: 0o600 });
@@ -38,10 +38,27 @@ export async function acquireManagerLock(
     return null;
 }
 
-/** True while the manager lock file exists. */
-export async function managerLockExists(stateDirectory: InstallationDirectory): Promise<boolean> {
+/** Keep the released lock filename; a dead owner does not keep the daemon alive. */
+export async function daemonLockExists(
+    stateDirectory: InstallationDirectory,
+    filename: "manager.lock" | "worker.lock" = "manager.lock",
+): Promise<boolean> {
     try {
-        await readFile(join(stateDirectory, "manager.lock"), "utf8");
+        const pid = Number((await readFile(join(stateDirectory, filename), "utf8")).trim());
+        // The exclusive file can be observed before its owner finishes writing the PID.
+        if (!Number.isSafeInteger(pid) || pid <= 1) {
+            return true;
+        }
+        try {
+            process.kill(pid, 0);
+        } catch (cause) {
+            if (isNodeError(cause, "ESRCH")) {
+                return false;
+            }
+            if (!isNodeError(cause, "EPERM")) {
+                throw cause;
+            }
+        }
         return true;
     } catch (cause) {
         if (isNodeError(cause, "ENOENT")) {

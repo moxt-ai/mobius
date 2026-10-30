@@ -18,7 +18,7 @@ import {
     openMobiusControlInstallation,
 } from "../../src/daemon/pairing/pair-local-machine.ts";
 import { processPlatformSupportFor } from "../../src/engine/util/process/platform/index.ts";
-import { installWorkspaceDaemonRelease } from "../support/installed-daemon-release.ts";
+import { installWorkspaceDaemonRelease, workspaceDaemonEnvironment } from "../support/installed-daemon-release.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -578,7 +578,7 @@ async function runCli(
     cliPath = resolve(import.meta.dirname, "../../src/cli/entrypoint.ts"),
 ): Promise<{ readonly code: number | null; readonly stderr: string; readonly stdout: string }> {
     const child = spawn(process.execPath, [cliPath, ...arguments_], {
-        env: environment,
+        env: workspaceDaemonEnvironment(environment),
         signal,
         stdio: ["ignore", "pipe", "pipe"],
     });

@@ -8,8 +8,8 @@ import { ControlledAcpAgentSpecification } from "../support/agents/controlled-ac
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { writeControlledAcpExecutable } from "../support/controlled-acp-executable.ts";
 
-// @no-uc: Technical regression; only the manager witnesses a silent worker death, so its log must reach the exported report.
-test("Given a managed daemon, When a bug report is read through the Runtime, Then it carries the manager's worker lifecycle record that explains how this worker started", async () => {
+// @no-uc: Technical regression; process lifecycle logs must reach Runtime bug reports.
+test("Given a daemon, When a bug report is read through the Runtime, Then it carries the daemon startup and readiness records", async () => {
     const directory = await mkdtemp(join(tmpdir(), "mobius-lifecycle-diagnostics-"));
     const executableDirectory = await writeControlledAcpExecutable(directory);
     try {
@@ -28,13 +28,12 @@ test("Given a managed daemon, When a bug report is read through the Runtime, The
                     }
                     const exported = decodeRuntimeDiagnosticsResult(message);
                     expect(exported.requestId).toBe("lifecycle-report");
-                    // The manager is the only witness of how a worker died. It
-                    // writes beside the control directory, not beside this
-                    // Runtime's own daemon.log, so the report has to read both.
+                    // Process logs live beside shared control state; diagnostics
+                    // must include them alongside this Runtime's own daemon.log.
                     const kinds = exported.entries.map((entry) => entry["kind"] ?? "");
-                    expect(kinds).toContain("worker_started");
-                    expect(kinds).toContain("worker_ready");
-                    const ready = exported.entries.find((entry) => entry["kind"] === "worker_ready");
+                    expect(kinds).toContain("daemon_started");
+                    expect(kinds).toContain("daemon_ready");
+                    const ready = exported.entries.find((entry) => entry["kind"] === "daemon_ready");
                     expect(ready?.["version"]).toMatch(/^\d+\.\d+\.\d+$/u);
                     expect(JSON.stringify(exported)).not.toContain(peer.workspace);
                     break;

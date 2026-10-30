@@ -1,17 +1,26 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { cp, mkdtemp, readdir, readFile, rm, stat, symlink } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdtemp, readdir, readFile, rm, stat, symlink } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 const execute = promisify(execFile);
-const installation = process.env.MOBIUS_INSTALL_DIRECTORY;
-assert.ok(installation, "MOBIUS_INSTALL_DIRECTORY must identify an installed release");
-const root = resolve(installation);
+// npm adds the selected package's bin directory to PATH for the test host.
+// Resolve that actual cache entry, without installing or copying the release ourselves.
+const root = (process.env.PATH ?? process.env.Path ?? "")
+    .split(delimiter)
+    .map((directory) => resolve(directory, "../.."))
+    .find((directory) => existsSync(join(directory, "node_modules/@moxt-ai/mobius/package.json")));
+assert.ok(root, "Run this suite through npx --package=<release archive>");
+const archive = process.env.MOBIUS_RELEASE_ARCHIVE;
+assert.ok(archive, "MOBIUS_RELEASE_ARCHIVE must identify the exact PR archive");
+assert.ok(process.env.npm_execpath, "npx must supply its npm entrypoint");
+const npxEntry = join(dirname(process.env.npm_execpath), "npx-cli.js");
 const unsupported = process.env.MOBIUS_EXPECT_UNSUPPORTED === "true";
 const entry = join(root, "node_modules/@moxt-ai/mobius/dist/cli.js");
 const metadata = JSON.parse(await readFile(join(root, "node_modules/@moxt-ai/mobius/package.json"), "utf8"));
@@ -163,31 +172,28 @@ test("Given an installed release, When a user starts the CLI, Then help, version
     const environment = {
         ...process.env,
         MOBIUS_STATE_DIRECTORY: join(directory, "state"),
-        NPM_CONFIG_OFFLINE: "true",
-        NPM_CONFIG_CACHE: join(directory, "npm-cache"),
     };
     const run = (args, timeout = 45_000, signal = context.signal) =>
-        execute(process.execPath, args, {
-            cwd: root,
-            env: environment,
-            timeout,
-            maxBuffer: 1024 * 1024,
-            windowsHide: true,
-            signal,
-        });
+        execute(
+            process.execPath,
+            args[0] === entry
+                ? [npxEntry, "--yes", "--prefer-online", "--package", archive, "--", "mobius", ...args.slice(1)]
+                : args,
+            {
+                cwd: root,
+                env: environment,
+                timeout,
+                maxBuffer: 1024 * 1024,
+                windowsHide: true,
+                signal,
+            },
+        );
     // Hooks report cleanup failures separately, without hiding a failed CLI command.
     context.after(async () => {
         // Cleanup has an independent deadline even when the scenario was cancelled.
         await run([entry, "quit"], 45_000, AbortSignal.timeout(45_000));
         await rm(directory, { recursive: true, force: true });
     });
-    // Exercise this exact, potentially unpublished archive, not a registry release
-    // with the same version. Missing-release downloads have their own registry journey.
-    await cp(
-        join(root, "node_modules"),
-        join(environment.MOBIUS_STATE_DIRECTORY, "npm", metadata.version, "node_modules"),
-        { recursive: true },
-    );
     await context.test("installed ESM export", async (stage) => {
         await run(
             [
@@ -206,7 +212,7 @@ test("Given an installed release, When a user starts the CLI, Then help, version
             `CLI: ${metadata.version}\nDaemon: not running\n`,
         );
     });
-    // Release preflight and manager/worker startup have their own bounded deadlines.
+    // Each public lifecycle command goes through the real npx package runner.
     await context.test("daemon startup", async (stage) => {
         assert.match((await run([entry, "start"], 180_000, stage.signal)).stdout, /Mobius daemon is running/);
     });
@@ -215,6 +221,17 @@ test("Given an installed release, When a user starts the CLI, Then help, version
             (await run([entry, "--version"], 45_000, stage.signal)).stdout,
             `CLI: ${metadata.version}\nDaemon: ${metadata.version}\n`,
         );
+    });
+    await context.test("repeated start reuses the daemon and restart replaces it", async (stage) => {
+        const control = join(environment.MOBIUS_STATE_DIRECTORY, "installations", "dev.mobius.cli");
+        const pointer = JSON.parse(await readFile(join(control, "current.json"), "utf8"));
+        const lock = join(control, pointer.installationId, "manager.lock");
+        const before = await readFile(lock, "utf8");
+        await run([entry, "start"], 45_000, stage.signal);
+        assert.equal(await readFile(lock, "utf8"), before);
+        await run([entry, "restart"], 90_000, stage.signal);
+        assert.notEqual(await readFile(lock, "utf8"), before);
+        await assert.rejects(stat(join(environment.MOBIUS_STATE_DIRECTORY, "npm")), { code: "ENOENT" });
     });
     await context.test("daemon shutdown", async (stage) => {
         await run([entry, "quit"], 45_000, stage.signal);

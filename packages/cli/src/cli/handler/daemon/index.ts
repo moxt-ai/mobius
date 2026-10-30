@@ -1,16 +1,20 @@
 import type { Command } from "commander";
-
+import { runDaemon } from "../../../daemon/lifecycle/daemon.ts";
 import type { CliContext } from "../../context.ts";
-import { registerManagerCommand } from "./manager.ts";
 import { registerQuitCommand } from "./quit.ts";
 import { registerReleaseCommand } from "./release.ts";
 import { registerStartCommand } from "./start.ts";
 import { registerUpgradeCommand } from "./upgrade.ts";
-import { registerWorkerCommand } from "./worker.ts";
 
 export function registerInternalRuntimeHandlers(program: Command, context: CliContext): void {
-    registerManagerCommand(program, context);
-    registerWorkerCommand(program, context);
+    program.command("__daemon", { hidden: true }).action(async () => {
+        await runDaemon(context.version, context.shutdownSignal);
+    });
+    // Released managers launch this entrypoint when their worker installs a newer release.
+    // Keep their ownership contract until a public restart replaces the old manager.
+    program.command("__worker", { hidden: true }).action(async () => {
+        await runDaemon(context.version, context.shutdownSignal, "legacy-manager");
+    });
 }
 
 export function registerDaemonProcessLifecycleHandlers(program: Command, context: CliContext): void {

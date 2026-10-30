@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 
-import { releaseIdleAgentProcesses } from "../../../daemon/lifecycle/worker.ts";
+import { releaseIdleAgentProcesses } from "../../../daemon/lifecycle/daemon.ts";
 import { openMobiusControlInstallation } from "../../../daemon/pairing/pair-local-machine.ts";
 import type { CliContext } from "../../context.ts";
 

@@ -16,3 +16,7 @@ export async function installWorkspaceDaemonRelease(
     await writeFile(join(root, "package.json"), JSON.stringify({ ...cliPackage, version }));
     await writeFile(join(root, "dist", "cli.js"), `import ${JSON.stringify(pathToFileURL(entry).href)};`);
 }
+
+export function workspaceDaemonEnvironment(environment: Readonly<NodeJS.ProcessEnv>): NodeJS.ProcessEnv {
+    return { ...environment };
+}
