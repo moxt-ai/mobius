@@ -1,0 +1,170 @@
+name: Verified automated review
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize, ready_for_review]
+  merge_group:
+    types: [checks_requested]
+
+# Configure this workflow from protected main as an organization-required workflow.
+# It never checks out or executes code from the pull request.
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: verified-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.merge_group.head_sha }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify completed Moxt review
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Require a trusted approval for every current PR head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          import { setTimeout } from 'node:timers/promises';
+
+          const cancellation = new AbortController();
+          for (const signal of ['SIGINT', 'SIGTERM']) {
+            process.once(signal, () => cancellation.abort(new Error('Review verification cancelled.')));
+          }
+          const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+          const repository = process.env.GITHUB_REPOSITORY;
+          if (!['moxt-ai/mobius', 'moxt-ai/morty'].includes(repository)) {
+            throw new Error('This review policy is scoped to Mobius and Morty.');
+          }
+          const [owner, name] = repository.split('/');
+          const shaPattern = /^[a-f0-9]{40}$/;
+          const deadline = Date.now() + 20 * 60_000;
+          const api = async (path, body) => {
+            const response = await fetch(`https://api.github.com/${path}`, {
+              method: body === undefined ? 'GET' : 'POST',
+              headers: {
+                Accept: 'application/vnd.github+json',
+                Authorization: `Bearer ${process.env.GH_TOKEN}`,
+                'Content-Type': 'application/json',
+              },
+              body: body === undefined ? undefined : JSON.stringify(body),
+              redirect: 'error',
+              signal: AbortSignal.any([cancellation.signal, AbortSignal.timeout(20_000)]),
+            });
+            if (!response.ok) throw new Error(`GitHub review lookup failed: HTTP ${response.status}`);
+            const result = await response.json();
+            if (result.errors) throw new Error('GitHub could not resolve the merge queue.');
+            return result;
+          };
+          const allPages = async (path) => {
+            const results = [];
+            for (let page = 1; page <= 100; page++) {
+              const batch = await api(`${path}?per_page=100&page=${page}`);
+              if (!Array.isArray(batch)) throw new Error('Expected a GitHub result list.');
+              results.push(...batch);
+              if (batch.length < 100) return results;
+            }
+            throw new Error('Review result pagination exceeded its safety limit.');
+          };
+          const validateTarget = (target) => {
+            if (!Number.isSafeInteger(target.number) || target.number < 1 || !shaPattern.test(target.sha)) {
+              throw new Error('Invalid pull request identity.');
+            }
+            return target;
+          };
+          const resolveTargets = async () => {
+            if (process.env.GITHUB_EVENT_NAME === 'pull_request') {
+              if (event.pull_request?.base?.ref !== 'main') throw new Error('Unexpected target branch.');
+              return [validateTarget({ number: event.pull_request.number, sha: event.pull_request.head?.sha })];
+            }
+            if (process.env.GITHUB_EVENT_NAME !== 'merge_group' ||
+                event.merge_group?.base_ref !== 'refs/heads/main' ||
+                !shaPattern.test(event.merge_group?.head_sha)) {
+              throw new Error('Expected a main-branch pull request or merge group.');
+            }
+            const entries = [];
+            let cursor = null;
+            for (let page = 0; page < 100; page++) {
+              const result = await api('graphql', {
+                query: `query($owner:String!,$name:String!,$cursor:String) {
+                  repository(owner:$owner,name:$name) {
+                    mergeQueue(branch:"main") {
+                      entries(first:100,after:$cursor) {
+                        nodes { position headCommit { oid } pullRequest { number headRefOid baseRefName } }
+                        pageInfo { hasNextPage endCursor }
+                      }
+                    }
+                  }
+                }`,
+                variables: { owner, name, cursor },
+              });
+              const connection = result.data?.repository?.mergeQueue?.entries;
+              if (!connection) throw new Error('The protected merge queue is unavailable.');
+              entries.push(...connection.nodes);
+              if (!connection.pageInfo.hasNextPage) break;
+              cursor = connection.pageInfo.endCursor;
+              if (page === 99) throw new Error('Merge queue pagination exceeded its safety limit.');
+            }
+            const target = entries.find((entry) => entry.headCommit?.oid === event.merge_group.head_sha);
+            if (!target) throw new Error('The merge group is no longer the current queue entry.');
+            // A group can contain the changes from entries ahead of its own PR.
+            return entries.filter((entry) => entry.position <= target.position).map((entry) => {
+              if (entry.pullRequest.baseRefName !== 'main') throw new Error('Unexpected queued base branch.');
+              return validateTarget({ number: entry.pullRequest.number, sha: entry.pullRequest.headRefOid });
+            });
+          };
+          const signature = (targets) => targets.map(({ number, sha }) => `${number}:${sha}`).sort().join(',');
+          const targets = await resolveTargets();
+          if (targets.length === 0) throw new Error('No pull request found for this change.');
+          while (Date.now() < deadline) {
+            cancellation.signal.throwIfAborted();
+            const pending = [];
+            const approvals = [];
+            for (const target of targets) {
+              const pull = await api(`repos/${repository}/pulls/${target.number}`);
+              if (pull.state !== 'open' || pull.draft || pull.base?.ref !== 'main' || pull.head?.sha !== target.sha) {
+                throw new Error(`PR #${target.number} is stale, closed, a draft, or targets another branch.`);
+              }
+              const reviews = await allPages(`repos/${repository}/pulls/${target.number}/reviews`);
+              const latest = reviews.filter((review) =>
+                review.user?.id === 265534778 && review.user?.login === 'moxt-ai[bot]' &&
+                review.user?.type === 'Bot' && review.commit_id === target.sha &&
+                review.submitted_at
+              ).sort((a, b) => b.id - a.id)[0];
+              if (!latest) {
+                pending.push(target.number);
+              } else if (latest.state !== 'APPROVED') {
+                throw new Error(`Moxt has not approved PR #${target.number} at ${target.sha}: ${latest.state}.`);
+              } else {
+                approvals.push({ ...target, review: latest.html_url });
+              }
+            }
+            if (pending.length === 0) {
+              if (signature(await resolveTargets()) !== signature(targets)) {
+                throw new Error('The merge queue changed during review verification.');
+              }
+              // Re-read after fetching reviews so a new PR head cannot reuse an old verdict.
+              for (const target of targets) {
+                const pull = await api(`repos/${repository}/pulls/${target.number}`);
+                if (pull.head?.sha !== target.sha || pull.state !== 'open' || pull.draft) {
+                  throw new Error(`PR #${target.number} changed during review verification.`);
+                }
+              }
+              const summary = approvals.map(({ number, sha, review }) =>
+                `- PR #${number}, head ${sha}: [completed Moxt approval](${review})`
+              ).join('\n');
+              console.log(summary);
+              appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Verified automated reviews\n\n${summary}\n`);
+              process.exit(0);
+            }
+            console.log(`Waiting for a completed Moxt approval: ${pending.map((number) => `#${number}`).join(', ')}`);
+            await setTimeout(15_000, undefined, { signal: cancellation.signal });
+          }
+          throw new Error('No completed approval for every current head before the review deadline.');
+          NODE
