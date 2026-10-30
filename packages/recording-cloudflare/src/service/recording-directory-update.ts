@@ -10,6 +10,7 @@ import type {
     PendingDirectoryChange,
     RecordingDirectoryUpdate,
 } from "../entity/recording-directory-update.ts";
+import { recordedSessionTitle } from "../entity/session-title.ts";
 
 function operation(wireEvent: SessionWireEvent): DirectoryOperation {
     const recordedAt = wireEvent.recordedAt;
@@ -39,7 +40,7 @@ function operation(wireEvent: SessionWireEvent): DirectoryOperation {
         }
     }
     if (event.type === "acp" && event.payload.sessionUpdate === "session_info_update" && event.payload.title != null) {
-        return { kind: "title", title: event.payload.title, recordedAt };
+        return { kind: "title", title: recordedSessionTitle(event.payload.title), recordedAt };
     }
     return { kind: "activity", recordedAt };
 }

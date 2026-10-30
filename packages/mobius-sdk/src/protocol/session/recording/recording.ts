@@ -68,13 +68,16 @@ const sessionRecordingHistoryPageSchema = z
     })
     .readonly();
 
+/** Longest Session title a Recording summary or Turn history page carries. */
+export const SESSION_RECORDING_TITLE_MAX_LENGTH = 1_000;
+
 const sessionRecordingSummaryFields = {
     additionalDirectoryIds: z.array(DIRECTORY_IDENTIFIER).max(16).readonly(),
     agentId: identifierStringSchema,
     directoryId: DIRECTORY_IDENTIFIER,
     runtimeId: identifierStringSchema,
     sessionId: identifierStringSchema,
-    title: z.string().max(1_000),
+    title: z.string().max(SESSION_RECORDING_TITLE_MAX_LENGTH),
     updatedAt: z.iso.datetime({ offset: true }),
 };
 

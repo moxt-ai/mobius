@@ -8,6 +8,7 @@ import {
 import { and, asc, desc, eq, gt, gte, lt, lte } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/durable-sqlite";
 import {
+    committedDirectoryOperationsSchema,
     type DirectoryChange,
     directoryOperationSchema,
     type PendingDirectoryChange,
@@ -307,6 +308,8 @@ export class SessionRecordingStorage {
         directory: DirectoryChange,
         project: (ordinal: number, events: readonly SessionWireEvent[], receivedAt: number) => void = () => undefined,
     ): AppendOutcome => {
+        // Validated before the first write, so every committed directory change decodes when the outbox reads it.
+        const directoryOperationsJson = JSON.stringify(directoryOperationSchema.array().parse(directory.operations));
         const appended: { readonly batch: RecordedBatch; readonly characters: number }[] = [];
         const outcome = this.#storage.transactionSync((): AppendOutcome => {
             const [event, ...remainingEvents] = write.envelope.events;
@@ -381,7 +384,7 @@ export class SessionRecordingStorage {
             }
             this.#database
                 .insert(pendingDirectoryUpdate)
-                .values({ operationsJson: JSON.stringify(directory.operations), events: directory.events })
+                .values({ operationsJson: directoryOperationsJson, events: directory.events })
                 .run();
             return { kind: "recorded" };
         });
@@ -420,7 +423,7 @@ export class SessionRecordingStorage {
             .all()
             .map((row) => ({
                 ordinal: row.ordinal,
-                operations: directoryOperationSchema.array().parse(JSON.parse(row.operationsJson)),
+                operations: committedDirectoryOperationsSchema.parse(JSON.parse(row.operationsJson)),
                 events: row.events,
             }));
 
