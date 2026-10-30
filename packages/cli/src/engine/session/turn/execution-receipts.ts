@@ -67,6 +67,19 @@ function cancelledBeforeStart(state: ExecutionState): boolean {
     );
 }
 
+/** A restart failed the command before it started, so its identifier may run again. */
+function restartedBeforeStart(state: ExecutionState): boolean {
+    if (state.kind !== "settled-before-start") {
+        return false;
+    }
+    const outcome = decodeKnownSessionEventPayload(JSON.parse(state.outcome));
+    return (
+        outcome?.type === "lifecycle-metadata" &&
+        outcome.payload.kind === "prompt.failed-before-start" &&
+        outcome.payload.code === "runtime_restarted"
+    );
+}
+
 function executionOutcome(state: ExecutionState): string | null {
     switch (state.kind) {
         case "pending":
@@ -93,6 +106,66 @@ type ExecutionReceipt = Readonly<{
     sessionId: string;
     state: ExecutionState;
 }>;
+
+/** What the three ledgers hold for one command identifier. */
+type CommandRecord = Readonly<{
+    // The detailed receipt, while it is retained.
+    receipt: ExecutionReceipt | undefined;
+    // The started identity left behind when the receipt was evicted.
+    identity: Readonly<{ sessionId: string; commandHash: string }> | undefined;
+    // The durable fact that the command was cancelled before it started.
+    cancellation: PersistedCommandCancellation | undefined;
+}>;
+
+/** What a command identifier means to one Session: whether it may run, and what happened to it. */
+type CommandStanding =
+    // Nothing is recorded: the command may run.
+    | { readonly kind: "unseen" }
+    // Another Session owns the identifier.
+    | { readonly kind: "foreign" }
+    // A restart failed the command before it started: it may run again.
+    | { readonly kind: "retryable"; readonly receipt: ExecutionReceipt }
+    // The detailed receipt answers for the command, which does not run again.
+    | { readonly kind: "retained"; readonly receipt: ExecutionReceipt }
+    // The command started, and only its identity outlived the receipt.
+    | { readonly kind: "expired"; readonly commandHash: string }
+    // The command was cancelled before it started; any receipt still left has not recorded that yet.
+    | { readonly kind: "cancelled"; readonly receipt: ExecutionReceipt | undefined };
+
+function commandStanding({ receipt, identity, cancellation }: CommandRecord, sessionId: string): CommandStanding {
+    if (receipt !== undefined) {
+        if (receipt.sessionId !== sessionId) {
+            return { kind: "foreign" };
+        }
+        if (
+            !executionStarted(receipt.state) &&
+            !cancelledBeforeStart(receipt.state) &&
+            cancellation?.sessionId === sessionId
+        ) {
+            // The cancellation commits before its receipt, so a crash between the two leaves this pair.
+            return { kind: "cancelled", receipt };
+        }
+        return restartedBeforeStart(receipt.state) ? { kind: "retryable", receipt } : { kind: "retained", receipt };
+    }
+    if (identity !== undefined) {
+        return identity.sessionId === sessionId
+            ? { kind: "expired", commandHash: identity.commandHash }
+            : { kind: "foreign" };
+    }
+    if (cancellation !== undefined) {
+        return cancellation.sessionId === sessionId ? { kind: "cancelled", receipt: undefined } : { kind: "foreign" };
+    }
+    return { kind: "unseen" };
+}
+
+const cancelledBeforeStartOutcome = (commandId: string): SessionEventPayload => ({
+    type: "lifecycle-metadata",
+    payload: { kind: "prompt.completed", commandId, stopReason: "cancelled", execution: "not-started" },
+});
+
+const unexpectedStanding = (standing: never): never => {
+    throw new Error("Unexpected command standing", { cause: standing });
+};
 
 export class ExecutionReceipts {
     readonly #executions = new Map<string, ExecutionReceipt>();
@@ -125,6 +198,20 @@ export class ExecutionReceipts {
         }
         cancellations.retain(retained);
     }
+    /** Reads every ledger that can still change the answer and classifies the identifier for the Session. */
+    readonly #standing = (commandId: string, sessionId: string): CommandStanding => {
+        const receipt = this.#executions.get(commandId);
+        // A started receipt, or one settled as cancelled, is final; only the others consult the cancellation ledger.
+        const final = receipt !== undefined && (executionStarted(receipt.state) || cancelledBeforeStart(receipt.state));
+        return commandStanding(
+            {
+                receipt,
+                identity: receipt === undefined ? this.#table.identity(commandId) : undefined,
+                cancellation: final ? undefined : this.#cancellations.read(commandId),
+            },
+            sessionId,
+        );
+    };
     readonly #remember = (commandId: string, receipt: ExecutionReceipt, evicted: readonly string[]): void => {
         // Live failure detail may quote user input; only the durable receipt goes to the table.
         this.#executions.set(commandId, receipt);
@@ -183,17 +270,23 @@ export class ExecutionReceipts {
     };
     /** The command's delivery as these receipts know it; another Session's command reads as unknown. */
     readonly delivery = (commandId: string, sessionId: string): CommandDelivery => {
-        const receipt = this.#executions.get(commandId);
-        if (receipt === undefined) {
-            return this.#table.identity(commandId)?.sessionId === sessionId ||
-                this.#cancellations.read(commandId)?.sessionId === sessionId
-                ? { state: "expired" }
-                : { state: "unknown" };
+        const standing = this.#standing(commandId, sessionId);
+        switch (standing.kind) {
+            case "unseen":
+            case "foreign":
+                return { state: "unknown" };
+            case "expired":
+                return { state: "expired" };
+            case "cancelled":
+                // A command that never started has no result to lose: it stays cancelled.
+                return { state: "completed", stopReason: "cancelled" };
+            case "retryable":
+            case "retained":
+                break;
+            default:
+                return unexpectedStanding(standing);
         }
-        if (receipt.sessionId !== sessionId) {
-            return { state: "unknown" };
-        }
-        if (executionOutcome(receipt.state) === null) {
+        if (executionOutcome(standing.receipt.state) === null) {
             return { state: "accepted" };
         }
         const outcome = this.outcome(commandId);
@@ -247,11 +340,20 @@ export class ExecutionReceipts {
     };
     /** Started identities remain authoritative after their detailed receipt is evicted. */
     readonly hasStarted = (commandId: string, sessionId: string): boolean => {
-        const receipt = this.#executions.get(commandId);
-        return (
-            (receipt?.sessionId === sessionId && executionStarted(receipt.state)) ||
-            this.#table.identity(commandId)?.sessionId === sessionId
-        );
+        const standing = this.#standing(commandId, sessionId);
+        switch (standing.kind) {
+            case "unseen":
+            case "foreign":
+            case "cancelled":
+            case "retryable":
+                return false;
+            case "expired":
+                return true;
+            case "retained":
+                return executionStarted(standing.receipt.state);
+            default:
+                return unexpectedStanding(standing);
+        }
     };
 
     /** Reserves an unseen command for cancellation before a delayed prompt can claim its identity. */
@@ -259,39 +361,28 @@ export class ExecutionReceipts {
         commandId: string,
         sessionId: string,
     ): SessionEventPayload | undefined => {
-        const existing = this.#executions.get(commandId);
-        if (existing !== undefined) {
-            return existing.sessionId === sessionId ? this.outcome(commandId) : undefined;
+        const standing = this.#standing(commandId, sessionId);
+        switch (standing.kind) {
+            case "foreign":
+                return undefined;
+            case "retryable":
+            case "retained":
+                return this.outcome(commandId);
+            case "expired":
+                // Preserve the legacy cancellation acknowledgement without replacing an executed
+                // identity with a before-admission reservation after its detailed receipt expired.
+                return {
+                    type: "lifecycle-metadata",
+                    payload: { kind: "prompt.completed", commandId, stopReason: "cancelled" },
+                };
+            case "cancelled":
+                return cancelledBeforeStartOutcome(commandId);
+            case "unseen":
+                break;
+            default:
+                return unexpectedStanding(standing);
         }
-        const identity = this.#table.identity(commandId);
-        if (identity !== undefined) {
-            // Preserve the legacy cancellation acknowledgement without replacing an executed
-            // identity with a before-admission reservation after its detailed receipt expired.
-            return identity.sessionId === sessionId
-                ? {
-                      type: "lifecycle-metadata",
-                      payload: { kind: "prompt.completed", commandId, stopReason: "cancelled" },
-                  }
-                : undefined;
-        }
-        const cancellation = this.#cancellations.read(commandId);
-        if (cancellation !== undefined) {
-            return cancellation.sessionId === sessionId
-                ? {
-                      type: "lifecycle-metadata",
-                      payload: {
-                          kind: "prompt.completed",
-                          commandId,
-                          stopReason: "cancelled",
-                          execution: "not-started",
-                      },
-                  }
-                : undefined;
-        }
-        const outcome: SessionEventPayload = {
-            type: "lifecycle-metadata",
-            payload: { kind: "prompt.completed", commandId, stopReason: "cancelled", execution: "not-started" },
-        };
+        const outcome = cancelledBeforeStartOutcome(commandId);
         // The identifier belongs to the cancellation, so a later prompt conflicts rather than executing.
         const commandHash = createHash("sha256")
             .update(
@@ -358,20 +449,10 @@ export class ExecutionReceipts {
         const recovered: { sessionId: string; event: SessionEventPayload; recordedAt: string }[] = [];
         for (const [commandId, receipt] of [...this.#executions]) {
             const outcome = executionOutcome(receipt.state);
-            const restoreCancellation =
-                !this.hasStarted(commandId, receipt.sessionId) &&
-                !cancelledBeforeStart(receipt.state) &&
-                this.#cancellations.read(commandId)?.sessionId === receipt.sessionId;
+            // A cancellation committed without its receipt settles the receipt as that cancellation.
+            const restoreCancellation = this.#standing(commandId, receipt.sessionId).kind === "cancelled";
             const event: SessionEventPayload | null = restoreCancellation
-                ? {
-                      type: "lifecycle-metadata",
-                      payload: {
-                          kind: "prompt.completed",
-                          commandId,
-                          stopReason: "cancelled",
-                          execution: "not-started",
-                      },
-                  }
+                ? cancelledBeforeStartOutcome(commandId)
                 : outcome === null
                   ? {
                         type: "lifecycle-metadata",
@@ -411,39 +492,33 @@ export class ExecutionReceipts {
 
     readonly claimExecution = (commandId: string, sessionId: string, commandJson: string): RuntimeExecutionReceipt => {
         const commandHash = createHash("sha256").update(commandJson).digest("hex");
-        let existing = this.#executions.get(commandId);
-        const previous = this.outcome(commandId);
-        if (
-            existing?.sessionId === sessionId &&
-            !executionStarted(existing.state) &&
-            previous?.type === "lifecycle-metadata" &&
-            previous.payload.kind === "prompt.failed-before-start" &&
-            previous.payload.code === "runtime_restarted"
-        ) {
-            this.#table.remove(commandId);
-            this.#executions.delete(commandId);
-            this.#recoveredCommands.delete(commandId);
-            existing = undefined;
-        }
-        if (existing !== undefined) {
-            if (existing.sessionId !== sessionId || existing.commandHash !== commandHash) {
+        const standing = this.#standing(commandId, sessionId);
+        switch (standing.kind) {
+            case "foreign":
+            case "cancelled":
                 return { kind: "conflict" };
-            }
-            return {
-                attemptId: existing.attemptId,
-                commandId,
-                kind: "duplicate",
-                outcome: this.#recoveredCommands.has(commandId) ? this.outcome(commandId) : undefined,
-            };
-        }
-        const identity = this.#table.identity(commandId);
-        if (identity !== undefined) {
-            return identity.sessionId === sessionId && identity.commandHash === commandHash
-                ? { kind: "expired" }
-                : { kind: "conflict" };
-        }
-        if (this.#cancellations.read(commandId) !== undefined) {
-            return { kind: "conflict" };
+            case "retained":
+                if (standing.receipt.commandHash !== commandHash) {
+                    return { kind: "conflict" };
+                }
+                return {
+                    attemptId: standing.receipt.attemptId,
+                    commandId,
+                    kind: "duplicate",
+                    outcome: this.#recoveredCommands.has(commandId) ? this.outcome(commandId) : undefined,
+                };
+            case "expired":
+                return standing.commandHash === commandHash ? { kind: "expired" } : { kind: "conflict" };
+            case "retryable":
+                // Forget the restart failure, then claim as if it had never been received.
+                this.#table.remove(commandId);
+                this.#executions.delete(commandId);
+                this.#recoveredCommands.delete(commandId);
+                return this.claimExecution(commandId, sessionId, commandJson);
+            case "unseen":
+                break;
+            default:
+                return unexpectedStanding(standing);
         }
         const attemptId = randomUUID();
         this.#save(commandId, {
