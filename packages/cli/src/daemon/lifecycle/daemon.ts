@@ -1,4 +1,3 @@
-import { setTimeout } from "node:timers/promises";
 import { refreshAgentCatalog } from "../../engine/runtime/catalog/refresh-agent-catalog.ts";
 import type { RuntimeConfig } from "../../engine/runtime/config.ts";
 import { RuntimeInstallationStore } from "../../engine/runtime/connection/runtime-installation-store.ts";
@@ -7,8 +6,10 @@ import { RuntimeLoop } from "../../engine/runtime/runtime-loop.ts";
 import { RuntimeAgentProcesses } from "../../engine/session/process/runtime-agent-processes.ts";
 import { RuntimeTurnActivity } from "../../engine/session/turn/runtime-turn-activity.ts";
 import type { InstallationDirectory } from "../../engine/storage/installation/installation-files.ts";
+import { BoundedLineLog } from "../../engine/storage/logs/bounded-log.ts";
+import { logDirectory, WORKER_LIFECYCLE_LOG_FILENAME } from "../../engine/storage/logs/log-files.ts";
 import { isNodeError } from "../../engine/util/node-error.ts";
-import { acquireManagerLock } from "../../storage/daemon/manager-lock.ts";
+import { acquireDaemonLock } from "../../storage/daemon/daemon-lock.ts";
 import { prepareMobiusEngineDataDir, resolveMaxAcpProcesses } from "../config.ts";
 import { sendLocalRequest } from "../control/local-client.ts";
 import { serveLocalControl } from "../control/local-server.ts";
@@ -16,16 +17,27 @@ import { openMobiusControlInstallation } from "../pairing/pair-local-machine.ts"
 import { prepareVersionData, recordCurrentData } from "../upgrades/data.ts";
 import { surviveUnhandledRejections, type UnhandledRejectionGuard } from "./unhandled-rejection.ts";
 
-class WorkerRuntimeError extends Error {
+class DaemonRuntimeError extends Error {
     readonly code = "worker_runtime_failed";
     constructor(connectionId: string, cause: unknown) {
         super(`Runtime ${connectionId} failed`, { cause });
     }
 }
 
+// Older daemons serve reload/release on a separate worker socket. A null reply
+// means their manager did not recognize the command; no side effect occurred.
+async function sendDaemonCommand(
+    directory: InstallationDirectory,
+    kind: "reload" | "release",
+    signal: AbortSignal,
+): Promise<unknown> {
+    const response = await sendLocalRequest(directory, "manager", { kind }, signal);
+    return response === null ? await sendLocalRequest(directory, "worker", { kind }, signal) : response;
+}
+
 export async function reloadDaemon(stateDirectory: InstallationDirectory, signal: AbortSignal): Promise<void> {
     try {
-        const response = await sendLocalRequest(stateDirectory, "worker", { kind: "reload" }, signal);
+        const response = await sendDaemonCommand(stateDirectory, "reload", signal);
         if (
             typeof response !== "object" ||
             response === null ||
@@ -47,11 +59,13 @@ export async function releaseIdleAgentProcesses(
     signal: AbortSignal,
 ): Promise<void> {
     try {
-        const response = await sendLocalRequest(stateDirectory, "worker", { kind: "release" }, signal);
+        const response = await sendDaemonCommand(stateDirectory, "release", signal);
         if (typeof response === "object" && response !== null && "kind" in response && response.kind === "released") {
             return;
         }
-        throw new Error("The running daemon cannot release Agent sessions. Run `mobius start` to update it first.");
+        throw new Error(
+            "The running daemon cannot release Agent sessions. Run `npx --yes @moxt-ai/mobius@latest restart` to update it first.",
+        );
     } catch (cause) {
         if (!isNodeError(cause, "ENOENT") && !isNodeError(cause, "ECONNREFUSED")) {
             throw cause;
@@ -59,28 +73,37 @@ export async function releaseIdleAgentProcesses(
     }
 }
 
-export async function runWorker(version: string, signal: AbortSignal): Promise<void> {
+export async function runDaemon(version: string, signal: AbortSignal): Promise<void> {
     // Install before any await: an unhandled rejection during startup itself
-    // must not kill the worker before the guard exists.
-    const rejectionGuard = surviveUnhandledRejections("worker");
+    // must not kill the daemon before the guard exists.
+    const rejectionGuard = surviveUnhandledRejections();
     const shutdown = new AbortController();
     const combined = AbortSignal.any([signal, shutdown.signal]);
     try {
-        await runWorkerRuntime(version, combined, shutdown, rejectionGuard);
+        await runDaemonRuntime(version, combined, shutdown, rejectionGuard);
+    } catch (cause) {
+        const control = await openMobiusControlInstallation(AbortSignal.timeout(5_000), process.env);
+        new BoundedLineLog(logDirectory(control.stateDirectory), WORKER_LIFECYCLE_LOG_FILENAME, 512 * 1024).record(
+            JSON.stringify({
+                kind: "daemon_failed",
+                message: cause instanceof Error ? cause.message : "Daemon failed",
+            }),
+        );
+        throw cause;
     } finally {
         shutdown.abort();
         rejectionGuard.release();
     }
 }
 
-async function runWorkerRuntime(
+async function runDaemonRuntime(
     version: string,
     combined: AbortSignal,
     shutdown: AbortController,
     rejectionGuard: UnhandledRejectionGuard,
 ): Promise<void> {
     const control = await openMobiusControlInstallation(combined, process.env);
-    const releaseDaemon = await acquireManagerLock(control.stateDirectory);
+    const releaseDaemon = await acquireDaemonLock(control.stateDirectory);
     if (releaseDaemon === null) {
         return;
     }
@@ -88,17 +111,6 @@ async function runWorkerRuntime(
         await prepareVersionData(version, combined);
         const engineDataDir = await prepareMobiusEngineDataDir(version, combined, process.env);
         const installation = await RuntimeInstallationStore.open(engineDataDir, combined);
-        const deadline = AbortSignal.any([combined, AbortSignal.timeout(15_000)]);
-        let release: (() => Promise<void>) | null = null;
-        while (release === null) {
-            deadline.throwIfAborted();
-            release = await acquireManagerLock(control.stateDirectory, "worker.lock");
-            if (release === null) {
-                await setTimeout(25, undefined, { signal: deadline });
-            }
-        }
-        // The lock makes this process the only worker, and therefore the only
-        // writer of the worker's rejection log; buffered startup entries flush now.
         rejectionGuard.bindStateDirectory(control.stateDirectory);
         const turnActivity = new RuntimeTurnActivity();
         const agentProcesses = new RuntimeAgentProcesses();
@@ -112,7 +124,7 @@ async function runWorkerRuntime(
         >();
         const fail = (connectionId: string, cause: unknown): void => {
             console.error(`Runtime ${connectionId} failed; stopping the daemon`, cause);
-            shutdown.abort(new WorkerRuntimeError(connectionId, cause));
+            shutdown.abort(new DaemonRuntimeError(connectionId, cause));
         };
         const reconcile = async (): Promise<void> => {
             const connections = await installation.listConnections(combined);
@@ -142,9 +154,8 @@ async function runWorkerRuntime(
                         resolveMaxAcpProcesses(process.env),
                     );
                     const controller = new AbortController();
-                    // The manager writes the worker lifecycle and rejection logs beside
-                    // the control directory, not beside this Runtime's own state, so a
-                    // bug report taken through this Runtime reads them from there.
+                    // Process diagnostics live beside the shared control directory,
+                    // so every Runtime can include them in bug reports.
                     const loop = new RuntimeLoop(async () => config, {
                         processLogsDirectory: control.stateDirectory,
                         turnActivity,
@@ -195,14 +206,21 @@ async function runWorkerRuntime(
             );
         };
         let reload: Promise<void> = Promise.resolve();
-        let lifecycle: Promise<void> = Promise.resolve();
         try {
             await reconcile();
             await serveLocalControl(
                 control.stateDirectory,
-                "worker",
+                "manager",
                 combined,
                 async (request) => {
+                    if (typeof request === "object" && request !== null && "kind" in request) {
+                        if (request.kind === "status") {
+                            return { kind: "status", protocolVersion: 2, worker: { pid: process.pid, version } };
+                        }
+                        if (request.kind === "stop") {
+                            return { kind: "stopped" };
+                        }
+                    }
                     if (
                         typeof request === "object" &&
                         request !== null &&
@@ -229,57 +247,25 @@ async function runWorkerRuntime(
                     await pending;
                     return { kind: "reloaded" };
                 },
-                async () => {
-                    combined.throwIfAborted();
-                    await recordCurrentData(version, combined);
-                    lifecycle = serveLocalControl(
-                        control.stateDirectory,
-                        "manager",
-                        combined,
-                        async (request) => {
-                            if (typeof request !== "object" || request === null || !("kind" in request)) {
-                                return {
-                                    kind: "error",
-                                    code: "invalid_request",
-                                    message: "Expected a control command",
-                                };
-                            }
-                            if (request.kind === "stop") {
-                                return { kind: "stopped" };
-                            }
-                            if (request.kind === "status" || request.kind === "ensure") {
-                                return { kind: "status", protocolVersion: 2, worker: { pid: process.pid, version } };
-                            }
-                            return {
-                                kind: "error",
-                                code: "invalid_request",
-                                message: "Restart the daemon to update it",
-                            };
-                        },
-                        undefined,
-                        (response) => {
-                            if (
-                                typeof response === "object" &&
-                                response !== null &&
-                                "kind" in response &&
-                                response.kind === "stopped"
-                            ) {
-                                shutdown.abort();
-                            }
-                        },
-                    );
-                    void lifecycle.catch((cause: unknown) => shutdown.abort(cause));
+                async () => await recordCurrentData(version, combined),
+                (response) => {
+                    if (
+                        typeof response === "object" &&
+                        response !== null &&
+                        "kind" in response &&
+                        response.kind === "stopped"
+                    ) {
+                        shutdown.abort();
+                    }
                 },
             );
-            if (shutdown.signal.reason instanceof WorkerRuntimeError) {
+            if (shutdown.signal.reason instanceof DaemonRuntimeError) {
                 throw shutdown.signal.reason;
             }
         } finally {
             shutdown.abort();
             await reload;
             await Promise.all([...active.values()].map((running) => running.completion));
-            await release();
-            await lifecycle;
         }
     } finally {
         await releaseDaemon();

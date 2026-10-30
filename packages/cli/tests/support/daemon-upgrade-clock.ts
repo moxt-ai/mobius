@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { join } from "node:path";
 import { mock } from "node:test";
 
-if (process.argv.includes("__worker") || process.argv.includes("__manager")) {
+if (process.argv.includes("__daemon") || process.argv.includes("__worker") || process.argv.includes("__manager")) {
     mock.timers.enable({ apis: ["Date", "setInterval"], now: new Date("2030-01-01T00:00:00Z") });
     const server = createServer((request, response) => {
         mock.timers.tick(Number(request.url?.slice(1)));

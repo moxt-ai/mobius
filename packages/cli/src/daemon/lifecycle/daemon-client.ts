@@ -2,13 +2,16 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { once } from "node:events";
 import type { InstallationDirectory } from "../../engine/storage/installation/installation-files.ts";
 import { isNodeError } from "../../engine/util/node-error.ts";
-import { managerLockExists } from "../../storage/daemon/manager-lock.ts";
+import { daemonLockExists } from "../../storage/daemon/daemon-lock.ts";
 import { CONTROL_TIMEOUT_MILLISECONDS, sendLocalRequest } from "../control/local-client.ts";
-import { decodeKnownLifecycleResponse, type LifecycleResponse, type WorkerLaunch } from "../control/protocol.ts";
-import { resolveLatestDaemonLaunch } from "../upgrades/package.ts";
+import { decodeKnownLifecycleResponse, type LifecycleResponse } from "../control/protocol.ts";
 
-async function spawnManager(launch: WorkerLaunch): Promise<ChildProcess> {
-    const child = spawn(launch.executable, [launch.entry, "__manager"], {
+async function spawnDaemon(): Promise<ChildProcess> {
+    const entry = process.argv[1];
+    if (entry === undefined) {
+        throw new Error("The CLI entrypoint is missing");
+    }
+    const child = spawn(process.execPath, [entry, "__daemon"], {
         detached: true,
         windowsHide: true,
         env: process.env,
@@ -19,15 +22,15 @@ async function spawnManager(launch: WorkerLaunch): Promise<ChildProcess> {
     return child;
 }
 
-async function launchManager(launch: WorkerLaunch): Promise<ChildProcess> {
-    process.stdout.write(`Starting mobius daemon ${launch.version}\n`);
-    return await spawnManager(launch);
+async function launchDaemon(version: string): Promise<ChildProcess> {
+    process.stdout.write(`Starting mobius daemon ${version}\n`);
+    return await spawnDaemon();
 }
 
-async function waitForManagerExit(stateDirectory: InstallationDirectory, signal: AbortSignal): Promise<void> {
+async function waitForDaemonExit(stateDirectory: InstallationDirectory, signal: AbortSignal): Promise<void> {
     const deadline = AbortSignal.any([signal, AbortSignal.timeout(30_000)]);
     while (!deadline.aborted) {
-        if (!(await managerLockExists(stateDirectory))) {
+        if (!(await daemonLockExists(stateDirectory))) {
             return;
         }
         await new Promise<void>((resolve, reject) => {
@@ -44,35 +47,23 @@ async function waitForManagerExit(stateDirectory: InstallationDirectory, signal:
     throw deadline.reason;
 }
 
-// npx selects the release; the worker inherits the current version's data at startup.
-export async function ensureWorkingProcess(
+// The invoking CLI owns the release. npx resolves it before any daemon is stopped.
+export async function ensureDaemon(
     stateDirectory: InstallationDirectory,
-    _cliVersion: string,
+    version: string,
     signal: AbortSignal,
 ): Promise<string> {
-    const launch = await resolveLatestDaemonLaunch(signal);
-    const version = launch.version;
-    const running = await readWorkingProcessVersion(stateDirectory, signal);
-    if (running !== null && running !== version) {
-        await stopManager(stateDirectory, signal);
+    const running = await readDaemonVersion(stateDirectory, signal);
+    if (running !== null) {
+        return running;
     }
     const deadline = AbortSignal.any([signal, AbortSignal.timeout(CONTROL_TIMEOUT_MILLISECONDS)]);
-    await ensureManager(stateDirectory, launch, deadline);
-    const response = decodeKnownLifecycleResponse(
-        await sendLocalRequest(stateDirectory, "manager", { kind: "ensure", launch }, deadline),
-    );
-    if (response?.kind === "error") {
-        throw new Error(response.message);
-    }
-    if (response?.kind !== "status" || response.worker?.version !== version) {
-        throw new Error("The working daemon did not start");
-    }
+    await waitForDaemon(stateDirectory, version, deadline);
     return version;
 }
 
-// Returns the running worker's version, or null when no compatible manager
-// reports one. Callers fall back to ensureWorkingProcess to start a daemon.
-export async function readWorkingProcessVersion(
+// Status keeps the released wire format; the worker field identifies the daemon.
+export async function readDaemonVersion(
     stateDirectory: InstallationDirectory,
     signal: AbortSignal,
 ): Promise<string | null> {
@@ -91,12 +82,12 @@ export async function readWorkingProcessVersion(
     return null;
 }
 
-async function ensureManager(
+async function waitForDaemon(
     stateDirectory: InstallationDirectory,
-    launch: WorkerLaunch,
+    version: string,
     signal: AbortSignal,
 ): Promise<void> {
-    let managerStarted = false;
+    let daemonStarted = false;
     let child: ChildProcess | undefined;
     while (!signal.aborted) {
         if (child !== undefined && (child.exitCode !== null || child.signalCode !== null)) {
@@ -106,20 +97,20 @@ async function ensureManager(
             const response = decodeKnownLifecycleResponse(
                 await sendLocalRequest(stateDirectory, "manager", { kind: "status" }, signal),
             );
-            if (response?.kind === "status") {
-                if (managerStarted) {
-                    process.stdout.write(`Mobius daemon ${launch.version} started\n`);
+            if (response?.kind === "status" && response.worker !== null) {
+                if (daemonStarted) {
+                    process.stdout.write(`Mobius daemon ${version} started\n`);
                 }
                 return;
             }
-            throw new Error("The manager could not return its status");
+            throw new Error("The daemon could not return its status");
         } catch (cause) {
             if (!isNodeError(cause, "ENOENT") && !isNodeError(cause, "ECONNREFUSED")) {
                 throw cause;
             }
-            if (!managerStarted) {
-                child = await launchManager(launch);
-                managerStarted = true;
+            if (!daemonStarted) {
+                child = await launchDaemon(version);
+                daemonStarted = true;
             }
             await new Promise<void>((resolve, reject) => {
                 const timeout = setTimeout(finish, 50);
@@ -136,7 +127,7 @@ async function ensureManager(
     throw signal.reason;
 }
 
-export async function stopManager(
+export async function stopDaemon(
     stateDirectory: InstallationDirectory,
     signal: AbortSignal,
 ): Promise<Extract<LifecycleResponse, { kind: "stopped" }>> {
@@ -148,9 +139,9 @@ export async function stopManager(
             throw new Error(response.message);
         }
         if (response?.kind !== "stopped") {
-            throw new Error("The Mobius manager returned an unexpected response");
+            throw new Error("The Mobius daemon returned an unexpected response");
         }
-        await waitForManagerExit(stateDirectory, signal);
+        await waitForDaemonExit(stateDirectory, signal);
         return response;
     } catch (cause) {
         if (isNodeError(cause, "ENOENT") || isNodeError(cause, "ECONNREFUSED")) {

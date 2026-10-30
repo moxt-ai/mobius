@@ -1,7 +1,6 @@
 import type { Command } from "commander";
-
-import { ensureWorkingProcess } from "../../../daemon/lifecycle/manager-client.ts";
-import { reloadDaemon } from "../../../daemon/lifecycle/worker.ts";
+import { reloadDaemon } from "../../../daemon/lifecycle/daemon.ts";
+import { ensureDaemon } from "../../../daemon/lifecycle/daemon-client.ts";
 import {
     openMobiusCliInstallation,
     openMobiusControlInstallation,
@@ -20,7 +19,7 @@ export function registerStartCommand(program: Command, context: CliContext): voi
         .addOption(valueOption("--connection <connection-id>", "saved Runtime connection identifier"))
         .action(async (options: StartOptions) => {
             const control = await openMobiusControlInstallation(context.shutdownSignal, process.env);
-            await ensureWorkingProcess(control.stateDirectory, context.version, context.shutdownSignal);
+            await ensureDaemon(control.stateDirectory, context.version, context.shutdownSignal);
             const installation = await openMobiusCliInstallation(context.shutdownSignal, process.env);
             if (options.connection !== undefined) {
                 await installation.setConnectionActivation(options.connection, "active", context.shutdownSignal);

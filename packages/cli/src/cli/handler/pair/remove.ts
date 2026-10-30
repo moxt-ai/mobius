@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 
-import { reloadDaemon } from "../../../daemon/lifecycle/worker.ts";
+import { reloadDaemon } from "../../../daemon/lifecycle/daemon.ts";
 import {
     openMobiusCliInstallation,
     openMobiusControlInstallation,

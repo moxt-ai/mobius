@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import packageMetadata from "../../package.json" with { type: "json" };
-import { installWorkspaceDaemonRelease, workspaceDaemonEnvironment } from "../support/installed-daemon-release.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -19,7 +18,7 @@ async function runCli(
     environment: Readonly<NodeJS.ProcessEnv>,
 ): Promise<{ readonly code: number | null; readonly stderr: string; readonly stdout: string }> {
     const child = spawn(process.execPath, [resolve(import.meta.dirname, "../../dist/cli.js"), ...arguments_], {
-        env: workspaceDaemonEnvironment(environment),
+        env: environment,
         signal: AbortSignal.timeout(60_000),
         stdio: ["ignore", "pipe", "pipe"],
     });
@@ -83,7 +82,6 @@ describe("Mobius state root", () => {
 
             const env = environment(home, root);
             if (command === "start") {
-                await installWorkspaceDaemonRelease(root);
                 // Startup must validate the container even when no inheritance is needed.
                 await writeFile(join(root, "current-data.txt"), `versions/${packageMetadata.version}\n`, {
                     mode: 0o600,

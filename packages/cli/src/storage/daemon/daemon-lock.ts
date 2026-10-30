@@ -4,14 +4,11 @@ import type { InstallationDirectory } from "../../engine/storage/installation/in
 import { isNodeError } from "../../engine/util/node-error.ts";
 
 /**
- * Takes the lock file that makes this process the only holder of a daemon role. A lock left by a
+ * Takes the lock file that makes this process the only daemon. A lock left by a
  * process that is gone is replaced. Returns the release function, or null when a live process holds it.
  */
-export async function acquireManagerLock(
-    stateDirectory: InstallationDirectory,
-    name = "manager.lock",
-): Promise<(() => Promise<void>) | null> {
-    const path = join(stateDirectory, name);
+export async function acquireDaemonLock(stateDirectory: InstallationDirectory): Promise<(() => Promise<void>) | null> {
+    const path = join(stateDirectory, "manager.lock");
     for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
             await writeFile(path, `${process.pid.toString()}\n`, { flag: "wx", mode: 0o600 });
@@ -38,8 +35,8 @@ export async function acquireManagerLock(
     return null;
 }
 
-/** True while the manager lock file exists. */
-export async function managerLockExists(stateDirectory: InstallationDirectory): Promise<boolean> {
+/** Keep the released lock filename to exclude older managers as well. */
+export async function daemonLockExists(stateDirectory: InstallationDirectory): Promise<boolean> {
     try {
         await readFile(join(stateDirectory, "manager.lock"), "utf8");
         return true;

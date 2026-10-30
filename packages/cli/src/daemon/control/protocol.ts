@@ -1,14 +1,5 @@
 import { z } from "zod";
 
-export const workerLaunch = z
-    .object({
-        executable: z.string().min(1),
-        entry: z.string().min(1),
-        version: z.string().min(1).max(128),
-    })
-    .readonly();
-export type WorkerLaunch = z.infer<typeof workerLaunch>;
-
 export const lifecycleResponse = z
     .discriminatedUnion("kind", [
         z.object({

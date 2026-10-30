@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import cliPackage from "../../package.json" with { type: "json" };
 import { openMobiusControlInstallation } from "../../src/daemon/pairing/pair-local-machine.ts";
-import { installWorkspaceDaemonRelease, workspaceDaemonEnvironment } from "../support/installed-daemon-release.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -22,7 +21,7 @@ async function runCli(
     signal: AbortSignal,
 ): Promise<{ readonly code: number | null; readonly stderr: string; readonly stdout: string }> {
     const child = spawn(process.execPath, [resolve(import.meta.dirname, "../../dist/cli.js"), ...arguments_], {
-        env: workspaceDaemonEnvironment(environment),
+        env: environment,
         signal,
         stdio: ["ignore", "pipe", "pipe"],
     });
@@ -59,14 +58,15 @@ describe("Mobius version command", () => {
         temporaryDirectories.push(directory);
         const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: join(directory, "state") };
         const signal = AbortSignal.timeout(60_000);
-        await installWorkspaceDaemonRelease(environment.MOBIUS_STATE_DIRECTORY);
-        await rm(join(environment.MOBIUS_STATE_DIRECTORY, "npm"), { recursive: true, force: true });
+
         try {
             const started = await runCli(["start"], environment, signal);
             expect(started.code).toBe(0);
             const control = await openMobiusControlInstallation(signal, environment);
             const daemonPid = await readFile(join(control.stateDirectory, "manager.lock"), "utf8");
-            expect(await readFile(join(control.stateDirectory, "worker.lock"), "utf8")).toBe(daemonPid);
+            await expect(access(join(control.stateDirectory, "worker.lock"))).rejects.toMatchObject({ code: "ENOENT" });
+            expect((await runCli(["start"], environment, signal)).code).toBe(0);
+            expect(await readFile(join(control.stateDirectory, "manager.lock"), "utf8")).toBe(daemonPid);
             await expect(access(join(environment.MOBIUS_STATE_DIRECTORY, "npm"))).rejects.toMatchObject({
                 code: "ENOENT",
             });
@@ -75,6 +75,8 @@ describe("Mobius version command", () => {
             expect(reported.code).toBe(0);
             expect(reported.stderr).toBe("");
             expect(reported.stdout).toBe(`CLI: ${cliPackage.version}\nDaemon: ${cliPackage.version}\n`);
+            expect((await runCli(["restart"], environment, signal)).code).toBe(0);
+            expect(await readFile(join(control.stateDirectory, "manager.lock"), "utf8")).not.toBe(daemonPid);
         } finally {
             await runCli(["quit"], environment, AbortSignal.timeout(10_000)).catch(() => undefined);
         }

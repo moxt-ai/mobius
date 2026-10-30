@@ -6,8 +6,6 @@ const MAXIMUM_REJECTION_LOG_BYTES = 512 * 1_024;
 const MAXIMUM_REJECTION_TEXT_BYTES = 2_048;
 const MAXIMUM_PENDING_REJECTIONS = 100;
 
-export type DaemonProcessRole = "manager" | "worker";
-
 // Diagnostic text only: names, messages, and codes. Local rejection payloads
 // can carry user content, so keep the same single-line, bounded treatment as
 // the other local lifecycle logs.
@@ -37,15 +35,12 @@ export interface UnhandledRejectionGuard {
 // Node's default unhandled rejection mode kills the process, which would take
 // the whole daemon down for a stray floating promise. While this guard is
 // installed every unhandled rejection is recorded instead — stderr for the
-// supervised worker's captured tail, a bounded local log beside the other
+// console, a bounded local log beside the other
 // daemon logs once its directory is bound. Recording is best-effort: a broken
 // log must never become the failure that kills the daemon.
 //
-// Each role writes its own file: BoundedLineLog rotation is not safe across
-// processes, so a file must have exactly one writer. The manager owns its file
-// through manager.lock; the worker must bind only after acquiring worker.lock,
-// which makes it the sole writer of its own file.
-export function surviveUnhandledRejections(role: DaemonProcessRole): UnhandledRejectionGuard {
+// Bind after taking the daemon lock so the bounded log has exactly one writer.
+export function surviveUnhandledRejections(): UnhandledRejectionGuard {
     let log: BoundedLineLog | null = null;
     const pending: string[] = [];
     const record = (reason: unknown): void => {
@@ -76,7 +71,7 @@ export function surviveUnhandledRejections(role: DaemonProcessRole): UnhandledRe
             }
             log = new BoundedLineLog(
                 logDirectory(stateDirectory),
-                unhandledRejectionLogFilename(role),
+                unhandledRejectionLogFilename("worker"),
                 MAXIMUM_REJECTION_LOG_BYTES,
                 (cause) => {
                     process.stderr.write(`The unhandled rejection log could not be written: ${String(cause)}\n`);
