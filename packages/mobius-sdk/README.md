@@ -420,13 +420,10 @@ reconcile with the operators involved. Do not revoke or rotate an arbitrary new
 credential or assume a missing list entry makes a retry safe.
 
 Confirm an unused credential with the integration owners and their deployed
-configuration before revoking it. Usage timestamps are best-effort observations,
-not a complete audit trail. A missing or old observation does not prove inactivity;
-the legacy last-use timestamp can also contain the issuance time before any use.
-Do not use these values alone to decide that a credential is safe to revoke.
+configuration before revoking it. The Platform does not record credential usage.
 
 - **Lost `createApp` response:** after confirming which App was created, use its
-  `defaultCredentialId` and `listAppCredentials` to locate the credential. Rotate
+  `initialCredentialId` and `listAppCredentials` to locate the credential. Rotate
   that credential to obtain and save a replacement secret. If it was already
   rotated, inspect the replacement chain first. Changing the requested name to get
   past a failed create can leave the original App and credential behind.
