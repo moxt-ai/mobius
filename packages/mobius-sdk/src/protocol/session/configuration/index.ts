@@ -117,8 +117,7 @@ const sessionConfigureCommandSchema = z
         ...sessionIdentityFields,
         booleanValue: z.boolean(),
         configId: z.string().min(1).max(128),
-        // Omitted by legacy clients: explicit edits retain last-write-wins behavior.
-        expectedConfigurationRevision: IDENTIFIER.optional(),
+        expectedConfigurationRevision: IDENTIFIER,
         kind: z.literal(SESSION_CONFIGURE_KIND),
         requestId: IDENTIFIER,
         value: z.string().max(500),

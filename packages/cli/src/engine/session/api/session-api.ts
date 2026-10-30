@@ -54,7 +54,8 @@ export interface AgentSettingsInspectionOptions {
 export interface SessionConfigureOptions extends SessionPrepareOptions {
     readonly booleanValue: boolean;
     readonly configId: string;
-    readonly expectedConfigurationRevision?: string;
+    /** The snapshot an explicit edit was chosen from; null when the Runtime applies settings it owns. */
+    readonly expectedConfigurationRevision: string | null;
     readonly requestId: string;
     readonly value: string;
     readonly valueType: SessionConfigOption["type"];

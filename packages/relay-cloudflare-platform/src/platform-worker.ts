@@ -143,7 +143,7 @@ const sessionConfigurationBody = v.strictObject({
     agentId: sessionIdentifier,
     booleanValue: v.boolean(),
     configId: sessionIdentifier,
-    expectedConfigurationRevision: v.optional(sessionIdentifier),
+    expectedConfigurationRevision: sessionIdentifier,
     directoryId: v.custom<string>(isDirectoryIdentifier),
     value: v.pipe(v.string(), v.maxLength(500)),
     valueType: v.picklist(["select", "boolean"]),

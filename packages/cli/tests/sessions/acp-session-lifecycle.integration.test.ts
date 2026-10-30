@@ -1667,6 +1667,7 @@ agent.once("exit", (code) => process.exit(code ?? 84));
                 agent,
                 booleanValue: false,
                 configId: "model",
+                expectedConfigurationRevision: null,
                 cwd: process.cwd(),
                 requestId: "configure-exited-session",
                 sessionId: "exited-conversation",

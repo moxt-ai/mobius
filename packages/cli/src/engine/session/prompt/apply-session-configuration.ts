@@ -182,6 +182,7 @@ async function applySessionConfigurationSelection(
             agent,
             booleanValue: selection.booleanValue,
             configId: selection.configId,
+            expectedConfigurationRevision: null,
             cwd,
             requestId: `cfg_${randomUUID()}`,
             sessionId,

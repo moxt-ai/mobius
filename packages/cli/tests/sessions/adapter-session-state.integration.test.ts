@@ -214,6 +214,7 @@ test.each(["opening", "configuration"] as const)(
                                 valueType: "select",
                                 value: "test-large",
                                 booleanValue: false,
+                                expectedConfigurationRevision: ready.configurationRevision,
                             }),
                         );
                         for (;;) {
