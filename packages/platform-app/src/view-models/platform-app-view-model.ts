@@ -1,28 +1,15 @@
-import type {
-    MobiusCreatedPlatformApp,
-    MobiusPlatformApp,
-    MobiusPlatformAppCredential,
-    MobiusPlatformAppCredentialMetadata,
-    MobiusPlatformAppSessionStatusWebhook,
-    MobiusPlatformDeveloperClient,
-    MobiusPlatformProject,
-    MobiusPlatformRecordingPolicy,
+import {
+    MOBIUS_PLATFORM_APP_PERMISSIONS,
+    type MobiusCreatedPlatformApp,
+    type MobiusPlatformApp,
+    type MobiusPlatformAppCredential,
+    type MobiusPlatformAppCredentialMetadata,
+    type MobiusPlatformAppSessionStatusWebhook,
+    type MobiusPlatformDeveloperClient,
+    type MobiusPlatformProject,
+    type MobiusPlatformRecordingPolicy,
 } from "@moxt-ai/mobius-sdk/platform";
 import { createStore } from "zustand/vanilla";
-
-const APP_PERMISSIONS = Object.freeze([
-    "artifact:read",
-    "artifact:write",
-    "interaction:respond",
-    "project:event:read",
-    "project:read",
-    "runtime:pair",
-    "runtime:read",
-    "runtime:revoke",
-    "session:delete",
-    "session:read",
-    "session:write",
-]);
 
 type CredentialClient = Pick<MobiusPlatformDeveloperClient, "issueAppCredential" | "listAppCredentials">;
 type AppClient = Pick<MobiusPlatformDeveloperClient, "createApp" | "listApps">;
@@ -155,7 +142,7 @@ export function createPlatformStore() {
                 try {
                     created = await client.issueAppCredential(
                         selectedAppId,
-                        { permissions: APP_PERMISSIONS, projectIds: [] },
+                        { permissions: MOBIUS_PLATFORM_APP_PERMISSIONS, projectIds: [] },
                         AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
                     );
                 } catch (cause) {

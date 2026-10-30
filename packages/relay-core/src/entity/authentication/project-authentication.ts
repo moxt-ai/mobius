@@ -1,26 +1,42 @@
-import { isIdentifier } from "@moxt-ai/mobius-sdk/protocol";
+import { isIdentifier, PROJECT_PERMISSION_NAMES, type ProjectPermissionName } from "@moxt-ai/mobius-sdk/protocol";
 import type { ProjectScope } from "../do/session.ts";
 import type { HttpError } from "../http-error.ts";
 import { VerifiedChannelAccess } from "../pairing/pairing.ts";
 
 export class ProjectPermission {
-    static readonly ArtifactRead = new ProjectPermission("artifact:read");
-    static readonly ArtifactWrite = new ProjectPermission("artifact:write");
-    static readonly IdentityBindingsManage = new ProjectPermission("identity-binding:manage");
-    static readonly InteractionRespond = new ProjectPermission("interaction:respond");
-    static readonly OwnerCredentialsManage = new ProjectPermission("owner-credential:manage");
-    static readonly ProjectEventsRead = new ProjectPermission("project:event:read");
-    static readonly ProjectRead = new ProjectPermission("project:read");
-    static readonly RuntimePair = new ProjectPermission("runtime:pair");
-    static readonly RuntimeRead = new ProjectPermission("runtime:read");
-    static readonly RuntimeRevoke = new ProjectPermission("runtime:revoke");
-    static readonly SessionDelete = new ProjectPermission("session:delete");
-    static readonly SessionRead = new ProjectPermission("session:read");
-    static readonly SessionWrite = new ProjectPermission("session:write");
+    // The vocabulary is defined once by the protocol; each name has exactly one instance.
+    static readonly #byName: ReadonlyMap<string, ProjectPermission> = new Map(
+        PROJECT_PERMISSION_NAMES.map((name) => [name, new ProjectPermission(name)]),
+    );
 
-    readonly value: string;
+    /** The permission this release knows by that name, if any. */
+    static readonly known = (name: string): ProjectPermission | undefined => ProjectPermission.#byName.get(name);
 
-    private constructor(value: string) {
+    static readonly named = (name: ProjectPermissionName): ProjectPermission => {
+        const permission = ProjectPermission.#byName.get(name);
+        if (permission === undefined) {
+            throw new Error(`Project permission ${name} is missing from the vocabulary`);
+        }
+        return permission;
+    };
+
+    static readonly ArtifactRead = ProjectPermission.named("artifact:read");
+    static readonly ArtifactWrite = ProjectPermission.named("artifact:write");
+    static readonly IdentityBindingsManage = ProjectPermission.named("identity-binding:manage");
+    static readonly InteractionRespond = ProjectPermission.named("interaction:respond");
+    static readonly OwnerCredentialsManage = ProjectPermission.named("owner-credential:manage");
+    static readonly ProjectEventsRead = ProjectPermission.named("project:event:read");
+    static readonly ProjectRead = ProjectPermission.named("project:read");
+    static readonly RuntimePair = ProjectPermission.named("runtime:pair");
+    static readonly RuntimeRead = ProjectPermission.named("runtime:read");
+    static readonly RuntimeRevoke = ProjectPermission.named("runtime:revoke");
+    static readonly SessionDelete = ProjectPermission.named("session:delete");
+    static readonly SessionRead = ProjectPermission.named("session:read");
+    static readonly SessionWrite = ProjectPermission.named("session:write");
+
+    readonly value: ProjectPermissionName;
+
+    private constructor(value: ProjectPermissionName) {
         this.value = value;
     }
 
@@ -30,21 +46,9 @@ export class ProjectPermission {
 /** What a project credential must grant to open a Runtime host connection and to keep using it. */
 export const PROJECT_HOST_PERMISSION = ProjectPermission.RuntimeRead;
 
-export const PROJECT_PERMISSIONS: readonly ProjectPermission[] = Object.freeze([
-    ProjectPermission.ArtifactRead,
-    ProjectPermission.ArtifactWrite,
-    ProjectPermission.IdentityBindingsManage,
-    ProjectPermission.InteractionRespond,
-    ProjectPermission.OwnerCredentialsManage,
-    ProjectPermission.ProjectEventsRead,
-    ProjectPermission.ProjectRead,
-    ProjectPermission.RuntimePair,
-    ProjectPermission.RuntimeRead,
-    ProjectPermission.RuntimeRevoke,
-    ProjectPermission.SessionDelete,
-    ProjectPermission.SessionRead,
-    ProjectPermission.SessionWrite,
-]);
+export const PROJECT_PERMISSIONS: readonly ProjectPermission[] = Object.freeze(
+    PROJECT_PERMISSION_NAMES.map(ProjectPermission.named),
+);
 
 export const INTERACTIVE_PROJECT_PERMISSIONS: readonly ProjectPermission[] = Object.freeze([
     ProjectPermission.ArtifactRead,
@@ -58,11 +62,12 @@ export const INTERACTIVE_PROJECT_PERMISSIONS: readonly ProjectPermission[] = Obj
     ProjectPermission.SessionWrite,
 ]);
 
+/** Decodes a requested permission strictly: a name this release does not know is an invalid request. */
 export function decodeProjectPermission(value: unknown): ProjectPermission {
     if (typeof value !== "string") {
         throw new ProjectAuthenticationError("project_permission_invalid", "The Project permission is invalid");
     }
-    const permission = PROJECT_PERMISSIONS.find((candidate) => candidate.value === value);
+    const permission = ProjectPermission.known(value);
     if (permission === undefined) {
         throw new ProjectAuthenticationError("project_permission_invalid", "The Project permission is invalid");
     }
@@ -82,6 +87,67 @@ export function decodeProjectPermissions(value: unknown): ReadonlySet<ProjectPer
         permissions.add(permission);
     }
     return permissions;
+}
+
+const MAXIMUM_RECORDED_PERMISSIONS = 64;
+const MAXIMUM_RECORDED_PERMISSION_LENGTH = 128;
+
+/** A stored permission set as this release reads it. */
+export class RecordedProjectPermissions {
+    readonly granted: ReadonlySet<ProjectPermission>;
+    /** Names a newer release recorded that this release does not know. They grant nothing here. */
+    readonly unrecognized: readonly string[];
+
+    constructor(granted: ReadonlySet<ProjectPermission>, unrecognized: readonly string[] = []) {
+        this.granted = new Set(granted);
+        this.unrecognized = Object.freeze([...unrecognized]);
+    }
+
+    /** Every recorded name, so rewriting the record keeps what a newer release granted. */
+    readonly names = (): readonly string[] =>
+        Object.freeze([...[...this.granted].map((permission) => permission.value), ...this.unrecognized].sort());
+}
+
+/**
+ * Decodes a stored permission set, which a newer release may have written during a gradual deployment or before a
+ * rollback. Names this release does not know are set aside instead of invalidating the record; a value that is not a
+ * set of permission names still fails.
+ */
+export function decodeRecordedProjectPermissions(value: unknown): RecordedProjectPermissions {
+    if (!Array.isArray(value) || value.length === 0 || value.length > MAXIMUM_RECORDED_PERMISSIONS) {
+        throw recordedPermissionsInvalid();
+    }
+    const entries: readonly unknown[] = value;
+    const names = new Set<string>();
+    for (const candidate of entries) {
+        if (
+            typeof candidate !== "string" ||
+            candidate.length === 0 ||
+            candidate.length > MAXIMUM_RECORDED_PERMISSION_LENGTH ||
+            names.has(candidate)
+        ) {
+            throw recordedPermissionsInvalid();
+        }
+        names.add(candidate);
+    }
+    const granted = new Set<ProjectPermission>();
+    const unrecognized: string[] = [];
+    for (const name of names) {
+        const permission = ProjectPermission.known(name);
+        if (permission === undefined) {
+            unrecognized.push(name);
+        } else {
+            granted.add(permission);
+        }
+    }
+    return new RecordedProjectPermissions(granted, unrecognized);
+}
+
+function recordedPermissionsInvalid(): ProjectAuthenticationError {
+    return new ProjectAuthenticationError(
+        "project_authorization_record_invalid",
+        "The stored Project permissions are invalid",
+    );
 }
 
 export class AuditActorKind {

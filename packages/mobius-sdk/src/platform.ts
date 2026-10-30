@@ -2,12 +2,16 @@ import {
     decodeIdentifier,
     type Identifier,
     isIdentifier,
+    PLATFORM_APP_PROJECT_PERMISSIONS,
     type ProjectLocationHint,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { MobiusProtocolError, MobiusValidationError } from "./errors.ts";
 import { type MobiusEndpointOptions, MobiusRequestExecutor, StaticMobiusCredentialProvider } from "./service-client.ts";
 
 export { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-sdk/protocol";
+
+/** Every Project permission a Platform App credential may hold, for issuing a credential with the App's full authority. */
+export const MOBIUS_PLATFORM_APP_PERMISSIONS: readonly string[] = PLATFORM_APP_PROJECT_PERMISSIONS;
 
 export {
     MobiusApiError,
