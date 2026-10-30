@@ -19,7 +19,7 @@ jobs:
     outputs:
       docs-only: ${{ steps.classify.outputs.docs-only }}
     steps:
-      - uses: actions/checkout@v4.4.0
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -73,10 +73,10 @@ jobs:
         environment: [staging, production]
     environment: ${{ matrix.environment }}
     steps:
-      - uses: actions/checkout@v4.4.0
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4.4.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .nvmrc
       - name: Validate GitHub runtime configuration
@@ -104,13 +104,13 @@ jobs:
           - name: Hosting tests
             command: pnpm test:ci:hosting
     steps:
-      - uses: actions/checkout@v4.4.0
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v4.3.0
+      - uses: pnpm/action-setup@v6.1.0
         with:
           run_install: false
-      - uses: actions/setup-node@v4.4.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .nvmrc
           cache: pnpm
@@ -140,20 +140,20 @@ jobs:
     env:
       TEST_SHARD: ${{ matrix.shard }}/4
     steps:
-      - uses: actions/checkout@v4.4.0
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v4.3.0
+      - uses: pnpm/action-setup@v6.1.0
         with:
           run_install: false
-      - uses: actions/setup-node@v4.4.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .nvmrc
           cache: pnpm
       # setup-node caches package contents, but not pnpm's registry metadata and policy-verification receipts.
       # pnpm still validates the lockfile hash and active policy before trusting a cached receipt.
       - name: Cache pnpm verification metadata
-        uses: actions/cache@v4.3.0
+        uses: actions/cache@v6.1.0
         with:
           path: ${{ runner.temp }}/pnpm-metadata
           key: pnpm-metadata-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', '.nvmrc', '.npmrc', '.pnpmfile.cjs', 'pnpmfile.cjs') }}
@@ -195,13 +195,13 @@ jobs:
         @earendil-works/pi-coding-agent@1.1.0
         pi-acp@0.0.34
     steps:
-      - uses: actions/checkout@v4.4.0
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v4.3.0
+      - uses: pnpm/action-setup@v6.1.0
         with:
           run_install: false
-      - uses: actions/setup-node@v4.4.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .nvmrc
           cache: pnpm
@@ -209,7 +209,7 @@ jobs:
       # Every shard installs the same pinned Agents; reuse their tarballs instead of
       # downloading them from the registry on each run.
       - name: Restore the real Agent npm cache
-        uses: actions/cache@v4.3.0
+        uses: actions/cache@v6.1.0
         with:
           path: ~/.npm/_cacache
           key: real-agents-npm-${{ runner.os }}-${{ env.REAL_AGENT_PACKAGES }}
@@ -232,11 +232,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4.4.0
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v4.4.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .nvmrc
       - name: Require versions above the base for published package changes
@@ -318,13 +318,13 @@ jobs:
       group: deploy-mobius-platform-${{ matrix.environment }}
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4.4.0
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4.4.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .nvmrc
-      - uses: pnpm/action-setup@v4.3.0
+      - uses: pnpm/action-setup@v6.1.0
         with:
           run_install: false
       - run: pnpm install --frozen-lockfile
@@ -440,13 +440,13 @@ jobs:
       group: deploy-mobius-recording-${{ matrix.environment }}
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4.4.0
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4.4.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .nvmrc
-      - uses: pnpm/action-setup@v4.3.0
+      - uses: pnpm/action-setup@v6.1.0
         with:
           run_install: false
       - run: pnpm install --frozen-lockfile
