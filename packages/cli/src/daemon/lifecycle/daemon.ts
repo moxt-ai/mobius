@@ -233,6 +233,8 @@ async function runDaemonRuntime(
         };
         try {
             await reconcile();
+            // CLI mutations follow this pointer as soon as status reports readiness.
+            await recordCurrentData(version, combined);
             // Both released endpoints use the same authenticated handler in one process.
             const servers = ["manager", "worker"] as const;
             const results = await Promise.allSettled(
@@ -243,11 +245,7 @@ async function runDaemonRuntime(
                             endpoint,
                             combined,
                             handle,
-                            async () => {
-                                if (endpoint === "manager") {
-                                    await recordCurrentData(version, combined);
-                                }
-                            },
+                            undefined,
                             (response) => {
                                 if (
                                     typeof response === "object" &&

@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { once } from "node:events";
+import { setTimeout as delay } from "node:timers/promises";
 import type { InstallationDirectory } from "../../engine/storage/installation/installation-files.ts";
 import { isNodeError } from "../../engine/util/node-error.ts";
 import { daemonLockExists } from "../../storage/daemon/daemon-lock.ts";
@@ -109,7 +110,8 @@ async function waitForDaemon(
             // Check the shared endpoint first and keep waiting for its owner.
             if (
                 child !== undefined &&
-                (child.signalCode !== null || (child.exitCode !== null && child.exitCode !== 0))
+                (child.signalCode !== null ||
+                    (child.exitCode !== null && (child.exitCode !== 0 || !(await daemonLockExists(stateDirectory)))))
             ) {
                 throw new Error("The daemon exited before becoming ready");
             }
@@ -136,22 +138,32 @@ export async function stopDaemon(
     stateDirectory: InstallationDirectory,
     signal: AbortSignal,
 ): Promise<Extract<LifecycleResponse, { kind: "stopped" }>> {
-    try {
-        const response = decodeKnownLifecycleResponse(
-            await sendLocalRequest(stateDirectory, "manager", { kind: "stop" }, signal),
-        );
-        if (response?.kind === "error") {
-            throw new Error(response.message);
+    const deadline = AbortSignal.any([signal, AbortSignal.timeout(CONTROL_TIMEOUT_MILLISECONDS)]);
+    while (true) {
+        deadline.throwIfAborted();
+        try {
+            const response = decodeKnownLifecycleResponse(
+                await sendLocalRequest(stateDirectory, "manager", { kind: "stop" }, deadline),
+            );
+            if (response?.kind === "error") {
+                throw new Error(response.message);
+            }
+            if (response?.kind !== "stopped") {
+                throw new Error("The Mobius daemon returned an unexpected response");
+            }
+            await waitForDaemonExit(stateDirectory, deadline);
+            return response;
+        } catch (cause) {
+            deadline.throwIfAborted();
+            if (!isNodeError(cause, "ENOENT") && !isNodeError(cause, "ECONNREFUSED")) {
+                throw cause;
+            }
+            if (!(await daemonLockExists(stateDirectory))) {
+                return { kind: "stopped" };
+            }
+            // The owner may still be copying data or discovering Agents. Its missing
+            // socket is not proof of shutdown: wait for control or report the deadline.
+            await delay(50, undefined, { signal: deadline });
         }
-        if (response?.kind !== "stopped") {
-            throw new Error("The Mobius daemon returned an unexpected response");
-        }
-        await waitForDaemonExit(stateDirectory, signal);
-        return response;
-    } catch (cause) {
-        if (isNodeError(cause, "ENOENT") || isNodeError(cause, "ECONNREFUSED")) {
-            return { kind: "stopped" };
-        }
-        throw cause;
     }
 }

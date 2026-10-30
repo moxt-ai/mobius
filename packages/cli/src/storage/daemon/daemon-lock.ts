@@ -35,10 +35,24 @@ export async function acquireDaemonLock(stateDirectory: InstallationDirectory): 
     return null;
 }
 
-/** Keep the released lock filename to exclude older managers as well. */
+/** Keep the released lock filename; a dead owner does not keep the daemon alive. */
 export async function daemonLockExists(stateDirectory: InstallationDirectory): Promise<boolean> {
     try {
-        await readFile(join(stateDirectory, "manager.lock"), "utf8");
+        const pid = Number((await readFile(join(stateDirectory, "manager.lock"), "utf8")).trim());
+        // The exclusive file can be observed before its owner finishes writing the PID.
+        if (!Number.isSafeInteger(pid) || pid <= 1) {
+            return true;
+        }
+        try {
+            process.kill(pid, 0);
+        } catch (cause) {
+            if (isNodeError(cause, "ESRCH")) {
+                return false;
+            }
+            if (!isNodeError(cause, "EPERM")) {
+                throw cause;
+            }
+        }
         return true;
     } catch (cause) {
         if (isNodeError(cause, "ENOENT")) {
