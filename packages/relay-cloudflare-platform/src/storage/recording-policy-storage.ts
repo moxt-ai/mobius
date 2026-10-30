@@ -15,6 +15,7 @@ import {
 } from "../schema/d1/index.ts";
 import { activeAppConfigurationTarget, appConfigurationAudit } from "./app-configuration-write.ts";
 import { type PlatformDrizzleDatabase, platformDrizzle } from "./platform-drizzle-database.ts";
+import { appActive, projectServed } from "./platform-lifecycle.ts";
 
 type StoredRecordingMode = EffectiveRecordingMode;
 
@@ -50,7 +51,7 @@ export class RecordingPolicyStorage {
         const rows = await this.#database
             .select({ appId: platformProject.appId, projectId: platformProject.projectId })
             .from(platformProject)
-            .where(and(eq(platformProject.projectId, projectId), eq(platformProject.lifecycle, "active")))
+            .where(and(eq(platformProject.projectId, projectId), projectServed))
             .limit(1);
         signal.throwIfAborted();
         return rows[0] ?? null;
@@ -62,7 +63,7 @@ export class RecordingPolicyStorage {
             .select({ mode: platformAppRecordingPolicy.mode })
             .from(platformApp)
             .leftJoin(platformAppRecordingPolicy, eq(platformAppRecordingPolicy.appId, platformApp.appId))
-            .where(and(eq(platformApp.appId, appId), eq(platformApp.lifecycle, "active")))
+            .where(and(eq(platformApp.appId, appId), appActive))
             .limit(1);
         signal.throwIfAborted();
         const row = rows[0];
@@ -79,7 +80,7 @@ export class RecordingPolicyStorage {
                 eq(platformProjectRecordingPolicy.projectId, platformProject.projectId),
             )
             .leftJoin(platformAppRecordingPolicy, eq(platformAppRecordingPolicy.appId, platformProject.appId))
-            .where(and(eq(platformProject.projectId, projectId), eq(platformProject.lifecycle, "active")))
+            .where(and(eq(platformProject.projectId, projectId), projectServed))
             .limit(1);
         signal.throwIfAborted();
         const row = rows[0];
@@ -130,13 +131,7 @@ export class RecordingPolicyStorage {
         const target = this.#database
             .select({ projectId: platformProject.projectId })
             .from(platformProject)
-            .where(
-                and(
-                    eq(platformProject.projectId, projectId),
-                    eq(platformProject.lifecycle, "active"),
-                    exists(activeAppConfigurationTarget(this.#database, platformProject.appId)),
-                ),
-            )
+            .where(and(eq(platformProject.projectId, projectId), projectServed))
             .as("active_project");
         const active = exists(this.#database.select().from(target));
         const [, auditRows] = await this.#database.batch([

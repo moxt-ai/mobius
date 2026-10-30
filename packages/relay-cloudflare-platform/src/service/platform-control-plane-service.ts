@@ -213,9 +213,10 @@ function overlapMilliseconds(overlapSeconds: number): number {
 function tenantResource(row: TenantRow): object {
     return {
         createdAt: iso(row.created_at),
-        deletedAt: typeof row.deleted_at === "number" ? iso(row.deleted_at) : "",
+        // No operation deletes a Tenant: every Tenant that exists is active.
+        deletedAt: "",
         displayName: row.display_name,
-        lifecycle: row.lifecycle,
+        lifecycle: "active",
         quotas: decodeObject(row.quotas_json, "The Tenant quota record is invalid"),
         tenantId: row.tenant_id,
         updatedAt: iso(row.updated_at),
@@ -374,9 +375,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         const quotas = JSON.stringify(tenantQuotas(undefined));
         const tenant: TenantRow = {
             created_at: now,
-            deleted_at: null,
             display_name: tenantId,
-            lifecycle: "active",
             quotas_json: quotas,
             tenant_id: tenantId,
             updated_at: now,
@@ -785,6 +784,10 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
             if (duplicate !== null && duplicate.request_digest === digest) {
                 await this.recoverProjectProvisioning(duplicate, access, signal);
                 return projectResource(duplicate);
+            }
+            // A Project is created only under an active App; a deletion committed after the check above wins.
+            if ((await this.#storage.readApp(app.app_id, signal))?.lifecycle !== "active") {
+                throw new PlatformControlPlaneError("app_access_denied", "The App is unavailable", 403);
             }
             await this.recordQuotaDenial(access, "project", app.app_id, quota.activeProjects, signal);
             throw new PlatformControlPlaneError(
@@ -1257,7 +1260,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
 
     private readonly readTenant = async (tenantId: string, signal: AbortSignal): Promise<TenantRow> => {
         const row = await this.#storage.readTenant(validateIdentifier(tenantId, "tenant_id"), signal);
-        if (row === null || row.lifecycle !== "active") {
+        if (row === null) {
             throw new PlatformControlPlaneError("tenant_not_found", "The Tenant was not found", 404);
         }
         return row;

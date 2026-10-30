@@ -3,13 +3,14 @@ import type { SQLiteColumn } from "drizzle-orm/sqlite-core";
 import type { PlatformAuditRecord } from "../entity/platform-records.ts";
 import { platformApp, platformDashboardAuditEvent } from "../schema/d1/index.ts";
 import type { PlatformDrizzleDatabase } from "./platform-drizzle-database.ts";
+import { appActive } from "./platform-lifecycle.ts";
 
 /** Configuration writes and their success audits use the same live App predicate inside a D1 batch. */
 export function activeAppConfigurationTarget(database: PlatformDrizzleDatabase, appId: string | SQLiteColumn) {
     return database
         .select({ appId: platformApp.appId })
         .from(platformApp)
-        .where(and(eq(platformApp.appId, appId), eq(platformApp.lifecycle, "active")));
+        .where(and(eq(platformApp.appId, appId), appActive));
 }
 
 export function appConfigurationAudit(database: PlatformDrizzleDatabase, audit: PlatformAuditRecord, condition?: SQL) {

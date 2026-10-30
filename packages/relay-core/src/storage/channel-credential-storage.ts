@@ -2,6 +2,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { relayDrizzle } from "../infra/drizzle-database.ts";
 import type { SqlDatabase } from "../infra/sql-database.ts";
 import { channelHostCredential, runtimeIdentity, runtimeRegistration } from "../schema/project-do/index.ts";
+import { hostCredentialValid } from "./host-credential-validity.ts";
 
 export interface ChannelCredentialIdentity {
     readonly channelId: string;
@@ -39,27 +40,20 @@ export class ChannelCredentialStorage {
 
     readonly readActive = async (identity: ChannelCredentialIdentity, signal: AbortSignal) => {
         const database = relayDrizzle(this.#database, signal);
-        const channels = await database
-            .select({ channelId: runtimeIdentity.channelId })
-            .from(runtimeIdentity)
-            .innerJoin(runtimeRegistration, eq(runtimeRegistration.runtimeId, runtimeIdentity.runtimeId))
+        const credentials = await database
+            .select({ credentialId: channelHostCredential.credentialId })
+            .from(channelHostCredential)
+            .innerJoin(runtimeIdentity, eq(runtimeIdentity.channelId, channelHostCredential.channelId))
             .where(
                 and(
-                    eq(runtimeIdentity.channelId, identity.channelId),
+                    eq(channelHostCredential.credentialId, identity.credentialId),
+                    eq(channelHostCredential.channelId, identity.channelId),
                     eq(runtimeIdentity.runtimeId, identity.runtimeId),
                     eq(runtimeIdentity.projectId, identity.projectId),
-                    isNull(runtimeIdentity.revokedAt),
-                    database.$count(
-                        channelHostCredential,
-                        and(
-                            eq(channelHostCredential.credentialId, identity.credentialId),
-                            eq(channelHostCredential.channelId, runtimeIdentity.channelId),
-                            isNull(channelHostCredential.revokedAt),
-                        ),
-                    ),
+                    hostCredentialValid(database),
                 ),
             )
             .limit(1);
-        return channels.length === 0 ? null : { active: 1 };
+        return credentials.length === 0 ? null : { active: 1 };
     };
 }

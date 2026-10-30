@@ -4,9 +4,6 @@ import * as v from "valibot";
 const nonNegativeInteger = v.pipe(v.number(), v.safeInteger(), v.minValue(0));
 const lifecycle = v.picklist(["active", "deleted"]);
 
-export const ActiveCountRowSchema = v.object({ active_count: nonNegativeInteger });
-export type ActiveCountRow = Readonly<v.InferOutput<typeof ActiveCountRowSchema>>;
-
 export const AppRowSchema = v.object({
     app_id: v.string(),
     created_at: nonNegativeInteger,
@@ -39,7 +36,6 @@ export type AuditRow = Readonly<v.InferOutput<typeof AuditRowSchema>>;
 export const CredentialRowSchema = v.object({
     all_projects: v.picklist([0, 1]),
     app_id: v.string(),
-    app_lifecycle: v.string(),
     credential_id: v.string(),
     issued_at: nonNegativeInteger,
     overlap_ends_at: v.nullable(nonNegativeInteger),
@@ -49,7 +45,6 @@ export const CredentialRowSchema = v.object({
     revoked_at: v.nullable(nonNegativeInteger),
     secret_digest: v.string(),
     tenant_id: v.string(),
-    tenant_lifecycle: v.string(),
 });
 export type CredentialRow = Readonly<v.InferOutput<typeof CredentialRowSchema>>;
 
@@ -86,9 +81,6 @@ export const PlatformProjectScopeRowSchema = v.object({
 });
 export type PlatformProjectScopeRow = Readonly<v.InferOutput<typeof PlatformProjectScopeRowSchema>>;
 
-export const ProjectIdRowSchema = v.object({ project_id: v.string() });
-export type ProjectIdRow = Readonly<v.InferOutput<typeof ProjectIdRowSchema>>;
-
 export const ProjectRowSchema = v.object({
     app_id: v.string(),
     client_reference: v.string(),
@@ -112,9 +104,7 @@ export const ProjectStorageScopeRowSchema = v.object({ created_at: v.number() })
 
 export const TenantRowSchema = v.object({
     created_at: nonNegativeInteger,
-    deleted_at: v.nullable(nonNegativeInteger),
     display_name: v.string(),
-    lifecycle,
     quotas_json: v.string(),
     tenant_id: v.string(),
     updated_at: nonNegativeInteger,
