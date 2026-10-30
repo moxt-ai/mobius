@@ -19,6 +19,7 @@ test("Given a released manager, When it upgrades its worker, Then the new releas
     const archive = process.env.MOBIUS_RELEASE_ARCHIVE;
     assert.ok(archive);
     assert.ok(process.env.npm_execpath);
+    assert.ok(process.env.npm_config_cache, "The release workflow must provide an isolated npm cache");
     const npx = join(dirname(process.env.npm_execpath), "npx-cli.js");
     const root = (process.env.PATH ?? process.env.Path ?? "")
         .split(delimiter)
@@ -80,7 +81,7 @@ test("Given a released manager, When it upgrades its worker, Then the new releas
     const environment = {
         ...process.env,
         MOBIUS_STATE_DIRECTORY: join(directory, "state"),
-        npm_config_cache: join(directory, "npm-cache"),
+        npm_config_cache: process.env.npm_config_cache,
         npm_config_registry: origin,
         // Dependencies keep their published HTTPS tarball URLs. Older npm versions
         // otherwise substitute the fixture host while retaining the HTTPS scheme.
@@ -94,7 +95,16 @@ test("Given a released manager, When it upgrades its worker, Then the new releas
         try {
             return await execute(
                 process.execPath,
-                [npx, "--yes", "--prefer-online", "--package", `@moxt-ai/mobius@${version}`, "--", "mobius", ...args],
+                [
+                    npx,
+                    "--yes",
+                    "--prefer-online",
+                    "--package",
+                    version === oldVersion ? `@moxt-ai/mobius@${oldVersion}` : archive,
+                    "--",
+                    "mobius",
+                    ...args,
+                ],
                 {
                     env: environment,
                     cwd: directory,
