@@ -75,9 +75,6 @@ export class ActiveRuntimeTurn {
         !this.#started() &&
         !this.#controller.signal.aborted;
 
-    /** Whether the command's execution was handed to the Agent. */
-    readonly hasStarted = (): boolean => this.#started();
-
     readonly abortRuntime = (): void => {
         this.#controller.abort();
     };
