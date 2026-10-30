@@ -1,4 +1,4 @@
-import type { LocalSessionOperations, ProjectStore, SessionRuntimeOperations } from "@moxt-ai/mobius-relay-core";
+import type { LocalSessionOperations, ProjectStore } from "@moxt-ai/mobius-relay-core";
 import {
     CloudflareChannelRuntime,
     createMobiusApplication,
@@ -11,6 +11,7 @@ import {
     type RelayContext,
     RequestAccessMetrics,
     requestTimeoutMiddleware,
+    type SessionBindingRequest,
     SessionControl,
     standardWebSocketHost,
     type WebSocketHost,
@@ -22,7 +23,6 @@ import {
     decodeFileReadCommand,
     decodeMessageKind,
     decodeRuntimeStatusEvent,
-    decodeSessionQueryCommand,
     decodeSessionWireEnvelope,
     type Identifier,
     isDirectoryIdentifier,
@@ -132,7 +132,7 @@ const controlApplication = createPlatformControlApplication();
 const PLATFORM_REQUEST_TIMEOUT_MILLISECONDS = 30_000;
 const sessionIdentifier = v.custom<Identifier>(isIdentifier);
 const sessionPromptBody = v.strictObject({
-    additionalDirectoryIds: v.pipe(v.array(v.string()), v.maxLength(16)),
+    additionalDirectoryIds: v.optional(v.pipe(v.array(v.string()), v.maxLength(16))),
     agentId: v.optional(sessionIdentifier),
     attachments: v.pipe(v.array(v.unknown()), v.maxLength(16)),
     content: v.pipe(v.string(), v.maxLength(100000)),
@@ -144,12 +144,12 @@ const sessionPromptBody = v.strictObject({
 });
 const sessionPromptDispositionBody = v.strictObject({ disposition: v.literal("steer") });
 const sessionConfigurationBody = v.strictObject({
-    additionalDirectoryIds: v.pipe(v.array(v.custom<string>(isDirectoryIdentifier)), v.maxLength(16)),
-    agentId: sessionIdentifier,
+    additionalDirectoryIds: v.optional(v.pipe(v.array(v.custom<string>(isDirectoryIdentifier)), v.maxLength(16))),
+    agentId: v.optional(sessionIdentifier),
     booleanValue: v.boolean(),
     configId: sessionIdentifier,
     expectedConfigurationRevision: sessionIdentifier,
-    directoryId: v.custom<string>(isDirectoryIdentifier),
+    directoryId: v.optional(v.custom<string>(isDirectoryIdentifier)),
     value: v.pipe(v.string(), v.maxLength(500)),
     valueType: v.picklist(["select", "boolean"]),
 });
@@ -170,6 +170,32 @@ const sessionInteractionResponseBody = v.variant("kind", [
         responderId: sessionIdentifier,
     }),
 ]);
+
+/**
+ * A Session binding stated in a query string. Each omitted field is the Session's own. A query cannot tell an empty
+ * list from an omitted one; callers that state the binding send no `additionalDirectoryId` for an empty list, so with
+ * `agentId` or `directoryId` present an absent list is empty.
+ */
+function sessionBindingQuery(request: {
+    readonly query: (name: string) => string | undefined;
+    readonly queries: (name: string) => string[] | undefined;
+}): SessionBindingRequest {
+    const agentId = request.query("agentId");
+    const directoryId = request.query("directoryId");
+    const additionalDirectoryIds = request.queries("additionalDirectoryId");
+    return {
+        additionalDirectoryIds:
+            additionalDirectoryIds === undefined && agentId === undefined && directoryId === undefined
+                ? undefined
+                : v.parse(
+                      v.pipe(v.array(v.custom<string>(isDirectoryIdentifier)), v.maxLength(16)),
+                      additionalDirectoryIds ?? [],
+                  ),
+        agentId: agentId === undefined ? undefined : v.parse(sessionIdentifier, agentId),
+        directoryId:
+            directoryId === undefined ? undefined : v.parse(v.custom<string>(isDirectoryIdentifier), directoryId),
+    };
+}
 
 type DispatchEnvironment = {
     readonly Bindings: PlatformApplicationBindings;
@@ -194,29 +220,6 @@ function optionalExecutionContext(context: Pick<Context, "executionCtx">): Conte
     } catch {
         return undefined;
     }
-}
-
-async function runtimeSessionIdentity(
-    relay: SessionRuntimeOperations,
-    target: { readonly projectId: string; readonly runtimeId: string; readonly sessionId: string },
-    signal: AbortSignal,
-) {
-    const queried = await relay.requestProjectScopeControl(
-        new ProjectScope(target.projectId),
-        target.runtimeId,
-        decodeSessionQueryCommand(
-            JSON.stringify({ kind: "session.query", requestId: crypto.randomUUID(), sessionIds: [target.sessionId] }),
-        ),
-        signal,
-    );
-    if (queried.kind !== "session.queried") {
-        throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid Session query");
-    }
-    const session = queried.entries.find((entry) => entry.sessionId === target.sessionId);
-    if (session === undefined) {
-        throw new PairingDirectoryError("session_not_found", "The selected Session is unavailable");
-    }
-    return session;
 }
 
 export function createPlatformAccessServices(
@@ -382,17 +385,10 @@ export function createPlatformApplication(
                 Number(context.req.query("eventLimit") ?? "50"),
             );
             const control = authorizedSessionControl(context, access, sessionId);
-            const events = await control.previewEvents(
-                {
-                    additionalDirectoryIds: v.parse(
-                        v.pipe(v.array(v.custom<string>(isDirectoryIdentifier)), v.maxLength(16)),
-                        context.req.queries("additionalDirectoryId") ?? [],
-                    ),
-                    agentId: v.parse(sessionIdentifier, context.req.query("agentId")),
-                    directoryId: v.parse(v.custom<string>(isDirectoryIdentifier), context.req.query("directoryId")),
-                },
-                { cursor: context.req.query("cursor") ?? null, eventLimit },
-            );
+            const events = await control.previewEvents(sessionBindingQuery(context.req), {
+                cursor: context.req.query("cursor") ?? null,
+                eventLimit,
+            });
             context.header("Cache-Control", "no-store");
             return context.json(events);
         })
@@ -430,16 +426,11 @@ export function createPlatformApplication(
                 context.req.raw.signal,
             );
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
-            const additionalDirectoryIds = v.parse(
-                v.pipe(v.array(v.custom<string>(isDirectoryIdentifier)), v.maxLength(16)),
-                context.req.queries("additionalDirectoryId") ?? [],
-            );
-            const agentId = v.parse(sessionIdentifier, context.req.query("agentId"));
-            const directoryId = v.parse(v.custom<string>(isDirectoryIdentifier), context.req.query("directoryId"));
+            const binding = sessionBindingQuery(context.req);
             const commandId = context.req.query("commandId");
             const control = authorizedSessionControl(context, access, sessionId);
             const result = await control.activeTurn(
-                { additionalDirectoryIds, agentId, directoryId },
+                binding,
                 commandId === undefined ? undefined : v.parse(sessionIdentifier, commandId),
             );
             context.header("Cache-Control", "no-store");
@@ -467,21 +458,8 @@ export function createPlatformApplication(
                 });
             }
             const body = parsed.output;
-            const identity =
-                body.agentId === undefined || body.directoryId === undefined
-                    ? await runtimeSessionIdentity(
-                          sessionOperations(context),
-                          { projectId: access.projectId, runtimeId: access.runtimeId, sessionId },
-                          context.req.raw.signal,
-                      )
-                    : { agentId: body.agentId, directoryId: body.directoryId };
             const control = authorizedSessionControl(context, access, sessionId);
-            const accepted = await control.submitTurn({
-                ...body,
-                agentId: identity.agentId,
-                commandId: body.idempotencyKey,
-                directoryId: identity.directoryId,
-            });
+            const accepted = await control.submitTurn({ ...body, commandId: body.idempotencyKey });
             const acceptedAt = new Date().toISOString();
             context.header("Cache-Control", "no-store");
             return context.json({

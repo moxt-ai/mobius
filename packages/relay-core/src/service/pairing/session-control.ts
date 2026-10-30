@@ -10,6 +10,7 @@ import {
     decodeSessionPreviewHistoryPageLoad,
     decodeSessionPromptCommand,
     decodeSessionPromptDispositionCommand,
+    decodeSessionQueryCommand,
     decodeSessionRenameCommand,
     ProtocolMessageError,
     promptCompletion,
@@ -29,7 +30,17 @@ export interface SessionExecutionIdentity {
     readonly additionalDirectoryIds: readonly string[];
 }
 
-export interface TurnSubmission extends SessionExecutionIdentity {
+/**
+ * A Session's binding as a caller states it for an operation on that existing Session. The Runtime owns the binding,
+ * so each omitted field is the Session's own; each supplied field reaches the Runtime unchanged, which validates it.
+ */
+export interface SessionBindingRequest {
+    readonly agentId?: string | undefined;
+    readonly directoryId?: string | undefined;
+    readonly additionalDirectoryIds?: readonly string[] | undefined;
+}
+
+export interface TurnSubmission extends SessionBindingRequest {
     readonly commandId: string;
     readonly content: string;
     readonly attachments: readonly unknown[];
@@ -43,7 +54,7 @@ export type InteractionResponse =
     | { readonly kind: "permission"; readonly optionId: string; readonly outcome: "cancelled" | "selected" }
     | { readonly kind: "elicitation"; readonly action: "accept" | "cancel" | "decline"; readonly content: string };
 
-export interface SessionConfiguration extends SessionExecutionIdentity {
+export interface SessionConfiguration extends SessionBindingRequest {
     readonly configId: string;
     readonly expectedConfigurationRevision: string;
     readonly valueType: "select" | "boolean";
@@ -68,16 +79,17 @@ export class SessionControl {
     readonly submitTurn = async (
         turn: TurnSubmission,
     ): Promise<{ readonly commandId: string; readonly state: "running" | "queued" }> => {
+        const binding = await this.#binding(turn);
         let command: SessionPromptCommand;
         try {
             command = decodeSessionPromptCommand(
                 JSON.stringify({
-                    additionalDirectoryIds: turn.additionalDirectoryIds,
-                    agentId: turn.agentId,
+                    additionalDirectoryIds: binding.additionalDirectoryIds,
+                    agentId: binding.agentId,
                     attachments: turn.attachments,
                     bindingId: RUNTIME_WORKSPACE_BINDING_ID,
                     commandId: turn.commandId,
-                    directoryId: turn.directoryId,
+                    directoryId: binding.directoryId,
                     disposition: turn.disposition,
                     ...(turn.historyPolicy === undefined ? {} : { historyPolicy: turn.historyPolicy }),
                     kind: "session.prompt",
@@ -195,6 +207,7 @@ export class SessionControl {
             decodeSessionConfigureCommand(
                 JSON.stringify({
                     ...configuration,
+                    ...(await this.#binding(configuration)),
                     bindingId: RUNTIME_WORKSPACE_BINDING_ID,
                     kind: "session.configure",
                     requestId: crypto.randomUUID(),
@@ -216,7 +229,8 @@ export class SessionControl {
         );
 
     /** The Session's running Turn, and the delivery of `deliveryCommandId` when the caller names one. */
-    readonly activeTurn = async (identity: SessionExecutionIdentity, deliveryCommandId?: string) => {
+    readonly activeTurn = async (supplied: SessionBindingRequest, deliveryCommandId?: string) => {
+        const identity = await this.#binding(supplied);
         const result = await this.#control(
             decodeNativeSessionRequest(
                 JSON.stringify({
@@ -241,9 +255,10 @@ export class SessionControl {
 
     /** A page of the Agent's native history for the Session, as Session events. */
     readonly previewEvents = async (
-        identity: SessionExecutionIdentity,
+        supplied: SessionBindingRequest,
         page: { readonly cursor: string | null; readonly eventLimit: number },
     ) => {
+        const identity = await this.#binding(supplied);
         const result = await this.#control(
             decodeSessionPreviewHistoryPageLoad(
                 JSON.stringify({
@@ -282,5 +297,35 @@ export class SessionControl {
             throw new PairingDirectoryError("invalid_request", "The Runtime returned invalid V2 Session events");
         }
         return result.events.events;
+    };
+
+    /** The binding an operation runs with: the caller's fields, and the Session's own from its Runtime for the rest. */
+    readonly #binding = async (supplied: SessionBindingRequest): Promise<SessionExecutionIdentity> => {
+        const { additionalDirectoryIds, agentId, directoryId } = supplied;
+        if (agentId !== undefined && directoryId !== undefined && additionalDirectoryIds !== undefined) {
+            return { additionalDirectoryIds, agentId, directoryId };
+        }
+        const queried = await this.#control(
+            decodeSessionQueryCommand(
+                JSON.stringify({
+                    kind: "session.query",
+                    requestId: crypto.randomUUID(),
+                    sessionIds: [this.#sessionId],
+                }),
+            ),
+        );
+        if (queried.kind !== "session.queried") {
+            throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid Session query");
+        }
+        const session = queried.entries.find((entry) => entry.sessionId === this.#sessionId);
+        if (session === undefined) {
+            throw new PairingDirectoryError("session_not_found", "The selected Session is unavailable");
+        }
+        return {
+            additionalDirectoryIds:
+                additionalDirectoryIds ?? session.additionalDirectories.map((directory) => directory.directoryId),
+            agentId: agentId ?? session.agentId,
+            directoryId: directoryId ?? session.directoryId,
+        };
     };
 }

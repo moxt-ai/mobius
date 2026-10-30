@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { MobiusClient, StaticMobiusCredentialProvider } from "@moxt-ai/mobius-sdk/server";
 import { expect, it } from "vitest";
 import { startTestPlatform } from "../support/platform.ts";
 
@@ -187,5 +188,68 @@ it("Given a deeply nested multibyte project path, When the SDK browses it and ru
         expect(JSON.stringify(events)).toContain("Remember the long workspace conversation");
     } finally {
         await rm(root, { recursive: true, force: true });
+    }
+});
+
+it("Given a Session with an additional directory, When the App prompts it and reads its execution without stating its binding, Then the Runtime runs the Turn in the Session's own directories", async () => {
+    const additional = await mkdtemp(join(tmpdir(), "mobius-additional-directory-"));
+    try {
+        const additionalDirectoryId = `path-${Buffer.from(await realpath(additional)).toString("base64url")}`;
+        await using platform = await startTestPlatform();
+        const signal = AbortSignal.timeout(30_000);
+        const project = await platform.developer.createProject(
+            platform.appId,
+            {
+                clientReference: `client-${crypto.randomUUID()}`,
+                displayName: "Session binding",
+                idempotencyKey: `project-${crypto.randomUUID()}`,
+                locationHint: "wnam",
+            },
+            signal,
+        );
+        const runtime = await platform.connectAgent(project.projectId);
+        const sessionId = `session-${crypto.randomUUID()}`;
+        await runtime.client.sessions.create(
+            {
+                additionalDirectoryIds: [additionalDirectoryId],
+                agentId: "claude",
+                directoryId: "default",
+                runtimeId: runtime.runtimeId,
+                sessionId,
+            },
+            signal,
+        );
+        const access = await runtime.client.sessions.createAccess(runtime.runtimeId, sessionId, 900, signal);
+        const session = new MobiusClient({
+            endpoint: platform.baseUrl,
+            projectId: project.projectId,
+            credentialProvider: new StaticMobiusCredentialProvider(access.credential),
+            transport: { fetch: async (request: Request) => await platform.app.request(request) },
+        });
+
+        const turn = await session.turns.submit(
+            sessionId,
+            {
+                attachments: [],
+                content: "Remember the additional directory",
+                idempotencyKey: `turn-${crypto.randomUUID()}`,
+            },
+            signal,
+        );
+        await expect(session.sessions.readSessionExecution(sessionId, {}, signal, turn.turnId)).resolves.toHaveProperty(
+            "command",
+        );
+
+        expect(await runtime.client.runtimes.listSessions(runtime.runtimeId, 100, signal)).toContainEqual(
+            expect.objectContaining({
+                additionalDirectories: [expect.objectContaining({ directoryId: additionalDirectoryId })],
+                agentId: "claude",
+                prompted: true,
+                sessionId,
+                title: "Remember the additional directory",
+            }),
+        );
+    } finally {
+        await rm(additional, { recursive: true, force: true });
     }
 });

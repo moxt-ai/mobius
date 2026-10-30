@@ -33,6 +33,12 @@ const sessionIdentitySchema = v.strictObject({
     agentId: identifier,
     directoryId: v.custom<string>(isDirectoryIdentifier),
 });
+/** The binding of an existing Session: each omitted field is the Session's own. */
+const sessionBindingSchema = v.strictObject({
+    additionalDirectoryIds: v.optional(sessionIdentitySchema.entries.additionalDirectoryIds),
+    agentId: v.optional(sessionIdentitySchema.entries.agentId),
+    directoryId: v.optional(sessionIdentitySchema.entries.directoryId),
+});
 const createSessionSchema = v.strictObject({
     ...sessionIdentitySchema.entries,
     bindingId: v.optional(identifier),
@@ -41,7 +47,7 @@ const createSessionSchema = v.strictObject({
     title: v.optional(v.pipe(v.string(), v.maxLength(512))),
 });
 const configureSessionSchema = v.strictObject({
-    ...sessionIdentitySchema.entries,
+    ...sessionBindingSchema.entries,
     booleanValue: v.boolean(),
     configId: identifier,
     expectedConfigurationRevision: identifier,
@@ -52,7 +58,7 @@ const renameSessionSchema = v.strictObject({
     title: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(500)),
 });
 const nativeEventsSchema = v.strictObject({
-    ...sessionIdentitySchema.entries,
+    ...sessionBindingSchema.entries,
     cursor: v.nullable(v.string()),
     eventLimit: v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(10_000)),
 });
@@ -76,7 +82,7 @@ const browserCredentialSchema = v.strictObject({
     ),
 });
 const submitTurnIdentityEntries = {
-    ...sessionIdentitySchema.entries,
+    ...sessionBindingSchema.entries,
     content: v.string(),
     disposition: v.picklist(["reject", "queue", "steer"]),
     historyPolicy: v.optional(v.picklist(["eager", "execution-only"])),
@@ -364,7 +370,7 @@ export function createProjectRuntimeRoutes() {
             "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/active-turn",
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {
-                const body = validated(sessionIdentitySchema, context.req.valid("json"));
+                const body = validated(sessionBindingSchema, context.req.valid("json"));
                 const result = await sessionControl(context).activeTurn(body);
                 context.header("Cache-Control", "no-store");
                 return context.json(result);
