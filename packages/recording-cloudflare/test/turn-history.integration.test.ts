@@ -1029,6 +1029,20 @@ describe("Recording Turn history", () => {
         expect(await failed.json()).toMatchObject({ error: { code: "projection_failed" } });
     });
 
+    it("Given an undecodable projection state, When a client reads Turns before backfill runs, Then the read reports the failure its own step records", async () => {
+        await completedTurn("command-1", "Prompt 1", "Reply 1");
+        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]));
+        await runInDurableObject(stub, (_instance, state) => {
+            state.storage.sql.exec("UPDATE recording_projection SET state_json = '{}'");
+        });
+        await completedTurn("command-2", "Prompt 2", "Reply 2");
+
+        const failed = await worker.fetch(new Request(sessionPath("turns")), env);
+        expect(failed.status).toBe(503);
+        expect(failed.headers.get("retry-after")).toBe("1");
+        expect(await failed.json()).toMatchObject({ error: { code: "projection_failed" } });
+    });
+
     it("Given an attempt that failed after answering, When a retry of the same command answers, Then each attempt keeps its own answer item", async () => {
         await record([
             requested("command-1", "Summarize"),
