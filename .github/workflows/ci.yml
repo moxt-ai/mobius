@@ -59,10 +59,12 @@ jobs:
   validate-worker-config:
     name: Validate Worker config (${{ matrix.environment }})
     needs: changes
+    # Environment credentials belong to deployments from the protected main branch.
     if: >-
       needs.changes.outputs.docs-only == 'false' &&
       github.repository == 'moxt-ai/mobius' &&
-      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
@@ -112,6 +114,16 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: pnpm
+      - name: Validate Worker config with public fixtures
+        if: matrix.name == 'Static checks'
+        run: node scripts/validate-worker-config.ts
+        env:
+          CLERK_SECRET_KEY: ci-placeholder
+          MOBIUS_SESSION_WEBHOOK_SECRET_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          MOBIUS_PLATFORM_ALLOWED_ORIGINS: https://example.invalid
+          MOBIUS_PLATFORM_OIDC_PROVIDERS: '[]'
+          MOBIUS_PLATFORM_OPERATOR_SUBJECTS: '[]'
+          SESSION_ACTIVE_SESSIONS_PER_PROJECT: '10'
       - run: pnpm install --frozen-lockfile
       - run: ${{ matrix.command }}
 
