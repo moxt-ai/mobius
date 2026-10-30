@@ -1,7 +1,5 @@
-import { getSessionMessages } from "@anthropic-ai/claude-agent-sdk";
-import { withDeadline, withEnvironment } from "./utils.js";
-
-const SESSION_REVISION_TIMEOUT_MILLISECONDS = 30_000;
+import { isTaskNotificationOrigin } from "./background-task-notifications.js";
+import { getEnvironmentSessionMessages } from "./environment-session-messages.js";
 
 /**
  * Identify the latest main-conversation message in a session's transcript under
@@ -11,19 +9,20 @@ const SESSION_REVISION_TIMEOUT_MILLISECONDS = 30_000;
  * Claude Code chains each new message to the last one its process holds in memory,
  * so a new message from another client means this query continues an earlier copy.
  * The query's own messages are excluded because the CLI may flush them after the
- * turn completes. Metadata such as titles and prompt pointers is not conversation.
+ * turn completes. Background task notifications are excluded too: the Claude process
+ * that ran the task appends them on its own, without a prompt from any client.
+ * Metadata such as titles and prompt pointers is not conversation.
  */
-export function getEnvironmentSessionRevision(
+export async function getEnvironmentSessionRevision(
     environment: Readonly<NodeJS.ProcessEnv>,
     sessionId: string,
-    cwd: string,
     ownMessageIds: ReadonlySet<string>,
     signal: AbortSignal,
 ): Promise<string> {
-    return withEnvironment(environment, () =>
-        withDeadline(signal, SESSION_REVISION_TIMEOUT_MILLISECONDS, async () => {
-            const messages = await getSessionMessages(sessionId, { dir: cwd });
-            return messages.findLast((message) => !ownMessageIds.has(message.uuid))?.uuid ?? "";
-        }),
+    const messages = await getEnvironmentSessionMessages(environment, sessionId, signal);
+    return (
+        messages.findLast(
+            (message) => !ownMessageIds.has(message.uuid) && !isTaskNotificationOrigin(message.nativeOrigin),
+        )?.uuid ?? ""
     );
 }

@@ -5202,7 +5202,6 @@ export class ClaudeAcpAgent {
             latestEntryId: await getEnvironmentSessionRevision(
                 this.environment,
                 params.sessionId,
-                session.cwd,
                 session.streamedMessageIds,
                 signal,
             ),
