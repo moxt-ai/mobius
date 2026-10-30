@@ -25,7 +25,8 @@ beforeEach(() => {
     position = 0;
     generation = "generation-1";
     vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-10-15T00:00:00.000Z"));
+    // Native alarm delivery must remain under the test's explicit control.
+    vi.setSystemTime(new Date("2090-10-15T00:00:00.000Z"));
 });
 afterEach(() => vi.useRealTimers());
 
@@ -126,6 +127,11 @@ function promptText(page: SessionRecordingTurnPage): readonly string[] {
     });
 }
 
+async function runDueAlarm(stub: DurableObjectStub): Promise<boolean> {
+    const at = await runInDurableObject(stub, (_instance, state) => state.storage.getAlarm());
+    return at !== null && at <= Date.now() ? await runDurableObjectAlarm(stub) : false;
+}
+
 describe("Recording Turn history", () => {
     it("Given context compaction, When a client reads during compaction and after completion, Then the same ordered status survives another read", async () => {
         const compactionId = `native/context ${"x".repeat(130)}`;
@@ -220,7 +226,7 @@ describe("Recording Turn history", () => {
         });
         const building = await worker.fetch(new Request(sessionPath("turns")), env);
         expect(building.status).toBe(503);
-        while (await runDurableObjectAlarm(stub)) {
+        while (await runDueAlarm(stub)) {
             // Existing Recordings recover compactions from their authoritative raw events.
         }
         expect(await turnPage()).toEqual(projected);
@@ -301,7 +307,7 @@ describe("Recording Turn history", () => {
         const building = await worker.fetch(new Request(sessionPath("turns")), env);
         expect(building.status).toBe(503);
         expect(await building.json()).toMatchObject({ error: { code: "projection_building" } });
-        while (await runDurableObjectAlarm(stub)) {
+        while (await runDueAlarm(stub)) {
             // Rebuild through the same bounded production path as an existing Recording.
         }
         expect(await turnPage()).toEqual(projected);
@@ -721,7 +727,7 @@ describe("Recording Turn history", () => {
 
         // New batches are recorded meanwhile and must not be folded ahead of the older batches.
         await completedTurn("command-3", "Prompt 3", "Reply 3");
-        while (await runDurableObjectAlarm(stub)) {
+        while (await runDueAlarm(stub)) {
             // Each alarm folds one bounded step and schedules the next until the projection is caught up.
         }
 
@@ -878,7 +884,7 @@ describe("Recording Turn history", () => {
         });
         // A read finds the projection behind and schedules the backfill that rebuilds it.
         expect((await worker.fetch(new Request(sessionPath("turns")), env)).status).toBe(503);
-        while (await runDurableObjectAlarm(stub)) {
+        while (await runDueAlarm(stub)) {
             // One backfill step folds both chunks into the item it creates.
         }
 
@@ -1008,7 +1014,7 @@ describe("Recording Turn history", () => {
             state.storage.sql.exec("UPDATE recording_projection SET state_json = '{}'");
         });
         await completedTurn("command-2", "Prompt 2", "Reply 2");
-        while (await runDurableObjectAlarm(stub)) {
+        while (await runDueAlarm(stub)) {
             // Each due attempt fails on the undecodable state and records the failure.
         }
         const failed = await worker.fetch(new Request(sessionPath("turns")), env);

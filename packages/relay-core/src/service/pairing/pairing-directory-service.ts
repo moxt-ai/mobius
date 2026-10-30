@@ -113,6 +113,9 @@ export class PairingDirectoryService implements PairingOperations {
     private readonly projectStorage = async (scope: ProjectScope, signal: AbortSignal) => {
         const project = await this.#cx.storages.projectDirectory.resolve(scope.projectId, signal);
         signal.throwIfAborted();
+        if (project === null) {
+            throw new PairingDirectoryError("unauthorized", "The Project is no longer active");
+        }
         if (project.projectId !== scope.projectId) {
             throw new PairingDirectoryError("invalid_directory_record", "The Project storage locator is invalid");
         }

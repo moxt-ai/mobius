@@ -17,6 +17,7 @@
     },
     "dependencies": {
         "@moxt-ai/mobius-sdk": "workspace:*",
+        "@noble/hashes": "2.0.1",
         "drizzle-orm": "^0.45.2",
         "hono": "^4.13.14",
         "zod": "^4.6.7"

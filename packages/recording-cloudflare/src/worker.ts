@@ -46,7 +46,10 @@ export interface RecordingWorker {
 
 type RecordingEnvironment = { readonly Bindings: RecordingWorkerBindings };
 type SessionRecordingRoutes = Pick<SessionRecordingStorage, "append" | "read" | "readPage">;
-type TurnHistoryRoutes = Pick<SessionTurnHistory, "execution" | "item" | "itemPage" | "project" | "turnPage">;
+type TurnHistoryRoutes = Pick<
+    SessionTurnHistory,
+    "execution" | "item" | "itemPage" | "project" | "turnPage" | "nextInactivityDeadline"
+>;
 const jsonHeaders = { "content-type": "application/json" } as const;
 // An opaque append-order cursor: the batch ordinal and the event position inside that batch.
 const recordingCursorPattern = /^v2:[1-9][0-9]*:(?:0|[1-9][0-9]*)$/;
@@ -124,9 +127,9 @@ function sessionRecordingRoutes(
             let appended: AppendOutcome;
             try {
                 // Folding never throws out of `project`, so an error here is the envelope itself.
-                appended = storage.append(write, (ordinal, events) => {
+                appended = storage.append(write, (ordinal, events, receivedAt) => {
                     // Every stored batch is folded in order; one left for backfill leaves the rest to it too.
-                    const folded = history.project(ordinal, events);
+                    const folded = history.project(ordinal, events, receivedAt);
                     projected = projected && folded;
                 });
             } catch (cause) {
@@ -147,6 +150,11 @@ function sessionRecordingRoutes(
             waiters.changed();
             if (!projected) {
                 await scheduleBackfill();
+            } else {
+                const deadline = history.nextInactivityDeadline();
+                if (deadline !== null) {
+                    await scheduleBackfill(new Date(deadline));
+                }
             }
             const after = metrics.snapshot();
             console.info(
@@ -844,29 +852,33 @@ export function createRecordingWorker(): RecordingWorker {
 export class SessionRecordingDurableObject extends DurableObject<RecordingWorkerBindings> {
     readonly #history: SessionTurnHistory;
     readonly #routes: Hono<RecordingEnvironment>;
+    readonly #waiters = new RecordingEventWaiters();
     constructor(state: DurableObjectState, _environment: RecordingWorkerBindings) {
         super(state, _environment);
         const metrics = new RecordingSqlMetrics();
         const recording = new SessionRecordingStorage(state.storage, metrics);
         const historyStorage = new SessionTurnHistoryStorage(state.storage, metrics);
         this.#history = new SessionTurnHistory(recording, historyStorage);
-        this.#routes = sessionRecordingRoutes(
-            recording,
-            this.#history,
-            this.#scheduleBackfill,
-            metrics,
-            new RecordingEventWaiters(),
-        );
+        this.#routes = sessionRecordingRoutes(recording, this.#history, this.#scheduleBackfill, metrics, this.#waiters);
     }
     override async fetch(request: Request): Promise<Response> {
         return await this.#routes.fetch(request);
     }
     /** Folds one bounded step of unprojected Recording batches and keeps stepping until caught up. */
     override async alarm(): Promise<void> {
-        const outcome = this.#history.backfill(new Date());
+        const now = new Date();
+        const outcome = this.#history.backfill(now);
         switch (outcome.kind) {
-            case "caught_up":
+            case "caught_up": {
+                if (this.#history.assessInactivity(now)) {
+                    this.#waiters.changed();
+                }
+                const deadline = this.#history.nextInactivityDeadline();
+                if (deadline !== null) {
+                    await this.ctx.storage.setAlarm(Math.max(Date.now(), deadline));
+                }
                 return;
+            }
             case "behind":
                 await this.ctx.storage.setAlarm(Date.now());
                 return;
@@ -877,8 +889,10 @@ export class SessionRecordingDurableObject extends DurableObject<RecordingWorker
     }
     /** Arms a backfill step at `at` (now by default) unless one is already scheduled. */
     readonly #scheduleBackfill = async (at?: Date): Promise<void> => {
-        if ((await this.ctx.storage.getAlarm()) === null) {
-            await this.ctx.storage.setAlarm(Math.max(Date.now(), at?.getTime() ?? 0));
+        const due = Math.max(Date.now(), at?.getTime() ?? 0);
+        const current = await this.ctx.storage.getAlarm();
+        if (current === null || due < current) {
+            await this.ctx.storage.setAlarm(due);
         }
     };
 }

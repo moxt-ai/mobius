@@ -2,85 +2,36 @@ import { AcpExecutionError } from "../../acp/acp-error.ts";
 
 type Execution =
     | { readonly kind: "running"; readonly commandId: string }
-    | { readonly kind: "cancelling"; readonly commandId: string; readonly completion: Promise<void> }
-    | { readonly kind: "cancelled-before-start"; readonly completion: Promise<void> };
+    | { readonly kind: "cancelling"; readonly commandId: string; readonly completion: Promise<void> };
 
-const unreachable = (state: never): never => {
-    throw new AcpExecutionError("Unexpected execution state", { cause: state });
-};
-
-/** Cancellation remains attached to its command until that command finishes. */
+/**
+ * The prompt executing in each Session. Cancellation names the command it stops and never outlives that command's
+ * execution; a command cancelled before its execution begins is refused by its own turn instead.
+ */
 export class ActiveExecutions {
     readonly #entries = new Map<string, Execution>();
-    readonly command = (id: string): string | undefined => {
-        const state = this.#entries.get(id);
-        switch (state?.kind) {
-            case "running":
-            case "cancelling":
-                return state.commandId;
-            case "cancelled-before-start":
-            case undefined:
-                return undefined;
-            default:
-                return unreachable(state);
-        }
-    };
+    readonly command = (id: string): string | undefined => this.#entries.get(id)?.commandId;
     readonly cancellation = (id: string): Promise<void> | undefined => {
         const state = this.#entries.get(id);
-        switch (state?.kind) {
-            case "cancelling":
-            case "cancelled-before-start":
-                return state.completion;
-            case "running":
-            case undefined:
-                return undefined;
-            default:
-                return unreachable(state);
-        }
+        return state?.kind === "cancelling" ? state.completion : undefined;
     };
     readonly isBusy = (id: string): boolean => this.#entries.has(id);
     readonly begin = (id: string, commandId: string): void => {
-        const state = this.#entries.get(id);
-        switch (state?.kind) {
-            case "running":
-            case "cancelling":
-                throw new AcpExecutionError(
-                    "Another prompt is already running in this conversation",
-                    {},
-                    "session_busy",
-                );
-            case "cancelled-before-start":
-            case undefined:
-                break;
-            default:
-                unreachable(state);
+        if (this.#entries.has(id)) {
+            throw new AcpExecutionError("Another prompt is already running in this conversation", {}, "session_busy");
         }
-        this.#entries.set(
-            id,
-            state?.kind === "cancelled-before-start"
-                ? { kind: "cancelling", commandId, completion: state.completion }
-                : { kind: "running", commandId },
-        );
+        this.#entries.set(id, { kind: "running", commandId });
     };
-    readonly cancel = (id: string, stop: () => Promise<void>): Promise<void> => {
+    readonly cancel = (id: string, commandId: string, stop: () => Promise<void>): Promise<void> => {
         const state = this.#entries.get(id);
-        switch (state?.kind) {
-            case "cancelling":
-            case "cancelled-before-start":
-                return state.completion;
-            case "running":
-            case undefined:
-                break;
-            default:
-                return unreachable(state);
+        if (state?.commandId !== commandId) {
+            return Promise.resolve();
+        }
+        if (state.kind === "cancelling") {
+            return state.completion;
         }
         const completion = Promise.withResolvers<void>();
-        this.#entries.set(
-            id,
-            state?.kind === "running"
-                ? { kind: "cancelling", commandId: state.commandId, completion: completion.promise }
-                : { kind: "cancelled-before-start", completion: completion.promise },
-        );
+        this.#entries.set(id, { kind: "cancelling", commandId, completion: completion.promise });
         void (async () => await stop())().then(completion.resolve, completion.reject);
         return completion.promise;
     };

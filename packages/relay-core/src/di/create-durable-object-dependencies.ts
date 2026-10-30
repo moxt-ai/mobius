@@ -31,9 +31,13 @@ function createRuntimeRelayDependencies(cx: {
         readonly waitUntil: (operation: Promise<void>) => void;
     };
 }) {
+    /** Null when the Project is no longer served: none of its credentials remain active. */
     const credentialService = async (scope: ProjectScope, signal: AbortSignal) => {
         const project = await cx.storages.projectDirectory.resolve(scope.projectId, signal);
         signal.throwIfAborted();
+        if (project === null) {
+            return null;
+        }
         if (project.projectId !== scope.projectId) {
             throw new Error("The Project placement is invalid");
         }
@@ -42,12 +46,12 @@ function createRuntimeRelayDependencies(cx: {
     };
     const credentials: Pick<ChannelCredentialService, "isActive" | "isRuntimeActive"> = {
         isActive: async (identity, signal) => {
-            const scope = new ProjectScope(identity.projectId);
-            return (await credentialService(scope, signal)).isActive(identity, signal);
+            const service = await credentialService(new ProjectScope(identity.projectId), signal);
+            return service !== null && (await service.isActive(identity, signal));
         },
         isRuntimeActive: async (identity, signal) => {
-            const scope = new ProjectScope(identity.projectId);
-            return (await credentialService(scope, signal)).isRuntimeActive(identity, signal);
+            const service = await credentialService(new ProjectScope(identity.projectId), signal);
+            return service !== null && (await service.isRuntimeActive(identity, signal));
         },
     };
     const recording = new BestEffortRecording(cx.gateways.recording, cx.utilities.waitUntil);

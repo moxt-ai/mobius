@@ -1235,7 +1235,7 @@ export function parseTaskListOutput(content: unknown): TaskListOutput | undefine
         const lines = text.trim().split("\n");
         for (const line of lines) {
             const match =
-                /^#(\S+) \[(pending|in_progress|completed)\] (.+?)(?: \(([^()]*)\))?(?: \[blocked by ((?:#[^,\]]+(?:, )?)+)\])?$/.exec(
+                /^#(\S+) \[(pending|in_progress|completed)\] (.+?)(?: \(([^()]*)\))?(?: \[blocked by (#[^,\]]+(?:, #[^,\]]+)*(?:, )?)\])?$/.exec(
                     line,
                 );
             if (!match) {

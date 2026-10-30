@@ -25,11 +25,11 @@ export const sessionCancelCommand: RuntimeCommand = {
             });
             return;
         }
-        const cancellationState = turn.requestCancellation();
-        if (cancellationState === "already-requested" || cancellationState === "pending") {
+        const cancellation = turn.requestCancellation();
+        if (cancellation.kind !== "running") {
             return;
         }
-        void sessions.cancelPrompt(message.sessionId, signal).catch((error) => {
+        void sessions.cancelPrompt(message.sessionId, cancellation.execution, signal).catch((error) => {
             console.error("Mobius daemon could not cancel the agent turn", error);
         });
     },

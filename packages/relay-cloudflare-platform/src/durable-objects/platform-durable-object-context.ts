@@ -4,6 +4,7 @@ import { PlatformSessionStatusNotifications } from "../gateway/platform-session-
 import { PlatformProjectStorageDirectory } from "../infra/platform-project-storage-directory.ts";
 import { AppSessionStatusWebhookService } from "../service/app-session-status-webhook-service.ts";
 import { AppSessionStatusWebhookStorage } from "../storage/app-session-status-webhook-storage.ts";
+import { PlatformControlPlaneStorage } from "../storage/platform-control-plane-storage.ts";
 import {
     PlatformDatabaseResolver,
     type PlatformStorageBindings,
@@ -26,7 +27,10 @@ export function createPlatformDurableObjectContext(
 ) {
     const databases = new PlatformDatabaseResolver(environment);
     const registry = new PlatformStorageRegistry(environment);
-    const projects = new PlatformProjectStorageDirectory(registry);
+    const projects = new PlatformProjectStorageDirectory(
+        registry,
+        new PlatformControlPlaneStorage(environment.PLATFORM_DIRECTORY_DATABASE, databases),
+    );
     const webhookStorage = new AppSessionStatusWebhookStorage(environment.PLATFORM_DIRECTORY_DATABASE);
     const webhookService = new AppSessionStatusWebhookService(
         null,

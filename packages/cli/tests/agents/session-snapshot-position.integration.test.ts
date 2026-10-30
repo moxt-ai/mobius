@@ -151,9 +151,20 @@ for (const agentId of ["codex", "claude", "pi"] as const) {
                     )
                     .join("");
                 expect(text).toContain(answer);
+                // The Agent may publish more after the turn (Claude titles the session at idle), so the
+                // newest one-event page covers at least the reply snapshot and a live event it can name.
                 const page = await readPage(1);
-                expect(page).toHaveProperty("throughPosition");
-                expect(page.throughPosition).toBe(after.throughPosition);
+                if (page.throughPosition === undefined) {
+                    throw new Error("Missing snapshot position");
+                }
+                const pagePosition = page.throughPosition;
+                expect(BigInt(pagePosition)).toBeGreaterThanOrEqual(afterPosition);
+                while (!observed.some((event) => event.position === pagePosition)) {
+                    const message = await peer.nextMessage();
+                    if (decodeMessageKind(message) === "session.event.v2") {
+                        observed.push(...decodeSessionEventEnvelope(message).events);
+                    }
+                }
                 expect(page.events).toHaveLength(1);
                 expect(page.nextCursor).not.toBeNull();
             });
