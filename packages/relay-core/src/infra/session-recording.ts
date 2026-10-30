@@ -28,6 +28,11 @@ export interface SessionRecording {
         envelope: SessionWireEnvelope,
         signal: AbortSignal,
     ) => Promise<readonly SessionRecordingBatchResult[]>;
+    /**
+     * Whether Recording stores each event once, so events it may already hold can be delivered again. Only a
+     * Recording that says so does; one that does not answer yes, or cannot be asked, does not.
+     */
+    readonly storesEachEventOnce: (signal: AbortSignal) => Promise<boolean>;
 }
 
 export class DisabledSessionRecording implements SessionRecording {
@@ -37,5 +42,10 @@ export class DisabledSessionRecording implements SessionRecording {
             sessionId,
             kind: "skipped",
         }));
+    };
+    // Nothing is recorded, so nothing is delivered again.
+    readonly storesEachEventOnce: SessionRecording["storesEachEventOnce"] = async (signal) => {
+        signal.throwIfAborted();
+        return false;
     };
 }

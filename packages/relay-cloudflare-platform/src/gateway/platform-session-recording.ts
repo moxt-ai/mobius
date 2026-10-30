@@ -30,10 +30,49 @@ const batchResponseSchema = v.object({
     ),
 });
 
+// Unknown fields are ignored, so Recording can announce more than this Relay reads.
+const capabilitiesSchema = v.object({ storesEachEventOnce: v.optional(v.boolean()) });
+
 const RECORDING_REQUEST_TIMEOUT_MILLISECONDS = 10_000;
 // A Project's resolved policy is reused this long, so a streaming reply does not read D1 for every batch
 // it records. A changed policy applies to the deliveries that start after the reuse ends.
 const RECORDING_POLICY_REUSE_MILLISECONDS = 5_000;
+const RECORDING_CAPABILITY_TIMEOUT_MILLISECONDS = 2_000;
+// Recording's answer about storing each event once is reused this long, so a burst of failed writes asks once.
+// After Recording is rolled back to a version that does not say so, events stop being delivered again within it.
+const RECORDING_CAPABILITY_REUSE_MILLISECONDS = 10_000;
+
+/** Asks Recording whether it stores each event once. Any answer but yes, including none, counts as no. */
+async function askStoresEachEventOnce(fetcher: Fetcher): Promise<boolean> {
+    try {
+        const response = await fetcher.fetch(
+            new Request("https://recording.internal/v1/capabilities", {
+                signal: AbortSignal.timeout(RECORDING_CAPABILITY_TIMEOUT_MILLISECONDS),
+            }),
+        );
+        if (!response.ok) {
+            // A Recording without the route, such as one released before it, answers 404.
+            await response.body?.cancel();
+            return false;
+        }
+        return v.parse(capabilitiesSchema, await response.json()).storesEachEventOnce === true;
+    } catch {
+        return false;
+    }
+}
+
+/** Waits for a shared answer unless `signal` aborts first, which abandons only this caller's wait. */
+async function untilAborted<T>(answer: Promise<T>, signal: AbortSignal): Promise<T> {
+    signal.throwIfAborted();
+    const abandoned = Promise.withResolvers<never>();
+    const abandon = () => abandoned.reject(signal.reason);
+    signal.addEventListener("abort", abandon, { once: true });
+    try {
+        return await Promise.race([answer, abandoned.promise]);
+    } finally {
+        signal.removeEventListener("abort", abandon);
+    }
+}
 export type RecordingProvider =
     | { readonly kind: "absent" }
     | { readonly fetcher: Fetcher; readonly kind: "available"; readonly providerId: string };
@@ -45,6 +84,7 @@ export class PlatformSessionRecording implements SessionRecording {
         string,
         { readonly policy: ResolvedRecordingPolicy; readonly readAt: number }
     >();
+    #capability: { readonly askedAt: number; readonly storesEachEventOnce: Promise<boolean> } | null = null;
 
     constructor(policies: RecordingPolicyStorage, provider: RecordingProvider) {
         if (provider.kind === "available" && !isIdentifier(provider.providerId)) {
@@ -111,6 +151,25 @@ export class PlatformSessionRecording implements SessionRecording {
             signal.throwIfAborted();
             return failed("write_failed");
         }
+    };
+
+    /** Recording's answer, asked once for concurrent callers and reused while it is recent. */
+    readonly storesEachEventOnce = async (signal: AbortSignal): Promise<boolean> => {
+        signal.throwIfAborted();
+        if (this.#provider.kind === "absent") {
+            return false;
+        }
+        const now = Date.now();
+        let capability = this.#capability;
+        if (
+            capability === null ||
+            now < capability.askedAt ||
+            now - capability.askedAt >= RECORDING_CAPABILITY_REUSE_MILLISECONDS
+        ) {
+            capability = { askedAt: now, storesEachEventOnce: askStoresEachEventOnce(this.#provider.fetcher) };
+            this.#capability = capability;
+        }
+        return await untilAborted(capability.storesEachEventOnce, signal);
     };
 
     /** The Project's policy, reused while it was read recently; an unavailable read is never reused. */

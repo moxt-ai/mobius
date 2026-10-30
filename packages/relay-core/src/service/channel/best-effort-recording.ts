@@ -19,8 +19,9 @@ const MAX_DELIVERY_BYTES = 1024 * 1024;
 // Keep recovery bursts in small independent deliveries so their tail can make progress.
 const MAX_DELIVERY_SESSIONS = 32;
 // How long the Relay waits before repeating a Session's first, second and third failed deliveries in a row. A
-// failure that can pass, such as Recording restarting for a deployment, has usually passed by then. Recording
-// stores an event once, so repeating a delivery that did commit is safe.
+// failure that can pass, such as Recording restarting for a deployment, has usually passed by then. A delivery
+// that failed or timed out may still have committed, so it is repeated only to a Recording that stores each event
+// once.
 const RETRY_BACKOFF_MILLISECONDS = [1_000, 2_000, 4_000];
 
 type DeliveryFailure =
@@ -203,33 +204,46 @@ export class BestEffortRecording {
 
     /**
      * Applies one Session's delivery result. A failure that can pass repeats the batch after a backoff, before any
-     * later event of the Session. Any other failure drops the batch, as does a failure that outlasts the retries;
-     * after that, the Session's failed deliveries are dropped at once until one is recorded, so a Session that
-     * Recording keeps refusing cannot hold the shared buffer.
+     * later event of the Session, if Recording stores each event once. Any other failure drops the batch, as does
+     * a failure that outlasts the retries; after that, the Session's failed deliveries are dropped at once until one
+     * is recorded, so a Session that Recording keeps refusing cannot hold the shared buffer.
      */
     #settle(delivery: Delivery, result: SessionRecordingBatchResult | undefined): void {
-        const { lane, events, bytes } = delivery;
+        const { lane } = delivery;
         const failure: DeliveryFailure | null =
             result === undefined ? "recording_incomplete" : result.kind === "failed" ? result.code : null;
         lane.failures = failure === null ? 0 : lane.failures + 1;
         const backoff = RETRY_BACKOFF_MILLISECONDS[lane.failures - 1];
         if (failure !== null && retryable(failure) && backoff !== undefined) {
-            // The batch keeps its bytes, and its Session keeps its place, until the repeat settles.
-            console.warn("Recording delivery will be retried", { code: failure, retry: lane.failures });
-            lane.retry = { events, bytes };
+            // The batch keeps its bytes, and its Session keeps its place, until it is repeated or dropped.
             lane.state = "backing-off";
-            this.#waitUntil(
-                new Promise((resolve) => {
-                    setTimeout(() => {
-                        lane.state = "idle";
-                        this.#enqueue(lane);
-                        this.#pump();
-                        resolve();
-                    }, backoff);
-                }),
-            );
+            this.#waitUntil(this.#retryLater(delivery, failure, backoff));
             return;
         }
+        this.#release(delivery, failure);
+    }
+
+    /**
+     * Repeats a failed batch after the backoff. A write that failed or timed out may still have committed, so a
+     * Recording that does not store each event once never receives it again: the batch is dropped at once, as it
+     * was before the Relay retried.
+     */
+    async #retryLater(delivery: Delivery, failure: DeliveryFailure, backoff: number): Promise<void> {
+        const { lane, events, bytes } = delivery;
+        if (await this.#storesEachEventOnce()) {
+            console.warn("Recording delivery will be retried", { code: failure, retry: lane.failures });
+            await new Promise((resolve) => setTimeout(resolve, backoff));
+            lane.retry = { events, bytes };
+            lane.state = "idle";
+            this.#enqueue(lane);
+        } else {
+            this.#release(delivery, failure);
+        }
+        this.#pump();
+    }
+
+    /** Frees a settled batch's place; a failed batch is dropped, and the Session's next recorded event says so. */
+    #release({ lane, bytes }: Delivery, failure: DeliveryFailure | null): void {
         if (failure !== null) {
             lane.gap = true;
             console.warn("Recording event dropped", { code: failure });
@@ -239,6 +253,22 @@ export class BestEffortRecording {
         this.#enqueue(lane);
         if (lane.events.length === 0 && !lane.gap) {
             this.#lanes.delete(laneKey(lane.target));
+        }
+    }
+
+    /** Whether Recording says it stores each event once; no answer within the deadline counts as no. */
+    async #storesEachEventOnce(): Promise<boolean> {
+        const controller = new AbortController();
+        const timer = setTimeout(
+            () => controller.abort(new DOMException("Recording deadline expired", "TimeoutError")),
+            DEADLINE_MILLISECONDS,
+        );
+        try {
+            return await this.#recording.storesEachEventOnce(controller.signal);
+        } catch {
+            return false;
+        } finally {
+            clearTimeout(timer);
         }
     }
 
