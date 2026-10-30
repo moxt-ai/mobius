@@ -513,14 +513,13 @@ export class RuntimeService {
         return socket.isOpen();
     };
 
-    private readonly daemonMessageLane = (message: DaemonToRelayMessage): string => {
-        if (message.kind === SESSION_EVENT_KIND) {
-            return message.events.every((event) => event.sessionId === message.events[0]?.sessionId)
-                ? `session:${message.events[0]?.sessionId ?? "unknown"}`
-                : "runtime";
-        }
-        return "runtime";
-    };
+    // A batch can span Sessions, so per-Session lanes would let a later single-Session batch overtake an
+    // earlier mixed batch while that batch's authorization read is still in flight. Every event batch
+    // therefore shares one lane and reaches peers and Recording in the order the daemon sent it. Control
+    // messages keep their own lane: the daemon sends them without waiting for batched events, so they were
+    // never ordered against events.
+    private readonly daemonMessageLane = (message: DaemonToRelayMessage): string =>
+        message.kind === SESSION_EVENT_KIND ? "session-events" : "runtime";
 
     private readonly channel = (runtimeId: string, scope: ProjectScope): ChannelActor => {
         const key = JSON.stringify({
