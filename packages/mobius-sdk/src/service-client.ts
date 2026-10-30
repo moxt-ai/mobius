@@ -73,6 +73,7 @@ import {
     type MobiusRuntimePairingStatus,
     type MobiusRuntimePairingWaitOptions,
     MobiusSessionAccess,
+    type MobiusSessionBinding,
     type MobiusTurn,
     type MobiusTurnCancellation,
     type SubmitMobiusTurnRequest,
@@ -121,6 +122,29 @@ export interface MobiusCredentialProvider {
 
 export interface DiscoverMobiusAgentSettingsRequest {
     readonly model?: string;
+}
+
+/** A Session setting change; the binding fields follow `MobiusSessionBinding`. */
+export type UpdateMobiusSessionConfigurationRequest = MobiusSessionBinding &
+    Pick<
+        SessionConfigureCommand,
+        "booleanValue" | "configId" | "expectedConfigurationRevision" | "value" | "valueType"
+    >;
+
+/**
+ * Writes the supplied binding fields to a query. A query cannot carry an empty list, so an empty
+ * `additionalDirectoryIds` reads as empty only beside `agentId` or `directoryId`; alone it reads as omitted.
+ */
+function setSessionBindingQuery(query: URLSearchParams, binding: MobiusSessionBinding): void {
+    if (binding.agentId !== undefined) {
+        query.set("agentId", binding.agentId);
+    }
+    if (binding.directoryId !== undefined) {
+        query.set("directoryId", binding.directoryId);
+    }
+    for (const directoryId of binding.additionalDirectoryIds ?? []) {
+        query.append("additionalDirectoryId", directoryId);
+    }
 }
 
 export interface ForkMobiusNativeSessionRequest {
@@ -1196,24 +1220,10 @@ export class MobiusSessionResources {
             | readonly [
                   runtimeId: string,
                   sessionId: string,
-                  request: Omit<SessionConfigureCommand, "bindingId" | "kind" | "requestId" | "sessionId">,
+                  request: UpdateMobiusSessionConfigurationRequest,
                   signal: AbortSignal,
               ]
-            | readonly [
-                  sessionId: string,
-                  request: Pick<
-                      SessionConfigureCommand,
-                      | "additionalDirectoryIds"
-                      | "agentId"
-                      | "booleanValue"
-                      | "configId"
-                      | "expectedConfigurationRevision"
-                      | "directoryId"
-                      | "value"
-                      | "valueType"
-                  >,
-                  signal: AbortSignal,
-              ]
+            | readonly [sessionId: string, request: UpdateMobiusSessionConfigurationRequest, signal: AbortSignal]
     ) => {
         const result =
             operation.length === 3
@@ -1339,11 +1349,7 @@ export class MobiusSessionResources {
     readonly previewRuntimeNativeEvents = async (
         runtimeId: string,
         sessionId: string,
-        identity: {
-            readonly additionalDirectoryIds: readonly string[];
-            readonly agentId: string;
-            readonly directoryId: string;
-        },
+        identity: MobiusSessionBinding,
         page: NativeEventPageRequest,
         signal: AbortSignal,
     ): Promise<NativeSessionEvents> => {
@@ -1364,11 +1370,7 @@ export class MobiusSessionResources {
 
     readonly previewSessionNativeEvents = async (
         sessionId: string,
-        identity: {
-            readonly additionalDirectoryIds: readonly string[];
-            readonly agentId: string;
-            readonly directoryId: string;
-        },
+        identity: MobiusSessionBinding,
         page: NativeEventPageRequest,
         signal: AbortSignal,
     ): Promise<NativeSessionEvents> => {
@@ -1376,14 +1378,10 @@ export class MobiusSessionResources {
             new URL("https://mobius.invalid/"),
             sessionPath(this.#projectId, sessionId, "native-events-preview"),
         );
-        path.searchParams.set("agentId", identity.agentId);
-        path.searchParams.set("directoryId", identity.directoryId);
+        setSessionBindingQuery(path.searchParams, identity);
         path.searchParams.set("eventLimit", page.eventLimit.toString());
         if (page.cursor !== null) {
             path.searchParams.set("cursor", page.cursor);
-        }
-        for (const directoryId of identity.additionalDirectoryIds) {
-            path.searchParams.append("additionalDirectoryId", directoryId);
         }
         return decodeKnownNativeSessionEvents(
             await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal),
@@ -1398,11 +1396,7 @@ export class MobiusSessionResources {
      */
     readonly readSessionExecution = async (
         sessionId: string,
-        identity: {
-            readonly additionalDirectoryIds: readonly string[];
-            readonly agentId: string;
-            readonly directoryId: string;
-        },
+        identity: MobiusSessionBinding,
         signal: AbortSignal,
         commandId?: string,
     ): Promise<
@@ -1415,11 +1409,7 @@ export class MobiusSessionResources {
             new URL("https://mobius.invalid/"),
             sessionPath(this.#projectId, sessionId, "active-turn"),
         );
-        path.searchParams.set("agentId", identity.agentId);
-        path.searchParams.set("directoryId", identity.directoryId);
-        for (const directoryId of identity.additionalDirectoryIds) {
-            path.searchParams.append("additionalDirectoryId", directoryId);
-        }
+        setSessionBindingQuery(path.searchParams, identity);
         if (commandId !== undefined) {
             path.searchParams.set("commandId", commandId);
         }
@@ -1442,11 +1432,7 @@ export class MobiusSessionResources {
     readonly readRuntimeSessionExecution = async (
         runtimeId: string,
         sessionId: string,
-        identity: {
-            readonly additionalDirectoryIds: readonly string[];
-            readonly agentId: string;
-            readonly directoryId: string;
-        },
+        identity: MobiusSessionBinding,
         signal: AbortSignal,
     ): Promise<Pick<Extract<NativeSessionResult, { readonly action: "active-turn" }>, "turn" | "queued">> => {
         const result = decodeNativeSessionResult(
@@ -1479,7 +1465,7 @@ export class MobiusTurnResources {
 
     readonly submit = async (
         sessionId: string,
-        request: SubmitMobiusTurnRequest & { readonly agentId?: string; readonly directoryId?: string },
+        request: SubmitMobiusTurnRequest,
         signal: AbortSignal,
     ): Promise<MobiusTurn> => {
         const turn = decodeMobiusTurn(
@@ -1494,7 +1480,7 @@ export class MobiusTurnResources {
     readonly submitToRuntime = async (
         runtimeId: string,
         sessionId: string,
-        request: SubmitMobiusTurnRequest & { readonly agentId: string; readonly directoryId: string },
+        request: SubmitMobiusTurnRequest,
         signal: AbortSignal,
     ): Promise<{ readonly turnId: string }> => {
         const result = await this.#executor.post(

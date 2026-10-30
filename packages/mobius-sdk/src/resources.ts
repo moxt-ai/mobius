@@ -134,8 +134,18 @@ export interface CreateMobiusSessionRequest {
     readonly sessionId: string;
 }
 
-export interface SubmitMobiusTurnRequest {
-    readonly additionalDirectoryIds: readonly string[];
+/**
+ * The binding of an existing Session as an operation on it states it. The Session's Runtime owns its binding: a field
+ * left out is the Session's own, and a supplied field is checked against it. Relays released before binding resolution
+ * require every field, so leave fields out only with a Relay that resolves them.
+ */
+export interface MobiusSessionBinding {
+    readonly additionalDirectoryIds?: readonly string[];
+    readonly agentId?: string;
+    readonly directoryId?: string;
+}
+
+export interface SubmitMobiusTurnRequest extends MobiusSessionBinding {
     readonly attachments: readonly PromptAttachment[];
     readonly content: string;
     readonly disposition?: string;
