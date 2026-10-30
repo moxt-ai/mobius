@@ -107,6 +107,14 @@ async function runDaemonRuntime(
     if (releaseDaemon === null) {
         return;
     }
+    const lifecycleLog = new BoundedLineLog(
+        logDirectory(control.stateDirectory),
+        WORKER_LIFECYCLE_LOG_FILENAME,
+        512 * 1024,
+    );
+    lifecycleLog.record(
+        JSON.stringify({ kind: "daemon_started", pid: process.pid, version, timestamp: new Date().toISOString() }),
+    );
     try {
         await prepareVersionData(version, combined);
         const engineDataDir = await prepareMobiusEngineDataDir(version, combined, process.env);
@@ -235,6 +243,14 @@ async function runDaemonRuntime(
             await reconcile();
             // CLI mutations follow this pointer as soon as status reports readiness.
             await recordCurrentData(version, combined);
+            lifecycleLog.record(
+                JSON.stringify({
+                    kind: "daemon_ready",
+                    pid: process.pid,
+                    version,
+                    timestamp: new Date().toISOString(),
+                }),
+            );
             // Both released endpoints use the same authenticated handler in one process.
             const servers = ["manager", "worker"] as const;
             const results = await Promise.allSettled(
