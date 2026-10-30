@@ -42,8 +42,10 @@ const sessionIdentitySchema = v.strictObject({
 });
 const createSessionSchema = v.strictObject({
     ...sessionIdentitySchema.entries,
+    bindingId: v.optional(identifier),
     runtimeId: identifier,
     sessionId: identifier,
+    title: v.optional(v.pipe(v.string(), v.maxLength(512))),
 });
 const configureSessionSchema = v.strictObject({
     ...sessionIdentitySchema.entries,
