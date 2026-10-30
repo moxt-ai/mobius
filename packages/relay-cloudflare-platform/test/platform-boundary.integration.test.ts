@@ -87,6 +87,8 @@ class ControlledRecording implements SessionRecording {
         this.contents.push(...envelope.events.map((event) => JSON.stringify(event)));
         return sessions.map((sessionId) => ({ sessionId, kind: "recorded" }));
     };
+    // It does not say it stores each event once, so the Relay drops its failed write instead of repeating it.
+    readonly storesEachEventOnce: SessionRecording["storesEachEventOnce"] = async () => false;
 }
 
 function liveEvent(sessionId: string, text: string): string {
@@ -2650,6 +2652,7 @@ it.each(["text", "binary"])(
                             kind: "recorded",
                         }));
                     },
+                    storesEachEventOnce: async () => false,
                 };
                 const pending: Promise<void>[] = [];
                 const database = new DurableObjectSqlDatabase(state.storage);
@@ -4384,6 +4387,7 @@ it("Given a recovery frame spans 164 Sessions, When Recording has a bounded per-
                     persisted.push(...envelope.events.map((event) => event.eventId));
                     return sessions.map((sessionId) => ({ sessionId, kind: "recorded" }));
                 },
+                storesEachEventOnce: async () => false,
             };
             const pending: Promise<void>[] = [];
             const database = new DurableObjectSqlDatabase(state.storage);

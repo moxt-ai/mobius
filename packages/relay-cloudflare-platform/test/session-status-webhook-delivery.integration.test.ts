@@ -191,6 +191,8 @@ class StalledRecording implements SessionRecording {
             signal.removeEventListener("abort", cancel);
         }
     };
+    // It does not say it stores each event once, so the Relay drops its failed writes instead of repeating them.
+    readonly storesEachEventOnce: SessionRecording["storesEachEventOnce"] = async () => false;
 }
 
 async function throughRelay(
