@@ -6,7 +6,6 @@ import {
     SESSION_ELICITATION_RESOLVED_KIND,
     SESSION_PERMISSION_REQUESTED_KIND,
     SESSION_PERMISSION_RESOLVED_KIND,
-    type SessionCancelCommand,
     type SessionElicitationRequestedEvent,
     type SessionElicitationResolvedEvent,
     type SessionPermissionRequestedEvent,
@@ -25,13 +24,15 @@ export type RecordedSessionEvent =
     | SessionPermissionRequestedEvent
     | SessionPermissionResolvedEvent;
 
-type TurnDispatchState =
-    | { readonly kind: "pending" }
+/**
+ * Where a prompt stands in its Session's admission. Whether it started belongs to its execution receipt: the turn
+ * reads that fact instead of keeping a copy of it.
+ */
+type TurnAdmission =
+    | { readonly kind: "waiting" }
     | { readonly kind: "queued"; readonly promotion: PromiseWithResolvers<void> }
     | { readonly kind: "promoted" }
-    | { readonly kind: "admitted"; readonly disposition: string }
-    /** The Agent execution the turn belongs to: its own command, or the turn it steers. */
-    | { readonly kind: "running"; readonly execution: string };
+    | { readonly kind: "admitted"; readonly disposition: string };
 
 export type TurnCancellation =
     | { readonly kind: "already-requested" }
@@ -41,35 +42,41 @@ export type TurnCancellation =
 export class ActiveRuntimeTurn {
     readonly attemptId: string;
     readonly command: SessionPromptCommand;
+    readonly epoch = decodeIdentifier(randomUUID());
     readonly #controller: AbortController;
     readonly #finished = Promise.withResolvers<void>();
+    readonly #started: () => boolean;
     #cancellationRequested = false;
-    #dispatch: TurnDispatchState;
+    #admission: TurnAdmission = { kind: "waiting" };
     #sequence = 0;
     #interaction: Extract<
         RecordedSessionEvent,
         { readonly kind: typeof SESSION_PERMISSION_REQUESTED_KIND | typeof SESSION_ELICITATION_REQUESTED_KIND }
     > | null = null;
-    readonly #epoch = decodeIdentifier(randomUUID());
 
-    constructor(command: SessionPromptCommand, attemptId: string) {
+    /** `started` reads the command's execution receipt, the single owner of whether the command started. */
+    constructor(command: SessionPromptCommand, attemptId: string, started: () => boolean) {
         this.attemptId = attemptId;
         this.command = command;
         this.#controller = new AbortController();
-        this.#dispatch = { kind: "pending" };
+        this.#started = started;
     }
 
     readonly enqueue = (): void => {
-        if (this.#dispatch.kind !== "pending") {
-            throw new Error("Only a pending prompt can enter the queue");
+        if (this.#admission.kind !== "waiting") {
+            throw new Error("Only a waiting prompt can enter the queue");
         }
-        this.#dispatch = { kind: "queued", promotion: Promise.withResolvers<void>() };
+        this.#admission = { kind: "queued", promotion: Promise.withResolvers<void>() };
     };
 
     readonly isQueued = (): boolean =>
-        (this.#dispatch.kind === "queued" ||
-            (this.#dispatch.kind === "admitted" && this.#dispatch.disposition === SessionPromptDisposition.Queue)) &&
+        (this.#admission.kind === "queued" ||
+            (this.#admission.kind === "admitted" && this.#admission.disposition === SessionPromptDisposition.Queue)) &&
+        !this.#started() &&
         !this.#controller.signal.aborted;
+
+    /** Whether the command's execution was handed to the Agent. */
+    readonly hasStarted = (): boolean => this.#started();
 
     readonly abortRuntime = (): void => {
         this.#controller.abort();
@@ -77,11 +84,6 @@ export class ActiveRuntimeTurn {
 
     readonly finish = (): void => {
         this.#finished.resolve();
-    };
-
-    readonly activate = (execution: string): { readonly epoch: string; readonly sequence: 0 } => {
-        this.#dispatch = { kind: "running", execution };
-        return { epoch: this.#epoch, sequence: 0 };
     };
 
     readonly promoteQueuedPrompt = (
@@ -94,20 +96,18 @@ export class ActiveRuntimeTurn {
         ) {
             return "unavailable";
         }
-        switch (this.#dispatch.kind) {
+        switch (this.#admission.kind) {
             case "queued": {
-                const promotion = this.#dispatch.promotion;
-                this.#dispatch = { kind: "promoted" };
+                const promotion = this.#admission.promotion;
+                this.#admission = { kind: "promoted" };
                 promotion.resolve();
                 return "accepted";
             }
             case "promoted":
                 return "accepted";
             case "admitted":
-                return this.#dispatch.disposition === SessionPromptDisposition.Steer ? "accepted" : "already-started";
-            case "running":
-                return "already-started";
-            case "pending":
+                return this.#admission.disposition === SessionPromptDisposition.Steer ? "accepted" : "already-started";
+            case "waiting":
                 return "unavailable";
         }
     };
@@ -116,19 +116,34 @@ export class ActiveRuntimeTurn {
         const disposition = this.effectiveDisposition();
         // Claim the dispatch before asynchronous Agent preparation so a late promotion
         // cannot change a disposition that execution has already selected.
-        this.#dispatch = { kind: "admitted", disposition };
+        this.#admission = { kind: "admitted", disposition };
         return disposition;
     };
 
     readonly queuePromotion = (): Promise<void> | null => {
-        if (this.#dispatch.kind === "queued") {
-            return this.#dispatch.promotion.promise;
+        if (this.#admission.kind === "queued") {
+            return this.#admission.promotion.promise;
         }
-        return this.#dispatch.kind === "promoted" ? Promise.resolve() : null;
+        return this.#admission.kind === "promoted" ? Promise.resolve() : null;
     };
 
-    readonly effectiveDisposition = (): string =>
-        this.#dispatch.kind === "promoted" ? SessionPromptDisposition.Steer : this.command.disposition;
+    readonly effectiveDisposition = (): string => {
+        switch (this.#admission.kind) {
+            case "waiting":
+            case "queued":
+                return this.command.disposition;
+            case "promoted":
+                return SessionPromptDisposition.Steer;
+            case "admitted":
+                return this.#admission.disposition;
+        }
+    };
+
+    /** A steering prompt joins the execution of the turn it steers; every other prompt owns its execution. */
+    readonly execution = (): string =>
+        this.effectiveDisposition() === SessionPromptDisposition.Steer
+            ? this.command.targetCommandId
+            : this.command.commandId;
 
     readonly recordEvent = (event: RecordedSessionEvent): RecordedSessionEvent => {
         if (
@@ -148,43 +163,36 @@ export class ActiveRuntimeTurn {
         return event;
     };
 
-    readonly recordSteeringPrompt = (command: SessionPromptCommand): boolean => {
-        return (
-            this.#dispatch.kind === "running" &&
-            command.sessionId === this.command.sessionId &&
-            command.targetCommandId === this.command.commandId
-        );
-    };
-
     readonly snapshot = (): ActiveTurnSnapshot => {
-        if (this.#dispatch.kind !== "running") {
+        if (!this.#started()) {
             return null;
         }
         return {
             commandId: decodeIdentifier(this.command.commandId),
-            epoch: this.#epoch,
+            epoch: this.epoch,
             interaction: this.#interaction,
             sequence: this.#sequence,
             state: "running",
         };
     };
 
-    readonly matches = (cancellation: SessionCancelCommand): boolean =>
-        cancellation.commandId === this.command.commandId && cancellation.sessionId === this.command.sessionId;
-
     readonly matchesInteraction = (interactionId: string, sessionId: string): boolean =>
         this.command.sessionId === sessionId && this.#interaction?.interactionId === interactionId;
 
+    /**
+     * Before the command starts, cancellation withdraws it by aborting its own admission and preparation. Once it
+     * started, the Agent execution it belongs to must be asked to stop.
+     */
     readonly requestCancellation = (): TurnCancellation => {
         if (this.#cancellationRequested) {
             return { kind: "already-requested" };
         }
         this.#cancellationRequested = true;
-        if (this.#dispatch.kind !== "running") {
-            this.#controller.abort(new Error("The queued Agent turn was cancelled"));
+        if (!this.#started()) {
+            this.#controller.abort(new Error("The Agent turn was cancelled before it started"));
             return { kind: "pending" };
         }
-        return { kind: "running", execution: this.#dispatch.execution };
+        return { kind: "running", execution: this.execution() };
     };
 
     readonly cancellationRequested = (): boolean => this.#cancellationRequested;

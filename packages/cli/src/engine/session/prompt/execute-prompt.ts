@@ -7,7 +7,6 @@ import { AcpExecutionError } from "../../acp/acp-error.ts";
 import { operationErrorCode, operationErrorMessage } from "../../infra/operation-error.ts";
 import type { ReportFailure, ResolveAgent } from "../api/session-api.ts";
 import type { SessionManager } from "../manager/session-manager.ts";
-import type { ExecutionReceipts } from "../turn/execution-receipts.ts";
 import { resolveSessionDirectories } from "../workspace/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
 import { agentForSessionConfiguration, applyCompleteSessionConfiguration } from "./apply-session-configuration.ts";
@@ -15,7 +14,6 @@ import { PromptArtifactError, type ReadPromptArtifact, resolvePromptArtifacts } 
 import type { PromptLifecycle } from "./prompt-lifecycle.ts";
 
 export interface ExecutePromptOptions {
-    readonly operations: ExecutionReceipts;
     readonly eventProjection: PromptLifecycle;
     readonly command: SessionPromptCommand;
     readonly resolveAgent: ResolveAgent;
@@ -24,7 +22,7 @@ export interface ExecutePromptOptions {
     readonly directories: WorkspaceDirectoryService;
     readonly sessions: SessionManager;
     readonly attemptId: string;
-    readonly activateAttempt: (execution: string) => { readonly epoch: string; readonly sequence: 0 };
+    readonly epoch: string;
     readonly waitForSessionAvailability: (
         signal: AbortSignal,
     ) => Promise<
@@ -33,12 +31,16 @@ export interface ExecutePromptOptions {
         | { readonly kind: "queue-target-unavailable" }
     >;
     readonly signal: AbortSignal;
-    readonly recordSteeringPrompt: () => boolean;
+    readonly steerTargetStarted: () => boolean;
     readonly cancellationRequested: () => boolean;
 }
 
+/**
+ * Admits, prepares and runs one prompt. The command starts only when the Agent session records `prompt.started`,
+ * immediately before handing the work to the Agent; until then a cancellation withdraws it and a failure settles it
+ * as failed before start.
+ */
 export async function executePrompt({
-    operations,
     eventProjection,
     command,
     resolveAgent,
@@ -47,10 +49,10 @@ export async function executePrompt({
     directories,
     sessions,
     attemptId,
-    activateAttempt,
+    epoch,
     waitForSessionAvailability,
     signal,
-    recordSteeringPrompt,
+    steerTargetStarted,
     cancellationRequested,
 }: ExecutePromptOptions): Promise<void> {
     try {
@@ -121,25 +123,14 @@ export async function executePrompt({
             prepared = await sessions.prepareExecutionSession(preparation);
         }
         signal.throwIfAborted();
-        operations.markExecutionStarted(command.commandId);
-        if (availability.disposition === SessionPromptDisposition.Steer) {
-            if (!recordSteeringPrompt()) {
-                throw new AcpExecutionError(
-                    "The steering target is unavailable",
-                    {},
-                    "prompt_queue_target_unavailable",
-                );
-            }
+        if (availability.disposition === SessionPromptDisposition.Steer && !steerTargetStarted()) {
+            throw new AcpExecutionError("The steering target is unavailable", {}, "prompt_queue_target_unavailable");
         }
-        // A steering prompt joins the execution of the turn it steers, so cancelling it cancels that execution.
-        const stream = activateAttempt(
-            availability.disposition === SessionPromptDisposition.Steer ? command.targetCommandId : command.commandId,
-        );
-        const lifecycle = eventProjection.started(
+        const lifecycle = eventProjection.lifecycle(
             command.sessionId,
             command.commandId,
             attemptId,
-            stream.epoch,
+            epoch,
             availability.disposition,
         );
         const attachments = await resolvePromptArtifacts(readArtifact, command.attachments, signal);
@@ -206,7 +197,7 @@ export async function executePrompt({
             code === "session_operation_failed"
                 ? "The local agent could not complete the request"
                 : operationErrorMessage(error);
-        await eventProjection.failed(command.sessionId, command.commandId, failureCode, failureMessage);
+        await eventProjection.failed(command.sessionId, command.commandId, attemptId, failureCode, failureMessage);
         // The daemon runs detached with its stdio ignored, so a failure recorded
         // only here would leave no trace for a later bug report. The local log is
         // the durable copy; the in-band failure event above stays the live signal.

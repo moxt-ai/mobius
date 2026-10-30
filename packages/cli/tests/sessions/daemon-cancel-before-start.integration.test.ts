@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { existsSync, watch } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -279,6 +280,119 @@ test("Given an unacknowledged command, When Stop arrives before its prompt, Then
                     }
                 }
                 expect(stoppedStarted).toBe(false);
+            },
+        );
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+        vi.useRealTimers();
+    }
+}, 90_000);
+
+function fileCreated(directory: string, name: string): Promise<void> {
+    const created = Promise.withResolvers<void>();
+    const watcher = watch(directory, () => {
+        if (existsSync(join(directory, name))) {
+            watcher.close();
+            created.resolve();
+        }
+    });
+    if (existsSync(join(directory, name))) {
+        watcher.close();
+        created.resolve();
+    }
+    return created.promise;
+}
+
+test("Given a prompt still loading its conversation's saved history, When the client withdraws it, Then the Runtime withdraws it before it starts and the next prompt runs", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-30T00:00:00Z"));
+    const directory = await mkdtemp(join(tmpdir(), "mobius-withdraw-loading-"));
+    try {
+        const agentDirectory = join(directory, "agent");
+        await mkdir(agentDirectory, { recursive: true });
+        const executableDirectory = await writeControlledAcpExecutable(directory, { loadSession: true });
+        await withControlledDaemon(
+            new ControlledAcpAgentSpecification(),
+            { MOBIUS_FAKE_ACP_STATE_DIRECTORY: agentDirectory, PATH: executableDirectory },
+            async (peer) => {
+                const prompt = (commandId: string, text: string) =>
+                    encodeSessionPromptCommand({
+                        additionalDirectoryIds: [],
+                        agentId: "controlled-acp",
+                        bindingId: peer.bindingId,
+                        commandId,
+                        directoryId: "default",
+                        disposition: "reject",
+                        attachments: [],
+                        kind: "session.prompt",
+                        prompt: text,
+                        sessionId: peer.sessionId,
+                        targetCommandId: "",
+                    });
+                const completed = async (commandId: string): Promise<void> => {
+                    for (;;) {
+                        const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
+                        if (
+                            event.type === "lifecycle-metadata" &&
+                            event.payload.kind === "prompt.completed" &&
+                            event.payload.commandId === commandId
+                        ) {
+                            expect(event.payload.stopReason).toBe("end_turn");
+                            return;
+                        }
+                    }
+                };
+                const first = randomUUID();
+                peer.send(prompt(first, "Start a conversation with saved history"));
+                await completed(first);
+                // After a restart the next prompt replays the saved history before it reaches the Agent.
+                await peer.restart();
+                await writeFile(join(agentDirectory, "pause-load"), "");
+                const loading = fileCreated(agentDirectory, "load-paused");
+                const withdrawn = randomUUID();
+                peer.send(prompt(withdrawn, "This request is withdrawn before it starts"));
+                await loading;
+
+                peer.send(
+                    JSON.stringify({
+                        commandId: withdrawn,
+                        kind: "session.cancel-before-start",
+                        sessionId: peer.sessionId,
+                    }),
+                );
+
+                let started = false;
+                let settled = false;
+                while (!settled) {
+                    const raw = await peer.nextMessage();
+                    if (decodeMessageKind(raw) === "session.operation.failed") {
+                        expect(decodeSessionOperationFailedEvent(raw).requestId).not.toBe(withdrawn);
+                    }
+                    if (decodeMessageKind(raw) !== SESSION_EVENT_KIND) {
+                        continue;
+                    }
+                    for (const event of decodeSessionEventEnvelope(raw).events) {
+                        if (event.type !== "lifecycle-metadata" || !("commandId" in event.payload)) {
+                            continue;
+                        }
+                        if (event.payload.commandId !== withdrawn) {
+                            continue;
+                        }
+                        expect(event.payload.kind).not.toBe("prompt.failed-before-start");
+                        if (event.payload.kind === "prompt.started") {
+                            started = true;
+                        }
+                        if (event.payload.kind === "prompt.completed") {
+                            expect(event.payload).toMatchObject({ execution: "not-started", stopReason: "cancelled" });
+                            settled = true;
+                        }
+                    }
+                }
+                expect(started).toBe(false);
+                await rm(join(agentDirectory, "pause-load"));
+                const next = randomUUID();
+                peer.send(prompt(next, "The next request completes"));
+                await completed(next);
             },
         );
     } finally {

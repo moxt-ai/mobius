@@ -1,12 +1,12 @@
-import { AcpExecutionError } from "../../acp/acp-error.ts";
-
 type Execution =
     | { readonly kind: "running"; readonly commandId: string }
     | { readonly kind: "cancelling"; readonly commandId: string; readonly completion: Promise<void> };
 
 /**
- * The prompt executing in each Session. Cancellation names the command it stops and never outlives that command's
- * execution; a command cancelled before its execution begins is refused by its own turn instead.
+ * The prompt each Session's Agent process is driving, and the cancellation sent to it. Session admission is the only
+ * owner of whether a Session is busy and admits one execution at a time, so this records that execution without
+ * deciding it again. Cancellation names the command it stops and never outlives that command's execution; a command
+ * cancelled before its execution begins is withdrawn by its own turn instead.
  */
 export class ActiveExecutions {
     readonly #entries = new Map<string, Execution>();
@@ -17,9 +17,6 @@ export class ActiveExecutions {
     };
     readonly isBusy = (id: string): boolean => this.#entries.has(id);
     readonly begin = (id: string, commandId: string): void => {
-        if (this.#entries.has(id)) {
-            throw new AcpExecutionError("Another prompt is already running in this conversation", {}, "session_busy");
-        }
         this.#entries.set(id, { kind: "running", commandId });
     };
     readonly cancel = (id: string, commandId: string, stop: () => Promise<void>): Promise<void> => {

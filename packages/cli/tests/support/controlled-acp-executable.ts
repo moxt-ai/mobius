@@ -8,8 +8,12 @@ const fakeAgentPath = fileURLToPath(new URL("../sessions/fixtures/acp-peer.ts", 
  * Put the controlled ACP peer on PATH as `controlled-acp` and return that
  * directory. The managed daemon discovers Agents through the production catalog,
  * so a lifecycle report through a real managed daemon needs a real executable.
+ * With `loadSession`, the peer replays saved history, where `pause-load` can hold it.
  */
-export async function writeControlledAcpExecutable(directory: string): Promise<string> {
+export async function writeControlledAcpExecutable(
+    directory: string,
+    { loadSession = false }: { readonly loadSession?: boolean } = {},
+): Promise<string> {
     const executableDirectory = join(directory, "bin");
     const executable = join(executableDirectory, "controlled-acp");
     await mkdir(executableDirectory, { recursive: true });
@@ -21,8 +25,7 @@ if (process.argv.includes("--version")) {
 } else {
   process.argv.push(
     "--agent-name", "Controlled ACP",
-    "--agent-version", "1.0.0",
-    "--no-load-session",
+    "--agent-version", "1.0.0",${loadSession ? "" : '\n    "--no-load-session",'}
     "--http-mcp",
     "--no-additional-directories",
     "--no-delete-session",

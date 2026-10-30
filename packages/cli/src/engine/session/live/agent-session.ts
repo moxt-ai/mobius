@@ -705,9 +705,6 @@ export class AgentSession implements AgentSessionRestore {
     });
 
     readonly prompt = async (options: SessionTurnOptions): Promise<PromptResult> => {
-        if (this.#turn.running) {
-            throw new AcpExecutionError("Another prompt is already running in this conversation", {}, "session_busy");
-        }
         if (!this.#capabilities.loadSession && this.#sessionLoad.kind === "not-requested") {
             this.#sessionLoad = {
                 kind: "loaded",
@@ -726,6 +723,8 @@ export class AgentSession implements AgentSessionRestore {
             await this.#completedHistory(options.signal);
         }
         validatePromptContent(options, this.#capabilities);
+        // Recording prompt.started below is the command's start; a cancellation that arrived first withdraws it.
+        options.signal.throwIfAborted();
         if (this.#sessionTitle === null || this.#sessionTitle.length === 0) {
             this.#sessionTitle = conversationTitleFromText(options.prompt);
         }
@@ -813,6 +812,8 @@ export class AgentSession implements AgentSessionRestore {
             throw new AcpExecutionError("The target turn is no longer active", {}, "steering_target_unavailable");
         }
         validatePromptContent(options, this.#capabilities);
+        // Recording prompt.started below is the command's start; a cancellation that arrived first withdraws it.
+        options.signal.throwIfAborted();
         const lifecycle = options.lifecycle;
         if (lifecycle !== undefined) {
             await this.recordLifecycleEvent({

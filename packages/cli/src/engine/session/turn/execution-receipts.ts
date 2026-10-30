@@ -3,6 +3,7 @@ import {
     type CommandDelivery,
     decodeKnownSessionEventPayload,
     encodeSessionCancelBeforeStartCommand,
+    isPromptTerminal,
     type LastTurnOutcome,
     type SessionEventPayload,
     type SessionLiveEvent,
@@ -157,7 +158,7 @@ export class ExecutionReceipts {
             return { state: "accepted" };
         }
         const outcome = this.outcome(commandId);
-        if (outcome?.type !== "lifecycle-metadata") {
+        if (outcome?.type !== "lifecycle-metadata" || !isPromptTerminal(outcome.payload)) {
             return { state: "expired" };
         }
         switch (outcome.payload.kind) {
@@ -166,8 +167,6 @@ export class ExecutionReceipts {
             case "prompt.failed":
             case "prompt.failed-before-start":
                 return { code: outcome.payload.code, state: "failed" };
-            default:
-                return { state: "expired" };
         }
     };
     /**
@@ -191,7 +190,7 @@ export class ExecutionReceipts {
             }
         }
         const outcome = last === undefined ? undefined : this.outcome(last);
-        if (last === undefined || outcome?.type !== "lifecycle-metadata") {
+        if (last === undefined || outcome?.type !== "lifecycle-metadata" || !isPromptTerminal(outcome.payload)) {
             return undefined;
         }
         switch (outcome.payload.kind) {
@@ -205,8 +204,6 @@ export class ExecutionReceipts {
                     message: outcome.payload.message,
                     state: "failed",
                 };
-            default:
-                return undefined;
         }
     };
     /** Started identities remain authoritative after their detailed receipt is evicted. */
@@ -264,16 +261,25 @@ export class ExecutionReceipts {
         });
         return outcome;
     };
-    readonly recordOutcome = (event: SessionLiveEvent): void => {
+    /**
+     * Receipts follow their command's recorded lifecycle. `prompt.started` is recorded where the command is handed
+     * to the Agent, so the started mark and the event clients see are one transition; a terminal event settles the
+     * receipt. Nothing else marks a command started.
+     */
+    readonly record = (event: SessionLiveEvent): void => {
         if (event.type !== "lifecycle-metadata") {
             return;
         }
         const payload = event.payload;
-        if (
-            payload.kind !== "prompt.completed" &&
-            payload.kind !== "prompt.failed" &&
-            payload.kind !== "prompt.failed-before-start"
-        ) {
+        if (payload.kind === "prompt.started") {
+            const receipt = this.#executions.get(payload.commandId);
+            // A start reported after settlement does not reopen the execution.
+            if (receipt?.state.kind === "pending") {
+                this.#save(payload.commandId, { ...receipt, state: { kind: "started" } });
+            }
+            return;
+        }
+        if (!isPromptTerminal(payload)) {
             return;
         }
         const receipt = this.#executions.get(payload.commandId);
@@ -379,28 +385,6 @@ export class ExecutionReceipts {
             state: { kind: "pending" },
         });
         return { attemptId, commandId, kind: "accepted" };
-    };
-
-    readonly markExecutionStarted = (commandId: string): void => {
-        const current = this.#executions.get(commandId);
-        if (current === undefined) {
-            throw new Error("The runtime execution receipt does not exist");
-        }
-        const state = current.state;
-        switch (state.kind) {
-            case "pending":
-                this.#save(commandId, { ...current, state: { kind: "started" } });
-                return;
-            case "started":
-                return;
-            case "settled-before-start":
-            case "settled-after-start":
-                throw new Error("The runtime execution transition is invalid");
-            default: {
-                const unreachable: never = state;
-                throw new Error("Unexpected execution state", { cause: unreachable });
-            }
-        }
     };
 
     /** Only commands without a terminal result can still be cancelled. */
