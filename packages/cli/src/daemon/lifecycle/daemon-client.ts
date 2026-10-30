@@ -90,9 +90,6 @@ async function waitForDaemon(
     let daemonStarted = false;
     let child: ChildProcess | undefined;
     while (!signal.aborted) {
-        if (child !== undefined && (child.exitCode !== null || child.signalCode !== null)) {
-            throw new Error("The daemon exited before becoming ready");
-        }
         try {
             const response = decodeKnownLifecycleResponse(
                 await sendLocalRequest(stateDirectory, "manager", { kind: "status" }, signal),
@@ -107,6 +104,14 @@ async function waitForDaemon(
         } catch (cause) {
             if (!isNodeError(cause, "ENOENT") && !isNodeError(cause, "ECONNREFUSED")) {
                 throw cause;
+            }
+            // A competing launcher can exit successfully after losing the lock.
+            // Check the shared endpoint first and keep waiting for its owner.
+            if (
+                child !== undefined &&
+                (child.signalCode !== null || (child.exitCode !== null && child.exitCode !== 0))
+            ) {
+                throw new Error("The daemon exited before becoming ready");
             }
             if (!daemonStarted) {
                 child = await launchDaemon(version);

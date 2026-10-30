@@ -206,59 +206,69 @@ async function runDaemonRuntime(
             );
         };
         let reload: Promise<void> = Promise.resolve();
+        const handle = async (request: unknown) => {
+            if (typeof request === "object" && request !== null && "kind" in request) {
+                if (request.kind === "status" || request.kind === "ensure") {
+                    return { kind: "status", protocolVersion: 2, worker: { pid: process.pid, version } };
+                }
+                if (request.kind === "stop") {
+                    return { kind: "stopped" };
+                }
+            }
+            if (typeof request === "object" && request !== null && "kind" in request && request.kind === "release") {
+                // Agents' own clients can continue the conversations that idle processes held.
+                await agentProcesses.retireIdleProcesses();
+                return { kind: "released" };
+            }
+            if (typeof request !== "object" || request === null || !("kind" in request) || request.kind !== "reload") {
+                return { kind: "error", code: "invalid_reload", message: "Expected a configuration reload" };
+            }
+            // A reload, such as `mobius start` after the user installs or signs in to an Agent, also re-reads the
+            // Agent inventory of Runtimes that were already running; Runtimes it starts read it themselves.
+            const running = new Set(active.keys());
+            const pending = reload.then(reconcile).then(async () => await refreshRunningCatalogs(running));
+            reload = pending.catch(() => undefined);
+            await pending;
+            return { kind: "reloaded" };
+        };
         try {
             await reconcile();
-            await serveLocalControl(
-                control.stateDirectory,
-                "manager",
-                combined,
-                async (request) => {
-                    if (typeof request === "object" && request !== null && "kind" in request) {
-                        if (request.kind === "status") {
-                            return { kind: "status", protocolVersion: 2, worker: { pid: process.pid, version } };
-                        }
-                        if (request.kind === "stop") {
-                            return { kind: "stopped" };
-                        }
-                    }
-                    if (
-                        typeof request === "object" &&
-                        request !== null &&
-                        "kind" in request &&
-                        request.kind === "release"
-                    ) {
-                        // Agents' own clients can continue the conversations that idle processes held.
-                        await agentProcesses.retireIdleProcesses();
-                        return { kind: "released" };
-                    }
-                    if (
-                        typeof request !== "object" ||
-                        request === null ||
-                        !("kind" in request) ||
-                        request.kind !== "reload"
-                    ) {
-                        return { kind: "error", code: "invalid_reload", message: "Expected a configuration reload" };
-                    }
-                    // A reload, such as `mobius start` after the user installs or signs in to an Agent, also re-reads the
-                    // Agent inventory of Runtimes that were already running; Runtimes it starts read it themselves.
-                    const running = new Set(active.keys());
-                    const pending = reload.then(reconcile).then(async () => await refreshRunningCatalogs(running));
-                    reload = pending.catch(() => undefined);
-                    await pending;
-                    return { kind: "reloaded" };
-                },
-                async () => await recordCurrentData(version, combined),
-                (response) => {
-                    if (
-                        typeof response === "object" &&
-                        response !== null &&
-                        "kind" in response &&
-                        response.kind === "stopped"
-                    ) {
+            // Both released endpoints use the same authenticated handler in one process.
+            const servers = ["manager", "worker"] as const;
+            const results = await Promise.allSettled(
+                servers.map(async (endpoint) => {
+                    try {
+                        await serveLocalControl(
+                            control.stateDirectory,
+                            endpoint,
+                            combined,
+                            handle,
+                            async () => {
+                                if (endpoint === "manager") {
+                                    await recordCurrentData(version, combined);
+                                }
+                            },
+                            (response) => {
+                                if (
+                                    typeof response === "object" &&
+                                    response !== null &&
+                                    "kind" in response &&
+                                    response.kind === "stopped"
+                                ) {
+                                    shutdown.abort();
+                                }
+                            },
+                        );
+                    } finally {
                         shutdown.abort();
                     }
-                },
+                }),
             );
+            for (const result of results) {
+                if (result.status === "rejected") {
+                    throw result.reason;
+                }
+            }
             if (shutdown.signal.reason instanceof DaemonRuntimeError) {
                 throw shutdown.signal.reason;
             }
