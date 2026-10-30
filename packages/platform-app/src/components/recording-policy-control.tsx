@@ -3,7 +3,6 @@ import { Check, LoaderCircle } from "lucide-react";
 import { useId } from "react";
 
 const MODES: readonly { readonly label: string; readonly mode: MobiusRecordingPolicyMode }[] = [
-    { label: "Inherit", mode: "inherit" },
     { label: "Enabled", mode: "enabled" },
     { label: "Disabled", mode: "disabled" },
 ];
@@ -19,7 +18,7 @@ export interface RecordingPolicyControlProps {
     readonly testId: string;
 }
 
-/** Segmented Recording mode picker shared by the App and Project configuration surfaces. */
+/** Application-wide Recording mode picker. */
 export function RecordingPolicyControl({
     busy,
     effectiveMode,

@@ -51,7 +51,6 @@ import {
     platformAppRecordingPolicy,
     platformAppSessionStatusWebhook,
     platformDashboardAuditEvent,
-    platformProjectRecordingPolicy,
 } from "../src/schema/d1/index.ts";
 import { platformDrizzle } from "../src/storage/platform-drizzle-database.ts";
 import {
@@ -486,7 +485,7 @@ describe.sequential("Platform Session-only boundary", () => {
         expect(unavailableProjects.accessCount).toBe(0);
     });
 
-    it("Given Recording is not installed, When a developer configures App and Project policy, Then disabled inheritance works, enablement is rejected, and Session policy is unavailable", async () => {
+    it("Given Recording is not installed, When a developer configures App policy, Then disabled inheritance works, enablement and Project overrides are rejected, and Session policy is unavailable", async () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
@@ -592,7 +591,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 }),
                 environment,
             ),
-            200,
+            409,
         );
         const sessionPolicyUrl = `${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/projects/${projectId}/sessions/session-policy/recording-policy`;
         const sessionPolicyResponse = await worker.fetch(
@@ -1773,9 +1772,7 @@ describe.sequential("Platform Recording policy configuration", () => {
             const webhook = `apps/${appId}/session-status-webhook`;
             const policies = [`apps/${appId}/recording-policy`, `projects/${projectId}/recording-policy`];
             if (configured) {
-                for (const policy of policies) {
-                    await responseJson(await dashboard(policy, "PUT", { mode: "enabled" }), 200);
-                }
+                await responseJson(await dashboard(`apps/${appId}/recording-policy`, "PUT", { mode: "enabled" }), 200);
                 await responseJson(
                     await dashboard(webhook, "PUT", {
                         enabled: true,
@@ -1794,10 +1791,6 @@ describe.sequential("Platform Recording policy configuration", () => {
                     .select()
                     .from(platformAppRecordingPolicy)
                     .where(eq(platformAppRecordingPolicy.appId, appId)),
-                projectPolicy: await database
-                    .select()
-                    .from(platformProjectRecordingPolicy)
-                    .where(eq(platformProjectRecordingPolicy.projectId, projectId)),
                 webhook: await database
                     .select()
                     .from(platformAppSessionStatusWebhook)
@@ -1873,8 +1866,19 @@ describe.sequential("Platform Recording policy configuration", () => {
                 expect(await responseJson(response, 403)).toMatchObject({ error: { code: "tenant_owner_required" } });
             }
             expect(await responseJson(await dashboard(path, member), 200)).toMatchObject({ mode: "inherit" });
-            await responseJson(await dashboard(path, developerHeaders(), "PUT", { mode: "disabled" }), 200);
         }
+        await responseJson(
+            await dashboard(`apps/${appId}/recording-policy`, developerHeaders(), "PUT", { mode: "disabled" }),
+            200,
+        );
+        expect(
+            await responseJson(
+                await dashboard(`projects/${projectId}/recording-policy`, developerHeaders(), "PUT", {
+                    mode: "disabled",
+                }),
+                409,
+            ),
+        ).toMatchObject({ error: { code: "project_recording_override_unsupported" } });
         const endpoint = "https://consumer.example.test/webhook?token=private-value";
         await responseJson(
             await dashboard(`apps/${appId}/session-status-webhook`, member, "PUT", { enabled: true, endpoint }),
@@ -1893,19 +1897,13 @@ describe.sequential("Platform Recording policy configuration", () => {
         // Denied writes leave no policy change to record.
         expect(
             events.filter((event) => String(record(event)["action"]).endsWith("recording-policy.updated")),
-        ).toHaveLength(2);
+        ).toHaveLength(1);
         expect(events).toEqual(
             expect.arrayContaining([
                 expect.objectContaining({
                     action: "app.recording-policy.updated",
                     actorId: "developer-1",
                     subjectId: appId,
-                    details: { mode: "disabled" },
-                }),
-                expect.objectContaining({
-                    action: "project.recording-policy.updated",
-                    actorId: "developer-1",
-                    subjectId: projectId,
                     details: { mode: "disabled" },
                 }),
                 expect.objectContaining({
@@ -2063,7 +2061,7 @@ describe.sequential("Platform Recording policy configuration", () => {
         });
     });
 
-    it("Given an enabled App policy, When a Project overrides it as disabled, Then that Project's broadcasts are not recorded", async () => {
+    it("Given an App with recording, When App recording is toggled, Then only the App setting governs recording and Project overrides are rejected", async () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
@@ -2083,27 +2081,61 @@ describe.sequential("Platform Recording policy configuration", () => {
             200,
         );
         const projectPolicyUrl = `${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/projects/${projectId}/recording-policy`;
+        for (const mode of ["enabled", "disabled", "inherit"]) {
+            expect(
+                await responseJson(
+                    await worker.fetch(
+                        new Request(projectPolicyUrl, {
+                            body: JSON.stringify({ mode }),
+                            headers: developerHeaders(),
+                            method: "PUT",
+                        }),
+                        environment,
+                    ),
+                    409,
+                ),
+            ).toMatchObject({ error: { code: "project_recording_override_unsupported" } });
+        }
+
         expect(
             await responseJson(
-                await worker.fetch(
-                    new Request(projectPolicyUrl, {
-                        body: JSON.stringify({ mode: "disabled" }),
-                        headers: developerHeaders(),
-                        method: "PUT",
-                    }),
-                    environment,
-                ),
+                await worker.fetch(new Request(projectPolicyUrl, { headers: developerHeaders() }), environment),
                 200,
             ),
-        ).toMatchObject({ effectiveMode: "disabled", inheritedFrom: "project", mode: "disabled" });
-
+        ).toMatchObject({ effectiveMode: "enabled", inheritedFrom: "app", mode: "inherit" });
+        await recordThroughRelay(projectId, "enabled-session", "recorded answer");
+        const enabled = await readRecordedHistory(projectId, "enabled-session");
+        expect(enabled.status).toBe(200);
+        await enabled.body?.cancel();
+        await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${appId}/recording-policy`, {
+                    body: JSON.stringify({ mode: "disabled" }),
+                    headers: developerHeaders(),
+                    method: "PUT",
+                }),
+                environment,
+            ),
+            200,
+        );
+        expect(
+            await responseJson(
+                await worker.fetch(new Request(projectPolicyUrl, { headers: developerHeaders() }), environment),
+                200,
+            ),
+        ).toMatchObject({ effectiveMode: "disabled", inheritedFrom: "app", mode: "inherit" });
         await recordThroughRelay(projectId, "disabled-session", "unrecorded answer");
         const recorded = await readRecordedHistory(projectId, "disabled-session");
         expect(recorded.status).toBe(404);
         await recorded.body?.cancel();
+        const history = await readRecordedHistory(projectId, "enabled-session");
+        expect(history.status).toBe(200);
+        expect(decodeSessionRecordingHistory(await history.text())).toMatchObject({
+            events: [{ payload: { content: { text: "recorded answer" } } }],
+        });
     });
 
-    it("Given a Runtime streaming into an enabled Project, When the Project disables Recording, Then output after the policy reuse window is not recorded", async () => {
+    it("Given a Runtime streaming into an enabled App, When the App disables Recording, Then output after the policy reuse window is not recorded", async () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
@@ -2128,7 +2160,7 @@ describe.sequential("Platform Recording policy configuration", () => {
 
         await withDaemonRelay(projectId, async (send) => {
             await send(sessionId, "event-before-change", "1", "recorded while enabled");
-            await policy(`projects/${projectId}`, "disabled");
+            await policy(`apps/${appId}`, "disabled");
             // Deliveries reuse a policy they resolved moments ago instead of reading it for every batch.
             await send(sessionId, "event-inside-window", "2", "reused enabled policy");
             vi.setSystemTime(Date.now() + 5_000);

@@ -1,0 +1,1 @@
+DROP TABLE `platform_project_recording_policies`;
