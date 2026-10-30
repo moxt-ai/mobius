@@ -170,9 +170,6 @@ test("Given a Fork succeeds but its response is lost, When the same operation is
         }
         expect(delivered.value.status).toBe(200);
         expect(lostStatus).toBe(200);
-        expect(await runtime.client.runtimes.list(signal)).toContainEqual(
-            expect.objectContaining({ runtimeId: runtime.runtimeId, nativeForkRecovery: true }),
-        );
         const retried = await send();
         expect(retried.status).toBe(200);
         const result: unknown = await retried.json();
@@ -196,26 +193,6 @@ test("Given a Fork succeeds but its response is lost, When the same operation is
         expect(await conflict.json()).toMatchObject({ error: { code: "idempotency_conflict" } });
         const after = await runtime.client.runtimes.listSessions(runtime.runtimeId, 100, signal);
         expect(after).toHaveLength(1); // One tracked fork for the user's one intent; the native source was never imported.
-        // Retained pre-receipt HTTP contract: an already-open old client can still fork through the new Relay.
-        const legacy = await fetch(
-            `${platform.baseUrl}/mobius/api/v1/projects/${project.projectId}/runtimes/${runtime.runtimeId}/native-sessions`,
-            {
-                method: "POST",
-                headers: { authorization: `Bearer ${platform.appCredential}`, "content-type": "application/json" },
-                body: JSON.stringify({
-                    action: "fork",
-                    additionalDirectoryIds: [],
-                    agentId: "claude",
-                    directoryId: "default",
-                    discoveryId: directory.sessionId,
-                    entryId: directory.entries[0].entryId,
-                }),
-                signal,
-            },
-        );
-        expect(legacy.status).toBe(200);
-        expect(await legacy.json()).toMatchObject({ action: "fork", ready: { kind: "session.ready" } });
-        expect(await runtime.client.runtimes.listSessions(runtime.runtimeId, 100, signal)).toHaveLength(2);
     } finally {
         proxy.closeAllConnections();
         await new Promise<void>((resolve) => proxy.close(() => resolve()));

@@ -927,7 +927,7 @@ export class MobiusRuntimeResources {
             | (Omit<
                   Extract<NativeSessionRequest, { readonly action: "import" | "fork" }>,
                   "kind" | "requestId" | "sessionId" | "targetSessionId" | "bindingId" | "action"
-              > & { readonly action: "import" | "fork"; readonly discoveryId: string }),
+              > & { readonly action: "import"; readonly discoveryId: string }),
         signal: AbortSignal,
     ) =>
         decodeNativeSessionResult(
@@ -941,8 +941,8 @@ export class MobiusRuntimeResources {
         );
 
     /**
-     * Requires the Relay's nativeForkRecovery capability. Reuse an operationId and its inputs after an ambiguous
-     * failure. This method never falls back to a legacy Fork; an unknown result must not create another Session.
+     * Reuse an operationId and its inputs after an ambiguous failure; an unknown result must not create another
+     * Session.
      */
     readonly forkNativeSession = async (
         runtimeId: string,

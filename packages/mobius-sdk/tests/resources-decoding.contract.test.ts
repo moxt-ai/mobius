@@ -38,7 +38,6 @@ describe("Runtime descriptor decoding contracts", () => {
     it("Given a Runtime list, When it is decoded, Then its Agents are available", () => {
         const decoded = decodeMobiusRuntimeList({ runtimes: [runtime] });
         expect(decoded[0]?.agents[0]?.id).toBe("codex");
-        expect(decoded[0]?.nativeForkRecovery).toBe(false);
     });
 
     it("Given a Runtime list whose Agents carry fields from a newer service, When it is decoded, Then its Agents are available", () => {

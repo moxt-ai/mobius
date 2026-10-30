@@ -647,12 +647,12 @@ export class AgentSession implements AgentSessionRestore {
         }
     };
 
-    // The revision check and Agent mutation share one queue, including legacy callers.
+    // The revision check and Agent mutation share one queue, including settings the Runtime applies itself.
     // A lost response may have committed: reread after a conflict, never replay an edit blindly.
     readonly configure = async (options: SessionConfigureOptions): Promise<SessionConfigurationSnapshot> =>
         this.#configurationChanges.run(async (signal) => {
             if (
-                options.expectedConfigurationRevision !== undefined &&
+                options.expectedConfigurationRevision !== null &&
                 options.expectedConfigurationRevision !== this.#configRevision
             ) {
                 throw new AcpExecutionError(

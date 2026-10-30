@@ -78,6 +78,7 @@ async function prepareSession(
                               ...preparation,
                               booleanValue: configuration.booleanValue,
                               configId: configuration.configId,
+                              expectedConfigurationRevision: null,
                               requestId: command.requestId,
                               value: configuration.value,
                               valueType: configuration.valueType,
@@ -303,9 +304,7 @@ export async function executeSessionConfigure(
             ...(await resolveAgent(command.agentId, signal, command.sessionId)),
             booleanValue: command.booleanValue,
             configId: command.configId,
-            ...(command.expectedConfigurationRevision === undefined
-                ? {}
-                : { expectedConfigurationRevision: command.expectedConfigurationRevision }),
+            expectedConfigurationRevision: command.expectedConfigurationRevision,
             cwd: resolved.cwd,
             requestId: command.requestId,
             sessionId: command.sessionId,

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 import { startTestPlatform } from "../support/platform.ts";
 
-for (const client of ["SDK", "legacy HTTP", "HTTP"] as const) {
+for (const client of ["SDK", "HTTP"] as const) {
     it(`Given a new Session, When ${client} creates and prompts it, Then its conversation uses the Runtime title and workspace without enabling Recording`, async () => {
         const cancellation = new AbortController();
         await using platform = await startTestPlatform();
@@ -40,12 +40,7 @@ for (const client of ["SDK", "legacy HTTP", "HTTP"] as const) {
                                 authorization: `Bearer ${platform.appCredential}`,
                                 "content-type": "application/json",
                             },
-                            body: JSON.stringify({
-                                ...request,
-                                ...(client === "legacy HTTP"
-                                    ? { bindingId: "binding_legacy", title: "Legacy title" }
-                                    : {}),
-                            }),
+                            body: JSON.stringify(request),
                             signal: cancellation.signal,
                         },
                     ),

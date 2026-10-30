@@ -1007,6 +1007,7 @@ describe.sequential("Platform Session-only boundary", () => {
                     booleanValue: false,
                     configId: "model",
                     directoryId: "root",
+                    expectedConfigurationRevision: "configuration-revision",
                     kind: "session.configure",
                     requestId: "local-config-request",
                     sessionId,
