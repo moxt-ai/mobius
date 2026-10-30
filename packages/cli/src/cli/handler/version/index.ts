@@ -12,12 +12,6 @@ async function reportInstallationVersion(context: CliContext): Promise<void> {
 }
 
 export function registerVersionHandler(program: Command, context: CliContext): void {
-    program
-        .command("version", { hidden: true })
-        .description("print the installed Mobius CLI version")
-        .action(() => {
-            process.stdout.write(`${context.version}\n`);
-        });
     program.option("-v, --version", "print the CLI and running daemon versions");
     program.action(() => {
         if (program.opts()["version"]) {

@@ -10,7 +10,6 @@ import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { expect, test, vi } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { MobiusRuntimeEngine, type RunLoopParams } from "../../src/exports/engine.ts";
-import { decodeReleasedRuntimeDiagnostics } from "./fixtures/released-runtime-diagnostics.ts";
 
 interface ProbeOptions {
     readonly scenario:
@@ -239,9 +238,6 @@ async function request(
         for await (const [encoded] of messages) {
             const decoded = decodeDaemonToServiceMessage(String(encoded));
             if ("requestId" in decoded && decoded.requestId === message.requestId) {
-                if (decoded.kind === "runtime.diagnostics.result") {
-                    expect(decodeReleasedRuntimeDiagnostics(String(encoded))).toEqual(decoded);
-                }
                 return decoded;
             }
         }

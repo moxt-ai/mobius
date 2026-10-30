@@ -107,10 +107,7 @@ async function ensureManager(
                 }
                 return;
             }
-            // Replace an older lifecycle protocol once; subsequent worker upgrades keep this manager.
-            await stopManager(stateDirectory, signal);
-            await launchManager(launch);
-            managerStarted = true;
+            throw new Error("The manager could not return its status");
         } catch (cause) {
             if (!isNodeError(cause, "ENOENT") && !isNodeError(cause, "ECONNREFUSED")) {
                 throw cause;

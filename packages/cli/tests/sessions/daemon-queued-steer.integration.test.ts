@@ -5,28 +5,18 @@ import { join } from "node:path";
 import {
     decodeMessageKind,
     decodeSessionEventEnvelope,
+    decodeSessionOperationFailedEvent,
     encodeSessionPromptCommand,
+    encodeSessionPromptDispositionCommand,
+    SESSION_PROMPT_DISPOSITION_KIND,
     type SessionLiveEvent,
+    type SessionOperationFailedEvent,
+    SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test, vi } from "vitest";
-import { z } from "zod";
 import { ControlledAcpAgentSpecification } from "../support/agents/controlled-acp.ts";
 import { type RealDaemonPeer, withControlledDaemon } from "../support/agents/real-daemon.ts";
 import { writeControlledAcpExecutable } from "../support/controlled-acp-executable.ts";
-
-// Frozen operation-failure fields from the SDK shipped with Runtime 0.0.357 (250c79d1).
-const legacyIdentifier = z
-    .string()
-    .min(1)
-    .max(128)
-    .regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/);
-const legacyFailure = z.object({
-    code: legacyIdentifier,
-    kind: z.literal("session.operation.failed"),
-    message: z.string().min(1).max(500),
-    requestId: legacyIdentifier,
-    sessionId: z.string().max(128),
-});
 
 const submit = (peer: RealDaemonPeer, prompt: string, targetCommandId = "") => {
     const commandId = randomUUID();
@@ -48,16 +38,22 @@ const submit = (peer: RealDaemonPeer, prompt: string, targetCommandId = "") => {
     return commandId;
 };
 
-// Retain the released request shape: old clients must get a readable, correlated refusal.
 const steer = (peer: RealDaemonPeer, commandId: string, sessionId = peer.sessionId) =>
-    peer.send(JSON.stringify({ kind: "session.prompt.disposition", commandId, sessionId, disposition: "steer" }));
+    peer.send(
+        encodeSessionPromptDispositionCommand({
+            kind: SESSION_PROMPT_DISPOSITION_KIND,
+            commandId,
+            sessionId,
+            disposition: SessionPromptDisposition.Steer,
+        }),
+    );
 
 const cancel = (peer: RealDaemonPeer, commandId: string) =>
     peer.send(JSON.stringify({ kind: "session.cancel", commandId, sessionId: peer.sessionId }));
 
 const observe = (peer: RealDaemonPeer) => {
     const events: SessionLiveEvent[] = [];
-    const failures: z.infer<typeof legacyFailure>[] = [];
+    const failures: SessionOperationFailedEvent[] = [];
     const next = async () => {
         const raw = await peer.nextMessage();
         switch (decodeMessageKind(raw)) {
@@ -65,7 +61,7 @@ const observe = (peer: RealDaemonPeer) => {
                 events.push(...decodeSessionEventEnvelope(raw).events);
                 break;
             case "session.operation.failed":
-                failures.push(legacyFailure.parse(JSON.parse(raw)));
+                failures.push(decodeSessionOperationFailedEvent(raw));
                 break;
         }
     };
@@ -113,7 +109,7 @@ const scenario = async (run: (peer: RealDaemonPeer) => Promise<void>) => {
     }
 };
 
-test("Given queued work has started or completed, When a released client sends a late steer, Then it receives the actual state without executing the message again", async () => {
+test("Given queued work has started or completed, When a client sends a late steer, Then it receives the actual state without executing the message again", async () => {
     await scenario(async (peer) => {
         const observed = observe(peer);
         const running = submit(peer, "hold after first delta");
