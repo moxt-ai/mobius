@@ -18,6 +18,7 @@ import type { PairingOperations } from "./pairing-operations.ts";
 import { runtimeControlPermission } from "./runtime-control-registry.ts";
 import {
     type RuntimeControlCommand,
+    type RuntimeControlResult,
     requestRuntimeAgentSettings,
     requestRuntimeContentWrite,
     requestRuntimeControl,
@@ -122,7 +123,7 @@ export class PairingService {
         command: RuntimeControlCommand,
         signal: AbortSignal,
         timing: OperationTiming = unmeasuredOperationTiming,
-    ) => {
+    ): Promise<RuntimeControlResult> => {
         const deadline =
             this.#runtimeOperations === undefined ? AbortSignal.any([signal, AbortSignal.timeout(120000)]) : signal;
         if (this.#runtimeOperations !== undefined) {
@@ -159,7 +160,10 @@ export class PairingService {
             return await timing.measure(
                 "control-runtime",
                 "Wait for Runtime control response",
-                async () => await requestRuntimeControl(socket, command, deadline),
+                async () =>
+                    await requestRuntimeControl(socket, command, deadline, (query, querySignal) =>
+                        this.requestControl(projectId, runtimeId, token, query, querySignal),
+                    ),
             );
         } finally {
             await timing.measure(
@@ -280,7 +284,7 @@ export class PairingService {
         runtimeId: string,
         command: RuntimeControlCommand,
         signal: AbortSignal,
-    ) => {
+    ): Promise<RuntimeControlResult> => {
         if (this.#runtimeOperations !== undefined) {
             return await this.#runtimeOperations.requestProjectScopeControl(scope, runtimeId, command, signal);
         }
@@ -297,7 +301,9 @@ export class PairingService {
             if (socket === null) {
                 throw new PairingDirectoryError("runtime_unavailable", "The Runtime connection is unavailable");
             }
-            return await requestRuntimeControl(socket, command, deadline);
+            return await requestRuntimeControl(socket, command, deadline, (query, querySignal) =>
+                this.requestProjectScopeControl(scope, runtimeId, query, querySignal),
+            );
         } finally {
             await this.#pairings.closeControlHost(access, AbortSignal.timeout(15000));
         }

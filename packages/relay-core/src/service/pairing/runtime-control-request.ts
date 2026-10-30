@@ -150,6 +150,7 @@ interface LifecycleExpectation {
 type LifecycleReply =
     | { readonly kind: "resolve"; readonly result: RuntimeControlResult }
     | { readonly kind: "reject"; readonly error: SessionRuntimeError }
+    | { readonly kind: "inspect-queue" }
     | { readonly kind: "ignore" };
 
 /** Maps one V2 lifecycle payload to the reply for the pending control command. */
@@ -170,26 +171,11 @@ function lifecycleReply(
         return { kind: "reject", error: new SessionRuntimeError(payload.code, payload.message) };
     }
     if (command.kind === "session.prompt" && payload.kind === "session.queue.changed") {
-        // A queue change on the submitted Session acknowledges a queue-disposition
-        // Turn: the daemon records it as the prompt enters its queue. The event is
-        // Session-scoped, so this resolves submissions that asked to be queued;
-        // every other disposition keeps waiting for its own prompt.started. A
-        // queue-disposition Turn completing on the same Session also records a
-        // queue change, so it can acknowledge a newer submission slightly early;
-        // the response state is advisory while the Turn's own lifecycle events
-        // remain authoritative for its outcome.
-        if (command.disposition !== "queue" || sessionId !== command.sessionId) {
-            return { kind: "ignore" };
-        }
-        return {
-            kind: "resolve",
-            result: {
-                commandId: requestId,
-                kind: "turn.queued",
-                sessionId,
-            },
-        };
+        return command.disposition === "queue" && sessionId === command.sessionId
+            ? { kind: "inspect-queue" }
+            : { kind: "ignore" };
     }
+
     if (!expectation.resolveOn.includes(payload.kind)) {
         return { kind: "ignore" };
     }
@@ -604,6 +590,7 @@ export async function requestRuntimeControl(
     socket: RuntimeReplyConnection,
     command: RuntimeControlCommand,
     signal: AbortSignal,
+    queryExecution?: (query: NativeSessionRequest, signal: AbortSignal) => Promise<RuntimeControlResult>,
 ): Promise<RuntimeControlResult> {
     const { reply } = runtimeControlRegistry[command.kind];
     const timeout = new AbortController();
@@ -611,7 +598,8 @@ export async function requestRuntimeControl(
         () => timeout.abort(new DOMException("Runtime request timed out", "TimeoutError")),
         120_000,
     );
-    const deadline = AbortSignal.any([signal, timeout.signal]);
+    const lifetime = new AbortController();
+    const deadline = AbortSignal.any([signal, timeout.signal, lifetime.signal]);
     const requestId =
         command.kind === "session.prompt" ||
         command.kind === "session.prompt.disposition" ||
@@ -622,6 +610,9 @@ export async function requestRuntimeControl(
               ? command.interactionId
               : command.requestId;
     let cleanup = () => {};
+    let queueCheck: "idle" | "checking" | "dirty" = "idle";
+    let inspection: Promise<void> = Promise.resolve();
+    const queueChangedDuringInspection = () => queueCheck === "dirty";
     try {
         deadline.throwIfAborted();
         return await new Promise<RuntimeControlResult>((resolve, reject) => {
@@ -637,6 +628,68 @@ export async function requestRuntimeControl(
                     );
                 }
                 reject(deadline.reason);
+            };
+            const inspectQueue = (): void => {
+                if (command.kind !== "session.prompt" || queryExecution === undefined) {
+                    reject(new SessionRuntimeError("runtime_unavailable", "Queue admission could not be confirmed"));
+                    return;
+                }
+                if (queueCheck !== "idle") {
+                    queueCheck = "dirty";
+                    return;
+                }
+                const query = queryExecution;
+                inspection = (async () => {
+                    do {
+                        queueCheck = "checking";
+                        // Queue changes carry no command identity. Read the Runtime's existing
+                        // snapshot contract before acknowledging this particular submission.
+                        const result = await query(
+                            {
+                                kind: "native.session.request",
+                                action: "active-turn",
+                                requestId: crypto.randomUUID(),
+                                sessionId: command.sessionId,
+                                targetSessionId: command.sessionId,
+                                agentId: command.agentId,
+                                bindingId: command.bindingId,
+                                directoryId: command.directoryId,
+                                additionalDirectoryIds: command.additionalDirectoryIds,
+                            },
+                            deadline,
+                        );
+                        deadline.throwIfAborted();
+                        if (
+                            result.kind !== "native.session.result" ||
+                            result.action !== "active-turn" ||
+                            result.targetSessionId !== command.sessionId
+                        ) {
+                            throw new SessionRuntimeError(
+                                "runtime_unavailable",
+                                "Queue admission could not be confirmed",
+                            );
+                        }
+                        if (result.queued.some((queued) => queued.commandId === command.commandId)) {
+                            resolve({
+                                kind: "turn.queued",
+                                commandId: command.commandId,
+                                sessionId: command.sessionId,
+                            });
+                            return;
+                        }
+                        // Changes received during a snapshot read require one fresh read;
+                        // otherwise keep waiting for this command's own lifecycle event.
+                    } while (queueChangedDuringInspection());
+                    queueCheck = "idle";
+                })().catch((cause: unknown) => {
+                    reject(
+                        deadline.aborted
+                            ? deadline.reason
+                            : new SessionRuntimeError("runtime_unavailable", "Queue admission could not be confirmed", {
+                                  cause,
+                              }),
+                    );
+                });
             };
             const onMessage = (event: Event) => {
                 if (!(event instanceof MessageEvent)) {
@@ -662,6 +715,9 @@ export async function requestRuntimeControl(
                                 lifecycleEvent.sessionId,
                                 lifecycleEvent.payload,
                             );
+                            if (lifecycle.kind === "inspect-queue") {
+                                inspectQueue();
+                            }
                             if (lifecycle.kind === "reject") {
                                 reject(lifecycle.error);
                                 return;
@@ -729,6 +785,8 @@ export async function requestRuntimeControl(
     } finally {
         clearTimeout(timer);
         cleanup();
+        lifetime.abort(new DOMException("Operation finished", "AbortError"));
+        await inspection;
         socket.close(1000, "Operation finished");
     }
 }

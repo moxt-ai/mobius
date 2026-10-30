@@ -61,6 +61,62 @@ import {
 } from "../src/worker.ts";
 import { registerRuntimeFixture } from "./registered-runtime.ts";
 
+it("Given another command changes the queue, When this submission is refused, Then it is not acknowledged", async () => {
+    const runtime = await connectRuntimeDaemon("audit-queue-correlation");
+    try {
+        const pending = runtime.sessionControlRequest("/turns", {
+            additionalDirectoryIds: [],
+            agentId: "codex",
+            content: "Do not silently lose this message",
+            directoryId: "root",
+            disposition: "queue",
+            idempotencyKey: "audit-rejected-command",
+            attachments: [],
+            targetCommandId: "unknown-target",
+        });
+        expect(decodeServiceToDaemonMessage(await runtime.daemonMessages.next())).toMatchObject({
+            kind: "session.prompt",
+            commandId: "audit-rejected-command",
+        });
+        runtime.daemon.send(
+            encodeSessionEventEnvelope({
+                kind: "session.event.v2",
+                events: [
+                    {
+                        eventId: "another-command-queue-change",
+                        position: "1",
+                        recordedAt: "2026-09-18T00:00:00.000Z",
+                        sessionGenerationId: "audit-generation",
+                        sessionId: runtime.sessionId,
+                        type: "lifecycle-metadata",
+                        payload: { kind: "session.queue.changed" },
+                    },
+                    {
+                        eventId: "refusal-of-audit-command",
+                        position: "2",
+                        recordedAt: "2026-09-18T00:00:00.000Z",
+                        sessionGenerationId: "audit-generation",
+                        sessionId: runtime.sessionId,
+                        type: "lifecycle-metadata",
+                        payload: {
+                            kind: "prompt.failed-before-start",
+                            commandId: "audit-rejected-command",
+                            code: "queue_target_unavailable",
+                            message: "The queue target is unavailable",
+                        },
+                    },
+                ],
+            }),
+        );
+        const response = await pending;
+        const body: unknown = await response.json();
+        expect(response.status).toBe(503);
+        expect(body).toMatchObject({ error: { code: "queue_target_unavailable" } });
+    } finally {
+        runtime.daemon.close(1000, "Audit complete");
+    }
+});
+
 class ControlledRecording implements SessionRecording {
     readonly started = Promise.withResolvers<void>();
     readonly release = Promise.withResolvers<void>();
@@ -2295,6 +2351,18 @@ async function connectRuntimeDaemon(slug: string, options: { readonly anchorCloc
             ),
         projectId,
         sessionId,
+        querySessions: (sessionIds: readonly string[]) =>
+            worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}/sessions/query`,
+                    {
+                        method: "POST",
+                        headers: credentialHeaders(appCredential),
+                        body: JSON.stringify({ sessionIds }),
+                    },
+                ),
+                environment,
+            ),
         deleteApp: () =>
             worker.fetch(
                 new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${text(app, "appId")}`, {
@@ -3743,6 +3811,23 @@ describe.sequential("Platform Turn submission", () => {
                             payload: { kind: "session.queue.changed" },
                         },
                     ],
+                }),
+            );
+            const admissionQuery = decodeServiceToDaemonMessage(await daemonMessages.next());
+            if (admissionQuery.kind !== "native.session.request" || admissionQuery.action !== "active-turn") {
+                throw new Error("Expected queue admission snapshot");
+            }
+            // Retained Runtime contract: no delivery receipt or new acknowledgement kind.
+            daemon.send(
+                JSON.stringify({
+                    kind: "native.session.result",
+                    action: "active-turn",
+                    requestId: admissionQuery.requestId,
+                    sessionId,
+                    targetSessionId: sessionId,
+                    turn: null,
+                    queued: [{ commandId: "queued-follow-up", prompt: "queue this follow-up", attachments: [] }],
+                    queuedCancellation: "before-start",
                 }),
             );
             expect(await responseJson(await queuedTurn, 200)).toMatchObject({

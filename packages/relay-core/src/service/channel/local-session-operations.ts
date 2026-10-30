@@ -129,7 +129,9 @@ export function createLocalSessionOperations(
             command.kind === "session.prompt" && command.disposition === "queue",
             signal,
         );
-        return await requestRuntimeControl(socket, command, signal);
+        return await requestRuntimeControl(socket, command, signal, (query, querySignal) =>
+            requestProjectScopeControl(scope, requestedRuntime, query, querySignal),
+        );
     };
     return {
         forkNativeSession: async (scope, requestedRuntime, operationId, input, signal) => {
