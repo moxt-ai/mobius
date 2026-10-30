@@ -12,8 +12,6 @@ export const channelHostCredential = sqliteTable(
         lastUsedAt: integer("last_used_at").notNull(),
         revokedAt: integer("revoked_at"),
         sourceGrantId: text("source_grant_id").unique(),
-        replacedByCredentialId: text("replaced_by_credential_id"),
-        overlapEndsAt: integer("overlap_ends_at"),
     },
     (table) => [
         check("channel_host_credentials_authority_check", sql`${table.authority} in ('owner', 'linked')`),

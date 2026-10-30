@@ -136,7 +136,7 @@ export class PairingDirectoryService implements PairingOperations {
         const tokenHash = await hashSecret(validateToken(token));
         const storage = await this.identityStorage({ kind: "host", channelId, tokenHash }, signal);
         const row = await storage.readHost(validateIdentifier(channelId, "channel_id"), tokenHash, signal);
-        if (row === null || (await storage.touchHost(row.credential_id, Date.now(), signal)).meta.changes !== 1) {
+        if (row === null || !(await storage.touchHost(row.credential_id, Date.now(), signal))) {
             throw new PairingDirectoryError("unauthorized", "A valid channel token is required");
         }
         return row;
@@ -563,8 +563,8 @@ export class PairingDirectoryService implements PairingOperations {
     ) => {
         const owner = await this.readAuthorizedOwner(channelId, token, signal);
         const storage = await this.projectStorage(new ProjectScope(owner.project_id), signal);
-        const page = await storage.listLinked(owner.channel_id, signal);
-        return page.results.map(
+        const devices = await storage.listLinked(owner.channel_id, signal);
+        return devices.map(
             (row) =>
                 new LinkedChannelDevice(
                     row.credential_id,

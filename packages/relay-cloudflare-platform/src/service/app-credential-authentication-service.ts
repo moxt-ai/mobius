@@ -87,14 +87,19 @@ export class AppCredentialAuthenticationService {
     };
 }
 
-/** Whether an AppCredential authenticates now. Authentication and every listing apply this one rule. */
-export function appCredentialActive(row: CredentialRow, now: number): boolean {
+/**
+ * Whether an AppCredential authenticates now. Authentication and every listing apply this one rule. It reads only
+ * the credential: App deletion revokes every credential of the App in the same batch, and a credential is issued
+ * only while its App is active.
+ */
+export function appCredentialActive(
+    row: Pick<CredentialRow, "overlap_ends_at" | "replaced_by_credential_id" | "revoked_at">,
+    now: number,
+): boolean {
     return (
         row.revoked_at === null &&
         (row.replaced_by_credential_id === null ||
-            (typeof row.overlap_ends_at === "number" && row.overlap_ends_at > now)) &&
-        row.app_lifecycle === "active" &&
-        row.tenant_lifecycle === "active"
+            (typeof row.overlap_ends_at === "number" && row.overlap_ends_at > now))
     );
 }
 

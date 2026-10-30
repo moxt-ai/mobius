@@ -9,6 +9,8 @@ import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createTestMobiusPlatformApp } from "../../test-support/src/app.ts";
 import { FakeClerk } from "../../test-support/src/clerk.ts";
 import { RuntimeRelay } from "../src/durable-objects/runtime-relay.ts";
+import { PlatformControlPlaneStorage } from "../src/storage/platform-control-plane-storage.ts";
+import { PlatformDatabaseResolver } from "../src/storage/platform-database-resolver.ts";
 import { createPlatformGateways, PlatformAuthenticationConfiguration } from "../src/worker.ts";
 
 const origin = `https://platform.test${MOBIUS_API_PREFIX}`;
@@ -553,4 +555,92 @@ it("Given an App with two active Projects, When its owner deletes it, Then delet
     await expectRejected(await app.deleteApp(), "app_access_denied", 403);
     expect(await app.readApp()).toEqual(deleted);
     expect(await app.listAuditEvents()).toEqual(auditsAfterDeletion);
+});
+
+it("Given an App deleted while its Project and AppCredential stayed active, When the lifecycle migration runs, Then both end at the App's deletion and neither authorizes", async () => {
+    const app = await application();
+    const deletedAt = "2026-10-27T00:01:00.000Z";
+    const directory = env.PLATFORM_DIRECTORY_DATABASE;
+    // The state a Project creation or credential issuance racing an earlier App deletion could leave behind.
+    await directory
+        .prepare("UPDATE platform_apps SET lifecycle = 'deleted', deleted_at = ?, updated_at = ? WHERE app_id = ?")
+        .bind(Date.parse(deletedAt), Date.parse(deletedAt), app.appId)
+        .run();
+    const migration = env.TEST_PLATFORM_MIGRATIONS.find(
+        (candidate) => candidate.name === "0011_end_lifecycle_with_app.sql",
+    );
+    if (migration === undefined) {
+        throw new Error("Expected the lifecycle migration");
+    }
+
+    await directory.batch(migration.queries.map((query) => directory.prepare(query)));
+
+    expect(await responseJson(await app.listProjects(), 200)).toMatchObject({
+        projects: [{ projectId: app.projectId, lifecycle: "deleted", deletedAt, updatedAt: deletedAt }],
+    });
+    await expectRejected(await app.authenticateApp(), "credential_revoked");
+    await expectRejected(await app.authenticateSession(), "credential_revoked");
+});
+
+it("Given an App deleted after a request checked it, When that request creates a Project or issues an AppCredential, Then neither is created", async () => {
+    const app = await application();
+    expect((await app.deleteApp()).status).toBe(200);
+    const storage = new PlatformControlPlaneStorage(env.PLATFORM_DIRECTORY_DATABASE, new PlatformDatabaseResolver(env));
+    const signal = new AbortController().signal;
+    const now = Date.now();
+    const audit = {
+        action: "stale.request",
+        actorId: "developer-1",
+        actorKind: "platform_developer",
+        actorRef: "",
+        appId: app.appId,
+        auditId: "stale-request-audit",
+        detailsJson: "{}",
+        outcome: "succeeded",
+        projectId: "",
+        recordedAt: now,
+        subjectId: app.appId,
+        tenantId: app.tenantId,
+    };
+
+    const project = await storage.createProject(
+        {
+            app_id: app.appId,
+            client_reference: "stale-project",
+            created_at: now,
+            deleted_at: null,
+            display_name: "Stale Project",
+            idempotency_key: "stale-project",
+            lifecycle: "active",
+            location_hint: "apac",
+            project_id: "stale-project",
+            request_digest: "stale-digest",
+            tenant_id: app.tenantId,
+            updated_at: now,
+        },
+        100,
+        audit,
+        signal,
+    );
+    const credentialIssued = await storage.issueAppCredential(
+        {
+            allProjects: true,
+            appId: app.appId,
+            credentialId: "stale-credential",
+            issuedAt: now,
+            permissionsJson: "[]",
+            publicCredentialId: "stale-public-credential",
+            secretDigest: "stale-digest",
+        },
+        [],
+        audit,
+        signal,
+    );
+
+    expect(project).toEqual({ projectCreated: false, auditRecorded: false });
+    expect(credentialIssued).toBe(false);
+    expect(await storage.listActiveProjectIds(app.appId, signal)).toEqual([]);
+    expect((await storage.listAppCredentials(app.appId, signal)).map((row) => row.credential_id)).toEqual([
+        app.defaultCredential.credentialId,
+    ]);
 });

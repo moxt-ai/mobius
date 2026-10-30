@@ -1,8 +1,6 @@
 import { relayDrizzle } from "@moxt-ai/mobius-relay-core/database";
-import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import {
-    type ActiveCountRow,
-    ActiveCountRowSchema,
     type AppRow,
     AppRowSchema,
     type AuditRow,
@@ -13,8 +11,6 @@ import {
     type PlatformAuditRecord,
     type PlatformProjectScopeRow,
     PlatformProjectScopeRowSchema,
-    type ProjectIdRow,
-    ProjectIdRowSchema,
     type ProjectRow,
     ProjectRowSchema,
     ProjectStorageScopeRowSchema,
@@ -28,12 +24,15 @@ import {
     platformAppCredential,
     platformAppCredentialScope,
     platformDashboardAuditEvent,
+    platformProject,
+    platformTenant,
 } from "../schema/d1/index.ts";
 import { platformAuditEvent } from "../schema/project-do/index.ts";
 import { waitForD1 } from "./d1-operation.ts";
 import { decodeOptionalStorageRecord, decodeStorageRecord, decodeStorageRecords } from "./decode-storage-record.ts";
 import { type PlatformDatabaseResolver, projectDatabase, projectSqlDatabase } from "./platform-database-resolver.ts";
 import { platformDrizzle } from "./platform-drizzle-database.ts";
+import { appActive, projectServed } from "./platform-lifecycle.ts";
 
 export class PlatformControlPlaneStorage {
     readonly #database: D1Database;
@@ -52,19 +51,18 @@ export class PlatformControlPlaneStorage {
         const results = await waitForD1(
             () =>
                 this.#database.batch([
-                    this.#database
-                        .prepare(
-                            `INSERT INTO platform_tenants (
-                               tenant_id, display_name, lifecycle, quotas_json, created_at, updated_at
-                             ) VALUES (?, ?, 'active', ?, ?, ?) ON CONFLICT(tenant_id) DO NOTHING`,
-                        )
-                        .bind(
-                            tenant.tenant_id,
-                            tenant.display_name,
-                            tenant.quotas_json,
-                            tenant.created_at,
-                            tenant.updated_at,
-                        ),
+                    this.statement(
+                        platformDrizzle(this.#database)
+                            .insert(platformTenant)
+                            .values({
+                                tenantId: tenant.tenant_id,
+                                displayName: tenant.display_name,
+                                quotasJson: tenant.quotas_json,
+                                createdAt: tenant.created_at,
+                                updatedAt: tenant.updated_at,
+                            })
+                            .onConflictDoNothing(),
+                    ),
                     this.auditOfPreviousChange(audit),
                 ]),
             signal,
@@ -101,11 +99,12 @@ export class PlatformControlPlaneStorage {
         const results = await waitForD1(
             () =>
                 this.#database.batch([
-                    this.#database
-                        .prepare(
-                            "UPDATE platform_apps SET display_name = ?, updated_at = ? WHERE app_id = ? AND lifecycle = 'active'",
-                        )
-                        .bind(displayName, updatedAt, appId),
+                    this.statement(
+                        platformDrizzle(this.#database)
+                            .update(platformApp)
+                            .set({ displayName, updatedAt })
+                            .where(and(eq(platformApp.appId, appId), appActive)),
+                    ),
                     this.auditOfPreviousChange(audit),
                 ]),
             signal,
@@ -113,55 +112,49 @@ export class PlatformControlPlaneStorage {
         return results.every((result) => result.meta.changes === 1);
     };
 
+    /**
+     * The single writer that ends an App. One batch records the App, each of its Projects and each of its
+     * AppCredentials as ended, so readers consult only the entity they read (see platform-lifecycle.ts).
+     */
     readonly deleteApp = async (
         appId: string,
         deletedAt: number,
         audit: PlatformAuditRecord,
         signal: AbortSignal,
     ): Promise<boolean> => {
+        const database = platformDrizzle(this.#database);
         const results = await waitForD1(
             () =>
                 this.#database.batch([
                     this.statement(
-                        platformDrizzle(this.#database)
+                        database
                             .update(platformApp)
                             .set({ lifecycle: "deleted", deletedAt, updatedAt: deletedAt })
-                            .where(and(eq(platformApp.appId, appId), eq(platformApp.lifecycle, "active"))),
+                            .where(and(eq(platformApp.appId, appId), appActive)),
                     ),
                     this.auditOfPreviousChange(audit),
-                    this.#database
-                        .prepare(
-                            `UPDATE platform_projects SET lifecycle = 'deleted', deleted_at = ?, updated_at = ?
-                              WHERE app_id = ? AND lifecycle != 'deleted'`,
-                        )
-                        .bind(deletedAt, deletedAt, appId),
-                    this.#database
-                        .prepare(
-                            "UPDATE platform_app_credentials SET revoked_at = COALESCE(revoked_at, ?) WHERE app_id = ?",
-                        )
-                        .bind(deletedAt, appId),
+                    this.statement(
+                        database
+                            .update(platformProject)
+                            .set({ lifecycle: "deleted", deletedAt, updatedAt: deletedAt })
+                            .where(and(eq(platformProject.appId, appId), projectServed)),
+                    ),
+                    this.statement(
+                        database
+                            .update(platformAppCredential)
+                            .set({ revokedAt: deletedAt })
+                            .where(
+                                and(eq(platformAppCredential.appId, appId), isNull(platformAppCredential.revokedAt)),
+                            ),
+                    ),
                 ]),
             signal,
         );
         return results[0]?.meta.changes === 1 && results[1]?.meta.changes === 1;
     };
 
-    readonly countActiveApps = async (tenantId: string, signal: AbortSignal): Promise<number> => {
-        const row: ActiveCountRow | null = decodeOptionalStorageRecord(
-            ActiveCountRowSchema,
-            await waitForD1(
-                () =>
-                    this.#database
-                        .prepare(
-                            "SELECT COUNT(*) AS active_count FROM platform_apps WHERE tenant_id = ? AND lifecycle = 'active'",
-                        )
-                        .bind(tenantId)
-                        .first(),
-                signal,
-            ),
-        );
-        return row?.active_count ?? -1;
-    };
+    readonly countActiveApps = async (tenantId: string, signal: AbortSignal): Promise<number> =>
+        await waitForD1(async () => await this.activeAppCount(tenantId), signal);
 
     readonly createApp = async (
         app: AppRow,
@@ -173,25 +166,7 @@ export class PlatformControlPlaneStorage {
         const results = await waitForD1(
             () =>
                 this.#database.batch([
-                    this.#database
-                        .prepare(
-                            `INSERT INTO platform_apps (
-                               app_id, tenant_id, display_name, lifecycle, default_credential_id,
-                               created_at, updated_at
-                             ) SELECT ?, ?, ?, 'active', ?, ?, ?
-                               WHERE (SELECT COUNT(*) FROM platform_apps
-                                       WHERE tenant_id = ? AND lifecycle = 'active') < ?`,
-                        )
-                        .bind(
-                            app.app_id,
-                            app.tenant_id,
-                            app.display_name,
-                            app.default_credential_id,
-                            app.created_at,
-                            app.updated_at,
-                            app.tenant_id,
-                            activeAppLimit,
-                        ),
+                    this.statement(this.appInsert(app, activeAppLimit)),
                     this.credentialInsertStatement(credential),
                     this.auditCreatedAppStatement(audit),
                 ]),
@@ -227,41 +202,27 @@ export class PlatformControlPlaneStorage {
     readonly readActiveProjectScope = async (
         projectId: string,
         signal: AbortSignal,
-    ): Promise<PlatformProjectScopeRow | null> =>
-        decodeOptionalStorageRecord(
-            PlatformProjectScopeRowSchema,
-            await waitForD1(
-                () =>
-                    this.#database
-                        .prepare(
-                            `SELECT projects.app_id, apps.tenant_id, projects.project_id, projects.lifecycle
-                               FROM platform_projects AS projects JOIN platform_apps AS apps ON apps.app_id = projects.app_id
-                              WHERE projects.project_id = ? AND projects.lifecycle = 'active'`,
-                        )
-                        .bind(projectId)
-                        .first(),
-                signal,
-            ),
+    ): Promise<PlatformProjectScopeRow | null> => {
+        const rows = await waitForD1(
+            () =>
+                platformDrizzle(this.#database)
+                    .select({
+                        app_id: platformProject.appId,
+                        tenant_id: platformApp.tenantId,
+                        project_id: platformProject.projectId,
+                        lifecycle: platformProject.lifecycle,
+                    })
+                    .from(platformProject)
+                    .innerJoin(platformApp, eq(platformApp.appId, platformProject.appId))
+                    .where(and(eq(platformProject.projectId, projectId), projectServed))
+                    .limit(1),
+            signal,
         );
-
-    readonly countActiveProjects = async (tenantId: string, signal: AbortSignal): Promise<number> => {
-        const row: ActiveCountRow | null = decodeOptionalStorageRecord(
-            ActiveCountRowSchema,
-            await waitForD1(
-                () =>
-                    this.#database
-                        .prepare(
-                            `SELECT COUNT(*) AS active_count
-                               FROM platform_projects AS projects JOIN platform_apps AS apps ON apps.app_id = projects.app_id
-                              WHERE apps.tenant_id = ? AND projects.lifecycle = 'active'`,
-                        )
-                        .bind(tenantId)
-                        .first(),
-                signal,
-            ),
-        );
-        return row?.active_count ?? -1;
+        return decodeOptionalStorageRecord(PlatformProjectScopeRowSchema, rows[0] ?? null);
     };
+
+    readonly countActiveProjects = async (tenantId: string, signal: AbortSignal): Promise<number> =>
+        await waitForD1(async () => await this.servedProjectCount(tenantId), signal);
 
     readonly createProject = async (
         project: ProjectRow,
@@ -270,31 +231,7 @@ export class PlatformControlPlaneStorage {
         signal: AbortSignal,
     ): Promise<{ readonly projectCreated: boolean; readonly auditRecorded: boolean }> => {
         const results = await waitForD1(
-            () =>
-                this.#database.batch([
-                    this.#database
-                        .prepare(
-                            `INSERT INTO platform_projects (
-                                project_id, app_id, display_name, client_reference,
-                                idempotency_key, request_digest, lifecycle, location_hint, created_at, updated_at
-                              ) SELECT ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?
-                               WHERE (SELECT COUNT(*) FROM platform_projects AS projects JOIN platform_apps AS apps ON apps.app_id = projects.app_id
-                                       WHERE apps.tenant_id = ? AND projects.lifecycle = 'active') < ?`,
-                        )
-                        .bind(
-                            project.project_id,
-                            project.app_id,
-                            project.display_name,
-                            project.client_reference,
-                            project.idempotency_key,
-                            project.request_digest,
-                            project.location_hint,
-                            project.created_at,
-                            project.updated_at,
-                            project.tenant_id,
-                            activeProjectLimit,
-                        ),
-                ]),
+            () => this.#database.batch([this.statement(this.projectInsert(project, activeProjectLimit))]),
             signal,
         );
         return {
@@ -306,12 +243,13 @@ export class PlatformControlPlaneStorage {
     readonly listApps = async (tenantId: string, signal: AbortSignal): Promise<readonly AppRow[]> => {
         const rows = await waitForD1(
             () =>
-                this.#database
-                    .prepare(
-                        "SELECT * FROM platform_apps WHERE tenant_id = ? AND lifecycle = 'active' ORDER BY created_at, app_id",
-                    )
-                    .bind(tenantId)
-                    .all(),
+                this.statement(
+                    platformDrizzle(this.#database)
+                        .select()
+                        .from(platformApp)
+                        .where(and(eq(platformApp.tenantId, tenantId), appActive))
+                        .orderBy(asc(platformApp.createdAt), asc(platformApp.appId)),
+                ).all(),
             signal,
         );
         return decodeStorageRecords(AppRowSchema, rows.results);
@@ -338,30 +276,11 @@ export class PlatformControlPlaneStorage {
         tenantId: string,
         signal: AbortSignal,
     ): Promise<{ readonly activeApps: number; readonly activeProjects: number }> => {
-        const [apps, projects] = await waitForD1(
-            () =>
-                Promise.all([
-                    this.#database
-                        .prepare(
-                            "SELECT COUNT(*) AS active_count FROM platform_apps WHERE tenant_id = ? AND lifecycle = 'active'",
-                        )
-                        .bind(tenantId)
-                        .first(),
-                    this.#database
-                        .prepare(
-                            `SELECT COUNT(*) AS active_count
-                               FROM platform_projects AS projects JOIN platform_apps AS apps ON apps.app_id = projects.app_id
-                              WHERE apps.tenant_id = ? AND projects.lifecycle = 'active'`,
-                        )
-                        .bind(tenantId)
-                        .first(),
-                ]),
+        const [activeApps, activeProjects] = await waitForD1(
+            () => Promise.all([this.activeAppCount(tenantId), this.servedProjectCount(tenantId)]),
             signal,
         );
-        return {
-            activeApps: decodeStorageRecord(ActiveCountRowSchema, apps).active_count,
-            activeProjects: decodeStorageRecord(ActiveCountRowSchema, projects).active_count,
-        };
+        return { activeApps, activeProjects };
     };
 
     readonly listTenantAuditEvents = async (
@@ -455,12 +374,9 @@ export class PlatformControlPlaneStorage {
             () =>
                 this.#database
                     .prepare(
-                        `SELECT credentials.*, apps.tenant_id,
-                                     apps.lifecycle AS app_lifecycle,
-                                     tenants.lifecycle AS tenant_lifecycle
+                        `SELECT credentials.*, apps.tenant_id
                            FROM platform_app_credentials AS credentials
                            JOIN platform_apps AS apps ON apps.app_id = credentials.app_id
-                           JOIN platform_tenants AS tenants ON tenants.tenant_id = apps.tenant_id
                           WHERE credentials.app_id = ?
                           ORDER BY credentials.issued_at DESC, credentials.credential_id DESC`,
                     )
@@ -706,12 +622,9 @@ export class PlatformControlPlaneStorage {
                 () =>
                     this.#database
                         .prepare(
-                            `SELECT credentials.*, apps.tenant_id,
-                                     apps.lifecycle AS app_lifecycle,
-                                     tenants.lifecycle AS tenant_lifecycle
+                            `SELECT credentials.*, apps.tenant_id
                                FROM platform_app_credentials AS credentials
                                JOIN platform_apps AS apps ON apps.app_id = credentials.app_id
-                               JOIN platform_tenants AS tenants ON tenants.tenant_id = apps.tenant_id
                               WHERE credentials.public_credential_id = ?`,
                         )
                         .bind(publicCredentialId)
@@ -727,12 +640,9 @@ export class PlatformControlPlaneStorage {
                 () =>
                     this.#database
                         .prepare(
-                            `SELECT credentials.*, apps.tenant_id,
-                                    apps.lifecycle AS app_lifecycle,
-                                    tenants.lifecycle AS tenant_lifecycle
+                            `SELECT credentials.*, apps.tenant_id
                                FROM platform_app_credentials AS credentials
                                JOIN platform_apps AS apps ON apps.app_id = credentials.app_id
-                               JOIN platform_tenants AS tenants ON tenants.tenant_id = apps.tenant_id
                               WHERE credentials.credential_id = ?`,
                         )
                         .bind(credentialId)
@@ -744,14 +654,13 @@ export class PlatformControlPlaneStorage {
     readonly listActiveProjectIds = async (appId: string, signal: AbortSignal): Promise<readonly string[]> => {
         const rows = await waitForD1(
             () =>
-                this.#database
-                    .prepare("SELECT project_id FROM platform_projects WHERE app_id = ? AND lifecycle = 'active'")
-                    .bind(appId)
-                    .all(),
+                platformDrizzle(this.#database)
+                    .select({ projectId: platformProject.projectId })
+                    .from(platformProject)
+                    .where(and(eq(platformProject.appId, appId), projectServed)),
             signal,
         );
-        const projects: readonly ProjectIdRow[] = decodeStorageRecords(ProjectIdRowSchema, rows.results);
-        return projects.map((project) => project.project_id);
+        return rows.map((row) => row.projectId);
     };
 
     readonly projectBelongsToApp = async (projectId: string, appId: string, signal: AbortSignal): Promise<boolean> => {
@@ -796,25 +705,111 @@ export class PlatformControlPlaneStorage {
         return true;
     };
 
-    private readonly credentialInsertStatement = (credential: PlatformAppCredentialInsert): D1PreparedStatement =>
-        this.#database
-            .prepare(
-                `INSERT INTO platform_app_credentials (
-                   credential_id, public_credential_id, app_id, secret_digest, permissions_json,
-                   all_projects, issued_at
-                 ) SELECT ?, ?, ?, ?, ?, ?, ?
-                   WHERE EXISTS (SELECT 1 FROM platform_apps WHERE app_id = ?)`,
-            )
-            .bind(
-                credential.credentialId,
-                credential.publicCredentialId,
-                credential.appId,
-                credential.secretDigest,
-                credential.permissionsJson,
-                credential.allProjects ? 1 : 0,
-                credential.issuedAt,
-                credential.appId,
-            );
+    private readonly activeAppCount = async (tenantId: string): Promise<number> =>
+        await platformDrizzle(this.#database).$count(platformApp, this.tenantActiveApps(tenantId));
+
+    private readonly servedProjectCount = async (tenantId: string): Promise<number> =>
+        await platformDrizzle(this.#database).$count(platformProject, this.tenantServedProjects(tenantId));
+
+    /** The Apps a Tenant's App quota counts. */
+    private readonly tenantActiveApps = (tenantId: string) => and(eq(platformApp.tenantId, tenantId), appActive);
+
+    /** The Projects a Tenant's Project quota counts. */
+    private readonly tenantServedProjects = (tenantId: string) => {
+        const database = platformDrizzle(this.#database);
+        return and(
+            projectServed,
+            inArray(
+                platformProject.appId,
+                database
+                    .select({ appId: platformApp.appId })
+                    .from(platformApp)
+                    .where(eq(platformApp.tenantId, tenantId)),
+            ),
+        );
+    };
+
+    /** Creates an App only for an existing Tenant whose active Apps are below the limit. */
+    private readonly appInsert = (app: AppRow, activeAppLimit: number) => {
+        const database = platformDrizzle(this.#database);
+        return database.insert(platformApp).select(
+            database
+                .select({
+                    appId: sql<string>`${app.app_id}`.as("appId"),
+                    tenantId: platformTenant.tenantId,
+                    displayName: sql<string>`${app.display_name}`.as("displayName"),
+                    lifecycle: sql<"active">`'active'`.as("lifecycle"),
+                    initialCredentialId: sql<string | null>`${app.default_credential_id}`.as("initialCredentialId"),
+                    createdAt: sql<number>`${app.created_at}`.as("createdAt"),
+                    updatedAt: sql<number>`${app.updated_at}`.as("updatedAt"),
+                    deletedAt: sql<null>`NULL`.as("deletedAt"),
+                })
+                .from(platformTenant)
+                .where(
+                    and(
+                        eq(platformTenant.tenantId, app.tenant_id),
+                        lt(database.$count(platformApp, this.tenantActiveApps(app.tenant_id)), activeAppLimit),
+                    ),
+                ),
+        );
+    };
+
+    /** Creates a Project only under an active App and while the Tenant's served Projects are below the limit. */
+    private readonly projectInsert = (project: ProjectRow, activeProjectLimit: number) => {
+        const database = platformDrizzle(this.#database);
+        return database.insert(platformProject).select(
+            database
+                .select({
+                    projectId: sql<string>`${project.project_id}`.as("projectId"),
+                    appId: platformApp.appId,
+                    displayName: sql<string>`${project.display_name}`.as("displayName"),
+                    clientReference: sql<string>`${project.client_reference}`.as("clientReference"),
+                    idempotencyKey: sql<string>`${project.idempotency_key}`.as("idempotencyKey"),
+                    requestDigest: sql<string>`${project.request_digest}`.as("requestDigest"),
+                    lifecycle: sql<"active">`'active'`.as("lifecycle"),
+                    createdAt: sql<number>`${project.created_at}`.as("createdAt"),
+                    updatedAt: sql<number>`${project.updated_at}`.as("updatedAt"),
+                    deletedAt: sql<null>`NULL`.as("deletedAt"),
+                    locationHint: sql<ProjectRow["location_hint"]>`${project.location_hint}`.as("locationHint"),
+                })
+                .from(platformApp)
+                .where(
+                    and(
+                        eq(platformApp.appId, project.app_id),
+                        eq(platformApp.tenantId, project.tenant_id),
+                        appActive,
+                        lt(
+                            database.$count(platformProject, this.tenantServedProjects(project.tenant_id)),
+                            activeProjectLimit,
+                        ),
+                    ),
+                ),
+        );
+    };
+
+    /** Issues an AppCredential only while its App is active. */
+    private readonly credentialInsertStatement = (credential: PlatformAppCredentialInsert): D1PreparedStatement => {
+        const database = platformDrizzle(this.#database);
+        return this.statement(
+            database.insert(platformAppCredential).select(
+                database
+                    .select({
+                        credentialId: sql<string>`${credential.credentialId}`.as("credentialId"),
+                        publicCredentialId: sql<string>`${credential.publicCredentialId}`.as("publicCredentialId"),
+                        appId: platformApp.appId,
+                        secretDigest: sql<string>`${credential.secretDigest}`.as("secretDigest"),
+                        permissionsJson: sql<string>`${credential.permissionsJson}`.as("permissionsJson"),
+                        allProjects: sql<number>`${credential.allProjects ? 1 : 0}`.as("allProjects"),
+                        issuedAt: sql<number>`${credential.issuedAt}`.as("issuedAt"),
+                        overlapEndsAt: sql<null>`NULL`.as("overlapEndsAt"),
+                        replacedByCredentialId: sql<null>`NULL`.as("replacedByCredentialId"),
+                        revokedAt: sql<null>`NULL`.as("revokedAt"),
+                    })
+                    .from(platformApp)
+                    .where(and(eq(platformApp.appId, credential.appId), appActive)),
+            ),
+        );
+    };
 
     private readonly auditCreatedAppStatement = (audit: PlatformAuditRecord): D1PreparedStatement =>
         this.#database

@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull, or } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { validateIdentifier } from "../entity/pairing/pairing.ts";
 import type { PairingIdentityCredential } from "../entity/pairing/pairing-identity.ts";
 import type { DatabaseResolver } from "../infra/database-resolver.ts";
@@ -14,6 +14,7 @@ import {
     runtimePairingRequest,
     runtimeRegistration,
 } from "../schema/project-do/index.ts";
+import { hostCredentialValid } from "./host-credential-validity.ts";
 
 export interface IdentityDatabaseSource {
     readonly sourceId: string;
@@ -29,20 +30,14 @@ async function identityRows(
     switch (credential.kind) {
         case "host":
             return orm
-                .selectDistinct({ project_id: runtimeIdentity.projectId })
-                .from(runtimeIdentity)
-                .innerJoin(runtimeRegistration, eq(runtimeRegistration.runtimeId, runtimeIdentity.runtimeId))
-                .innerJoin(channelHostCredential, eq(channelHostCredential.channelId, runtimeIdentity.channelId))
+                .select({ project_id: runtimeIdentity.projectId })
+                .from(channelHostCredential)
+                .innerJoin(runtimeIdentity, eq(runtimeIdentity.channelId, channelHostCredential.channelId))
                 .where(
                     and(
-                        eq(runtimeIdentity.channelId, validateIdentifier(credential.channelId, "channel_id")),
+                        eq(channelHostCredential.channelId, validateIdentifier(credential.channelId, "channel_id")),
                         eq(channelHostCredential.tokenHash, credential.tokenHash),
-                        isNull(channelHostCredential.revokedAt),
-                        isNull(runtimeIdentity.revokedAt),
-                        or(
-                            isNull(channelHostCredential.replacedByCredentialId),
-                            gt(channelHostCredential.overlapEndsAt, Date.now()),
-                        ),
+                        hostCredentialValid(orm),
                     ),
                 );
         case "daemon":
@@ -62,16 +57,14 @@ async function identityRows(
             const projectId = validateIdentifier(credential.projectId, "project_id");
             const [hosts, browsers] = await Promise.all([
                 orm
-                    .selectDistinct({ project_id: runtimeIdentity.projectId })
-                    .from(runtimeIdentity)
-                    .innerJoin(runtimeRegistration, eq(runtimeRegistration.runtimeId, runtimeIdentity.runtimeId))
-                    .innerJoin(channelHostCredential, eq(channelHostCredential.channelId, runtimeIdentity.channelId))
+                    .select({ project_id: runtimeIdentity.projectId })
+                    .from(channelHostCredential)
+                    .innerJoin(runtimeIdentity, eq(runtimeIdentity.channelId, channelHostCredential.channelId))
                     .where(
                         and(
                             eq(runtimeIdentity.projectId, projectId),
                             eq(channelHostCredential.tokenHash, credential.tokenHash),
-                            isNull(channelHostCredential.revokedAt),
-                            isNull(runtimeIdentity.revokedAt),
+                            hostCredentialValid(orm),
                         ),
                     ),
                 orm

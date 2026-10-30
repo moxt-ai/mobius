@@ -1,9 +1,10 @@
-import { and, eq, exists, gt, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, exists, gt, isNull, sql } from "drizzle-orm";
 import type { DatabaseResolver } from "../infra/database-resolver.ts";
 import { relayDrizzle } from "../infra/drizzle-database.ts";
 import type { ProjectStorageContext } from "../infra/project-storage-directory.ts";
 import type { SqlDatabase } from "../infra/sql-database.ts";
 import { channelAccessGrant, channelHostCredential, runtimeIdentity } from "../schema/project-do/index.ts";
+import { hostCredentialValid } from "./host-credential-validity.ts";
 import { RuntimeDirectoryStorage } from "./runtime-directory-storage.ts";
 
 interface ChannelScopeRow {
@@ -30,56 +31,43 @@ export class PairingStorage {
         this.runtimes = new RuntimeDirectoryStorage(project.projectId, this.#database);
     }
 
-    readonly readHost = (channelId: string, tokenHash: string, signal: AbortSignal) =>
-        this.#database
-            .prepare(`
-        SELECT channels.channel_id, channels.runtime_id, channels.project_id,
-            credentials.credential_id, credentials.authority
-        FROM runtimes AS channels
-        INNER JOIN runtime_registrations AS registrations ON registrations.runtime_id = channels.runtime_id
-        INNER JOIN channel_host_credentials AS credentials
-            ON credentials.channel_id = channels.channel_id
-        WHERE channels.channel_id = ? AND credentials.token_hash = ?
-            AND credentials.revoked_at IS NULL AND channels.revoked_at IS NULL
-            AND (credentials.replaced_by_credential_id IS NULL OR credentials.overlap_ends_at > ?)`)
-            .bind(channelId, tokenHash, Date.now())
-            .first<AuthorizedChannelRow>(signal);
+    readonly readHost = async (
+        channelId: string,
+        tokenHash: string,
+        signal: AbortSignal,
+    ): Promise<AuthorizedChannelRow | null> => {
+        const database = relayDrizzle(this.#database, signal);
+        const rows = await database
+            .select({
+                channel_id: runtimeIdentity.channelId,
+                runtime_id: runtimeIdentity.runtimeId,
+                project_id: runtimeIdentity.projectId,
+                credential_id: channelHostCredential.credentialId,
+                authority: channelHostCredential.authority,
+            })
+            .from(channelHostCredential)
+            .innerJoin(runtimeIdentity, eq(runtimeIdentity.channelId, channelHostCredential.channelId))
+            .where(
+                and(
+                    eq(channelHostCredential.channelId, channelId),
+                    eq(channelHostCredential.tokenHash, tokenHash),
+                    hostCredentialValid(database),
+                ),
+            )
+            .limit(1);
+        return rows[0] ?? null;
+    };
 
-    readonly readProjectHost = (projectId: string, tokenHash: string, signal: AbortSignal) =>
-        this.#database
-            .prepare(`
-        SELECT channels.channel_id, channels.runtime_id, channels.project_id,
-            credentials.credential_id, credentials.authority
-        FROM runtimes AS channels
-        INNER JOIN runtime_registrations AS registrations ON registrations.runtime_id = channels.runtime_id
-        INNER JOIN channel_host_credentials AS credentials
-            ON credentials.channel_id = channels.channel_id
-        WHERE channels.project_id = ? AND credentials.token_hash = ?
-            AND credentials.revoked_at IS NULL AND channels.revoked_at IS NULL`)
-            .bind(projectId, tokenHash)
-            .first<AuthorizedChannelRow>(signal);
-
-    readonly readRuntimeHost = (projectId: string, runtimeId: string, tokenHash: string, signal: AbortSignal) =>
-        this.#database
-            .prepare(`
-        SELECT channels.channel_id, channels.runtime_id, channels.project_id,
-            credentials.credential_id, credentials.authority
-        FROM runtimes AS channels
-        INNER JOIN runtime_registrations AS registrations ON registrations.runtime_id = channels.runtime_id
-        INNER JOIN channel_host_credentials AS credentials
-            ON credentials.channel_id = channels.channel_id
-        WHERE channels.project_id = ? AND channels.runtime_id = ? AND credentials.token_hash = ?
-            AND credentials.revoked_at IS NULL AND channels.revoked_at IS NULL`)
-            .bind(projectId, runtimeId, tokenHash)
-            .first<AuthorizedChannelRow>(signal);
-
-    readonly touchHost = (credentialId: string, now: number, signal: AbortSignal) =>
-        this.#database
-            .prepare(`
-        UPDATE channel_host_credentials SET last_used_at = ? WHERE credential_id = ? AND revoked_at IS NULL
-            AND (replaced_by_credential_id IS NULL OR overlap_ends_at > ?)`)
-            .bind(now, credentialId, now)
-            .run(signal);
+    /** Records use of a host credential; false when it no longer authenticates. */
+    readonly touchHost = async (credentialId: string, now: number, signal: AbortSignal): Promise<boolean> => {
+        const database = relayDrizzle(this.#database, signal);
+        const touched = await database
+            .update(channelHostCredential)
+            .set({ lastUsedAt: now })
+            .where(and(eq(channelHostCredential.credentialId, credentialId), hostCredentialValid(database)))
+            .returning({ credentialId: channelHostCredential.credentialId });
+        return touched.length === 1;
+    };
 
     readonly readBrowser = (projectId: string, tokenHash: string, signal: AbortSignal) =>
         this.#database
@@ -129,15 +117,24 @@ export class PairingStorage {
             .bind(credentialId, projectId, tokenHash, ownerId, now, expiresAt, now)
             .run(signal);
 
-    readonly listLinked = (channelId: string, signal: AbortSignal) =>
-        this.#database
-            .prepare(`
-        SELECT credential_id, created_at, last_used_at FROM channel_host_credentials
-        WHERE channel_id = ? AND authority = 'linked' AND revoked_at IS NULL ORDER BY created_at DESC, credential_id DESC`)
-            .bind(channelId)
-            .all<{ readonly credential_id: string; readonly created_at: number; readonly last_used_at: number }>(
-                signal,
-            );
+    readonly listLinked = async (channelId: string, signal: AbortSignal) => {
+        const database = relayDrizzle(this.#database, signal);
+        return await database
+            .select({
+                credential_id: channelHostCredential.credentialId,
+                created_at: channelHostCredential.createdAt,
+                last_used_at: channelHostCredential.lastUsedAt,
+            })
+            .from(channelHostCredential)
+            .where(
+                and(
+                    eq(channelHostCredential.channelId, channelId),
+                    eq(channelHostCredential.authority, "linked"),
+                    hostCredentialValid(database),
+                ),
+            )
+            .orderBy(desc(channelHostCredential.createdAt), desc(channelHostCredential.credentialId));
+    };
 
     readonly createProjectControlHost = (
         projectId: string,
@@ -223,8 +220,6 @@ export class PairingStorage {
                     lastUsedAt: sql<number>`${now}`.as("last_used_at"),
                     revokedAt: sql<null>`null`.as("revoked_at"),
                     sourceGrantId: channelAccessGrant.grantId,
-                    replacedByCredentialId: sql<null>`null`.as("replaced_by_credential_id"),
-                    overlapEndsAt: sql<null>`null`.as("overlap_ends_at"),
                 })
                 .from(channelAccessGrant)
                 .where(
