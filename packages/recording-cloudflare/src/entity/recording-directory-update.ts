@@ -36,6 +36,16 @@ export const directoryUpdateSchema = z
             write.updates.reduce((count, update) => count + update.operations.length, 0) <= 1000,
     );
 export type DirectoryOperation = z.infer<typeof directoryOperationSchema>;
+
+/** Directory operations a Recording batch implies, committed with the batch until the directory confirms them. */
+export interface DirectoryChange {
+    readonly operations: readonly DirectoryOperation[];
+    readonly events: number;
+}
+
+export interface PendingDirectoryChange extends DirectoryChange {
+    readonly ordinal: number;
+}
 export type RecordingDirectoryUpdate = z.infer<typeof directoryUpdateSchema>;
 
 /** Decodes an update for consumption, omitting entries this deployment cannot consume. */

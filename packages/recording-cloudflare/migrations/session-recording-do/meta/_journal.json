@@ -92,6 +92,13 @@
             "when": 1793334263048,
             "tag": "0012_blue_thunderball",
             "breakpoints": true
+        },
+        {
+            "idx": 13,
+            "version": "6",
+            "when": 1793345273283,
+            "tag": "0013_perpetual_sersi",
+            "breakpoints": true
         }
     ]
 }

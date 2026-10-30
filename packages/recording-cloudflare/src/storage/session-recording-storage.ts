@@ -5,12 +5,21 @@ import {
     type SessionWireEnvelope,
     type SessionWireEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
-import { and, asc, desc, eq, gt, gte, lt } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, lt, lte } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/durable-sqlite";
+import {
+    type DirectoryChange,
+    directoryOperationSchema,
+    type PendingDirectoryChange,
+} from "../entity/recording-directory-update.ts";
 import { sessionRecordingDurableObjectMigrations } from "../generated/session-recording-do-migrations.ts";
 import { RecordingSqlMetrics } from "../infra/recording-sql-metrics.ts";
 import * as schema from "../schema/session-recording-do/index.ts";
-import { recordedSessionEvent, recordingMetadata } from "../schema/session-recording-do/index.ts";
+import {
+    pendingDirectoryUpdate,
+    recordedSessionEvent,
+    recordingMetadata,
+} from "../schema/session-recording-do/index.ts";
 import { applyDurableObjectMigrations } from "./durable-object-migrations.ts";
 
 export interface RecordedBatch {
@@ -258,6 +267,7 @@ export class SessionRecordingStorage {
      */
     readonly append = (
         write: SessionRecordingWireWrite,
+        directory: DirectoryChange,
         project: (ordinal: number, events: readonly SessionWireEvent[], receivedAt: number) => void = () => undefined,
     ): AppendOutcome => {
         const appended: { readonly batch: RecordedBatch; readonly characters: number }[] = [];
@@ -332,6 +342,10 @@ export class SessionRecordingStorage {
                     characters: batch.encoded.length,
                 });
             }
+            this.#database
+                .insert(pendingDirectoryUpdate)
+                .values({ operationsJson: JSON.stringify(directory.operations), events: directory.events })
+                .run();
             return { kind: "recorded" };
         });
         // Only a committed batch is kept: readers waiting on this append read it next.
@@ -341,6 +355,41 @@ export class SessionRecordingStorage {
             }
         }
         return outcome;
+    };
+
+    /** The Recording's owner, or null before its first batch. */
+    readonly identity = (): {
+        readonly projectId: string;
+        readonly runtimeId: string;
+        readonly sessionId: string;
+    } | null => {
+        const metadata = this.#database
+            .select()
+            .from(recordingMetadata)
+            .where(eq(recordingMetadata.singleton, 1))
+            .all()[0];
+        return metadata === undefined
+            ? null
+            : { projectId: metadata.projectId, runtimeId: metadata.runtimeId, sessionId: metadata.sessionId };
+    };
+
+    /** The oldest directory changes not yet confirmed, in commit order. */
+    readonly pendingDirectory = (limit: number): readonly PendingDirectoryChange[] =>
+        this.#database
+            .select()
+            .from(pendingDirectoryUpdate)
+            .orderBy(asc(pendingDirectoryUpdate.ordinal))
+            .limit(limit)
+            .all()
+            .map((row) => ({
+                ordinal: row.ordinal,
+                operations: directoryOperationSchema.array().parse(JSON.parse(row.operationsJson)),
+                events: row.events,
+            }));
+
+    /** Forgets directory changes the directory confirmed, through `ordinal`. */
+    readonly confirmDirectory = (ordinal: number): void => {
+        this.#database.delete(pendingDirectoryUpdate).where(lte(pendingDirectoryUpdate.ordinal, ordinal)).run();
     };
 
     /** True when this Durable Object holds the Recording of exactly this Session. */
