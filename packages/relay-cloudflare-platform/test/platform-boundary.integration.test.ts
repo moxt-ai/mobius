@@ -2222,6 +2222,14 @@ async function connectRuntimeDaemon(slug: string, options: { readonly anchorCloc
     return {
         projectId,
         sessionId,
+        deleteApp: () =>
+            worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${text(app, "appId")}`, {
+                    method: "DELETE",
+                    headers: developerHeaders(),
+                }),
+                environment,
+            ),
         revoke: () =>
             worker.fetch(
                 new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}`, {
@@ -2500,6 +2508,17 @@ async function connectRuntimeDaemon(slug: string, options: { readonly anchorCloc
             ),
     };
 }
+
+it("Given a connected Runtime, When its App is deleted, Then its next message closes the daemon and its credential no longer connects", async () => {
+    const runtime = await connectRuntimeDaemon("deleted-app-runtime");
+    expect((await runtime.deleteApp()).status).toBe(200);
+
+    runtime.daemon.send(liveEvent(runtime.sessionId, "after deletion"));
+    expect(await runtime.daemonClosed).toMatchObject({ code: 1008, reason: "Runtime revoked" });
+    const reconnected = await runtime.reconnect();
+    expect(reconnected.status).toBe(401);
+    await reconnected.body?.cancel();
+});
 
 it.each(["text", "binary"])(
     "Given a connected Runtime, When revocation commits but disconnect delivery fails and a %s message arrives, Then later events reach neither viewers nor Recording and the daemon is closed",

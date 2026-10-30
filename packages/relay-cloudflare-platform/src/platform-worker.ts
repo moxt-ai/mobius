@@ -172,7 +172,7 @@ type DispatchEnvironment = {
         readonly control: PlatformControlPlaneService;
         readonly appAuthentication: AppCredentialAuthenticationService;
         readonly databases: PlatformDatabaseResolver;
-        readonly storageRegistry: PlatformStorageRegistry;
+        readonly projects: PlatformProjectStorageDirectory;
         readonly projectDatabases: SqlDatabase[];
         readonly relay: RelayContext;
         readonly recordingPolicies: RecordingPolicyService;
@@ -1019,7 +1019,7 @@ export function createPlatformApplication(
                 ),
             );
             context.set("databases", databases);
-            context.set("storageRegistry", storageRegistry);
+            context.set("projects", new PlatformProjectStorageDirectory(storageRegistry, controlStorage));
             context.set("projectDatabases", projectDatabases);
             await next();
         })
@@ -1027,8 +1027,7 @@ export function createPlatformApplication(
         .use("*", initializeSessionAccessTargetMiddleware)
         .use("*", async (context, next) => {
             const environment = context.env;
-            const { control, databases, storageRegistry, projectDatabases } = context.var;
-            const projects = new PlatformProjectStorageDirectory(storageRegistry);
+            const { control, databases, projects, projectDatabases } = context.var;
             const cx = createWorkerContext({
                 applications: control,
                 gateways: gateways(environment),
