@@ -149,6 +149,10 @@ class HeldProjectDirectory implements ProjectStorageDirectory {
 /** A Recording that stores every event the Relay delivers to it, in delivery order. */
 class StoredRecording implements SessionRecording {
     readonly events: SessionWireEvent[] = [];
+    /** Its answer when the Relay asks whether it stores each event once. A scenario can hold it or change it. */
+    answer: Promise<boolean> = Promise.resolve(true);
+    /** Resolves once the Relay has asked. */
+    readonly asked = Promise.withResolvers<void>();
 
     readonly deliverBatch: SessionRecording["deliverBatch"] = async (_target, envelope, signal) => {
         signal.throwIfAborted();
@@ -157,6 +161,12 @@ class StoredRecording implements SessionRecording {
             sessionId,
             kind: "recorded" as const,
         }));
+    };
+
+    readonly storesEachEventOnce: SessionRecording["storesEachEventOnce"] = async (signal) => {
+        signal.throwIfAborted();
+        this.asked.resolve();
+        return await this.answer;
     };
 }
 
@@ -340,6 +350,62 @@ it("Given a reconnected daemon's replay is still being authorized, When its next
         await Promise.all([replay, liveFrame]);
         await settle();
 
+        expect(recording.events).toEqual([replayed, live]);
+    });
+});
+
+it("Given Recording does not say it stores each event once, When a reconnected daemon replays its recent output, Then the Relay leaves the replay out of Recording and still records the live output that follows", async () => {
+    await withHeldAuthorizationRelay(async ({ connect, receiveDaemonFrame, recording, settle }) => {
+        recording.answer = Promise.resolve(false);
+        await connect("daemon");
+        const replayed = wireEvent("1", "acp", {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Replayed" },
+        });
+        const live = wireEvent("2", "acp", {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Live" },
+        });
+
+        await receiveDaemonFrame({ kind: "session.event.replay.v2", events: [replayed] });
+        await receiveDaemonFrame({ kind: "session.event.v2", events: [live] });
+        await settle();
+
+        expect(recording.events).toEqual([live]);
+    });
+});
+
+it("Given Recording is slow to say it stores each event once, When a reconnected daemon's replay is followed by live output, Then the replay holds the live output back until Recording answers and is stored first", async () => {
+    await withHeldAuthorizationRelay(async ({ connect, receiveDaemonFrame, recording, settle }) => {
+        const answer = Promise.withResolvers<boolean>();
+        recording.answer = answer.promise;
+        await connect("daemon");
+        const replayed = wireEvent("1", "acp", {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Replayed" },
+        });
+        const live = wireEvent("2", "acp", {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Live" },
+        });
+
+        const handled: string[] = [];
+        const replay = receiveDaemonFrame({ kind: "session.event.replay.v2", events: [replayed] }).then(() =>
+            handled.push("replay"),
+        );
+        const liveFrame = receiveDaemonFrame({ kind: "session.event.v2", events: [live] }).then(() =>
+            handled.push("live"),
+        );
+        await recording.asked.promise;
+        // Admitting a browser takes several storage reads, so a Relay that stopped waiting for the answer would
+        // finish the replay frame, and possibly the live one, meanwhile.
+        await connect("host");
+        handled.push("answered");
+        answer.resolve(true);
+        await Promise.all([replay, liveFrame]);
+        await settle();
+
+        expect(handled).toEqual(["answered", "replay", "live"]);
         expect(recording.events).toEqual([replayed, live]);
     });
 });

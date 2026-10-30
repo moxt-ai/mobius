@@ -232,7 +232,7 @@ export class RuntimeService {
                 if (!this.#cx.services.connections.isCurrent(identity)) {
                     return;
                 }
-                // Replayed output only reaches Recording, which stores each event once.
+                // Replayed output reaches only a Recording that says it stores each event once.
                 const ready: RuntimeLivenessReadyEvent = {
                     kind: RUNTIME_LIVENESS_READY_KIND,
                     sessionEventReplay: true,

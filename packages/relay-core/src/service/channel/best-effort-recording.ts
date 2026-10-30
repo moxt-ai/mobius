@@ -106,6 +106,21 @@ export class BestEffortRecording {
         this.#pump();
     };
 
+    /**
+     * Records events Recording may already hold, such as output a reconnected daemon sends again. They are left out
+     * unless Recording stores each event once. The caller waits for that answer, so events it publishes afterwards
+     * are recorded after these.
+     */
+    readonly publishAgain = async (
+        scope: SessionRecordingScope,
+        envelope: SessionWireEnvelope,
+        signal: AbortSignal,
+    ): Promise<void> => {
+        if (await this.#storesEachEventOnce(signal)) {
+            this.publish(scope, envelope);
+        }
+    };
+
     #enqueue(lane: SessionLane): void {
         if (lane.state !== "idle" || (lane.events.length === 0 && lane.retry === null)) {
             return;
@@ -256,15 +271,20 @@ export class BestEffortRecording {
         }
     }
 
-    /** Whether Recording says it stores each event once; no answer within the deadline counts as no. */
-    async #storesEachEventOnce(): Promise<boolean> {
+    /**
+     * Whether Recording says it stores each event once. No answer within the deadline, or before `signal` aborts,
+     * counts as no.
+     */
+    async #storesEachEventOnce(signal?: AbortSignal): Promise<boolean> {
         const controller = new AbortController();
         const timer = setTimeout(
             () => controller.abort(new DOMException("Recording deadline expired", "TimeoutError")),
             DEADLINE_MILLISECONDS,
         );
         try {
-            return await this.#recording.storesEachEventOnce(controller.signal);
+            return await this.#recording.storesEachEventOnce(
+                signal === undefined ? controller.signal : AbortSignal.any([signal, controller.signal]),
+            );
         } catch {
             return false;
         } finally {

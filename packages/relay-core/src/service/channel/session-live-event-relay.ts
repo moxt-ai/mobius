@@ -114,13 +114,14 @@ export class SessionLiveEventRelay {
     };
 
     /**
-     * Records events a reconnected daemon sent again. The Relay may already have handled them, and only Recording
-     * stores each event once, so they reach no browser, request or status notification.
+     * Records events a reconnected daemon sent again. The Relay may already have handled them, so they reach no
+     * browser, request or status notification, and Recording receives them only if it stores each event once.
      */
-    readonly replay = (envelope: SessionWireReplayEnvelope): void => {
-        this.#recording.publish(
+    readonly replay = async (envelope: SessionWireReplayEnvelope, signal: AbortSignal): Promise<void> => {
+        await this.#recording.publishAgain(
             { projectId: this.#projectId, runtimeId: this.#runtimeId },
             { kind: SESSION_EVENT_KIND, events: envelope.events },
+            signal,
         );
     };
 }

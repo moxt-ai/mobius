@@ -288,7 +288,8 @@ export class ChannelActor {
                 return;
             }
             if (kind === SESSION_EVENT_REPLAY_KIND) {
-                this.#liveEvents.replay(message);
+                // Later frames of this lane wait for the replay, so its events are recorded before theirs.
+                await this.#liveEvents.replay(message, signal);
                 return;
             }
             if (kind === SESSION_INFO_UPDATED_KIND) {
