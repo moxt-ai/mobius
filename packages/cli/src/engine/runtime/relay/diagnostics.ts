@@ -77,7 +77,7 @@ export class RelayConnectionDiagnostics {
         this.#route = describeEnvironmentProxyRoute(relayUrl);
     }
 
-    readonly snapshot = () => this.#localLog.snapshot();
+    readonly snapshot = (current: readonly Readonly<Record<string, string>>[] = []) => this.#localLog.snapshot(current);
 
     readonly catalogFailed = (failure: unknown): void => {
         const details: Record<string, string> = { ...this.#route, relayOrigin: this.#relayOrigin };

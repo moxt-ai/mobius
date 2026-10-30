@@ -1,11 +1,12 @@
 import { RUNTIME_PING_KIND, RUNTIME_PONG_KIND } from "@moxt-ai/mobius-sdk/protocol";
 import packageMetadata from "../../../../../package.json" with { type: "json" };
+import { runtimeEnvironmentDiagnostics } from "../../observability/environment-diagnostics.ts";
 import type { RuntimeCommand } from "../definition.ts";
 import { send } from "../transport.ts";
 
 export const runtimeDiagnosticsCommand: RuntimeCommand = {
     kind: "runtime.diagnostics.read",
-    handle: ({ diagnostics, socket }, message): void => {
+    handle: ({ config, diagnostics, socket }, message): void => {
         if (message.kind !== "runtime.diagnostics.read") {
             throw new Error("Command kind mismatch");
         }
@@ -14,7 +15,7 @@ export const runtimeDiagnosticsCommand: RuntimeCommand = {
                 kind: "runtime.diagnostics.result",
                 requestId: message.requestId,
                 version: packageMetadata.version,
-                ...diagnostics.snapshot(),
+                ...diagnostics.snapshot(runtimeEnvironmentDiagnostics(config)),
             });
         } catch {
             send(socket, {

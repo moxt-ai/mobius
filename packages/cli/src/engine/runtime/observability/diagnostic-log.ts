@@ -46,6 +46,19 @@ const REMOTE_DIAGNOSTIC_FIELDS = [
     "cause1Code",
     "cause2Name",
     "cause2Code",
+    "platform",
+    "architecture",
+    "osRelease",
+    "nodeVersion",
+    "uptimeSeconds",
+    "agentCount",
+    "omittedAgents",
+    "agentVersion",
+    "adapterVersion",
+    "versionSource",
+    "executableLocation",
+    "executableOverride",
+    "codexHome",
 ] as const;
 
 const FIELD_VALUE_PATTERN = /^[a-zA-Z0-9_.: -]{1,256}$/u;
@@ -88,7 +101,9 @@ export class RuntimeDiagnosticLog {
     }
 
     // Export only correlation and failure metadata. Local messages and paths stay local.
-    readonly snapshot = (): {
+    readonly snapshot = (
+        current: readonly Readonly<Record<string, string>>[] = [],
+    ): {
         readonly entries: readonly Readonly<Record<string, string>>[];
         readonly truncated: boolean;
     } => {
@@ -100,6 +115,8 @@ export class RuntimeDiagnosticLog {
             truncated ||= collected.truncated;
         }
         merged.sort(compareTimestamp);
+        // Current inventory must survive even if the recent log already fills the report.
+        merged.push(...current.map(exportedFields));
         const entries = merged.slice(-MAXIMUM_ENTRIES);
         truncated ||= entries.length < merged.length;
         while (JSON.stringify(entries).length > MAXIMUM_REPORT_BYTES && entries.length > 0) {
