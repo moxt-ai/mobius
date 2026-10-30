@@ -42,6 +42,7 @@ import {
     type PreparedSession,
     type PromptResult,
     type ResolveAgent,
+    type SessionConfigurationChange,
     type SessionConfigurationSnapshot,
     type SessionConfigureOptions,
     type SessionObserver,
@@ -312,11 +313,10 @@ export class SessionManager {
                     }
                     if (desired.type === "boolean") {
                         if (current.booleanValue !== desired.booleanValue) {
-                            await runtime.configure({
+                            await runtime.applyConfiguration({
                                 ...options,
                                 booleanValue: desired.booleanValue,
                                 configId: desired.id,
-                                expectedConfigurationRevision: null,
                                 requestId: `execution-prepare-${desired.id}`,
                                 value: "",
                                 valueType: "boolean",
@@ -328,11 +328,10 @@ export class SessionManager {
                         current.currentValue !== desired.currentValue &&
                         current.values.some((value) => value.value === desired.currentValue)
                     ) {
-                        await runtime.configure({
+                        await runtime.applyConfiguration({
                             ...options,
                             booleanValue: false,
                             configId: desired.id,
-                            expectedConfigurationRevision: null,
                             requestId: `execution-prepare-${desired.id}`,
                             value: desired.currentValue,
                             valueType: "select",
@@ -515,11 +514,10 @@ export class SessionManager {
                         model === undefined || modelIsFixed
                             ? prepared.configOptions
                             : (
-                                  await runtime.configure({
+                                  await runtime.applyConfiguration({
                                       ...options,
                                       booleanValue: false,
                                       configId: modelOption?.id ?? "model",
-                                      expectedConfigurationRevision: null,
                                       requestId: "agent-settings-model",
                                       sessionId: `agent-settings-${crypto.randomUUID()}`,
                                       value: model,
@@ -610,11 +608,23 @@ export class SessionManager {
             return (await this.#replaceExecutionPreparation(existing, options)).prepared();
         });
 
+    /** Applies a client's edit only while the Session's configuration still has the revision the client read. */
     readonly configureSession = async (options: SessionConfigureOptions): Promise<SessionConfigurationSnapshot> =>
         this.#operations.run(options, async (options) => {
             return await this.#executionProcesses.use(options.sessionId, async () => {
                 const runtime = await this.ensureSession(options);
                 return await runtime.configure(options);
+            });
+        });
+
+    /** Applies a setting the Runtime owns, such as one a prompt or a preparation requested. */
+    readonly applySessionConfiguration = async (
+        change: SessionConfigurationChange,
+    ): Promise<SessionConfigurationSnapshot> =>
+        this.#operations.run(change, async (change) => {
+            return await this.#executionProcesses.use(change.sessionId, async () => {
+                const runtime = await this.ensureSession(change);
+                return await runtime.applyConfiguration(change);
             });
         });
 
