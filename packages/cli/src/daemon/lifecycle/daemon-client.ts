@@ -59,8 +59,7 @@ export async function ensureDaemon(
         return running;
     }
     const deadline = AbortSignal.any([signal, AbortSignal.timeout(CONTROL_TIMEOUT_MILLISECONDS)]);
-    await waitForDaemon(stateDirectory, version, deadline);
-    return version;
+    return await waitForDaemon(stateDirectory, version, deadline);
 }
 
 // Status keeps the released wire format; the worker field identifies the daemon.
@@ -87,19 +86,38 @@ async function waitForDaemon(
     stateDirectory: InstallationDirectory,
     version: string,
     signal: AbortSignal,
-): Promise<void> {
+): Promise<string> {
     let daemonStarted = false;
     let child: ChildProcess | undefined;
     while (!signal.aborted) {
         try {
-            const response = decodeKnownLifecycleResponse(
+            let response = decodeKnownLifecycleResponse(
                 await sendLocalRequest(stateDirectory, "manager", { kind: "status" }, signal),
             );
+            if (response?.kind === "status" && response.worker === null) {
+                const entry = process.argv[1];
+                if (entry === undefined) {
+                    throw new Error("The CLI entrypoint is missing");
+                }
+                // A released manager may still own control after its worker exits.
+                // Reuse its authenticated launch protocol instead of competing for its lock.
+                response = decodeKnownLifecycleResponse(
+                    await sendLocalRequest(
+                        stateDirectory,
+                        "manager",
+                        { kind: "ensure", launch: { entry, executable: process.execPath, version } },
+                        signal,
+                    ),
+                );
+            }
+            if (response?.kind === "error") {
+                throw new Error(response.message);
+            }
             if (response?.kind === "status" && response.worker !== null) {
                 if (daemonStarted) {
                     process.stdout.write(`Mobius daemon ${version} started\n`);
                 }
-                return;
+                return response.worker.version;
             }
             throw new Error("The daemon could not return its status");
         } catch (cause) {

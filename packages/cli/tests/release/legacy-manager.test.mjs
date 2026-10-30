@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import { existsSync } from "node:fs";
 import { mkdtemp, readdir, readFile, rm, stat, watch, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -14,7 +15,7 @@ const execute = promisify(execFile);
 const oldVersion = "0.0.381";
 
 test("Given a released manager, When it upgrades its worker, Then the new release stays usable until restart replaces the manager", {
-    timeout: 300_000,
+    timeout: 480_000,
 }, async (context) => {
     const archive = process.env.MOBIUS_RELEASE_ARCHIVE;
     assert.ok(archive);
@@ -70,7 +71,11 @@ test("Given a released manager, When it upgrades its worker, Then the new releas
                 }),
             );
         } else {
-            response.writeHead(302, { location: `https://registry.npmjs.org${request.url}` });
+            const incoming = new URL(request.url, "http://localhost");
+            const target = new URL("https://registry.npmjs.org");
+            target.pathname = incoming.pathname;
+            target.search = incoming.search;
+            response.writeHead(302, { location: target.href });
             response.end();
         }
     });
@@ -181,4 +186,31 @@ test("Given a released manager, When it upgrades its worker, Then the new releas
     await run(next.version, ["release"]);
     await run(next.version, ["stop"]);
     assert.match((await run(next.version, ["--version"])).stdout, /Daemon: not running/);
+
+    // A released manager can survive a failed worker launch. Start that real
+    // manager without a worker, then recover through the new user's start command.
+    const managerReady = (async () => {
+        for await (const _event of watch(state, { signal: context.signal })) {
+            if (existsSync(join(state, "manager.lock"))) {
+                return;
+            }
+        }
+    })();
+    const emptyManager = spawn(
+        process.execPath,
+        [npx, "--yes", "--prefer-online", "--package", `@moxt-ai/mobius@${oldVersion}`, "--", "mobius", "__manager"],
+        { env: environment, cwd: directory, windowsHide: true, stdio: "ignore" },
+    );
+    const managerExited = once(emptyManager, "exit");
+    await managerReady;
+    assert.match((await run(next.version, ["--version"])).stdout, /Daemon: not running/);
+    const emptyManagerOwner = await readFile(join(state, "manager.lock"), "utf8");
+    await run(next.version, ["start"]);
+    assert.equal(await readFile(join(state, "manager.lock"), "utf8"), emptyManagerOwner);
+    assert.match(
+        (await run(next.version, ["--version"])).stdout,
+        new RegExp(`Daemon: ${next.version.replaceAll(".", "\\.")}`),
+    );
+    await run(next.version, ["stop"]);
+    await managerExited;
 });
