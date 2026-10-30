@@ -4,6 +4,7 @@ import {
     isPromptTerminal,
     SESSION_EVENT_BATCH_MAX_SIZE,
     SESSION_EVENT_KIND,
+    SESSION_EVENT_REPLAY_KIND,
     type SessionCloseNoticeEvent,
     type SessionInfoUpdatedEvent,
     type SessionLiveEvent,
@@ -20,6 +21,11 @@ const MAX_FRAME_BYTES = 8 * 1024 * 1024;
 // Browser-compatible WebSocket clients may initiate only 1000 or application close codes.
 const LOCAL_BACKPRESSURE_CLOSE_CODE = 4009;
 const EMPTY_ENVELOPE_BYTES = Buffer.byteLength(JSON.stringify({ events: [], kind: SESSION_EVENT_KIND }));
+const EMPTY_REPLAY_ENVELOPE_BYTES = Buffer.byteLength(JSON.stringify({ events: [], kind: SESSION_EVENT_REPLAY_KIND }));
+// How long sent output can be replayed after a reconnect. A connection can die without closing until the heartbeat
+// notices, at most 30 seconds later; whatever was sent meanwhile is lost unless it is sent again.
+const REPLAY_WINDOW_MILLISECONDS = 60_000;
+const MAX_REPLAY_BYTES = 16 * 1024 * 1024;
 export const SESSION_EVENT_BATCH_WINDOW_MILLISECONDS = 100;
 
 type PublisherConnection =
@@ -39,11 +45,23 @@ interface PendingBatch {
     bytes: number;
 }
 
-/** Keeps unsent output in bounded memory across reconnects. Sent events are never replayed. */
+interface SentBatch {
+    readonly events: readonly SessionLiveEvent[];
+    readonly bytes: number;
+    readonly sentAt: number;
+}
+
+/**
+ * Keeps unsent output in bounded memory across reconnects. Output sent within the replay window is sent again after a
+ * reconnect, but only to a Relay that announced replay support, because the Relay may have lost it with the previous
+ * connection.
+ */
 export class RuntimeSessionEventPublisher implements SessionEventSink {
     readonly #pending: PendingBatch[] = [];
+    readonly #sent: SentBatch[] = [];
     readonly #awaitingFirstAnswer = new Map<string, { readonly commandId: string; readonly generationId: string }>();
     #pendingBytes = 0;
+    #sentBytes = 0;
     #overflowReported = false;
     #pendingTask: ScheduledTask | null = null;
     #connection: PublisherConnection = { kind: "disconnected" };
@@ -53,11 +71,15 @@ export class RuntimeSessionEventPublisher implements SessionEventSink {
         this.#timer = timer;
     }
 
-    readonly connect = (socket: WebSocket): void => {
+    /** Starts sending on a ready connection; `replay` is whether its Relay announced replay support. */
+    readonly connect = (socket: WebSocket, { replay }: { readonly replay: boolean }): void => {
         if (this.#connection.kind === "closed") {
             return;
         }
         this.#connection = { kind: "connected", socket };
+        if (replay) {
+            this.replaySent(socket);
+        }
         // Hand off the unsent tail before a new command can publish newer events.
         this.flushEvents(socket);
     };
@@ -74,6 +96,8 @@ export class RuntimeSessionEventPublisher implements SessionEventSink {
         this.cancelFlush();
         this.#pending.length = 0;
         this.#pendingBytes = 0;
+        this.#sent.length = 0;
+        this.#sentBytes = 0;
         this.#awaitingFirstAnswer.clear();
     };
 
@@ -234,6 +258,8 @@ export class RuntimeSessionEventPublisher implements SessionEventSink {
                 socket.send(encoded);
                 sent += 1;
                 this.#pendingBytes -= batch.bytes;
+                this.#sent.push({ events: batch.events, bytes: batch.bytes, sentAt: Date.now() });
+                this.#sentBytes += batch.bytes;
                 for (const answer of batch.firstAnswers) {
                     console.info(
                         JSON.stringify({
@@ -256,6 +282,71 @@ export class RuntimeSessionEventPublisher implements SessionEventSink {
         this.#pending.splice(0, sent);
         if (this.#pending.length === 0) {
             this.#overflowReported = false;
+        }
+        this.forgetSent();
+    };
+
+    /** Drops sent output that left the replay window, oldest first, and keeps the rest within its byte bound. */
+    private readonly forgetSent = (): void => {
+        const now = Date.now();
+        let forgotten = 0;
+        for (const batch of this.#sent) {
+            if (this.#sentBytes <= MAX_REPLAY_BYTES && now - batch.sentAt <= REPLAY_WINDOW_MILLISECONDS) {
+                break;
+            }
+            this.#sentBytes -= batch.bytes;
+            forgotten += 1;
+        }
+        this.#sent.splice(0, forgotten);
+    };
+
+    /**
+     * Sends recently sent output again, oldest first, in frames within the live frame limits. Only the newest frames
+     * that leave room in the socket buffer for the unsent tail are sent, so a replay never closes the connection for
+     * backpressure. Recording stores each event once, so output the Relay did handle is not stored twice.
+     */
+    private readonly replaySent = (socket: WebSocket): void => {
+        this.forgetSent();
+        const frames: { readonly encoded: string; readonly bytes: number }[] = [];
+        const addFrame = (events: readonly SessionLiveEvent[]): void => {
+            const encoded = encodeDaemonToServiceMessage({ events, kind: SESSION_EVENT_REPLAY_KIND });
+            frames.push({ encoded, bytes: Buffer.byteLength(encoded, "utf8") });
+        };
+        let events: SessionLiveEvent[] = [];
+        let bytes = EMPTY_REPLAY_ENVELOPE_BYTES;
+        for (const batch of this.#sent) {
+            const batchBytes = batch.bytes - EMPTY_ENVELOPE_BYTES;
+            if (
+                events.length > 0 &&
+                (events.length + batch.events.length > SESSION_EVENT_BATCH_MAX_SIZE ||
+                    bytes + batchBytes > MAX_EVENT_BATCH_BYTES)
+            ) {
+                addFrame(events);
+                events = [];
+                bytes = EMPTY_REPLAY_ENVELOPE_BYTES;
+            }
+            events.push(...batch.events);
+            bytes += batchBytes;
+        }
+        if (events.length > 0) {
+            addFrame(events);
+        }
+        let room = MAX_BUFFERED_BYTES - socket.bufferedAmount - this.#pendingBytes;
+        let first = frames.length;
+        for (const frame of [...frames].reverse()) {
+            if (frame.bytes > room) {
+                break;
+            }
+            room -= frame.bytes;
+            first -= 1;
+        }
+        for (const { encoded } of frames.slice(first)) {
+            try {
+                socket.send(encoded);
+            } catch {
+                // The live handoff that follows notices a failed connection.
+                return;
+            }
         }
     };
 }

@@ -69,6 +69,7 @@ import {
     SESSION_CONFIGURE_KIND,
     SESSION_ELICITATION_RESPOND_KIND,
     SESSION_EVENT_KIND,
+    SESSION_EVENT_REPLAY_KIND,
     SESSION_HISTORY_PAGE_LOAD_KIND,
     SESSION_HISTORY_PAGE_LOADED_KIND,
     SESSION_INFO_UPDATED_KIND,
@@ -284,6 +285,11 @@ export class ChannelActor {
             const kind = message.kind;
             if (kind === SESSION_EVENT_KIND) {
                 this.#liveEvents.receive(message);
+                return;
+            }
+            if (kind === SESSION_EVENT_REPLAY_KIND) {
+                // Later frames of this lane wait for the replay, so its events are recorded before theirs.
+                await this.#liveEvents.replay(message, signal);
                 return;
             }
             if (kind === SESSION_INFO_UPDATED_KIND) {

@@ -193,10 +193,12 @@ export type {
     SessionEventEnvelope,
     SessionEventLogPage,
     SessionEventPayload,
+    SessionEventReplayEnvelope,
     SessionLiveEvent,
     SessionLiveEventBatch,
     SessionWireEnvelope,
     SessionWireEvent,
+    SessionWireReplayEnvelope,
 } from "./session/events/index.ts";
 
 export {
@@ -210,14 +212,17 @@ export {
     decodeSessionEventBatch,
     decodeSessionEventEnvelope,
     decodeSessionEventLogPage,
+    decodeSessionEventReplayEnvelope,
     decodeSessionLiveEvent,
     decodeSessionLiveEventBatch,
     decodeSessionWireEnvelope,
+    decodeSessionWireReplayEnvelope,
     encodeNativeSessionEvents,
     encodeSessionEvent,
     encodeSessionEventBatch,
     encodeSessionEventEnvelope,
     encodeSessionEventLogPage,
+    encodeSessionEventReplayEnvelope,
     encodeSessionLiveEvent,
     encodeSessionLiveEventBatch,
     encodeSessionWireEnvelope,
@@ -226,6 +231,7 @@ export {
     promptCompletion,
     SESSION_EVENT_BATCH_MAX_SIZE,
     SESSION_EVENT_KIND,
+    SESSION_EVENT_REPLAY_KIND,
 } from "./session/events/index.ts";
 
 export type {

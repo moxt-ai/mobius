@@ -257,6 +257,9 @@ importers:
       '@moxt-ai/mobius-sdk':
         specifier: workspace:*
         version: link:../mobius-sdk
+      '@moxt-ai/mobius-sdk-previous':
+        specifier: npm:@moxt-ai/mobius-sdk@0.0.136
+        version: '@moxt-ai/mobius-sdk@0.0.136(react@19.3.0)'
       esbuild:
         specifier: 0.28.2
         version: 0.28.2

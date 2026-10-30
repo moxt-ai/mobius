@@ -22,6 +22,11 @@ export interface RuntimeStatusEvent {
 
 export interface RuntimeLivenessReadyEvent {
     readonly kind: typeof RUNTIME_LIVENESS_READY_KIND;
+    /**
+     * The Relay records `session.event.replay.v2` events without delivering them live, so a reconnected daemon may
+     * send recent output again. Any value other than `true`, or none, means the Relay does not accept replays.
+     */
+    readonly sessionEventReplay?: true;
 }
 
 export interface RuntimeHeartbeatEvent {
@@ -56,7 +61,9 @@ export function decodeRuntimeStatusEvent(encoded: string): RuntimeStatusEvent {
 export function decodeRuntimeLivenessReadyEvent(encoded: string): RuntimeLivenessReadyEvent {
     const value = parseJson(encoded);
     assertKind(value, RUNTIME_LIVENESS_READY_KIND);
-    return { kind: RUNTIME_LIVENESS_READY_KIND };
+    return value["sessionEventReplay"] === true
+        ? { kind: RUNTIME_LIVENESS_READY_KIND, sessionEventReplay: true }
+        : { kind: RUNTIME_LIVENESS_READY_KIND };
 }
 
 export function decodeRuntimeHeartbeatEvent(encoded: string): RuntimeHeartbeatEvent {

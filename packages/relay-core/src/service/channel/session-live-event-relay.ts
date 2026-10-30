@@ -1,4 +1,9 @@
-import { encodeSessionWireEnvelope, type SessionWireEnvelope } from "@moxt-ai/mobius-sdk/protocol";
+import {
+    encodeSessionWireEnvelope,
+    SESSION_EVENT_KIND,
+    type SessionWireEnvelope,
+    type SessionWireReplayEnvelope,
+} from "@moxt-ai/mobius-sdk/protocol";
 import type { SessionStatusNotifications } from "../../infra/session-status-notifications.ts";
 import type { BestEffortRecording } from "./best-effort-recording.ts";
 import type { ChannelPeers } from "./channel-actor.ts";
@@ -106,5 +111,17 @@ export class SessionLiveEventRelay {
         const scope = { projectId: this.#projectId, runtimeId: this.#runtimeId };
         this.#notifications?.publish(scope, envelope);
         this.#recording.publish(scope, envelope);
+    };
+
+    /**
+     * Records events a reconnected daemon sent again. The Relay may already have handled them, so they reach no
+     * browser, request or status notification, and Recording receives them only if it stores each event once.
+     */
+    readonly replay = async (envelope: SessionWireReplayEnvelope, signal: AbortSignal): Promise<void> => {
+        await this.#recording.publishAgain(
+            { projectId: this.#projectId, runtimeId: this.#runtimeId },
+            { kind: SESSION_EVENT_KIND, events: envelope.events },
+            signal,
+        );
     };
 }

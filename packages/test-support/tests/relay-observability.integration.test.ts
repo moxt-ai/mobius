@@ -399,7 +399,10 @@ async function daemon() {
         await expect
             .poll(() => logs.slice(start).find((log) => log["event"] === "runtime_websocket_accepted"))
             .toBeDefined();
-        expect(JSON.parse(String(await ready))).toEqual({ kind: RUNTIME_LIVENESS_READY_KIND });
+        expect(JSON.parse(String(await ready))).toEqual({
+            kind: RUNTIME_LIVENESS_READY_KIND,
+            sessionEventReplay: true,
+        });
         return socket;
     } catch (error) {
         if (socket.readyState === 1) {

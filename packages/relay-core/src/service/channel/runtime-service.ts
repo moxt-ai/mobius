@@ -7,6 +7,7 @@ import {
     RUNTIME_STATUS_KIND,
     type RuntimeLivenessReadyEvent,
     SESSION_EVENT_KIND,
+    SESSION_EVENT_REPLAY_KIND,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { ProjectScope } from "../../entity/do/session.ts";
 import { type HostCredential, PairingDirectoryError } from "../../entity/pairing/pairing.ts";
@@ -231,7 +232,11 @@ export class RuntimeService {
                 if (!this.#cx.services.connections.isCurrent(identity)) {
                     return;
                 }
-                const ready: RuntimeLivenessReadyEvent = { kind: RUNTIME_LIVENESS_READY_KIND };
+                // Replayed output reaches only a Recording that says it stores each event once.
+                const ready: RuntimeLivenessReadyEvent = {
+                    kind: RUNTIME_LIVENESS_READY_KIND,
+                    sessionEventReplay: true,
+                };
                 socket.send(encodeServiceToDaemonMessage(ready));
             } catch (error) {
                 if (!attachment.controller.signal.aborted) {
@@ -514,12 +519,14 @@ export class RuntimeService {
     };
 
     // A batch can span Sessions, so per-Session lanes would let a later single-Session batch overtake an
-    // earlier mixed batch while that batch's authorization read is still in flight. Every event batch
-    // therefore shares one lane and reaches peers and Recording in the order the daemon sent it. Control
-    // messages keep their own lane: the daemon sends them without waiting for batched events, so they were
-    // never ordered against events.
+    // earlier mixed batch while that batch's authorization read is still in flight. Every event batch, live or
+    // replayed, therefore shares one lane and reaches peers and Recording in the order the daemon sent it.
+    // Control messages keep their own lane: the daemon sends them without waiting for batched events, so they
+    // were never ordered against events.
     private readonly daemonMessageLane = (message: DaemonToRelayMessage): string =>
-        message.kind === SESSION_EVENT_KIND ? "session-events" : "runtime";
+        message.kind === SESSION_EVENT_KIND || message.kind === SESSION_EVENT_REPLAY_KIND
+            ? "session-events"
+            : "runtime";
 
     private readonly channel = (runtimeId: string, scope: ProjectScope): ChannelActor => {
         const key = JSON.stringify({

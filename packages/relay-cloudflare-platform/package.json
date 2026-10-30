@@ -25,6 +25,7 @@
         "@cloudflare/vitest-plugin": "^1.4.9",
         "@cloudflare/workers-types": "^5.20261028.1",
         "@moxt-ai/mobius-sdk": "workspace:*",
+        "@moxt-ai/mobius-sdk-previous": "npm:@moxt-ai/mobius-sdk@0.0.136",
         "esbuild": "0.28.2",
         "vitest": "^4.1.12",
         "wrangler": "^4.154.0"

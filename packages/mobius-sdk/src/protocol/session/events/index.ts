@@ -17,6 +17,11 @@ const MAX_EVENT_COUNT = 10_000;
 const MAX_COLLECTION_SIZE = 1_000;
 const MAX_CONTENT_LENGTH = 1_000_000;
 export const SESSION_EVENT_KIND = "session.event.v2";
+/**
+ * Events a daemon sent before it reconnected, sent again because the Relay may not have handled them. A daemon sends
+ * them only to a Relay that announced `sessionEventReplay`; that Relay records them without delivering them live.
+ */
+export const SESSION_EVENT_REPLAY_KIND = "session.event.replay.v2";
 export const SESSION_EVENT_BATCH_MAX_SIZE = 1_000;
 
 const boundedString = z.string().max(MAX_CONTENT_LENGTH);
@@ -536,6 +541,14 @@ export const sessionWireEnvelopeSchema = z
     .passthrough()
     .readonly();
 export type SessionWireEnvelope = z.infer<typeof sessionWireEnvelopeSchema>;
+export const sessionWireReplayEnvelopeSchema = z
+    .object({
+        kind: z.literal(SESSION_EVENT_REPLAY_KIND),
+        events: z.array(sessionWireEventSchema).min(1).max(SESSION_EVENT_BATCH_MAX_SIZE).readonly(),
+    })
+    .passthrough()
+    .readonly();
+export type SessionWireReplayEnvelope = z.infer<typeof sessionWireReplayEnvelopeSchema>;
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -553,6 +566,10 @@ export const sessionEventEnvelopeSchema = z
     .object({ events: sessionLiveEventBatchSchema, kind: z.literal(SESSION_EVENT_KIND) })
     .readonly();
 export type SessionEventEnvelope = z.infer<typeof sessionEventEnvelopeSchema>;
+export const sessionEventReplayEnvelopeSchema = z
+    .object({ events: sessionLiveEventBatchSchema, kind: z.literal(SESSION_EVENT_REPLAY_KIND) })
+    .readonly();
+export type SessionEventReplayEnvelope = z.infer<typeof sessionEventReplayEnvelopeSchema>;
 export const sessionEventLogPageSchema = z
     .object({
         events: z.array(sessionEventSchema).max(MAX_EVENT_COUNT).readonly(),
@@ -661,6 +678,8 @@ export const decodeSessionWireEnvelope = (value: unknown): SessionWireEnvelope =
     decode(value, sessionWireEnvelopeSchema);
 export const encodeSessionWireEnvelope = (value: SessionWireEnvelope): string =>
     encode(value, sessionWireEnvelopeSchema);
+export const decodeSessionWireReplayEnvelope = (value: unknown): SessionWireReplayEnvelope =>
+    decode(value, sessionWireReplayEnvelopeSchema);
 export const decodeSessionEventBatch = (value: unknown): SessionEventBatch => decode(value, sessionEventBatchSchema);
 export const encodeSessionEventBatch = (value: SessionEventBatch): string => encode(value, sessionEventBatchSchema);
 export const decodeSessionLiveEventBatch = (value: unknown): SessionLiveEventBatch =>
@@ -676,6 +695,10 @@ export const decodeSessionEventEnvelope = (value: unknown): SessionEventEnvelope
     decode(value, sessionEventEnvelopeSchema);
 export const encodeSessionEventEnvelope = (value: SessionEventEnvelope): string =>
     encode(value, sessionEventEnvelopeSchema);
+export const decodeSessionEventReplayEnvelope = (value: unknown): SessionEventReplayEnvelope =>
+    decode(value, sessionEventReplayEnvelopeSchema);
+export const encodeSessionEventReplayEnvelope = (value: SessionEventReplayEnvelope): string =>
+    encode(value, sessionEventReplayEnvelopeSchema);
 export const decodeAcpSessionUpdate = (value: unknown): AcpSessionUpdate => decode(value, acpSessionUpdateSchema);
 export const decodeSessionEventLogPage = (value: unknown): SessionEventLogPage =>
     decode(value, sessionEventLogPageSchema);
