@@ -21,6 +21,7 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
+import { recordedSessionTitle } from "../entity/session-title.ts";
 import {
     characterCount,
     emptyProjection,
@@ -61,7 +62,6 @@ const waitingInteractionLimit = 100;
 const retiredGenerationLimit = 100;
 const backfillRetryBaseMilliseconds = 1_000;
 const backfillRetryMaxMilliseconds = 60 * 60 * 1_000;
-const titleCharacters = 1_000;
 const interactionLimit = 1_000;
 const activeCommandLimit = 1_000;
 /** Recorded events one backfill step folds, so a step stays within Durable Object CPU limits. */
@@ -772,10 +772,10 @@ class ProjectionFold {
     }
 
     #foldAcp(event: SessionLiveEvent, update: AcpSessionUpdate): void {
-        if (update.sessionUpdate === "session_info_update") {
-            const title = update.title?.trim();
-            if (title !== undefined && title.length > 0) {
-                this.#state = { ...this.#state, title: title.slice(0, titleCharacters) };
+        if (update.sessionUpdate === "session_info_update" && update.title != null) {
+            const title = recordedSessionTitle(update.title);
+            if (title.length > 0) {
+                this.#state = { ...this.#state, title };
             }
         }
         // Agent output belongs to the innermost command running in the current generation.

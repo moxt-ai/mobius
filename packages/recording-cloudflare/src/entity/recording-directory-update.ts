@@ -1,5 +1,6 @@
-import { isDirectoryIdentifier, isIdentifier } from "@moxt-ai/mobius-sdk/protocol";
+import { isDirectoryIdentifier, isIdentifier, SESSION_RECORDING_TITLE_MAX_LENGTH } from "@moxt-ai/mobius-sdk/protocol";
 import { z } from "zod";
+import { recordedSessionTitle } from "./session-title.ts";
 
 const identifier = z.string().refine((value: string): boolean => isIdentifier(value));
 const directoryIdentifier = z.string().refine(isDirectoryIdentifier);
@@ -11,11 +12,28 @@ const context = z
         additionalDirectoryIds: z.array(directoryIdentifier).max(16).readonly(),
     })
     .readonly();
+const title = z.string().max(SESSION_RECORDING_TITLE_MAX_LENGTH);
+const requestedOperation = z.object({ kind: z.literal("requested"), context, title, recordedAt }).readonly();
+const activityOperation = z.object({ kind: z.literal("activity"), recordedAt }).readonly();
 export const directoryOperationSchema = z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("requested"), context, title: z.string().max(1000), recordedAt }).readonly(),
-    z.object({ kind: z.literal("title"), title: z.string().max(1000), recordedAt }).readonly(),
-    z.object({ kind: z.literal("activity"), recordedAt }).readonly(),
+    requestedOperation,
+    z.object({ kind: z.literal("title"), title, recordedAt }).readonly(),
+    activityOperation,
 ]);
+/**
+ * Decodes the operations of a committed directory change. A change committed before Agent titles were bounded
+ * when projected may hold an Agent's title verbatim, so a title is read through the same title rule, which leaves
+ * every title committed since unchanged.
+ */
+export const committedDirectoryOperationsSchema = z
+    .discriminatedUnion("kind", [
+        requestedOperation,
+        z
+            .object({ kind: z.literal("title"), title: z.string().transform(recordedSessionTitle), recordedAt })
+            .readonly(),
+        activityOperation,
+    ])
+    .array();
 const directoryUpdateEntrySchema = z
     .object({
         sessionId: identifier,

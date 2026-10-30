@@ -23,26 +23,38 @@ export class RecordingDirectoryOutbox {
         this.#send = send;
     }
 
-    /** True once every committed change is confirmed; false leaves the rest for a later delivery. */
+    /**
+     * True once every committed change is confirmed; false leaves the rest for a later delivery. It never rejects:
+     * the changes are already committed with their batches, so failing to index them fails neither those writes nor
+     * other work waiting behind the delivery.
+     */
     readonly deliver = (): Promise<boolean> => {
-        this.#delivery = this.#delivery.then(this.#deliverPending, this.#deliverPending);
+        this.#delivery = this.#delivery.then(this.#deliverPending);
         return this.#delivery;
     };
 
     readonly #deliverPending = async (): Promise<boolean> => {
-        const identity = this.#storage.identity();
-        if (identity === null) {
-            return true;
-        }
-        for (;;) {
-            const next = pendingDirectoryUpdate(identity, this.#storage.pendingDirectory(pendingReadLimit));
-            if (next === null) {
+        try {
+            const identity = this.#storage.identity();
+            if (identity === null) {
                 return true;
             }
-            if (!(await this.#send(next.update))) {
-                return false;
+            for (;;) {
+                const next = pendingDirectoryUpdate(identity, this.#storage.pendingDirectory(pendingReadLimit));
+                if (next === null) {
+                    return true;
+                }
+                if (!(await this.#send(next.update))) {
+                    return false;
+                }
+                this.#storage.confirmDirectory(next.through);
             }
-            this.#storage.confirmDirectory(next.through);
+        } catch (cause) {
+            console.warn("Recording directory changes could not be delivered", {
+                code: "recording_directory_delivery_failed",
+                cause,
+            });
+            return false;
         }
     };
 }

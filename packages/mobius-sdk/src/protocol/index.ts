@@ -497,6 +497,7 @@ export {
     encodeSessionRecordingWireWrite,
     encodeSessionRecordingWrite,
     parseSessionRecordingWaitMilliseconds,
+    SESSION_RECORDING_TITLE_MAX_LENGTH,
 } from "./session/recording/recording.ts";
 
 export type {

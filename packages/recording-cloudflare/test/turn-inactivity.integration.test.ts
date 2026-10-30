@@ -228,6 +228,21 @@ describe("Recording execution inactivity", () => {
         expect((await execution("quiet")).commands[0]?.attempt).toEqual(state.commands[0]?.attempt);
     });
 
+    it("Given a directory change the outbox cannot read, When a running command is recorded and goes quiet, Then the write is recorded and an alarm still diagnoses inactivity", async () => {
+        await record([requested("unindexed")]);
+        // A committed directory change that no longer decodes stays at the head of the outbox.
+        await runInDurableObject(stub(), (_, state) => {
+            state.storage.sql.exec("INSERT INTO pending_directory_updates (operations_json, events) VALUES ('{', 1)");
+        });
+        await record([started("unindexed"), answer("Started")]);
+        vi.setSystemTime(start + hour + 1);
+        expect(await runDurableObjectAlarm(stub())).toBe(true);
+        expect((await execution("unindexed")).commands[0]?.attempt).toMatchObject({
+            kind: "indeterminate",
+            reason: "execution_inactive",
+        });
+    });
+
     it("Given meaningful progress, When the original deadline passes, Then only the renewed deadline can expire the command", async () => {
         await record([requested("progress"), started("progress")]);
         vi.setSystemTime(start + hour - 1);
