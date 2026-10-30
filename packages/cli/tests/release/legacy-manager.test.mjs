@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, stat, watch, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, stat, watch, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
@@ -82,17 +82,36 @@ test("Given a released manager, When it upgrades its worker, Then the new releas
         MOBIUS_STATE_DIRECTORY: join(directory, "state"),
         npm_config_cache: join(directory, "npm-cache"),
         npm_config_registry: origin,
+        // Dependencies keep their published HTTPS tarball URLs. Older npm versions
+        // otherwise substitute the fixture host while retaining the HTTPS scheme.
+        npm_config_replace_registry_host: "never",
         NO_PROXY: "127.0.0.1,localhost",
         no_proxy: "127.0.0.1,localhost",
         MOBIUS_TEST_LEGACY_CLOCK: clock,
         NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(join(import.meta.dirname, "legacy-manager-clock.mjs")).href}`,
     };
-    const run = (version, args, signal = context.signal) =>
-        execute(
-            process.execPath,
-            [npx, "--yes", "--prefer-online", "--package", `@moxt-ai/mobius@${version}`, "--", "mobius", ...args],
-            { env: environment, cwd: directory, signal, timeout: 120_000, windowsHide: true, maxBuffer: 1024 * 1024 },
-        );
+    const run = async (version, args, signal = context.signal) => {
+        try {
+            return await execute(
+                process.execPath,
+                [npx, "--yes", "--prefer-online", "--package", `@moxt-ai/mobius@${version}`, "--", "mobius", ...args],
+                {
+                    env: environment,
+                    cwd: directory,
+                    signal,
+                    timeout: 120_000,
+                    windowsHide: true,
+                    maxBuffer: 1024 * 1024,
+                },
+            );
+        } catch (cause) {
+            const logs = join(environment.npm_config_cache, "_logs");
+            for (const file of (await readdir(logs).catch(() => [])).sort().slice(-3)) {
+                context.diagnostic(`${file}\n${(await readFile(join(logs, file), "utf8")).slice(-6000)}`);
+            }
+            throw cause;
+        }
+    };
     context.after(async () => {
         try {
             await run(next.version, ["stop"], AbortSignal.timeout(60_000));
