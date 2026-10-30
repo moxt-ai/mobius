@@ -92,13 +92,6 @@
             "when": 1793347446244,
             "tag": "0012_drop_tenant_lifecycle",
             "breakpoints": true
-        },
-        {
-            "idx": 13,
-            "version": "6",
-            "when": 1793369116549,
-            "tag": "0013_remove_project_recording_overrides",
-            "breakpoints": true
         }
     ]
 }
