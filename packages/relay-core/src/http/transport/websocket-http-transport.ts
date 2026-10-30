@@ -79,6 +79,99 @@ function transportError(code: WebSocketTransportErrorCode): WebSocketTransportEr
     return new WebSocketTransportError(code);
 }
 
+/** Shared by browser connections owned by one Runtime, not by unrelated Runtimes. */
+export class WebSocketUploadBudget {
+    #bytes = 0;
+    #requests = 0;
+
+    readonly reserve = (bytes: number): void => {
+        if (this.#bytes + bytes > MAX_PENDING_BINARY_BYTES || this.#requests >= MAX_PENDING_BINARY_REQUESTS) {
+            throw transportError("request_capacity_exceeded");
+        }
+        this.#bytes += bytes;
+        this.#requests += 1;
+    };
+
+    readonly release = (bytes: number): void => {
+        this.#bytes -= bytes;
+        this.#requests -= 1;
+    };
+}
+
+class PendingBinaryUpload {
+    readonly chunks: Uint8Array[] = [];
+    receivedBytes = 0;
+    sequence = 0;
+    readonly #ready = Promise.withResolvers<boolean>();
+    readonly authorization = this.#ready.promise;
+    readonly #controller = new AbortController();
+    readonly #timeout: ReturnType<typeof setTimeout>;
+    #state: "pending" | "authorized" | "closed" = "pending";
+
+    readonly byteLength: number;
+    readonly message: Readonly<Record<string, unknown>>;
+    readonly #connectionBudget: WebSocketUploadBudget;
+    readonly #runtimeBudget: WebSocketUploadBudget;
+    readonly #onFailure: (cause: unknown) => Promise<void>;
+
+    constructor(
+        byteLength: number,
+        message: Readonly<Record<string, unknown>>,
+        connectionBudget: WebSocketUploadBudget,
+        runtimeBudget: WebSocketUploadBudget,
+        onFailure: (cause: unknown) => Promise<void>,
+    ) {
+        connectionBudget.reserve(byteLength);
+        this.byteLength = byteLength;
+        this.message = message;
+        this.#connectionBudget = connectionBudget;
+        this.#runtimeBudget = runtimeBudget;
+        this.#onFailure = onFailure;
+        this.#timeout = setTimeout(() => {
+            void this.fail(transportError("request_timeout"));
+        }, BINARY_REQUEST_TIMEOUT_MILLISECONDS);
+    }
+
+    readonly authorize = async (request: Request, authorize: DispatchRequest | undefined): Promise<void> => {
+        try {
+            const response = await authorize?.(new Request(request, { signal: this.#controller.signal }));
+            if (this.#controller.signal.aborted) {
+                return;
+            }
+            if (response !== undefined && !response.ok) {
+                await this.fail(response);
+                return;
+            }
+            this.#runtimeBudget.reserve(this.byteLength);
+            this.#state = "authorized";
+            this.#ready.resolve(true);
+        } catch (cause) {
+            if (!this.#controller.signal.aborted) {
+                await this.fail(cause);
+            }
+        }
+    };
+
+    readonly close = (): void => {
+        if (this.#state === "closed") {
+            return;
+        }
+        if (this.#state === "authorized") {
+            this.#runtimeBudget.release(this.byteLength);
+        }
+        this.#state = "closed";
+        clearTimeout(this.#timeout);
+        this.#connectionBudget.release(this.byteLength);
+        this.#controller.abort();
+        this.#ready.resolve(false);
+    };
+
+    private readonly fail = async (cause: unknown): Promise<void> => {
+        this.close();
+        await this.#onFailure(cause);
+    };
+}
+
 function record(value: unknown): Readonly<Record<string, unknown>> {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
         throw transportError("invalid_message");
@@ -192,6 +285,11 @@ export function acceptWebSocketHttpTransport(
     request: Request,
     dispatch: DispatchRequest,
     host: WebSocketHost,
+    options: {
+        readonly uploads: WebSocketUploadBudget;
+        readonly authorizeUpload?: DispatchRequest;
+        readonly validateTarget: (request: Request) => boolean;
+    } = { uploads: new WebSocketUploadBudget(), validateTarget: () => true },
 ): Response {
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
         return Response.json(
@@ -199,6 +297,11 @@ export function acceptWebSocketHttpTransport(
             { status: 426 },
         );
     }
+    const validateTarget = (operation: Request): void => {
+        if (!options.validateTarget(operation)) {
+            throw transportError("invalid_target");
+        }
+    };
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
@@ -208,18 +311,10 @@ export function acceptWebSocketHttpTransport(
         | { readonly kind: "pending"; readonly controller: AbortController }
         | { readonly kind: "open"; readonly socket: WebSocket }
     >();
-    const binaryRequests = new Map<
-        string,
-        {
-            readonly byteLength: number;
-            readonly chunks: Uint8Array[];
-            readonly message: Readonly<Record<string, unknown>>;
-            readonly timeout: ReturnType<typeof setTimeout>;
-            receivedBytes: number;
-            sequence: number;
-        }
-    >();
-    let pendingDeclaredBinaryBytes = 0;
+    // Buffer in-flight chunks within this connection while admission is authorized.
+    // Only verified uploads may consume the Runtime-wide budget.
+    const connectionUploads = new WebSocketUploadBudget();
+    const binaryRequests = new Map<string, PendingBinaryUpload>();
     const browserOrigin = request.headers.get("origin");
     let subscriptionDiagnosticCount = 0;
     let lastActivityAt = Date.now();
@@ -249,8 +344,7 @@ export function acceptWebSocketHttpTransport(
             return undefined;
         }
         binaryRequests.delete(requestId);
-        clearTimeout(upload.timeout);
-        pendingDeclaredBinaryBytes -= upload.byteLength;
+        upload.close();
         return upload;
     };
     const releaseAllBinaryRequests = (): void => {
@@ -259,6 +353,7 @@ export function acceptWebSocketHttpTransport(
         }
     };
     const release = () => {
+        controller.abort(new Error("WebSocket transport closed"));
         clearTimeout(idleTimeout);
         for (const subscription of subscriptions.values()) {
             if (subscription.kind === "pending") {
@@ -307,6 +402,9 @@ export function acceptWebSocketHttpTransport(
                     }
                     upload.chunks.push(chunk.bytes);
                     if (upload.receivedBytes < upload.byteLength) {
+                        return;
+                    }
+                    if (!(await upload.authorization) || binaryRequests.get(chunk.requestId) !== upload) {
                         return;
                     }
                     const completed = releaseBinaryRequest(chunk.requestId);
@@ -363,6 +461,7 @@ export function acceptWebSocketHttpTransport(
                         browserOrigin,
                         subscriptionController.signal,
                     );
+                    validateTarget(converted.request);
                     subscriptions.set(subscriptionId, { controller: subscriptionController, kind: "pending" });
                     const subscriptionHeaders = new Headers(converted.request.headers);
                     subscriptionHeaders.set("Upgrade", "websocket");
@@ -398,6 +497,7 @@ export function acceptWebSocketHttpTransport(
                     const openedAt = Date.now();
                     let lastMessageAt: number | null = null;
                     const finish = (end: SubscriptionEnd): void => {
+                        subscription.close(1000, "Session event subscription closed");
                         const current = subscriptions.get(subscriptionId);
                         if (
                             current?.kind === "open" &&
@@ -499,39 +599,49 @@ export function acceptWebSocketHttpTransport(
                         controller.signal,
                         new Uint8Array(0),
                     );
+                    validateTarget(declaration.request);
                     if (declaration.request.method === "GET") {
                         throw transportError("invalid_message");
                     }
-                    if (
-                        binaryRequests.size >= MAX_PENDING_BINARY_REQUESTS ||
-                        pendingDeclaredBinaryBytes + bodyByteLength > MAX_PENDING_BINARY_BYTES
-                    ) {
-                        throw transportError("request_capacity_exceeded");
-                    }
-                    const timeout = setTimeout(() => {
-                        if (releaseBinaryRequest(requestId) === undefined || server.readyState !== WebSocket.OPEN) {
-                            return;
-                        }
-                        const error = transportError("request_timeout").toHttpJson();
-                        server.send(
-                            JSON.stringify({
-                                code: error.body.error.code,
-                                kind: ERROR_KIND,
-                                message: error.body.error.message,
-                                requestId,
-                                status: error.status,
-                            }),
-                        );
-                    }, BINARY_REQUEST_TIMEOUT_MILLISECONDS);
-                    binaryRequests.set(requestId, {
-                        byteLength: bodyByteLength,
-                        chunks: [],
+                    const upload = new PendingBinaryUpload(
+                        bodyByteLength,
                         message,
-                        receivedBytes: 0,
-                        sequence: 0,
-                        timeout,
-                    });
-                    pendingDeclaredBinaryBytes += bodyByteLength;
+                        connectionUploads,
+                        options.uploads,
+                        async (cause) => {
+                            if (binaryRequests.get(requestId) !== upload) {
+                                return;
+                            }
+                            releaseBinaryRequest(requestId);
+                            if (cause instanceof Response) {
+                                const body = await cause.text();
+                                if (server.readyState === WebSocket.OPEN) {
+                                    server.send(
+                                        JSON.stringify({
+                                            body,
+                                            headers: responseHeaders(cause),
+                                            kind: RESPONSE_KIND,
+                                            requestId,
+                                            status: cause.status,
+                                        }),
+                                    );
+                                }
+                            } else if (server.readyState === WebSocket.OPEN) {
+                                const error = toHttpError(cause);
+                                server.send(
+                                    JSON.stringify({
+                                        code: error.body.error.code,
+                                        kind: ERROR_KIND,
+                                        message: error.body.error.message,
+                                        requestId,
+                                        status: error.status,
+                                    }),
+                                );
+                            }
+                        },
+                    );
+                    binaryRequests.set(requestId, upload);
+                    void upload.authorize(declaration.request, options.authorizeUpload);
                     return;
                 }
                 requestId = requestIdFromMessage(message);
@@ -544,6 +654,7 @@ export function acceptWebSocketHttpTransport(
                     binaryBody,
                 );
                 requestId = converted.requestId;
+                validateTarget(converted.request);
                 const response = await dispatch(converted.request);
                 const mediaType = response.headers.get("content-type") ?? "";
                 if (mediaType.startsWith("text/event-stream")) {
@@ -581,7 +692,17 @@ export function acceptWebSocketHttpTransport(
             }
         })();
     };
-    host.accept(server, { message: receive, close: release, error: release });
+    host.accept(server, {
+        message: receive,
+        close: () => {
+            release();
+            server.close(1000, "WebSocket transport closed");
+        },
+        error: () => {
+            release();
+            server.close(1011, "WebSocket transport failed");
+        },
+    });
     touch();
     return new Response(null, {
         status: 101,

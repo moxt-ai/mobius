@@ -1,5 +1,10 @@
 import { SELF } from "cloudflare:test";
-import { acceptWebSocketHttpTransport, SessionRuntimeError, standardWebSocketHost } from "@moxt-ai/mobius-relay-core";
+import {
+    acceptWebSocketHttpTransport,
+    SessionRuntimeError,
+    standardWebSocketHost,
+    WebSocketUploadBudget,
+} from "@moxt-ai/mobius-relay-core";
 import { encodeContentChunkFrame } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, it, vi } from "vitest";
 
@@ -30,10 +35,13 @@ function nextMessage(socket: WebSocket): Promise<string> {
     });
 }
 
-it("Given a browser connection, When it heartbeats through the public Platform transport, Then Cloudflare acknowledges it and application requests remain usable", async () => {
-    const response = await SELF.fetch("https://platform.test/mobius/api/v1/transport", {
-        headers: { Upgrade: "websocket" },
-    });
+it("Given a browser connection, When it heartbeats through the public Platform transport, Then the Runtime acknowledges it and application requests remain usable", async () => {
+    const response = await SELF.fetch(
+        "https://platform.test/mobius/api/v1/projects/project/runtimes/runtime/transport",
+        {
+            headers: { Upgrade: "websocket" },
+        },
+    );
     expect(response.status).toBe(101);
     const socket = response.webSocket;
     if (socket === null) {
@@ -50,7 +58,7 @@ it("Given a browser connection, When it heartbeats through the public Platform t
                 kind: "http.request",
                 requestId: "after-heartbeat",
                 method: "GET",
-                path: "/mobius/api/dashboard/health",
+                path: "/mobius/api/v1/projects/project/runtimes/runtime/diagnostics",
                 headers: [],
                 body: "",
             }),
@@ -58,17 +66,20 @@ it("Given a browser connection, When it heartbeats through the public Platform t
         expect(JSON.parse(await result)).toMatchObject({
             kind: "http.response",
             requestId: "after-heartbeat",
-            status: 200,
+            status: 401,
         });
     } finally {
         socket.close();
     }
 });
 
-it("Given an HTTP-over-WebSocket client, When it uses the public DO-owned transport, Then application responses preserve their request identities", async () => {
-    const response = await SELF.fetch("https://platform.test/mobius/api/v1/transport", {
-        headers: { Upgrade: "websocket" },
-    });
+it("Given a Runtime-bound browser, When it addresses another Runtime, Then the request is rejected without closing the browser connection", async () => {
+    const response = await SELF.fetch(
+        "https://platform.test/mobius/api/v1/projects/project/runtimes/runtime/transport",
+        {
+            headers: { Upgrade: "websocket" },
+        },
+    );
     expect(response.status).toBe(101);
     const socket = response.webSocket;
     if (socket === null) {
@@ -82,18 +93,80 @@ it("Given an HTTP-over-WebSocket client, When it uses the public DO-owned transp
                 kind: "http.request",
                 requestId: "request-identity",
                 method: "GET",
-                path: "/mobius/api/dashboard/health",
+                path: "/mobius/api/v1/projects/project/runtimes/another-runtime/diagnostics",
                 headers: [],
                 body: "",
             }),
         );
         expect(JSON.parse(await result)).toMatchObject({
-            kind: "http.response",
+            kind: "http.error",
+            code: "invalid_target",
             requestId: "request-identity",
-            status: 200,
+            status: 400,
         });
+        const heartbeat = nextMessage(socket);
+        socket.send('{"kind":"ping"}');
+        expect(await heartbeat).toBe('{"kind":"pong"}');
     } finally {
         socket.close();
+    }
+});
+
+it("Given two browser connections to one Runtime, When their pending uploads exceed its shared budget, Then the second upload is refused and capacity is released after a failed transfer", async () => {
+    const uploads = new WebSocketUploadBudget();
+    const daemon = new TextDaemonBoundary("uploaded");
+    const connect = () =>
+        acceptWebSocketHttpTransport(
+            new Request("https://platform.test/mobius/api/v1/transport", { headers: { Upgrade: "websocket" } }),
+            daemon.fetch,
+            standardWebSocketHost,
+            { uploads, validateTarget: () => true },
+        ).webSocket;
+    const first = connect();
+    const second = connect();
+    if (first === null || second === null) {
+        throw new Error("Expected browser transports");
+    }
+    first.accept();
+    second.accept();
+    const declaration = (requestId: string) =>
+        JSON.stringify({
+            kind: "http.request",
+            requestId,
+            method: "POST",
+            path: "/mobius/api/v1/projects/upload-project/runtimes/upload-runtime/content",
+            headers: [],
+            body: "",
+            bodyByteLength: 8 * 1024 * 1024,
+        });
+    try {
+        first.send(declaration("first"));
+        const admitted = nextMessage(first);
+        first.send('{"kind":"ping"}');
+        expect(await admitted).toBe('{"kind":"pong"}');
+        const refused = nextMessage(second);
+        second.send(declaration("second"));
+        expect(JSON.parse(await refused)).toMatchObject({
+            kind: "http.error",
+            code: "request_capacity_exceeded",
+            requestId: "second",
+        });
+        const failed = nextMessage(first);
+        first.send(
+            encodeContentChunkFrame({ requestId: "first", sequence: 1, bytes: new Uint8Array([1]) }).slice().buffer,
+        );
+        expect(JSON.parse(await failed)).toMatchObject({
+            kind: "http.error",
+            code: "invalid_message",
+            requestId: "first",
+        });
+        second.send(declaration("retry"));
+        const retried = nextMessage(second);
+        second.send('{"kind":"ping"}');
+        expect(await retried).toBe('{"kind":"pong"}');
+    } finally {
+        first.close();
+        second.close();
     }
 });
 

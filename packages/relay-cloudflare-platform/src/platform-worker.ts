@@ -1,6 +1,5 @@
 import type { LocalSessionOperations, ProjectStore, SessionRuntimeOperations } from "@moxt-ai/mobius-relay-core";
 import {
-    acceptWebSocketHttpTransport,
     CloudflareChannelRuntime,
     createMobiusApplication,
     createWorkerContext,
@@ -48,6 +47,7 @@ import { routeRuntimeSessionRequest } from "./gateway/runtime-session-routing.ts
 import { createPlatformControlApplication } from "./http/platform-routes.ts";
 import { createProjectApplication } from "./http/project-routes.ts";
 import { recordingReadRoutes, recordingSummaryV2Routes } from "./http/recording-read-routes.ts";
+import { authorizeSessionContentUpload } from "./http/session-content-upload.ts";
 import { ClerkOrganizationGateway } from "./infra/clerk-organization-gateway.ts";
 import type { OrganizationMembershipGateway } from "./infra/organization-membership-gateway.ts";
 import { PlatformProjectStorageDirectory } from "./infra/platform-project-storage-directory.ts";
@@ -79,7 +79,6 @@ export interface PlatformRelayBindings extends PlatformStorageBindings, ProjectW
     readonly RECORDING?: Fetcher;
     readonly RECORDING_PROVIDER_ID?: string;
     readonly RUNTIME_RELAY: DurableObjectNamespace<RuntimeRelay>;
-    readonly WEBSOCKET_TRANSPORT?: DurableObjectNamespace;
 }
 
 export interface ProjectPlatformRelayBindings extends PlatformRelayBindings, ProjectDurableObjectExecutionBindings {}
@@ -218,6 +217,38 @@ async function runtimeSessionIdentity(
         throw new PairingDirectoryError("session_not_found", "The selected Session is unavailable");
     }
     return session;
+}
+
+export function createPlatformAccessServices(
+    environment: PlatformApplicationBindings,
+    authentication: PlatformAuthenticationConfiguration,
+    organizations: (environment: PlatformRelayBindings) => OrganizationMembershipGateway = (bindings) =>
+        new ClerkOrganizationGateway(bindings.CLERK_SECRET_KEY),
+) {
+    const execution =
+        "MOBIUS_PROJECT_STORE" in environment
+            ? { projectId: environment.MOBIUS_PROJECT_ID, store: environment.MOBIUS_PROJECT_STORE }
+            : null;
+    const stores = new ProjectDurableObjectStores(environment.PROJECT_RELAY, execution);
+    const identityStores = execution === null ? [] : [execution.store];
+    const controlStorage = new PlatformControlPlaneStorage(environment.PLATFORM_DIRECTORY_DATABASE, stores);
+    const storageRegistry = new PlatformStorageRegistry(environment);
+    const appAuthentication = new AppCredentialAuthenticationService(controlStorage);
+    const control = new PlatformControlPlaneService(
+        controlStorage,
+        authentication,
+        storageRegistry,
+        appAuthentication,
+        new OrganizationAdministrators(organizations(environment)),
+    );
+    return {
+        stores,
+        identityStores,
+        control,
+        appAuthentication,
+        sessionAccess: new SessionAccessService(appAuthentication, control),
+        projects: new PlatformProjectStorageDirectory(storageRegistry, controlStorage),
+    };
 }
 
 export function createPlatformApplication(
@@ -520,22 +551,12 @@ export function createPlatformApplication(
                 context.req.raw.signal,
             );
         })
-        .put("/:sessionId/content/:contentKey", sessionAccessTargetMiddleware, async (context) => {
-            const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];
-            if (credential === undefined) {
-                return context.json(
-                    { error: { code: "session_access_required", message: "A Session credential is required" } },
-                    401,
-                );
+        .put("/:sessionId/content/:contentKey", async (context) => {
+            const authorized = await authorizeSessionContentUpload(context.req.raw, context.var.sessionAccess);
+            if (authorized instanceof Response) {
+                return authorized;
             }
-            const access = await context.var.sessionAccess.authorizeSession(
-                context.var.sessionAccessTarget,
-                credential,
-                ProjectPermission.SessionWrite,
-                context.req.raw.signal,
-            );
-            const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
-            const contentKey = v.parse(v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/u)), context.req.param("contentKey"));
+            const { access, sessionId, contentKey } = authorized;
             const byteLength = v.parse(
                 v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(CONTENT_WRITE_MAX_BYTES)),
                 Number(context.req.header("x-mobius-byte-length") ?? ""),
@@ -820,25 +841,11 @@ export function createPlatformApplication(
         })
         .use("*", async (context, next) => {
             const environment = context.env;
-            const execution =
-                "MOBIUS_PROJECT_STORE" in environment
-                    ? { projectId: environment.MOBIUS_PROJECT_ID, store: environment.MOBIUS_PROJECT_STORE }
-                    : null;
-            const stores = new ProjectDurableObjectStores(environment.PROJECT_RELAY, execution);
-            const identityStores = execution === null ? [] : [execution.store];
-            const controlStorage = new PlatformControlPlaneStorage(environment.PLATFORM_DIRECTORY_DATABASE, stores);
-            const storageRegistry = new PlatformStorageRegistry(environment);
-            const appAuthentication = new AppCredentialAuthenticationService(controlStorage);
-            const control = new PlatformControlPlaneService(
-                controlStorage,
-                authentication,
-                storageRegistry,
-                appAuthentication,
-                new OrganizationAdministrators(organizations(environment)),
-            );
+            const { stores, identityStores, control, appAuthentication, sessionAccess, projects } =
+                createPlatformAccessServices(environment, authentication, organizations);
             context.set("control", control);
             context.set("appAuthentication", appAuthentication);
-            context.set("sessionAccess", new SessionAccessService(appAuthentication, control));
+            context.set("sessionAccess", sessionAccess);
             context.set(
                 "recordingPolicies",
                 new RecordingPolicyService(
@@ -856,7 +863,7 @@ export function createPlatformApplication(
                 ),
             );
             context.set("stores", stores);
-            context.set("projects", new PlatformProjectStorageDirectory(storageRegistry, controlStorage));
+            context.set("projects", projects);
             context.set("identityStores", identityStores);
             await next();
         })
@@ -885,15 +892,6 @@ export function createPlatformApplication(
     }>()
         .onError((error) => {
             throw error;
-        })
-        .get(`${MOBIUS_API_PREFIX}/v1/transport`, (context): Response => {
-            const executionContext = optionalExecutionContext(context);
-            return acceptWebSocketHttpTransport(
-                context.req.raw,
-                async (request): Promise<Response> =>
-                    await platformApplication.fetch(request, context.env, executionContext),
-                socketHost,
-            );
         })
         .all("*", async (context) => {
             const metrics = new RequestAccessMetrics();
@@ -928,30 +926,7 @@ export function createPlatformGateways(environment: PlatformApplicationBindings)
 }
 
 export function createPlatformWorker() {
-    const application = createPlatformSocketWorker(standardWebSocketHost);
-    return {
-        fetch: async (
-            request: Request,
-            environment: ConfiguredPlatformRelayBindings,
-            executionContext?: ExecutionContext,
-        ): Promise<Response> => {
-            const path = new URL(request.url).pathname;
-            if (
-                request.headers.get("Upgrade")?.toLowerCase() === "websocket" &&
-                (path === `${MOBIUS_API_PREFIX}/v1/transport` || path.endsWith("/events-v2"))
-            ) {
-                const namespace = environment.WEBSOCKET_TRANSPORT;
-                if (namespace === undefined) {
-                    return Response.json(
-                        { error: { code: "service_unavailable", message: "The WebSocket transport is unavailable" } },
-                        { status: 503 },
-                    );
-                }
-                return await namespace.get(namespace.newUniqueId()).fetch(request);
-            }
-            return await application.fetch(request, environment, executionContext);
-        },
-    };
+    return createPlatformSocketWorker(standardWebSocketHost);
 }
 
 export function createPlatformSocketWorker(host: WebSocketHost) {
