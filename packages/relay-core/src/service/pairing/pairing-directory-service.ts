@@ -1,4 +1,5 @@
 import {
+    PROJECT_HOST_PERMISSION,
     type ProjectAccessContext,
     ProjectPermission,
     RuntimeAccessContext,
@@ -20,6 +21,7 @@ import {
     normalizePairingCode,
     PAIRING_LIFETIME_MILLISECONDS,
     PairingDirectoryError,
+    ProjectCredentialHostAccess,
     parseAgents,
     RevokedProjectRuntime,
     VerifiedChannelAccess,
@@ -197,9 +199,15 @@ export class PairingDirectoryService implements PairingOperations {
         token,
         signal,
     ) => {
-        const access = await this.authorizeProject(projectId, token, ProjectPermission.RuntimeRead, signal);
+        const access = await this.authorizeProject(projectId, token, PROJECT_HOST_PERMISSION, signal);
         const storage = await this.projectStorage(access.scope, signal);
-        return await this.openControlHostForScope(storage, access.scope, runtimeId, signal);
+        const runtime = await this.readProjectRuntime(storage, runtimeId, signal);
+        return new ProjectCredentialHostAccess(
+            runtime.channelId,
+            runtime.runtimeId,
+            runtime.projectId,
+            access.credentialId,
+        );
     };
 
     readonly authorizeProjectRuntime: PairingOperations["authorizeProjectRuntime"] = async (
