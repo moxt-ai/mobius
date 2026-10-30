@@ -418,16 +418,14 @@ export class RuntimeDirectoryStorage {
         return results[0]?.meta.changes === 1 ? this.readRuntime(value.runtimeId, signal) : null;
     };
 
-    readonly listRuntimes = async (signal: AbortSignal) => {
-        const results = await relayDrizzle(this.#database, signal)
+    readonly listRuntimes = async (signal: AbortSignal) =>
+        await relayDrizzle(this.#database, signal)
             .select({ ...identityFields, ...registrationFields })
             .from(runtimeIdentity)
             .innerJoin(runtimeRegistration, eq(runtimeRegistration.runtimeId, runtimeIdentity.runtimeId))
             .where(and(eq(runtimeIdentity.projectId, this.#projectId), isNull(runtimeIdentity.revokedAt)))
             .orderBy(runtimeIdentity.createdAt, runtimeIdentity.channelId)
             .limit(100);
-        return { results };
-    };
 
     readonly readChannel = async (channelId: string, signal: AbortSignal) => {
         const rows = await relayDrizzle(this.#database, signal)

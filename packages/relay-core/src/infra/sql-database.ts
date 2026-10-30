@@ -29,4 +29,3 @@ export interface SqlDatabase {
         signal: AbortSignal,
     ) => Promise<readonly SqlResult<unknown>[]>;
 }
-export type { DatabaseResolver } from "./database-resolver.ts";

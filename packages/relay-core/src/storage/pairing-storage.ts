@@ -1,34 +1,15 @@
 import { and, desc, eq, exists, gt, isNull, sql } from "drizzle-orm";
-import type { DatabaseResolver } from "../infra/database-resolver.ts";
+import type { AuthorizedChannelRow, LinkedDeviceRow } from "../entity/pairing/pairing-records.ts";
 import { relayDrizzle } from "../infra/drizzle-database.ts";
-import type { ProjectStorageContext } from "../infra/project-storage-directory.ts";
 import type { SqlDatabase } from "../infra/sql-database.ts";
 import { channelAccessGrant, channelHostCredential, runtimeIdentity } from "../schema/project-do/index.ts";
 import { hostCredentialValid } from "./host-credential-validity.ts";
-import { RuntimeDirectoryStorage } from "./runtime-directory-storage.ts";
 
-interface ChannelScopeRow {
-    readonly channel_id: string;
-    readonly project_id: string;
-    readonly runtime_id: string;
-}
-export interface AuthorizedChannelRow extends ChannelScopeRow {
-    readonly credential_id: string;
-    readonly authority: string;
-}
-interface BrowserCredentialRow {
-    readonly credential_id: string;
-    readonly expires_at: number;
-    readonly project_id: string;
-    readonly revoked_at: unknown;
-}
-
+/** Host, access grant and browser credentials in the Project's own storage. */
 export class PairingStorage {
     readonly #database: SqlDatabase;
-    readonly runtimes: RuntimeDirectoryStorage;
-    constructor(project: ProjectStorageContext, databases: DatabaseResolver) {
-        this.#database = databases.resolve(project.storagePlacement);
-        this.runtimes = new RuntimeDirectoryStorage(project.projectId, this.#database);
+    constructor(database: SqlDatabase) {
+        this.#database = database;
     }
 
     readonly readHost = async (
@@ -69,22 +50,6 @@ export class PairingStorage {
         return touched.length === 1;
     };
 
-    readonly readBrowser = (projectId: string, tokenHash: string, signal: AbortSignal) =>
-        this.#database
-            .prepare(`
-        SELECT credential_id, project_id, expires_at, revoked_at FROM project_browser_credentials
-        WHERE project_id = ? AND token_hash = ?`)
-            .bind(projectId, tokenHash)
-            .first<BrowserCredentialRow>(signal);
-
-    readonly touchBrowser = (credentialId: string, now: number, signal: AbortSignal) =>
-        this.#database
-            .prepare(`
-        UPDATE project_browser_credentials SET last_used_at = ?
-        WHERE credential_id = ? AND revoked_at IS NULL AND expires_at > ?`)
-            .bind(now, credentialId, now)
-            .run(signal);
-
     readonly createGrant = (
         grantId: string,
         channelId: string,
@@ -117,7 +82,7 @@ export class PairingStorage {
             .bind(credentialId, projectId, tokenHash, ownerId, now, expiresAt, now)
             .run(signal);
 
-    readonly listLinked = async (channelId: string, signal: AbortSignal) => {
+    readonly listLinked = async (channelId: string, signal: AbortSignal): Promise<readonly LinkedDeviceRow[]> => {
         const database = relayDrizzle(this.#database, signal);
         return await database
             .select({

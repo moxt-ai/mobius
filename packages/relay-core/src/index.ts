@@ -63,12 +63,12 @@ export {
 export { DurableObjectDatabaseAdapter, DurableObjectSqlDatabase } from "./infra/durable-object-sql-database.ts";
 export { logger } from "./infra/logger.ts";
 export type { ProjectApplicationResolver } from "./infra/project-application-resolver.ts";
-export type { ProjectDatabaseBindings } from "./infra/project-database-bindings.ts";
 export type {
     ProjectStorageContext,
     ProjectStorageDirectory,
     ProjectStoragePlacement,
 } from "./infra/project-storage-directory.ts";
+export type * from "./infra/project-store.ts";
 export { instrumentD1Database, RequestAccessMetrics } from "./infra/request-access-metrics.ts";
 export {
     DisabledSessionRecording,

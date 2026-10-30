@@ -1,24 +1,22 @@
 import { parseMobiusApiPrefix } from "@moxt-ai/mobius-sdk/protocol";
 import type { ChannelGateway } from "../gateway/channel-gateway.ts";
 import type { ProjectAccessAuthorizer } from "../gateway/project-access-authorizer.ts";
-import type { DatabaseResolver } from "../infra/database-resolver.ts";
 import type { ProjectApplicationResolver } from "../infra/project-application-resolver.ts";
 import type { ProjectStorageDirectory } from "../infra/project-storage-directory.ts";
-import type { SqlDatabase } from "../infra/sql-database.ts";
+import type { ProjectStore, ProjectStoreResolver } from "../infra/project-store.ts";
 import { ChannelService } from "../service/channel/channel-service.ts";
 import type { LocalSessionOperations } from "../service/channel/local-session-operations.ts";
 import { PairingDirectoryService } from "../service/pairing/pairing-directory-service.ts";
 import { PairingIdentityService } from "../service/pairing/pairing-identity-service.ts";
 import { PairingService } from "../service/pairing/pairing-service.ts";
-import { PairingIdentityStorage } from "../storage/pairing-identity-storage.ts";
-import { PairingStorage } from "../storage/pairing-storage.ts";
 
 interface PairingInfrastructure {
     readonly authentication: { readonly projects: ProjectAccessAuthorizer };
     readonly projectApplications: ProjectApplicationResolver;
-    readonly databases: DatabaseResolver;
+    readonly stores: ProjectStoreResolver;
     readonly projects: ProjectStorageDirectory;
-    readonly identityDatabases: readonly SqlDatabase[];
+    /** The Project stores this execution searches to find the Project a credential belongs to. */
+    readonly identityStores: readonly ProjectStore[];
 }
 
 export interface RelayInfrastructure extends PairingInfrastructure {
@@ -37,12 +35,11 @@ export interface RelayInfrastructure extends PairingInfrastructure {
 }
 
 function createPairings(cx: PairingInfrastructure) {
-    const sources = cx.identityDatabases.map((database, index) => ({ sourceId: String(index), database }));
-    const identities = new PairingIdentityService(new PairingIdentityStorage(sources, cx.databases), cx.projects);
+    const identities = new PairingIdentityService(cx.identityStores, cx.stores, cx.projects);
     return new PairingDirectoryService({
         gateways: { projectApplications: cx.projectApplications },
         storages: {
-            forProject: (project) => new PairingStorage(project, cx.databases),
+            forProject: (project) => cx.stores.resolve(project.storagePlacement),
             projectDirectory: cx.projects,
         },
         services: { identities, projectAuthentication: cx.authentication.projects },

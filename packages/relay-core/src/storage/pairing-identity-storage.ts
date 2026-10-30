@@ -1,9 +1,8 @@
 import { and, eq, isNull } from "drizzle-orm";
 import { validateIdentifier } from "../entity/pairing/pairing.ts";
 import type { PairingIdentityCredential } from "../entity/pairing/pairing-identity.ts";
-import type { DatabaseResolver } from "../infra/database-resolver.ts";
+import type { CredentialMatch, PairingScopeRow } from "../entity/pairing/pairing-records.ts";
 import { relayDrizzle } from "../infra/drizzle-database.ts";
-import type { ProjectStorageContext } from "../infra/project-storage-directory.ts";
 import type { SqlDatabase } from "../infra/sql-database.ts";
 import {
     channelAccessGrant,
@@ -16,16 +15,52 @@ import {
 } from "../schema/project-do/index.ts";
 import { hostCredentialValid } from "./host-credential-validity.ts";
 
-export interface IdentityDatabaseSource {
-    readonly sourceId: string;
-    readonly database: SqlDatabase;
-}
-
-async function identityRows(
+/** The Projects in this storage whose credential matches; only browser credentials carry their own lifetime. */
+export async function credentialMatches(
     database: SqlDatabase,
     credential: PairingIdentityCredential,
     signal: AbortSignal,
-): Promise<readonly Readonly<Record<string, unknown>>[]> {
+): Promise<readonly CredentialMatch[]> {
+    if (credential.kind !== "project") {
+        const rows = await credentialRows(database, credential, signal);
+        return rows.map((row) => ({ project_id: row.project_id, expires_at: null, revoked_at: null }));
+    }
+    const orm = relayDrizzle(database, signal);
+    const projectId = validateIdentifier(credential.projectId, "project_id");
+    const [hosts, browsers] = await Promise.all([
+        orm
+            .select({ project_id: runtimeIdentity.projectId })
+            .from(channelHostCredential)
+            .innerJoin(runtimeIdentity, eq(runtimeIdentity.channelId, channelHostCredential.channelId))
+            .where(
+                and(
+                    eq(runtimeIdentity.projectId, projectId),
+                    eq(channelHostCredential.tokenHash, credential.tokenHash),
+                    hostCredentialValid(orm),
+                ),
+            ),
+        orm
+            .select({
+                project_id: projectBrowserCredential.projectId,
+                expires_at: projectBrowserCredential.expiresAt,
+                revoked_at: projectBrowserCredential.revokedAt,
+            })
+            .from(projectBrowserCredential)
+            .where(
+                and(
+                    eq(projectBrowserCredential.projectId, projectId),
+                    eq(projectBrowserCredential.tokenHash, credential.tokenHash),
+                ),
+            ),
+    ]);
+    return [...hosts.map((row) => ({ project_id: row.project_id, expires_at: null, revoked_at: null })), ...browsers];
+}
+
+async function credentialRows(
+    database: SqlDatabase,
+    credential: Exclude<PairingIdentityCredential, { readonly kind: "project" }>,
+    signal: AbortSignal,
+): Promise<readonly { readonly project_id: string }[]> {
     const orm = relayDrizzle(database, signal);
     switch (credential.kind) {
         case "host":
@@ -53,36 +88,6 @@ async function identityRows(
                         isNull(runtimeIdentity.revokedAt),
                     ),
                 );
-        case "project": {
-            const projectId = validateIdentifier(credential.projectId, "project_id");
-            const [hosts, browsers] = await Promise.all([
-                orm
-                    .select({ project_id: runtimeIdentity.projectId })
-                    .from(channelHostCredential)
-                    .innerJoin(runtimeIdentity, eq(runtimeIdentity.channelId, channelHostCredential.channelId))
-                    .where(
-                        and(
-                            eq(runtimeIdentity.projectId, projectId),
-                            eq(channelHostCredential.tokenHash, credential.tokenHash),
-                            hostCredentialValid(orm),
-                        ),
-                    ),
-                orm
-                    .select({
-                        project_id: projectBrowserCredential.projectId,
-                        expires_at: projectBrowserCredential.expiresAt,
-                        revoked_at: projectBrowserCredential.revokedAt,
-                    })
-                    .from(projectBrowserCredential)
-                    .where(
-                        and(
-                            eq(projectBrowserCredential.projectId, projectId),
-                            eq(projectBrowserCredential.tokenHash, credential.tokenHash),
-                        ),
-                    ),
-            ]);
-            return [...hosts.map((row) => ({ ...row, expires_at: null, revoked_at: null })), ...browsers];
-        }
         case "pairing":
             return orm
                 .select({ project_id: runtimeIdentity.projectId })
@@ -115,47 +120,20 @@ async function identityRows(
     }
 }
 
-export class PairingIdentityStorage {
-    readonly #sources: readonly IdentityDatabaseSource[];
-    readonly #databases: DatabaseResolver;
-    constructor(sources: readonly IdentityDatabaseSource[], databases: DatabaseResolver) {
-        this.#sources = [...sources];
-        this.#databases = databases;
-    }
-
-    readonly matchesPlacement = (sourceId: string, project: ProjectStorageContext): boolean => {
-        const source = this.#sources.find((candidate) => candidate.sourceId === sourceId);
-        return source !== undefined && source.database === this.#databases.resolve(project.storagePlacement);
-    };
-
-    readonly find = async (credential: PairingIdentityCredential, signal: AbortSignal) => {
-        const matches: { readonly sourceId: string; readonly row: Readonly<Record<string, unknown>> }[] = [];
-        for (const source of this.#sources) {
-            const rows = await identityRows(source.database, credential, signal);
-            for (const row of rows) {
-                matches.push({ sourceId: source.sourceId, row });
-            }
-        }
-        return matches;
-    };
-
-    readonly findRuntime = async (tokenHash: string, signal: AbortSignal) => {
-        const matches: { readonly sourceId: string; readonly row: Readonly<Record<string, unknown>> }[] = [];
-        for (const source of this.#sources) {
-            const rows = await relayDrizzle(source.database, signal)
-                .select({
-                    project_id: runtimeIdentity.projectId,
-                    runtime_id: runtimeIdentity.runtimeId,
-                    channel_id: runtimeIdentity.channelId,
-                })
-                .from(runtimeIdentity)
-                .innerJoin(runtimeRegistration, eq(runtimeRegistration.runtimeId, runtimeIdentity.runtimeId))
-                .innerJoin(runtimeDaemonCredential, eq(runtimeDaemonCredential.runtimeId, runtimeIdentity.runtimeId))
-                .where(and(eq(runtimeDaemonCredential.tokenHash, tokenHash), isNull(runtimeIdentity.revokedAt)));
-            for (const row of rows) {
-                matches.push({ sourceId: source.sourceId, row });
-            }
-        }
-        return matches;
-    };
+/** The registered, unrevoked Runtimes in this storage whose daemon credential matches. */
+export async function runtimeCredentialMatches(
+    database: SqlDatabase,
+    tokenHash: string,
+    signal: AbortSignal,
+): Promise<readonly PairingScopeRow[]> {
+    return await relayDrizzle(database, signal)
+        .select({
+            project_id: runtimeIdentity.projectId,
+            runtime_id: runtimeIdentity.runtimeId,
+            channel_id: runtimeIdentity.channelId,
+        })
+        .from(runtimeIdentity)
+        .innerJoin(runtimeRegistration, eq(runtimeRegistration.runtimeId, runtimeIdentity.runtimeId))
+        .innerJoin(runtimeDaemonCredential, eq(runtimeDaemonCredential.runtimeId, runtimeIdentity.runtimeId))
+        .where(and(eq(runtimeDaemonCredential.tokenHash, tokenHash), isNull(runtimeIdentity.revokedAt)));
 }

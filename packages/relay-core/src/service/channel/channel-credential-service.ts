@@ -1,24 +1,25 @@
-import type { ChannelCredentialIdentity, ChannelCredentialStorage } from "../../storage/channel-credential-storage.ts";
+import type { ChannelCredentialIdentity } from "../../entity/pairing/pairing-records.ts";
+import type { ProjectStore } from "../../infra/project-store.ts";
 
 export class ChannelCredentialService {
-    readonly #storage: ChannelCredentialStorage;
+    readonly #store: ProjectStore;
 
-    constructor(storage: ChannelCredentialStorage) {
-        this.#storage = storage;
+    constructor(store: ProjectStore) {
+        this.#store = store;
     }
 
     readonly isRuntimeActive = async (
         identity: { readonly projectId: string; readonly runtimeId: string },
         signal: AbortSignal,
     ): Promise<boolean> => {
-        const row = await this.#storage.readActiveRuntime(identity, signal);
+        const active = await this.#store.isRuntimeActive(identity.runtimeId, signal);
         signal.throwIfAborted();
-        return row?.active === 1;
+        return active;
     };
 
     readonly isActive = async (identity: ChannelCredentialIdentity, signal: AbortSignal): Promise<boolean> => {
-        const row = await this.#storage.readActive(identity, signal);
+        const active = await this.#store.isHostCredentialActive(identity, signal);
         signal.throwIfAborted();
-        return row?.active === 1;
+        return active;
     };
 }

@@ -10,6 +10,7 @@
         "./gateway": "./src/gateway/index.ts",
         "./database": "./src/infra/sql-database.ts",
         "./logging": "./src/infra/logger.ts",
+        "./project-store": "./src/storage/sqlite-project-store.ts",
         "./schema/project-do": "./src/schema/project-do/index.ts"
     },
     "scripts": {

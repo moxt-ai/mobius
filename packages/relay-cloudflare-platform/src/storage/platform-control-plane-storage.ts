@@ -1,4 +1,3 @@
-import { relayDrizzle } from "@moxt-ai/mobius-relay-core/database";
 import { and, asc, desc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import {
     type AppRow,
@@ -13,12 +12,12 @@ import {
     PlatformProjectScopeRowSchema,
     type ProjectRow,
     ProjectRowSchema,
-    ProjectStorageScopeRowSchema,
     type RecordPresenceRow,
     RecordPresenceRowSchema,
     type TenantRow,
     TenantRowSchema,
 } from "../entity/platform-records.ts";
+import type { PlatformProjectStores } from "../infra/platform-project-store.ts";
 import {
     platformApp,
     platformAppCredential,
@@ -27,20 +26,18 @@ import {
     platformProject,
     platformTenant,
 } from "../schema/d1/index.ts";
-import { platformAuditEvent } from "../schema/project-do/index.ts";
 import { waitForD1 } from "./d1-operation.ts";
 import { decodeOptionalStorageRecord, decodeStorageRecord, decodeStorageRecords } from "./decode-storage-record.ts";
-import { type PlatformDatabaseResolver, projectDatabase, projectSqlDatabase } from "./platform-database-resolver.ts";
 import { platformDrizzle } from "./platform-drizzle-database.ts";
 import { appActive, projectServed } from "./platform-lifecycle.ts";
 
 export class PlatformControlPlaneStorage {
     readonly #database: D1Database;
-    readonly #databases: PlatformDatabaseResolver;
+    readonly #projects: Pick<PlatformProjectStores, "forProject">;
 
-    constructor(database: D1Database, databases: PlatformDatabaseResolver) {
+    constructor(database: D1Database, projects: Pick<PlatformProjectStores, "forProject">) {
         this.#database = database;
-        this.#databases = databases;
+        this.#projects = projects;
     }
 
     readonly createTenant = async (
@@ -326,32 +323,10 @@ export class PlatformControlPlaneStorage {
                 })),
             );
         }
-        const rows = await waitForD1(
-            () =>
-                relayDrizzle(projectSqlDatabase(this.#databases, projectId), signal)
-                    .select()
-                    .from(platformAuditEvent)
-                    .where(eq(platformAuditEvent.projectId, projectId))
-                    .orderBy(desc(platformAuditEvent.recordedAt), desc(platformAuditEvent.auditId))
-                    .limit(limit),
-            signal,
-        );
+        const rows = await this.#projects.forProject(projectId).listAuditEvents(limit, signal);
         return decodeStorageRecords(
             AuditRowSchema,
-            rows.map((row) => ({
-                action: row.action,
-                actor_id: row.actorId,
-                actor_kind: row.actorKind,
-                actor_ref: row.actorRef,
-                app_id: row.appId,
-                audit_id: row.auditId,
-                details_json: row.detailsJson,
-                outcome: row.outcome,
-                project_id: row.projectId,
-                recorded_at: row.recordedAt,
-                subject_id: row.subjectId,
-                tenant_id: tenantId,
-            })),
+            rows.map((row) => ({ ...row, tenant_id: tenantId })),
         );
     };
 
@@ -578,19 +553,8 @@ export class PlatformControlPlaneStorage {
         credentialId: string,
         projectId: string,
         signal: AbortSignal,
-    ): Promise<number | null> => {
-        const row = await waitForD1(
-            () =>
-                projectDatabase(this.#databases, projectId)
-                    .prepare(
-                        "SELECT created_at FROM platform_app_credential_projects WHERE credential_id = ? AND project_id = ?",
-                    )
-                    .bind(credentialId, projectId)
-                    .first(),
-            signal,
-        );
-        return row === null ? null : decodeStorageRecord(ProjectStorageScopeRowSchema, row).created_at;
-    };
+    ): Promise<number | null> =>
+        await this.#projects.forProject(projectId).readLegacyCredentialScope(credentialId, signal);
 
     /** A scope row exists only when its credential was inserted in the same batch. */
     private readonly scopeInsert = (credentialId: string, projectId: string, createdAt: number) => {
@@ -682,26 +646,7 @@ export class PlatformControlPlaneStorage {
             const result = await waitForD1(() => this.dashboardAuditStatement(audit).run(), signal);
             return result.success;
         }
-        await waitForD1(
-            () =>
-                relayDrizzle(projectSqlDatabase(this.#databases, audit.projectId), signal)
-                    .insert(platformAuditEvent)
-                    .values({
-                        auditId: audit.action === "project.created" ? `pae_created_${audit.projectId}` : audit.auditId,
-                        appId: audit.appId,
-                        projectId: audit.projectId,
-                        actorKind: audit.actorKind,
-                        actorId: audit.actorId,
-                        actorRef: audit.actorRef,
-                        action: audit.action,
-                        subjectId: audit.subjectId,
-                        outcome: audit.outcome === "succeeded" ? "succeeded" : "denied",
-                        detailsJson: audit.detailsJson,
-                        recordedAt: audit.recordedAt,
-                    })
-                    .onConflictDoNothing({ target: platformAuditEvent.auditId }),
-            signal,
-        );
+        await this.#projects.forProject(audit.projectId).recordAudit(audit, signal);
         return true;
     };
 

@@ -1,8 +1,8 @@
 import { CloudflareChannelPeers } from "../gateway/cloudflare-channel-peers.ts";
 import type { DoSqlDatabase } from "../infra/do-sql-database.ts";
 import { DurableObjectSqlDatabase } from "../infra/durable-object-sql-database.ts";
-import type { ProjectDatabaseBindings } from "../infra/project-database-bindings.ts";
 import type { ProjectStorageDirectory } from "../infra/project-storage-directory.ts";
+import type { ProjectStoreResolver } from "../infra/project-store.ts";
 import type { SessionRecording } from "../infra/session-recording.ts";
 import type { SessionStatusNotifications } from "../infra/session-status-notifications.ts";
 import { createDurableObjectDependencies } from "./create-durable-object-dependencies.ts";
@@ -10,7 +10,7 @@ import { createDurableObjectDependencies } from "./create-durable-object-depende
 export function createDurableObjectContext(
     state: DurableObjectState,
     options: {
-        readonly databases: ProjectDatabaseBindings;
+        readonly stores: ProjectStoreResolver;
         readonly projects: ProjectStorageDirectory;
         readonly doDatabase?: DoSqlDatabase;
         readonly recording?: SessionRecording;
@@ -20,7 +20,7 @@ export function createDurableObjectContext(
     return createDurableObjectDependencies({
         doDatabase: options.doDatabase ?? new DurableObjectSqlDatabase(state.storage),
         storages: {
-            databaseResolver: options.databases,
+            projectStores: options.stores,
             projectDirectory: options.projects,
         },
         gateways: {

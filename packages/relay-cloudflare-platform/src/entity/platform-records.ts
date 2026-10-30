@@ -33,6 +33,9 @@ export const AuditRowSchema = v.object({
 });
 export type AuditRow = Readonly<v.InferOutput<typeof AuditRowSchema>>;
 
+/** A Platform audit event kept in its Project's own storage; its Tenant is the Project's. */
+export type ProjectAuditRow = Omit<AuditRow, "tenant_id">;
+
 export const CredentialRowSchema = v.object({
     all_projects: v.picklist([0, 1]),
     app_id: v.string(),
@@ -99,8 +102,6 @@ export type ProjectRow = Readonly<v.InferOutput<typeof ProjectRowSchema>>;
 
 export const RecordPresenceRowSchema = v.object({ present: v.literal(1) });
 export type RecordPresenceRow = Readonly<v.InferOutput<typeof RecordPresenceRowSchema>>;
-
-export const ProjectStorageScopeRowSchema = v.object({ created_at: v.number() });
 
 export const TenantRowSchema = v.object({
     created_at: nonNegativeInteger,

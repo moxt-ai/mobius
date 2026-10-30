@@ -17,6 +17,7 @@ import { FakeClerk } from "../../test-support/src/clerk.ts";
 import { projectDurableObjectMigrations } from "../src/generated/project-do-migrations.ts";
 import { pairingChannel } from "../src/schema/legacy-project-do/pairing-channel.ts";
 import { initializeProjectDurableObjectSchema } from "../src/storage/project-durable-object-schema.ts";
+import { SqlitePlatformProjectStore } from "../src/storage/sqlite-platform-project-store.ts";
 import { createPlatformGateways, PlatformAuthenticationConfiguration } from "../src/worker.ts";
 
 const origin = `https://platform.test${MOBIUS_API_PREFIX}`;
@@ -101,7 +102,10 @@ async function project(name = "Runtime pairing") {
                 }),
                 {
                     ...env,
-                    MOBIUS_PROJECT_DATABASE: new DurableObjectDatabaseAdapter(state.storage),
+                    MOBIUS_PROJECT_STORE: new SqlitePlatformProjectStore(
+                        projectId,
+                        new DurableObjectDatabaseAdapter(state.storage),
+                    ),
                     MOBIUS_PROJECT_ID: projectId,
                 },
             );

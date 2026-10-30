@@ -1,15 +1,17 @@
-import type { SqlDatabase } from "@moxt-ai/mobius-relay-core/database";
 import { logger } from "@moxt-ai/mobius-relay-core/logging";
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-sdk/protocol";
+import type { ProjectDO } from "../durable-objects/project-do.ts";
 import { decodePlatformProjectPlacement, projectIdFromPrefixedValue } from "../entity/platform-project-id.ts";
 import { encodeProjectDurableObjectPath } from "../entity/project-durable-object-path.ts";
+import type { PlatformProjectStore } from "../infra/platform-project-store.ts";
 
 export interface ProjectWorkerRoutingBindings {
-    readonly PROJECT_RELAY: DurableObjectNamespace;
+    readonly PROJECT_RELAY: DurableObjectNamespace<ProjectDO>;
 }
 
+/** A request executing inside the Project Durable Object, beside the Project's own store. */
 export interface ProjectDurableObjectExecutionBindings extends ProjectWorkerRoutingBindings {
-    readonly MOBIUS_PROJECT_DATABASE: SqlDatabase;
+    readonly MOBIUS_PROJECT_STORE: PlatformProjectStore;
     readonly MOBIUS_PROJECT_ID: string;
 }
 
@@ -73,7 +75,7 @@ export async function routeProjectDurableObject(
     bindings: ProjectDurableObjectRoutingBindings,
     allowedOrigins: ReadonlySet<string>,
 ): Promise<Response | null> {
-    if ("MOBIUS_PROJECT_DATABASE" in bindings) {
+    if ("MOBIUS_PROJECT_STORE" in bindings) {
         return null;
     }
     const pathname = new URL(request.url).pathname;
