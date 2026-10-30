@@ -29,6 +29,7 @@ workflows:
     '.github/workflows/publish-sdk.yml':
         - 'actions/checkout@v7.0.1'
         - 'actions/setup-node@v7.0.0'
+    '.github/workflows/verified-review.yml': []
     '.github/workflows/verify-action-lockfile.yml':
         - 'actions/checkout@v7.0.1'
     '.github/workflows/windows-codex-compatibility.yml':
