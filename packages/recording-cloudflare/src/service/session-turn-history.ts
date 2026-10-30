@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import type {
     AcpSessionUpdate,
     LifecycleMetadata,
@@ -116,6 +115,20 @@ function isTerminal(attempt: SessionRecordingTurnAttempt): boolean {
 /** An attempt that a Session generation change would leave without an outcome. */
 function isInterruptible(attempt: SessionRecordingTurnAttempt): boolean {
     return attempt.kind === "running" || attempt.kind === "waiting_input";
+}
+
+// Schema decoding can reorder keys; key order alone does not advance a tool's work.
+function canonicalToolItem(item: StoredTurnItem | null): string {
+    return JSON.stringify(item, (_key, value: unknown): unknown => {
+        if (value === null || typeof value !== "object" || Array.isArray(value)) {
+            return value;
+        }
+        return Object.fromEntries(
+            Object.keys(value)
+                .sort()
+                .map((key) => [key, Reflect.get(value, key)]),
+        );
+    });
 }
 
 function observedAttempt(turn: StoredTurn, now: number): SessionRecordingTurnAttempt {
@@ -961,7 +974,7 @@ class ProjectionFold {
             openAnswer: null,
             openThought: null,
         });
-        if (!isDeepStrictEqual(previous, next)) {
+        if (canonicalToolItem(previous) !== canonicalToolItem(next)) {
             this.#progress(owner);
         }
     }

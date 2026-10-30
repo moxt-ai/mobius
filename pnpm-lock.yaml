@@ -223,9 +223,6 @@ importers:
       '@moxt-ai/mobius-sdk-previous':
         specifier: npm:@moxt-ai/mobius-sdk@0.0.136
         version: '@moxt-ai/mobius-sdk@0.0.136(react@19.3.0)'
-      '@types/node':
-        specifier: ^24.13.5
-        version: 24.13.5
       vitest:
         specifier: ^4.1.12
         version: 4.1.12(@types/node@24.13.5)(happy-dom@21.0.4)(vite@8.3.5(@types/node@24.13.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.14)(yaml@2.9.0))

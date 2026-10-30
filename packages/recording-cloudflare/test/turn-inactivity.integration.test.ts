@@ -120,10 +120,26 @@ const stub = () => env.SESSION_RECORDING.getByName(JSON.stringify([projectId, se
 
 describe("Recording execution inactivity", () => {
     it("Given unchanged tool status and empty chunks, When they are repeated near the deadline, Then they do not count as execution progress", async () => {
-        const tool = { sessionUpdate: "tool_call", toolCallId: "tool", status: "in_progress", title: "Work" };
+        const tool = {
+            sessionUpdate: "tool_call",
+            toolCallId: "tool",
+            status: "in_progress",
+            title: "Work",
+            rawInput: { first: 1, second: { a: 1, b: 2 } },
+        };
         await record([requested("tool"), started("tool"), event(tool, "acp")]);
         vi.setSystemTime(start + hour - 1);
-        await record([event({ ...tool, sessionUpdate: "tool_call_update" }, "acp"), answer("")]);
+        await record([
+            event(
+                {
+                    ...tool,
+                    rawInput: { second: { b: 2, a: 1 }, first: 1 },
+                    sessionUpdate: "tool_call_update",
+                },
+                "acp",
+            ),
+            answer(""),
+        ]);
         vi.setSystemTime(start + hour + 1);
         await runDurableObjectAlarm(stub());
         expect((await execution("tool")).commands[0]?.attempt.kind).toBe("indeterminate");
