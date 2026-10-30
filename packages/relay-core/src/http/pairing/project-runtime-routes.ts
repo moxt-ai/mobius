@@ -2,23 +2,16 @@ import {
     decodeAgentSettingsDiscoverCommand,
     decodeNativeSessionRequest,
     decodeSessionCloseCommand,
-    decodeSessionConfigReadCommand,
-    decodeSessionConfigureCommand,
     decodeSessionListCommand,
     decodeSessionPrepareCommand,
-    decodeSessionPreviewHistoryPageLoad,
-    decodeSessionPromptCommand,
     decodeSessionQueryCommand,
-    decodeSessionRenameCommand,
     decodeSessionRestoreCommand,
     decodeWorkspaceListCommand,
     type Identifier,
     isDirectoryIdentifier,
     isIdentifier,
     MAX_DIRECTORY_IDENTIFIER_LENGTH,
-    ProtocolMessageError,
     RUNTIME_WORKSPACE_BINDING_ID,
-    type SessionPromptCommand,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { Hono } from "hono";
 import * as v from "valibot";
@@ -32,7 +25,7 @@ import { assertRequiredKeys, bearerToken, readString } from "../../infra/relay-h
 import { bodyParser } from "../middleware/body-parser.ts";
 import { errorMiddleware, rethrowHonoError } from "../middleware/error-middleware.ts";
 import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
-import { createProjectRuntimeSessionControlRoutes } from "./project-runtime-session-control-routes.ts";
+import { createProjectRuntimeSessionControlRoutes, sessionControl } from "./project-runtime-session-control-routes.ts";
 
 const identifier = v.custom<Identifier>(isIdentifier);
 const sessionIdentitySchema = v.strictObject({
@@ -333,20 +326,7 @@ export function createProjectRuntimeRoutes() {
             },
         )
         .get("/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/configuration", async (context) => {
-            const command = decodeSessionConfigReadCommand(
-                JSON.stringify({
-                    kind: "session.config.read",
-                    requestId: crypto.randomUUID(),
-                    sessionId: validateIdentifier(context.req.param("sessionId"), "session_id"),
-                }),
-            );
-            const result = await context.env.services.runtimePairings.requestControl(
-                validateIdentifier(context.req.param("projectId"), "project_id"),
-                validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
-                bearerToken(context.req.raw),
-                command,
-                context.req.raw.signal,
-            );
+            const result = await sessionControl(context).readConfiguration();
             context.header("Cache-Control", "no-store");
             return context.json(result);
         })
@@ -355,22 +335,7 @@ export function createProjectRuntimeRoutes() {
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {
                 const body = validated(configureSessionSchema, context.req.valid("json"));
-                const command = decodeSessionConfigureCommand(
-                    JSON.stringify({
-                        ...body,
-                        bindingId: "workspace",
-                        kind: "session.configure",
-                        requestId: crypto.randomUUID(),
-                        sessionId: validateIdentifier(context.req.param("sessionId"), "session_id"),
-                    }),
-                );
-                const result = await context.env.services.runtimePairings.requestControl(
-                    validateIdentifier(context.req.param("projectId"), "project_id"),
-                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
-                    bearerToken(context.req.raw),
-                    command,
-                    context.req.raw.signal,
-                );
+                const result = await sessionControl(context).configure(body);
                 context.header("Cache-Control", "no-store");
                 return context.json(result);
             },
@@ -380,21 +345,7 @@ export function createProjectRuntimeRoutes() {
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {
                 const body = validated(renameSessionSchema, context.req.valid("json"));
-                const command = decodeSessionRenameCommand(
-                    JSON.stringify({
-                        kind: "session.rename",
-                        requestId: crypto.randomUUID(),
-                        sessionId: validateIdentifier(context.req.param("sessionId"), "session_id"),
-                        title: body.title,
-                    }),
-                );
-                const result = await context.env.services.runtimePairings.requestControl(
-                    validateIdentifier(context.req.param("projectId"), "project_id"),
-                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
-                    bearerToken(context.req.raw),
-                    command,
-                    context.req.raw.signal,
-                );
+                const result = await sessionControl(context).rename(body.title);
                 context.header("Cache-Control", "no-store");
                 return context.json(result);
             },
@@ -404,34 +355,9 @@ export function createProjectRuntimeRoutes() {
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {
                 const body = validated(nativeEventsSchema, context.req.valid("json"));
-                const command = decodeSessionPreviewHistoryPageLoad(
-                    JSON.stringify({
-                        additionalDirectoryIds: body.additionalDirectoryIds,
-                        agentId: body.agentId,
-                        cursor: body.cursor,
-                        directoryId: body.directoryId,
-                        eventLimit: body.eventLimit,
-                        bindingId: "workspace",
-                        kind: "session.preview-history.page.load",
-                        requestId: crypto.randomUUID(),
-                        sessionId: validateIdentifier(context.req.param("sessionId"), "session_id"),
-                    }),
-                );
-                const result = await context.env.services.runtimePairings.requestControl(
-                    validateIdentifier(context.req.param("projectId"), "project_id"),
-                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
-                    bearerToken(context.req.raw),
-                    command,
-                    context.req.raw.signal,
-                );
-                if (result.kind !== "session.preview-history.page.loaded") {
-                    throw new PairingDirectoryError(
-                        "invalid_request",
-                        "The Runtime returned invalid V2 Session events",
-                    );
-                }
+                const events = await sessionControl(context).previewEvents(body, body);
                 context.header("Cache-Control", "no-store");
-                return context.json(result.events);
+                return context.json(events);
             },
         )
         .post(
@@ -439,27 +365,7 @@ export function createProjectRuntimeRoutes() {
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {
                 const body = validated(sessionIdentitySchema, context.req.valid("json"));
-                const sessionId = validateIdentifier(context.req.param("sessionId"), "session_id");
-                const result = await context.env.services.runtimePairings.requestControl(
-                    validateIdentifier(context.req.param("projectId"), "project_id"),
-                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
-                    bearerToken(context.req.raw),
-                    decodeNativeSessionRequest(
-                        JSON.stringify({
-                            action: "active-turn",
-                            ...body,
-                            bindingId: RUNTIME_WORKSPACE_BINDING_ID,
-                            kind: "native.session.request",
-                            requestId: crypto.randomUUID(),
-                            sessionId,
-                            targetSessionId: sessionId,
-                        }),
-                    ),
-                    context.req.raw.signal,
-                );
-                if (result.kind !== "native.session.result" || result.action !== "active-turn") {
-                    throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid active Turn");
-                }
+                const result = await sessionControl(context).activeTurn(body);
                 context.header("Cache-Control", "no-store");
                 return context.json(result);
             },
@@ -469,49 +375,13 @@ export function createProjectRuntimeRoutes() {
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {
                 const body = validated(submitTurnSchema, context.req.valid("json"));
-                let command: SessionPromptCommand;
-                try {
-                    command = decodeSessionPromptCommand(
-                        JSON.stringify({
-                            additionalDirectoryIds: body.additionalDirectoryIds,
-                            agentId: body.agentId,
-                            bindingId: "workspace",
-                            commandId: body.idempotencyKey,
-                            directoryId: body.directoryId,
-                            disposition: body.disposition,
-                            ...(body.historyPolicy === undefined ? {} : { historyPolicy: body.historyPolicy }),
-                            attachments: "attachments" in body ? body.attachments : [],
-                            kind: "session.prompt",
-                            prompt: body.content,
-                            sessionConfigurations: body.sessionConfigurations,
-                            sessionId: validateIdentifier(context.req.param("sessionId"), "session_id"),
-                            targetCommandId: body.targetCommandId,
-                        }),
-                    );
-                } catch (error) {
-                    // The caller supplied this prompt, so protocol rejection is a client error, not a retryable outage.
-                    if (error instanceof ProtocolMessageError) {
-                        throw new PairingDirectoryError("invalid_request", "The Turn request is invalid", {
-                            cause: error,
-                        });
-                    }
-                    throw error;
-                }
-                const result = await context.env.services.runtimePairings.requestControl(
-                    validateIdentifier(context.req.param("projectId"), "project_id"),
-                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
-                    bearerToken(context.req.raw),
-                    command,
-                    context.req.raw.signal,
-                );
-                if (
-                    (result.kind !== "turn.started" && result.kind !== "turn.queued") ||
-                    result.commandId !== command.commandId
-                ) {
-                    throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid Turn");
-                }
+                const accepted = await sessionControl(context).submitTurn({
+                    ...body,
+                    attachments: "attachments" in body ? body.attachments : [],
+                    commandId: body.idempotencyKey,
+                });
                 context.header("Cache-Control", "no-store");
-                return context.json({ turnId: result.commandId });
+                return context.json({ turnId: accepted.commandId });
             },
         )
         .post(

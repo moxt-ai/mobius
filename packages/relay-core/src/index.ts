@@ -92,3 +92,4 @@ export {
 } from "./service/channel/local-session-operations.ts";
 export { RuntimeMessageScheduler } from "./service/channel/runtime-message-scheduler.ts";
 export type { RuntimePeers, RuntimeSocket, RuntimeSocketIdentity } from "./service/channel/runtime-service.ts";
+export { SessionControl } from "./service/pairing/session-control.ts";
