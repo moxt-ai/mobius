@@ -6,6 +6,7 @@ import { type AgentConnection, agent, methods, PROTOCOL_VERSION } from "@agentcl
 import {
     decodeMessageKind,
     decodeSessionEventEnvelope,
+    decodeSessionEventReplayEnvelope,
     decodeSessionHistoryPageLoaded,
     decodeSessionPreviewHistoryPageLoaded,
     encodeSessionHistoryPageLoad,
@@ -16,6 +17,7 @@ import {
     RUNTIME_HEARTBEAT_MESSAGE,
     SESSION_EVENT_BATCH_MAX_SIZE,
     SESSION_EVENT_KIND,
+    SESSION_EVENT_REPLAY_KIND,
     type SessionLiveEvent,
     WORKSPACE_ENTRIES_KIND,
 } from "@moxt-ai/mobius-sdk/protocol";
@@ -188,14 +190,22 @@ class StreamingAgent {
     };
 }
 
+// A released Relay announces readiness without replay support; a current one records replayed output.
+const RELEASED_RELAY_READY = JSON.stringify({ kind: "runtime.liveness.ready" });
+const REPLAYING_RELAY_READY = JSON.stringify({ kind: "runtime.liveness.ready", sessionEventReplay: true });
+
 class RelayPeer {
     readonly events: SessionLiveEvent[] = [];
+    /** Events the daemon sent again in replay frames, in arrival order. */
+    readonly replayed: SessionLiveEvent[] = [];
+    /** Whether each Session event frame, in arrival order, carried live or replayed events. */
+    readonly frames: Array<"live" | "replay"> = [];
     readonly batches: Array<{ readonly bytes: number; readonly count: number }> = [];
     readonly socket: WebSocket;
     readonly #messages: string[] = [];
     readonly #waiters: Array<(message: string) => void> = [];
 
-    constructor(socket: WebSocket) {
+    constructor(socket: WebSocket, ready: string) {
         this.socket = socket;
         socket.on("message", (encoded) => {
             const text = encoded.toString();
@@ -203,10 +213,16 @@ class RelayPeer {
                 socket.send(RUNTIME_HEARTBEAT_ACK_MESSAGE);
                 return;
             }
-            if (decodeMessageKind(text) === SESSION_EVENT_KIND) {
+            const kind = decodeMessageKind(text);
+            if (kind === SESSION_EVENT_KIND) {
                 const envelope = decodeSessionEventEnvelope(text);
                 this.events.push(...envelope.events);
+                this.frames.push("live");
                 this.batches.push({ bytes: Buffer.byteLength(text), count: envelope.events.length });
+            }
+            if (kind === SESSION_EVENT_REPLAY_KIND) {
+                this.replayed.push(...decodeSessionEventReplayEnvelope(text).events);
+                this.frames.push("replay");
             }
             const waiter = this.#waiters.shift();
             if (waiter === undefined) {
@@ -215,7 +231,7 @@ class RelayPeer {
                 waiter(text);
             }
         });
-        socket.send(JSON.stringify({ kind: "runtime.liveness.ready" }));
+        socket.send(ready);
     }
 
     readonly next = (): Promise<string> => {
@@ -251,7 +267,7 @@ function answer(events: readonly SessionLiveEvent[], sessionId: string): string 
         .join("");
 }
 
-async function startRuntime() {
+async function startRuntime({ replay = false }: { readonly replay?: boolean } = {}) {
     const directory = await mkdtemp(join(tmpdir(), "mobius-disconnected-output-"));
     const workspace = join(directory, "workspace");
     await mkdir(workspace);
@@ -263,7 +279,7 @@ async function startRuntime() {
     const peers: RelayPeer[] = [];
     const waiters: Array<(peer: RelayPeer) => void> = [];
     relay.on("connection", (socket) => {
-        const peer = new RelayPeer(socket);
+        const peer = new RelayPeer(socket, replay ? REPLAYING_RELAY_READY : RELEASED_RELAY_READY);
         const waiter = waiters.shift();
         if (waiter === undefined) {
             peers.push(peer);
@@ -592,6 +608,8 @@ test.each([true, false])(
         const events = [...runtime.initial.events, ...resumed.events];
         expect(answer(events, "tail-session")).toBe("Reply prefix; the final 161 characters remain available.");
         expect(new Set(events.map((event) => event.eventId)).size).toBe(events.length);
+        // A released Relay did not announce replays, so the daemon sends nothing again.
+        expect(resumed.replayed).toEqual([]);
         expect(
             events.filter((event) => event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed"),
         ).toMatchObject([
@@ -643,32 +661,140 @@ test("Given concurrent Sessions produce an offline burst, When the Runtime recon
     ).toHaveLength(2);
 });
 
-test("Given an outage exhausts the bounded output buffer, When the Relay reconnects, Then pending output stays bounded and the Agent can continue streaming", async () => {
-    await using runtime = await startRuntime();
-    const turn = await runtime.prompt(runtime.initial, "bounded-session");
-    (await runtime.timer.next(100)).run();
+test.each([
+    { relay: "a released Relay", replay: false },
+    { relay: "a Relay that records replays", replay: true },
+])(
+    "Given an outage exhausts the bounded output buffer, When $relay reconnects, Then pending output stays bounded and the Agent can continue streaming",
+    async ({ replay }) => {
+        await using runtime = await startRuntime({ replay });
+        const turn = await runtime.prompt(runtime.initial, "bounded-session");
+        (await runtime.timer.next(100)).run();
+        await runtime.initial.barrier();
+        const retry = await runtime.disconnect(runtime.initial);
+        const chunk = "x".repeat(512 * 1024);
+        for (let index = 0; index < 70; index += 1) {
+            await turn.write(chunk);
+        }
+        const reconnect = runtime.nextPeer();
+        retry.run();
+        const resumed = await reconnect;
+        await resumed.barrier();
+        const offlineAnswer = answer(resumed.events, "bounded-session");
+        expect(offlineAnswer.length).toBeGreaterThan(0);
+        expect(resumed.batches.reduce((bytes, batch) => bytes + batch.bytes, 0)).toBeLessThanOrEqual(32 * 1024 * 1024);
+        await turn.write("streaming continues after the outage");
+        turn.finish();
+        await runtime.activity.whenIdle(runtime.cancellation.signal);
+        (await runtime.timer.next(100)).run();
+        await resumed.barrier();
+        expect(answer(resumed.events, "bounded-session")).toBe(`${offlineAnswer}streaming continues after the outage`);
+        expect(
+            resumed.events.filter(
+                (event) => event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed",
+            ),
+        ).toMatchObject([{ payload: { kind: "prompt.completed", stopReason: "end_turn" } }]);
+    },
+);
+
+test("Given a Relay that records replays, When the daemon reconnects after sending part of a reply, Then it sends that output again before the output it could not send", async () => {
+    await using runtime = await startRuntime({ replay: true });
+    const turn = await runtime.prompt(runtime.initial, "replayed-session");
+    const pending = await runtime.timer.next(100);
+    await turn.write("Sent before the outage; ");
+    pending.run();
     await runtime.initial.barrier();
+    const sent = [...runtime.initial.events];
+    expect(answer(sent, "replayed-session")).toBe("Sent before the outage; ");
     const retry = await runtime.disconnect(runtime.initial);
-    const chunk = "x".repeat(512 * 1024);
-    for (let index = 0; index < 70; index += 1) {
-        await turn.write(chunk);
-    }
+    await turn.write("written during the outage.");
+    turn.finish();
+    await runtime.activity.whenIdle(runtime.cancellation.signal);
     const reconnect = runtime.nextPeer();
     retry.run();
     const resumed = await reconnect;
     await resumed.barrier();
-    const offlineAnswer = answer(resumed.events, "bounded-session");
-    expect(offlineAnswer.length).toBeGreaterThan(0);
-    expect(resumed.batches.reduce((bytes, batch) => bytes + batch.bytes, 0)).toBeLessThanOrEqual(32 * 1024 * 1024);
-    await turn.write("streaming continues after the outage");
+
+    expect(resumed.replayed).toEqual(sent);
+    expect(answer(resumed.events, "replayed-session")).toBe("written during the outage.");
+    expect(resumed.frames).toContain("replay");
+    expect(resumed.frames.lastIndexOf("replay")).toBeLessThan(resumed.frames.indexOf("live"));
+});
+
+test("Given output the daemon sent longer ago than its replay window, When it reconnects to a Relay that records replays, Then it replays only the newer output", async () => {
+    await using runtime = await startRuntime({ replay: true });
+    const turn = await runtime.prompt(runtime.initial, "replay-window");
+    const pending = await runtime.timer.next(100);
+    await turn.write("Sent a minute ago; ");
+    pending.run();
+    await runtime.initial.barrier();
+    const old = runtime.initial.events.length;
+    vi.setSystemTime(Date.now() + 60_001);
+    await turn.write("sent just now.");
+    (await runtime.timer.next(100)).run();
+    await runtime.initial.barrier();
+    const recent = runtime.initial.events.slice(old);
+    expect(answer(recent, "replay-window")).toBe("sent just now.");
+    const retry = await runtime.disconnect(runtime.initial);
+    const reconnect = runtime.nextPeer();
+    retry.run();
+    const resumed = await reconnect;
+    await resumed.barrier();
+
+    expect(resumed.replayed).toEqual(recent);
+});
+
+test("Given more recently sent output than the replay keeps, When the daemon reconnects to a Relay that records replays, Then it replays the newest 16 MiB of it in order", async () => {
+    await using runtime = await startRuntime({ replay: true });
+    const turn = await runtime.prompt(runtime.initial, "replay-bound");
+    const chunk = "x".repeat(512 * 1024);
+    for (let index = 0; index < 40; index += 1) {
+        await turn.write(`${index.toString()};${chunk}`);
+    }
+    await runtime.initial.barrier();
+    const sent = runtime.initial.events;
+    const retry = await runtime.disconnect(runtime.initial);
+    const reconnect = runtime.nextPeer();
+    retry.run();
+    const resumed = await reconnect;
+    await resumed.barrier();
+
+    const replayedBytes = resumed.replayed.reduce(
+        (bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)),
+        0,
+    );
+    expect(replayedBytes).toBeGreaterThan(15 * 1024 * 1024);
+    expect(replayedBytes).toBeLessThanOrEqual(16 * 1024 * 1024);
+    expect(resumed.replayed).toEqual(sent.slice(sent.length - resumed.replayed.length));
+});
+
+test("Given recent output and an unsent tail that together exceed the socket buffer, When the daemon reconnects to a Relay that records replays, Then it replays only the newest output that leaves room for the tail, and the tail arrives on that connection", async () => {
+    await using runtime = await startRuntime({ replay: true });
+    const turn = await runtime.prompt(runtime.initial, "replay-room");
+    const chunk = "x".repeat(512 * 1024);
+    for (let index = 0; index < 20; index += 1) {
+        await turn.write(`sent ${index.toString()};${chunk}`);
+    }
+    await runtime.initial.barrier();
+    const sent = runtime.initial.events;
+    const retry = await runtime.disconnect(runtime.initial);
+    for (let index = 0; index < 56; index += 1) {
+        await turn.write(`unsent ${index.toString()};${chunk}`);
+    }
     turn.finish();
     await runtime.activity.whenIdle(runtime.cancellation.signal);
-    (await runtime.timer.next(100)).run();
+    const reconnect = runtime.nextPeer();
+    retry.run();
+    const resumed = await reconnect;
     await resumed.barrier();
-    expect(answer(resumed.events, "bounded-session")).toBe(`${offlineAnswer}streaming continues after the outage`);
+
+    expect(resumed.replayed.length).toBeGreaterThan(0);
+    expect(resumed.replayed.length).toBeLessThan(sent.length);
+    expect(resumed.replayed).toEqual(sent.slice(sent.length - resumed.replayed.length));
+    expect(answer(resumed.events, "replay-room")).toContain("unsent 55;");
     expect(
         resumed.events.filter(
             (event) => event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed",
         ),
-    ).toMatchObject([{ payload: { kind: "prompt.completed", stopReason: "end_turn" } }]);
+    ).toHaveLength(1);
 });

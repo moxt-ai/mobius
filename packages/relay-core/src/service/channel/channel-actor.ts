@@ -69,6 +69,7 @@ import {
     SESSION_CONFIGURE_KIND,
     SESSION_ELICITATION_RESPOND_KIND,
     SESSION_EVENT_KIND,
+    SESSION_EVENT_REPLAY_KIND,
     SESSION_HISTORY_PAGE_LOAD_KIND,
     SESSION_HISTORY_PAGE_LOADED_KIND,
     SESSION_INFO_UPDATED_KIND,
@@ -284,6 +285,10 @@ export class ChannelActor {
             const kind = message.kind;
             if (kind === SESSION_EVENT_KIND) {
                 this.#liveEvents.receive(message);
+                return;
+            }
+            if (kind === SESSION_EVENT_REPLAY_KIND) {
+                this.#liveEvents.replay(message);
                 return;
             }
             if (kind === SESSION_INFO_UPDATED_KIND) {

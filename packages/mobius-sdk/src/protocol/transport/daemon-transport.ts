@@ -68,10 +68,15 @@ import {
 } from "../session/configuration/title.ts";
 import {
     decodeSessionEventEnvelope,
+    decodeSessionEventReplayEnvelope,
     decodeSessionWireEnvelope,
+    decodeSessionWireReplayEnvelope,
     encodeSessionEventEnvelope,
+    encodeSessionEventReplayEnvelope,
     SESSION_EVENT_KIND,
+    SESSION_EVENT_REPLAY_KIND,
     type SessionWireEnvelope,
+    type SessionWireReplayEnvelope,
 } from "../session/events/index.ts";
 import {
     CONTENT_AVAILABLE_KIND,
@@ -501,6 +506,11 @@ const daemonToServiceSignatures = {
         encodeSessionEventEnvelope,
         decodeSessionEventEnvelope,
     ),
+    [SESSION_EVENT_REPLAY_KIND]: defineMessageSignature(
+        SESSION_EVENT_REPLAY_KIND,
+        encodeSessionEventReplayEnvelope,
+        decodeSessionEventReplayEnvelope,
+    ),
     [SESSION_OPERATION_FAILED_KIND]: defineMessageSignature(
         SESSION_OPERATION_FAILED_KIND,
         encodeSessionOperationFailedEvent,
@@ -555,11 +565,13 @@ export type DaemonToRelayMessage =
           {
               readonly kind:
                   | typeof SESSION_EVENT_KIND
+                  | typeof SESSION_EVENT_REPLAY_KIND
                   | typeof SESSION_HISTORY_PAGE_LOADED_KIND
                   | typeof SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND;
           }
       >
     | SessionWireEnvelope
+    | SessionWireReplayEnvelope
     | SessionHistoryWirePageLoaded
     | SessionPreviewHistoryWirePageLoaded;
 
@@ -567,6 +579,9 @@ export function decodeDaemonToRelayMessage(encoded: string): DaemonToRelayMessag
     const kind = decodeMessageKind(encoded);
     if (kind === SESSION_EVENT_KIND) {
         return decodeSessionWireEnvelope(encoded);
+    }
+    if (kind === SESSION_EVENT_REPLAY_KIND) {
+        return decodeSessionWireReplayEnvelope(encoded);
     }
     if (kind === SESSION_HISTORY_PAGE_LOADED_KIND) {
         return decodeSessionHistoryWirePageLoaded(encoded);

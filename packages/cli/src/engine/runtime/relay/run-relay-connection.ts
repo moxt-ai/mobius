@@ -235,7 +235,7 @@ export async function runRelayConnection({
                             return;
                         }
                         ready = true;
-                        publisher.connect(socket);
+                        publisher.connect(socket, { replay: message.sessionEventReplay === true });
                         connectionLiveness.start();
                         onConnected();
                         return;

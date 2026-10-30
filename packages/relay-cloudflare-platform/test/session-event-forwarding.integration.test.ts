@@ -1,7 +1,14 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { DurableObjectSqlDatabase, RuntimeRelay } from "@moxt-ai/mobius-relay-core";
+import {
+    DurableObjectSqlDatabase,
+    RuntimeRelay,
+    type SessionRecording,
+    type SessionStatusNotifications,
+} from "@moxt-ai/mobius-relay-core";
 import type { ProjectStorageDirectory } from "@moxt-ai/mobius-relay-core/contracts";
+import type { SessionWireEnvelope, SessionWireEvent } from "@moxt-ai/mobius-sdk/protocol";
+import { decodeKnownServiceToDaemonMessage as decodeReleasedServiceToDaemonMessage } from "@moxt-ai/mobius-sdk-previous/protocol";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDurableObjectDependencies } from "../../relay-core/src/di/create-durable-object-dependencies.ts";
 import { createPlatformDurableObjectContext } from "../src/durable-objects/platform-durable-object-context.ts";
@@ -54,6 +61,8 @@ class Inbox {
 interface RuntimeConnection {
     readonly inbox: Inbox;
     readonly socket: WebSocket;
+    /** What the Relay announced to a daemon connection once it was ready. */
+    readonly ready: Record<string, unknown> | undefined;
 }
 
 interface RuntimeRelayTarget {
@@ -84,11 +93,13 @@ async function connectRuntime(target: RuntimeRelayTarget, path: string): Promise
     const inbox = new Inbox(socket);
     target.sockets.push(socket);
     socket.accept();
-    if (path === "daemon") {
-        // The Relay attaches every daemon connection with liveness and announces when it is ready.
-        expect(await inbox.next()).toEqual({ kind: "runtime.liveness.ready" });
+    // The Relay attaches every daemon connection with liveness and announces when it is ready, and that it records
+    // output the daemon replays after reconnecting.
+    const ready = path === "daemon" ? await inbox.next() : undefined;
+    if (ready !== undefined) {
+        expect(ready).toEqual({ kind: "runtime.liveness.ready", sessionEventReplay: true });
     }
-    return { inbox, socket };
+    return { inbox, socket, ready };
 }
 
 async function withRuntimeRelay(scenario: (connect: (path: string) => Promise<RuntimeConnection>) => Promise<void>) {
@@ -135,11 +146,38 @@ class HeldProjectDirectory implements ProjectStorageDirectory {
     };
 }
 
+/** A Recording that stores every event the Relay delivers to it, in delivery order. */
+class StoredRecording implements SessionRecording {
+    readonly events: SessionWireEvent[] = [];
+
+    readonly deliverBatch: SessionRecording["deliverBatch"] = async (_target, envelope, signal) => {
+        signal.throwIfAborted();
+        this.events.push(...envelope.events);
+        return [...new Set(envelope.events.map((event) => event.sessionId))].map((sessionId) => ({
+            sessionId,
+            kind: "recorded" as const,
+        }));
+    };
+}
+
+/** Session status notifications, kept instead of being sent to App webhooks. */
+class KeptStatusNotifications implements SessionStatusNotifications {
+    readonly envelopes: SessionWireEnvelope[] = [];
+
+    readonly publish: SessionStatusNotifications["publish"] = (_scope, envelope) => {
+        this.envelopes.push(envelope);
+    };
+}
+
 interface HeldAuthorizationRelay {
     readonly connect: (path: string) => Promise<RuntimeConnection>;
     readonly directory: HeldProjectDirectory;
+    readonly notifications: KeptStatusNotifications;
     /** Hands a daemon frame to the Relay's WebSocket handler. Settles once the Relay has handled it. */
     readonly receiveDaemonFrame: (message: unknown) => Promise<void>;
+    readonly recording: StoredRecording;
+    /** Waits until every Recording delivery the Relay started, and any it starts in turn, is done. */
+    readonly settle: () => Promise<void>;
 }
 
 async function withHeldAuthorizationRelay(scenario: (relay: HeldAuthorizationRelay) => Promise<void>) {
@@ -150,15 +188,27 @@ async function withHeldAuthorizationRelay(scenario: (relay: HeldAuthorizationRel
         const database = new DurableObjectSqlDatabase(state.storage);
         const context = createPlatformDurableObjectContext(state, env, { database });
         const directory = new HeldProjectDirectory(context.storages.projectDirectory);
+        const recording = new StoredRecording();
+        const notifications = new KeptStatusNotifications();
         const pending: Promise<void>[] = [];
         const relay = new RuntimeRelay(
             createDurableObjectDependencies({
                 doDatabase: database,
                 storages: { ...context.storages, projectDirectory: directory },
-                gateways: { peers: context.gateways.peers, projectCredentials: context.gateways.projectCredentials },
+                gateways: {
+                    peers: context.gateways.peers,
+                    projectCredentials: context.gateways.projectCredentials,
+                    recording,
+                    notifications,
+                },
                 utilities: { waitUntil: (operation) => pending.push(operation) },
             }),
         );
+        const settle = async (): Promise<void> => {
+            while (pending.length > 0) {
+                await Promise.allSettled(pending.splice(0));
+            }
+        };
         const sockets: WebSocket[] = [];
         const target = { projectId, runtimeId, fetch: (request: Request) => relay.fetch(request), sockets };
         const connect = (path: string) => connectRuntime(target, path);
@@ -170,16 +220,26 @@ async function withHeldAuthorizationRelay(scenario: (relay: HeldAuthorizationRel
             await relay.webSocketMessage(daemon, JSON.stringify(message));
         };
         try {
-            await scenario({ connect, directory, receiveDaemonFrame });
+            await scenario({ connect, directory, notifications, receiveDaemonFrame, recording, settle });
         } finally {
             for (const socket of sockets) {
                 socket.close(1000, "Test complete");
             }
-            while (pending.length > 0) {
-                await Promise.allSettled(pending.splice(0));
-            }
+            await settle();
         }
     });
+}
+
+function wireEvent(position: string, type: string, payload: Record<string, unknown>): SessionWireEvent {
+    return {
+        eventId: `session-1-${position}`,
+        position,
+        recordedAt: "2026-10-27T00:00:00.000Z",
+        sessionGenerationId: "generation-1",
+        sessionId: "session-1",
+        type,
+        payload,
+    } as SessionWireEvent;
 }
 
 it("Given a Session's final output in a mixed-Session batch, When the Session's completion arrives while that batch is still being authorized, Then the Session's browser receives the output before the completion", async () => {
@@ -224,6 +284,73 @@ it("Given a Session's final output in a mixed-Session batch, When the Session's 
 
         expect(await browser.inbox.next()).toEqual({ kind: "session.event.v2", events: [finalOutput] });
         expect(await browser.inbox.next()).toEqual({ kind: "session.event.v2", events: [completion] });
+    });
+});
+
+it("Given a browser watches a Session, When a reconnected daemon replays the Session's recent output, Then Recording stores it while the browser and status notifications receive only live output", async () => {
+    await withHeldAuthorizationRelay(async ({ connect, notifications, receiveDaemonFrame, recording, settle }) => {
+        await connect("daemon");
+        const browser = await connect("host?sessionId=session-1");
+        expect(await browser.inbox.next()).toMatchObject({ kind: "runtime.status", online: true });
+        const output = wireEvent("1", "acp", {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Sent before the reconnect" },
+        });
+        const completion = wireEvent("2", "lifecycle-metadata", {
+            kind: "prompt.completed",
+            commandId: "command-1",
+            stopReason: "end_turn",
+        });
+        const later = wireEvent("3", "acp", {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Sent after the reconnect" },
+        });
+
+        await receiveDaemonFrame({ kind: "session.event.replay.v2", events: [output, completion] });
+        await receiveDaemonFrame({ kind: "session.event.v2", events: [later] });
+        await settle();
+
+        expect(await browser.inbox.next()).toEqual({ kind: "session.event.v2", events: [later] });
+        expect(recording.events).toEqual([output, completion, later]);
+        expect(notifications.envelopes).toEqual([{ kind: "session.event.v2", events: [later] }]);
+    });
+});
+
+it("Given a reconnected daemon's replay is still being authorized, When its next live output arrives, Then Recording stores the replayed output first", async () => {
+    await withHeldAuthorizationRelay(async ({ connect, directory, receiveDaemonFrame, recording, settle }) => {
+        await connect("daemon");
+        const replayed = wireEvent("1", "acp", {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Replayed" },
+        });
+        const live = wireEvent("2", "acp", {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Live" },
+        });
+
+        const release = Promise.withResolvers<void>();
+        const held = directory.holdNext(release.promise);
+        const replay = receiveDaemonFrame({ kind: "session.event.replay.v2", events: [replayed] });
+        await held;
+        const liveFrame = receiveDaemonFrame({ kind: "session.event.v2", events: [live] });
+        // As above: another Runtime authority read, started after the live frame's own, lets that frame get as far
+        // as it can before the replay's read is released.
+        await connect("host");
+        release.resolve();
+        await Promise.all([replay, liveFrame]);
+        await settle();
+
+        expect(recording.events).toEqual([replayed, live]);
+    });
+});
+
+it("Given a released daemon, When the Relay announces it is ready and records replays, Then the daemon's decoder accepts the announcement as readiness", async () => {
+    await withRuntimeRelay(async (connect) => {
+        const daemon = await connect("daemon");
+
+        expect(decodeReleasedServiceToDaemonMessage(JSON.stringify(daemon.ready))).toEqual({
+            kind: "runtime.liveness.ready",
+        });
     });
 });
 
