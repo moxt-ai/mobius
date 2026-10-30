@@ -204,6 +204,9 @@ importers:
       '@moxt-ai/mobius-sdk':
         specifier: workspace:*
         version: link:../mobius-sdk
+      '@noble/hashes':
+        specifier: 2.0.1
+        version: 2.0.1
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@cloudflare/workers-types@5.20261028.1)(@types/better-sqlite3@7.6.13)(better-sqlite3@12.4.1)
@@ -1073,6 +1076,10 @@ packages:
   '@moxt-ai/mobius-sdk@0.0.136':
     resolution: {integrity: sha512-94Zt0inJGAUhsprlVRXryw6eE7jMOIRWiqRN/+hajjcqM5E7ytg1Gtn1EEzG+s96hEsMti+D6qiuJi/sHFxhCw==}
     engines: {node: '>=20.19.0'}
+
+  '@noble/hashes@2.0.1':
+    resolution: {integrity: sha512-XlOlEbQcE9fmuXxrVTXCTlG2nlRXa9Rj3rr5Ue/+tX+nmkgbX720YHh0VR3hBF9xDvwnb8D2shVGOwNx+ulArw==}
+    engines: {node: '>= 20.19.0'}
 
   '@oxc-project/types@0.155.0':
     resolution: {integrity: sha512-SeE8JPwW1xs1tHeNycjUtUBdhorRa8o4jlvjwk49R7/Z291i+4DQa7JJIgOm/TaYQZx+QrPQbVJ/9c8dMIZN8Q==}
@@ -3831,6 +3838,8 @@ snapshots:
       zod: 4.6.7
     transitivePeerDependencies:
       - react
+
+  '@noble/hashes@2.0.1': {}
 
   '@oxc-project/types@0.155.0': {}
 

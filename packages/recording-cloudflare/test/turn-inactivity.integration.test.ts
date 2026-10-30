@@ -119,6 +119,58 @@ async function execution(...commandIds: string[]) {
 const stub = () => env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]));
 
 describe("Recording execution inactivity", () => {
+    // Lossy display bounds must not lose progress or make identical detail patches renew activity.
+    it.each(["content", "rawInput", "rawOutput"])(
+        "Given omitted tool detail, When %s changes and repeats, Then changes renew and recover execution while repeats do not",
+        async (field) => {
+            const patch = (rawOutput: string) =>
+                event(
+                    {
+                        sessionUpdate: "tool_call_update",
+                        toolCallId: "large",
+                        [field]:
+                            field === "content"
+                                ? [{ type: "content", content: { type: "text", text: rawOutput } }]
+                                : rawOutput,
+                    },
+                    "acp",
+                );
+            await record([
+                requested("large"),
+                started("large"),
+                event(
+                    {
+                        sessionUpdate: "tool_call",
+                        toolCallId: "large",
+                        title: "Large tool",
+                        status: "in_progress",
+                        rawInput: { content: "x".repeat(1_000_000), path: "notes.txt" },
+                    },
+                    "acp",
+                ),
+            ]);
+            await record([
+                event(
+                    { sessionUpdate: "tool_call_update", toolCallId: "large", rawOutput: "y".repeat(1_000_000) },
+                    "acp",
+                ),
+            ]);
+            expect((await read()).turns[0]?.items[0]).toMatchObject({ detail: { kind: "omitted" } });
+            vi.setSystemTime(start + hour - 1);
+            await record([patch("changed")]);
+            vi.setSystemTime(start + hour + 1);
+            await runDurableObjectAlarm(stub());
+            expect((await execution("large")).commands[0]?.attempt.kind).toBe("running");
+            expect((await read()).turns[0]?.items[0]).toMatchObject({ detail: { kind: "omitted" } });
+            vi.setSystemTime(start + 2 * hour - 2);
+            await record([patch("changed")]);
+            vi.setSystemTime(start + 2 * hour + 1);
+            await runDurableObjectAlarm(stub());
+            expect((await execution("large")).commands[0]?.attempt.kind).toBe("indeterminate");
+            await record([patch("resumed")]);
+            expect((await execution("large")).commands[0]?.attempt.kind).toBe("running");
+        },
+    );
     it("Given unchanged tool status and empty chunks, When they are repeated near the deadline, Then they do not count as execution progress", async () => {
         const tool = {
             sessionUpdate: "tool_call",

@@ -18,6 +18,8 @@ import {
     type SessionWireEvent,
     sessionRecordingTurnItemCursor,
 } from "@moxt-ai/mobius-sdk/protocol";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
 import {
     characterCount,
     emptyProjection,
@@ -118,7 +120,7 @@ function isInterruptible(attempt: SessionRecordingTurnAttempt): boolean {
 }
 
 // Schema decoding can reorder keys; key order alone does not advance a tool's work.
-function canonicalToolItem(item: StoredTurnItem | null): string {
+function canonicalValue(item: unknown): string {
     return JSON.stringify(item, (_key, value: unknown): unknown => {
         if (value === null || typeof value !== "object" || Array.isArray(value)) {
             return value;
@@ -129,6 +131,10 @@ function canonicalToolItem(item: StoredTurnItem | null): string {
                 .map((key) => [key, Reflect.get(value, key)]),
         );
     });
+}
+
+function detailFingerprint(value: unknown): string {
+    return bytesToHex(sha256(new TextEncoder().encode(canonicalValue(value))));
 }
 
 function observedAttempt(turn: StoredTurn, now: number): SessionRecordingTurnAttempt {
@@ -945,8 +951,26 @@ class ProjectionFold {
         const previousDetail = previous !== null && previous.detail.kind === "inline" ? previous.detail : null;
         const rawInput = update.rawInput === undefined ? previousDetail?.rawInput : update.rawInput;
         const rawOutput = update.rawOutput === undefined ? previousDetail?.rawOutput : update.rawOutput;
+        const priorProgress = previous?.toolProgress;
+        const toolProgress = {
+            content:
+                update.content == null
+                    ? (priorProgress?.content ?? detailFingerprint(previousDetail?.content ?? []))
+                    : detailFingerprint(update.content),
+            rawInput:
+                update.rawInput === undefined
+                    ? (priorProgress?.rawInput ??
+                      (previousDetail?.rawInput === undefined ? null : detailFingerprint(previousDetail.rawInput)))
+                    : detailFingerprint(update.rawInput),
+            rawOutput:
+                update.rawOutput === undefined
+                    ? (priorProgress?.rawOutput ??
+                      (previousDetail?.rawOutput === undefined ? null : detailFingerprint(previousDetail.rawOutput)))
+                    : detailFingerprint(update.rawOutput),
+        };
         const { attemptId } = attemptTiming(turn.attempt);
         const next: StoredTurnItem = {
+            toolProgress,
             ...(attemptId === undefined ? {} : { attemptId }),
             detail: omitted
                 ? { kind: "omitted" }
@@ -974,7 +998,10 @@ class ProjectionFold {
             openAnswer: null,
             openThought: null,
         });
-        if (canonicalToolItem(previous) !== canonicalToolItem(next)) {
+        if (
+            canonicalValue(previous === null ? null : { ...previous, detail: undefined }) !==
+            canonicalValue({ ...next, detail: undefined })
+        ) {
             this.#progress(owner);
         }
     }
@@ -1030,7 +1057,8 @@ export class SessionTurnHistory {
             projection !== null &&
             (projection.state.version === 1 ||
                 projection.state.compactionVersion !== 1 ||
-                projection.state.activityVersion !== 1)
+                projection.state.activityVersion !== 1 ||
+                projection.state.toolProgressVersion !== 1)
         ) {
             // Older projections may contain repeated text or omit compactions and activity. Rebuild
             // only derived tables from the unchanged raw Recording, using the bounded backfill.

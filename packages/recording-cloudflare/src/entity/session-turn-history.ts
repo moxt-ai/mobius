@@ -73,7 +73,31 @@ export type StoredTurn = z.infer<typeof storedTurnSchema>;
  * Item fields as stored. Answer and thought text is kept outside this record, so stored text items
  * carry an empty `text` and `omittedCharacters`; reads fill both from the stored text.
  */
-export const storedTurnItemSchema = sessionRecordingTurnItem;
+const toolProgressSchema = z
+    .object({
+        content: z.string().length(64),
+        rawInput: z.string().length(64).nullable(),
+        rawOutput: z.string().length(64).nullable(),
+    })
+    .readonly();
+const toolProgressMetadataSchema = z.object({ toolProgress: toolProgressSchema.optional() }).readonly();
+export const storedTurnItemSchema = z.unknown().transform((value, context) => {
+    const decoded = sessionRecordingTurnItem.safeParse(value);
+    if (!decoded.success) {
+        context.addIssue({ code: "custom", message: "Invalid stored item" });
+        return z.NEVER;
+    }
+    const item = decoded.data;
+    if (item.kind !== "tool") {
+        return item;
+    }
+    const metadata = toolProgressMetadataSchema.safeParse(value);
+    if (!metadata.success) {
+        context.addIssue({ code: "custom", message: "Invalid stored tool progress" });
+        return z.NEVER;
+    }
+    return { ...item, ...metadata.data };
+});
 export type StoredTurnItem = z.infer<typeof storedTurnItemSchema>;
 
 export const storedInteractionSchema = sessionRecordingInteraction;
@@ -88,6 +112,7 @@ export const storedProjectionStateSchema = z
             .readonly()
             .nullable(),
         activityVersion: z.literal(1).optional(),
+        toolProgressVersion: z.literal(1).optional(),
         // Missing on a projection that has not folded compaction lifecycle events yet.
         compactionVersion: z.literal(1).optional(),
         // Generation of the last folded event; a different generation clears the active commands.
@@ -125,6 +150,7 @@ export const emptyProjection: StoredProjection = {
     state: {
         activeCommands: null,
         activityVersion: 1,
+        toolProgressVersion: 1,
         compactionVersion: 1,
         generationId: null,
         retiredGenerationIds: [],
