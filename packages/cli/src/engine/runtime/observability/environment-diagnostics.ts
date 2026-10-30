@@ -53,7 +53,7 @@ export function runtimeEnvironmentDiagnostics(config: RuntimeConfig): readonly R
             timestamp,
             platform: process.platform,
             architecture: process.arch,
-            osRelease: /^\d[\d.-]{0,63}$/u.test(release()) ? release() : "unavailable",
+            osRelease: /^(\d+(?:\.\d+){1,3})/u.exec(release())?.[1] ?? "unavailable",
             nodeVersion: process.versions.node,
             uptimeSeconds: Math.floor(process.uptime()).toString(),
             agentCount: agents.length.toString(),

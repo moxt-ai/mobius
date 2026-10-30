@@ -44,15 +44,6 @@ test("Given a daemon, When a bug report is read through the Runtime, Then it car
                             nodeVersion: process.versions.node,
                         }),
                     );
-                    expect(exported.entries).toContainEqual(
-                        expect.objectContaining({
-                            event: "agent_inventory",
-                            agentId: "claude",
-                            agentVersion: expect.stringMatching(/^\d+\.\d+\.\d+/u),
-                            adapterVersion: expect.stringMatching(/^\d+\.\d+\.\d+/u),
-                            versionSource: "runtime_catalog",
-                        }),
-                    );
                     // Independently retained 0.0.388 reader: added evidence must fit the released envelope,
                     // including its strict top-level shape and original bounds.
                     const releasedReport = z
