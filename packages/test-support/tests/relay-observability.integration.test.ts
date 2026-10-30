@@ -149,6 +149,47 @@ async function provisionProject() {
     return { ...app, projectId: text(project, "projectId") };
 }
 
+async function pairRuntime() {
+    const { projectId, appCredential } = await provisionProject();
+    const pairing = await api(
+        `/v1/projects/${projectId}/runtime-pairings`,
+        {
+            method: "POST",
+            headers: { authorization: `Bearer ${appCredential}` },
+            body: JSON.stringify({ idempotencyKey: "logging-runtime" }),
+        },
+        201,
+    );
+    const claimed = await api(
+        `/v1/runtime-pairings/${text(pairing, "pairingId")}/redeem`,
+        {
+            method: "POST",
+            body: JSON.stringify({
+                agents: [],
+                machineName: "Logging test",
+                workspaceName: "workspace",
+                pairingCode: text(pairing, "pairingCode"),
+            }),
+        },
+        200,
+    );
+    return { projectId, pairing, claimed };
+}
+
+let loggingRuntime:
+    | Promise<{ readonly projectId: string; readonly runtimeId: string; readonly channelId: string }>
+    | undefined;
+
+/** Internal Runtime Relay scenarios enter after public pairing registered the Runtime in an active Project. */
+function registeredLoggingRuntime() {
+    loggingRuntime ??= pairRuntime().then(({ projectId, pairing, claimed }) => ({
+        projectId,
+        runtimeId: text(claimed, "runtimeId"),
+        channelId: text(pairing, "channelId"),
+    }));
+    return loggingRuntime;
+}
+
 async function httpFailure(kind: string): Promise<Record<string, unknown>> {
     const start = logs.length;
     const response = await runtime.dispatchFetch(`https://relay.test/failure/${kind}?token=QUERY_CANARY`, {
@@ -209,29 +250,7 @@ it.each(["primitive", "object", "circular", "deep", "long", "secrets", "getter"]
 
 // @no-uc: Technical regression; a failing DO hop must identify its target rather than only its caller.
 it("identifies the failing Runtime Durable Object through the public pairing and connect APIs", async () => {
-    const { projectId, appCredential } = await provisionProject();
-    const pairing = await api(
-        `/v1/projects/${projectId}/runtime-pairings`,
-        {
-            method: "POST",
-            headers: { authorization: `Bearer ${appCredential}` },
-            body: JSON.stringify({ idempotencyKey: "logging-runtime" }),
-        },
-        201,
-    );
-    const claimed = await api(
-        `/v1/runtime-pairings/${text(pairing, "pairingId")}/redeem`,
-        {
-            method: "POST",
-            body: JSON.stringify({
-                agents: [],
-                machineName: "Logging test",
-                workspaceName: "workspace",
-                pairingCode: text(pairing, "pairingCode"),
-            }),
-        },
-        200,
-    );
+    const { projectId, pairing, claimed } = await pairRuntime();
     const start = logs.length;
     const response = await runtime.dispatchFetch("https://relay.test/mobius/api/v1/runtimes/connect", {
         headers: {
@@ -321,11 +340,12 @@ it("identifies a Project database overload through the public project creation A
 
 // @no-uc: Performance; short-lived Host/control sockets must not add routine lifecycle logs.
 it("keeps ordinary Host closes quiet after the real platform close callback completes", async () => {
-    const response = await runtime.dispatchFetch("https://relay.test/projects/project-logging/host", {
+    const { projectId, runtimeId, channelId } = await registeredLoggingRuntime();
+    const response = await runtime.dispatchFetch(`https://relay.test/projects/${projectId}/host`, {
         headers: {
             Upgrade: "websocket",
-            "x-mobius-runtime-id": "runtime-logging",
-            "x-mobius-channel-id": "channel-logging",
+            "x-mobius-runtime-id": runtimeId,
+            "x-mobius-channel-id": channelId,
             "x-mobius-host-credential-id": "ctl_HOST_CREDENTIAL_CANARY",
         },
     });
@@ -357,12 +377,13 @@ it("keeps ordinary Host closes quiet after the real platform close callback comp
 });
 
 async function daemon() {
+    const { projectId, runtimeId, channelId } = await registeredLoggingRuntime();
     const start = logs.length;
-    const response = await runtime.dispatchFetch("https://relay.test/projects/project-logging/daemon", {
+    const response = await runtime.dispatchFetch(`https://relay.test/projects/${projectId}/daemon`, {
         headers: {
             Upgrade: "websocket",
-            "x-mobius-runtime-id": "runtime-logging",
-            "x-mobius-channel-id": "channel-logging",
+            "x-mobius-runtime-id": runtimeId,
+            "x-mobius-channel-id": channelId,
         },
     });
     expect(response.status).toBe(101);
@@ -390,6 +411,7 @@ async function daemon() {
 
 // @no-uc: Technical regression; real close callbacks must retain peer diagnostics while detach and reconnect still work.
 it("records overload close details and connection epochs without logging healthy heartbeats", async () => {
+    const { projectId, runtimeId } = await registeredLoggingRuntime();
     const socket = await daemon();
     try {
         const start = logs.length;
@@ -409,8 +431,8 @@ it("records overload close details and connection epochs without logging healthy
             closeReason: "Service overloaded; retry later.",
             wasClean: true,
             role: "daemon",
-            runtimeId: "runtime-logging",
-            projectId: "project-logging",
+            runtimeId,
+            projectId,
             durableObjectId: expect.any(String),
             connectionId: expect.any(String),
             connectionEpoch: 1,
@@ -420,7 +442,7 @@ it("records overload close details and connection epochs without logging healthy
                 event: "runtime_websocket_accepted",
                 connectionEpoch: 1,
                 connectionId: closed?.["connectionId"],
-                runtimeId: "runtime-logging",
+                runtimeId,
             }),
         );
         const next = await daemon();
@@ -437,6 +459,7 @@ it("records overload close details and connection epochs without logging healthy
 
 // @no-uc: Technical regression; platform-supplied errors must survive the exported hibernatable WebSocket callback.
 it("retains a platform WebSocket error and connection identity before closing the socket", async () => {
+    const { runtimeId } = await registeredLoggingRuntime();
     const socket = await daemon();
     try {
         const closed = new Promise<number>((resolve) =>
@@ -456,7 +479,7 @@ it("retains a platform WebSocket error and connection identity before closing th
                 event: "runtime_websocket_error",
                 role: "daemon",
                 connectionEpoch: expect.any(Number),
-                runtimeId: "runtime-logging",
+                runtimeId,
                 durableObjectId: expect.any(String),
                 err: expect.objectContaining({
                     message: "Runtime relay request failed",

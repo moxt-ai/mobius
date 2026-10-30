@@ -1,5 +1,4 @@
 import type { RuntimeConnectionIdentity } from "../../entity/channel/runtime-connection.ts";
-import type { ProjectScope } from "../../entity/do/session.ts";
 import type { RuntimeConnectionStorage } from "../../storage/runtime-connection-storage.ts";
 
 export class RuntimeConnectionService {
@@ -10,20 +9,10 @@ export class RuntimeConnectionService {
     }
 
     readonly current = () => this.#storage.read();
-    readonly isRevoked = (runtimeId: string, scope: ProjectScope) => this.#storage.isRevoked(runtimeId, scope);
-    readonly revoke = (runtimeId: string, scope: ProjectScope, now: number) =>
-        this.#storage.revoke(runtimeId, scope, now);
 
     readonly prepare = (
         runtimeId: string,
-        scope: ProjectScope,
-    ):
-        | { readonly kind: "conflict" }
-        | { readonly kind: "revoked" }
-        | { readonly kind: "ready"; readonly identity: RuntimeConnectionIdentity } => {
-        if (this.#storage.isRevoked(runtimeId, scope)) {
-            return { kind: "revoked" };
-        }
+    ): { readonly kind: "conflict" } | { readonly kind: "ready"; readonly identity: RuntimeConnectionIdentity } => {
         const previous = this.#storage.read();
         if (previous !== null && previous.runtimeId !== runtimeId) {
             return { kind: "conflict" };

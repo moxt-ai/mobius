@@ -1,5 +1,4 @@
 import type { RuntimeConnectionIdentity } from "../entity/channel/runtime-connection.ts";
-import type { ProjectScope } from "../entity/do/session.ts";
 import { runtimeConnectionDurableObjectMigrations } from "../generated/runtime-connection-do-migrations.ts";
 import type { DoSqlDatabase } from "../infra/do-sql-database.ts";
 import { applyDurableObjectMigrations } from "../infra/durable-object-migrations.ts";
@@ -12,21 +11,6 @@ export class RuntimeConnectionStorage {
         this.#database = database;
         applyDurableObjectMigrations(database, "runtime-connection-do", runtimeConnectionDurableObjectMigrations);
     }
-
-    readonly isRevoked = (runtimeId: string, scope: ProjectScope): boolean =>
-        this.#database.query(
-            `SELECT 1 FROM runtime_revocations
-            WHERE runtime_id = ? AND project_id = ?`,
-            [runtimeId, scope.projectId],
-        )[0] !== undefined;
-
-    readonly revoke = (runtimeId: string, scope: ProjectScope, now: number): void => {
-        this.#database.run(
-            `INSERT INTO runtime_revocations (runtime_id, project_id, revoked_at)
-            VALUES (?, ?, ?) ON CONFLICT DO NOTHING`,
-            [runtimeId, scope.projectId, now],
-        );
-    };
 
     readonly read = ():
         | (RuntimeConnectionIdentity & { readonly connectedAt: number; readonly state: "online" | "offline" })
