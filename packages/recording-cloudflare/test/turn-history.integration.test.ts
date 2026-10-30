@@ -10,6 +10,7 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { decodeSessionRecordingTurnPage as decodePreviousTurnPage } from "@moxt-ai/mobius-sdk-previous/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { backfillEventsPerStep } from "../src/service/session-turn-history.ts";
 import { createRecordingWorker } from "../src/worker.ts";
 
 const worker = createRecordingWorker();
@@ -224,11 +225,7 @@ describe("Recording Turn history", () => {
                 "UPDATE recording_projection SET state_json = json_remove(state_json, '$.compactionVersion')",
             );
         });
-        const building = await worker.fetch(new Request(sessionPath("turns")), env);
-        expect(building.status).toBe(503);
-        while (await runDueAlarm(stub)) {
-            // Existing Recordings recover compactions from their authoritative raw events.
-        }
+        // Existing Recordings recover compactions from their authoritative raw events.
         expect(await turnPage()).toEqual(projected);
     });
 
@@ -304,12 +301,7 @@ describe("Recording Turn history", () => {
             state.storage.sql.exec("UPDATE recorded_turn_items SET text = text || 'Hello'");
             state.storage.sql.exec("UPDATE recorded_turns SET turn_json = json_set(turn_json, '$.answerLength', 15)");
         });
-        const building = await worker.fetch(new Request(sessionPath("turns")), env);
-        expect(building.status).toBe(503);
-        expect(await building.json()).toMatchObject({ error: { code: "projection_building" } });
-        while (await runDueAlarm(stub)) {
-            // Rebuild through the same bounded production path as an existing Recording.
-        }
+        // The read rebuilds through the same bounded backfill step as an existing Recording.
         expect(await turnPage()).toEqual(projected);
         const rebuiltRaw = await worker.fetch(new Request(sessionPath("events")), env);
         expect(await rebuiltRaw.json()).toMatchObject({ events: frames });
@@ -703,8 +695,28 @@ describe("Recording Turn history", () => {
         expect(page.turns[0]?.preceding).toBeNull();
     });
 
-    it("Given a Recording written before its Turn history existed, When a client reads Turns, Then a retryable error is returned until a backfill step catches up", async () => {
+    it("Given a projection folded before the current Turn history version, When a client reads Turns, Then the read rebuilds it from the Recording and answers", async () => {
         await completedTurn("command-1", "Prompt 1", "Reply 1");
+        await completedTurn("command-2", "Prompt 2", "Reply 2");
+        const projected = await turnPage();
+        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]));
+        await runInDurableObject(stub, (_instance, state) => {
+            // A deployment that folds Turns differently treats every projection written before it as outdated.
+            state.storage.sql.exec(
+                "UPDATE recording_projection SET state_json = json_remove(state_json, '$.activityVersion')",
+            );
+        });
+
+        expect(await turnPage()).toEqual(projected);
+    });
+
+    it("Given a Recording longer than one backfill step and written before its Turn history existed, When a client reads Turns, Then a retryable error is returned until backfill catches up", async () => {
+        await record([requested("command-1", "Prompt 1"), started("command-1")]);
+        // A step folds whole batches until it reaches its budget, so the Recording spans more batches than that.
+        for (let recorded = 0; recorded <= backfillEventsPerStep; recorded += 1_000) {
+            await record(Array.from({ length: 1_000 }, () => answer("Reply 1 ")));
+        }
+        await record([completed("command-1")]);
         await completedTurn("command-2", "Prompt 2", "Reply 2");
         const projected = await turnPage();
         const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]));
@@ -882,12 +894,7 @@ describe("Recording Turn history", () => {
                 state.storage.sql.exec(`DELETE FROM ${table}`);
             }
         });
-        // A read finds the projection behind and schedules the backfill that rebuilds it.
-        expect((await worker.fetch(new Request(sessionPath("turns")), env)).status).toBe(503);
-        while (await runDueAlarm(stub)) {
-            // One backfill step folds both chunks into the item it creates.
-        }
-
+        // The read that finds the projection behind folds both chunks into the item it creates.
         const [item] = (await turnPage()).turns[0]?.items ?? [];
         const full = await itemDetail("command-1", item?.itemId ?? "");
         expect(full).toMatchObject({ kind: "thought", omittedCharacters: 66_667 });

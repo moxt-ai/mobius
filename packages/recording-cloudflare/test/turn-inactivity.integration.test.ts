@@ -435,12 +435,34 @@ describe("Recording execution inactivity", () => {
                 "UPDATE recording_projection SET state_json = json_remove(state_json, '$.activityVersion')",
             );
         });
-        expect((await worker.fetch(new Request(path("turns")), env)).status).toBe(503);
+        // The read rebuilds the projection through the production bounded backfill step.
+        expect((await worker.fetch(new Request(path("turns")), env)).status).toBe(200);
         while (await runDurableObjectAlarm(stub())) {
-            // Rebuild through the production bounded backfill alarm.
+            // The alarm that follows the rebuild assesses its executions.
         }
         expect((await execution("clock")).commands[0]?.attempt.kind).toBe("indeterminate");
     });
+
+    it.each([
+        { answer: "its Turns", suffix: "turns", status: 200 },
+        { answer: "a missing item", suffix: `turns/quiet/items/${encodeURIComponent("tool:missing")}`, status: 404 },
+    ])(
+        "Given an assessed execution in an older projection, When a read rebuilds the projection and answers with $answer, Then an alarm assesses the execution again",
+        async ({ suffix, status }) => {
+            await record([requested("quiet"), started("quiet")]);
+            vi.setSystemTime(start + hour + 1);
+            expect(await runDurableObjectAlarm(stub())).toBe(true);
+            await runInDurableObject(stub(), (_instance, state) => {
+                state.storage.sql.exec(
+                    "UPDATE recording_projection SET state_json = json_remove(state_json, '$.activityVersion')",
+                );
+            });
+            expect((await worker.fetch(new Request(path(suffix)), env)).status).toBe(status);
+            // A rebuild folds the execution from its events again, so only an alarm records its inactivity.
+            expect(await runDurableObjectAlarm(stub())).toBe(true);
+            expect((await execution("quiet")).commands[0]?.attempt.kind).toBe("indeterminate");
+        },
+    );
 
     it.each(["1960-01-01T00:00:00.000Z", "2099-01-01T00:00:00.000Z"])(
         "Given legacy batches without receipt times and a runtime clock at %s, When their projection is rebuilt, Then history remains readable and the deadline is bounded",
@@ -455,7 +477,7 @@ describe("Recording execution inactivity", () => {
                     "UPDATE recording_projection SET state_json = json_remove(state_json, '$.activityVersion')",
                 );
             });
-            expect((await worker.fetch(new Request(path("turns")), env)).status).toBe(503);
+            expect((await worker.fetch(new Request(path("turns")), env)).status).toBe(200);
             await runDurableObjectAlarm(stub());
             vi.setSystemTime(start + 2 * hour);
             await runDurableObjectAlarm(stub());

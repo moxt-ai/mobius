@@ -49,7 +49,7 @@ type RecordingEnvironment = { readonly Bindings: RecordingWorkerBindings };
 type SessionRecordingRoutes = Pick<SessionRecordingStorage, "append" | "read" | "readPage">;
 type TurnHistoryRoutes = Pick<
     SessionTurnHistory,
-    "execution" | "item" | "itemPage" | "project" | "turnPage" | "nextInactivityDeadline"
+    "backfill" | "execution" | "item" | "itemPage" | "project" | "turnPage" | "nextInactivityDeadline"
 >;
 const jsonHeaders = { "content-type": "application/json" } as const;
 // An opaque append-order cursor: the batch ordinal and the event position inside that batch.
@@ -173,8 +173,9 @@ function sessionRecordingRoutes(
                 return errorResponse("invalid_target", 400);
             }
             return await turnHistoryResponse(
-                history.execution(target, commandIds),
+                () => history.execution(target, commandIds),
                 encodeSessionRecordingExecution,
+                history,
                 scheduleBackfill,
             );
         })
@@ -190,8 +191,9 @@ function sessionRecordingRoutes(
                 return errorResponse("invalid_target", 400);
             }
             return await turnHistoryResponse(
-                history.turnPage(target, before, limit),
+                () => history.turnPage(target, before, limit),
                 encodeSessionRecordingTurnPage,
+                history,
                 scheduleBackfill,
             );
         })
@@ -217,13 +219,15 @@ function sessionRecordingRoutes(
                 return errorResponse("invalid_target", 400);
             }
             return await turnHistoryResponse(
-                history.itemPage(
-                    target,
-                    commandId,
-                    { afterSequence: after?.sequence ?? null, beforeSequence: before?.sequence ?? null },
-                    limit,
-                ),
+                () =>
+                    history.itemPage(
+                        target,
+                        commandId,
+                        { afterSequence: after?.sequence ?? null, beforeSequence: before?.sequence ?? null },
+                        limit,
+                    ),
                 encodeSessionRecordingTurnItemPage,
+                history,
                 scheduleBackfill,
             );
         })
@@ -235,8 +239,9 @@ function sessionRecordingRoutes(
                 return errorResponse("invalid_target", 400);
             }
             return await turnHistoryResponse(
-                history.item(target, commandId, itemId),
+                () => history.item(target, commandId, itemId),
                 encodeSessionRecordingTurnItemDetail,
+                history,
                 scheduleBackfill,
             );
         })
@@ -418,13 +423,26 @@ function turnItemId(value: string | undefined): string | null {
 }
 
 async function turnHistoryResponse<T>(
-    read: TurnHistoryRead<T>,
+    read: () => TurnHistoryRead<T>,
     encode: (value: T) => string,
+    history: Pick<TurnHistoryRoutes, "backfill">,
     scheduleBackfill: (at?: Date) => Promise<void>,
 ): Promise<Response> {
-    switch (read.kind) {
+    let result = read();
+    if (result.kind === "building") {
+        // A read folds the step its alarm would fold next. After a deployment that changes how Turns are
+        // folded, every projection has to be rebuilt; a Recording that fits in that step is answered now
+        // instead of asking its reader to come back for the alarm's result.
+        history.backfill(new Date());
+        result = read();
+        if (result.kind === "ready" || result.kind === "not_found") {
+            // The alarm still runs, as it does after its own step catches up, to assess inactive executions.
+            await scheduleBackfill();
+        }
+    }
+    switch (result.kind) {
         case "ready":
-            return new Response(encode(read.value), { headers: jsonHeaders, status: 200 });
+            return new Response(encode(result.value), { headers: jsonHeaders, status: 200 });
         case "not_found":
             return errorResponse("not_found", 404);
         case "building": {
@@ -435,9 +453,9 @@ async function turnHistoryResponse<T>(
         }
         case "failed": {
             // Backfill retries on its own schedule; re-arming it covers an alarm that was lost.
-            await scheduleBackfill(read.retryAt);
+            await scheduleBackfill(result.retryAt);
             const response = errorResponse("projection_failed", 503);
-            response.headers.set("retry-after", String(read.retryAfterSeconds));
+            response.headers.set("retry-after", String(result.retryAfterSeconds));
             return response;
         }
     }
