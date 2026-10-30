@@ -1,3 +1,4 @@
+export { pendingDirectoryUpdate } from "./pending-directory-update.ts";
 export { projectedSessionEvent } from "./projected-session-event.ts";
 export { recordedInteraction } from "./recorded-interaction.ts";
 export { recordedSessionEvent } from "./recorded-session-event.ts";

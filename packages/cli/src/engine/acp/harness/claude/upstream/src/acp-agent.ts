@@ -4638,6 +4638,22 @@ export class ClaudeAcpAgent {
                             break;
                         }
 
+                        // Synthetic model errors may have stop_sequence and no result/idle trailer.
+                        // Settle the owning prompt from the typed failure, not its diagnostic prose.
+                        if (
+                            message.type === "assistant" &&
+                            message.parent_tool_use_id === null &&
+                            message.error === "model_not_found"
+                        ) {
+                            failActive(
+                                RequestError.internalError(
+                                    errorKindData(message.error),
+                                    "The selected model is unavailable",
+                                ),
+                            );
+                            break;
+                        }
+
                         let content: typeof message.message.content;
                         if (message.type === "assistant" && message.parent_tool_use_id === null) {
                             // Top-level assistant message: each text/thinking block may have

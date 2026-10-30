@@ -4,7 +4,12 @@ import {
     type SessionRecordingWireWrite,
     type SessionWireEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
-import type { DirectoryOperation, RecordingDirectoryUpdate } from "../entity/recording-directory-update.ts";
+import type {
+    DirectoryChange,
+    DirectoryOperation,
+    PendingDirectoryChange,
+    RecordingDirectoryUpdate,
+} from "../entity/recording-directory-update.ts";
 
 function operation(wireEvent: SessionWireEvent): DirectoryOperation {
     const recordedAt = wireEvent.recordedAt;
@@ -39,26 +44,63 @@ function operation(wireEvent: SessionWireEvent): DirectoryOperation {
     return { kind: "activity", recordedAt };
 }
 
-/** Keeps ordered creation/title changes while replacing other events with activity times. */
-export function projectDirectoryUpdate(write: SessionRecordingWireWrite): RecordingDirectoryUpdate {
-    const sessions = new Map<string, DirectoryOperation[]>();
-    for (const event of write.envelope.events) {
-        const operations = sessions.get(event.sessionId) ?? [];
-        const next = operation(event);
-        const previous = operations.at(-1);
-        if (next.kind === "activity" && previous?.kind === "activity") {
-            if (Date.parse(next.recordedAt) > Date.parse(previous.recordedAt)) {
-                operations[operations.length - 1] = next;
-            }
-        } else {
-            operations.push(next);
+/** Appends an operation, folding consecutive activity into its latest time. */
+function appendOperation(operations: DirectoryOperation[], next: DirectoryOperation): void {
+    const previous = operations.at(-1);
+    if (next.kind === "activity" && previous?.kind === "activity") {
+        if (Date.parse(next.recordedAt) > Date.parse(previous.recordedAt)) {
+            operations[operations.length - 1] = next;
         }
-        sessions.set(event.sessionId, operations);
+    } else {
+        operations.push(next);
+    }
+}
+
+/** Keeps a single Session's ordered creation/title changes while replacing other events with activity times. */
+export function projectDirectoryChange(write: SessionRecordingWireWrite): DirectoryChange {
+    const operations: DirectoryOperation[] = [];
+    for (const event of write.envelope.events) {
+        appendOperation(operations, operation(event));
+    }
+    return { operations, events: write.envelope.events.length };
+}
+
+/** The directory accepts at most this many operations, and counts at most this many events, per update. */
+const directoryUpdateBound = 1000;
+
+/**
+ * Joins a Session's oldest unconfirmed changes into one directory update, in commit order and within the
+ * directory's bounds, with the last change it covers. Re-applying a prefix of the same changes leaves the directory
+ * where applying them once does, so an update whose confirmation was lost is safe to send again.
+ */
+export function pendingDirectoryUpdate(
+    identity: { readonly projectId: string; readonly runtimeId: string; readonly sessionId: string },
+    pending: readonly PendingDirectoryChange[],
+): { readonly update: RecordingDirectoryUpdate; readonly through: number } | null {
+    const operations: DirectoryOperation[] = [];
+    let events = 0;
+    let through: number | null = null;
+    for (const change of pending) {
+        if (through !== null && operations.length + change.operations.length > directoryUpdateBound) {
+            break;
+        }
+        for (const next of change.operations) {
+            appendOperation(operations, next);
+        }
+        events += change.events;
+        through = change.ordinal;
+    }
+    if (through === null) {
+        return null;
     }
     return {
-        projectId: write.projectId,
-        runtimeId: write.runtimeId,
-        events: write.envelope.events.length,
-        updates: [...sessions].map(([sessionId, operations]) => ({ sessionId, operations })),
+        update: {
+            projectId: identity.projectId,
+            runtimeId: identity.runtimeId,
+            // The count only describes the update, so a larger backlog reports the bound.
+            events: Math.min(Math.max(events, 1), directoryUpdateBound),
+            updates: [{ sessionId: identity.sessionId, operations }],
+        },
+        through,
     };
 }
