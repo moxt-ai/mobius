@@ -176,6 +176,12 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
+    env:
+      REAL_AGENT_PACKAGES: >-
+        @openai/codex@0.154.0
+        @anthropic-ai/claude-code@2.1.273
+        @earendil-works/pi-coding-agent@1.1.0
+        pi-acp@0.0.34
     steps:
       - uses: actions/checkout@v4
         with:
@@ -188,13 +194,18 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Every shard installs the same pinned Agents; reuse their tarballs instead of
+      # downloading them from the registry on each run.
+      - name: Restore the real Agent npm cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm/_cacache
+          key: real-agents-npm-${{ runner.os }}-${{ env.REAL_AGENT_PACKAGES }}
       - name: Install real Agents
         run: >-
-          npm install --global
-          @openai/codex@0.154.0
-          @anthropic-ai/claude-code@2.1.273
-          @earendil-works/pi-coding-agent@1.1.0
-          pi-acp@0.0.34
+          npm install --global --prefer-offline
+          --fetch-retries=5 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=30000
+          $REAL_AGENT_PACKAGES
       - run: pnpm test:agent-daemon:real --shard="$TEST_SHARD"
         env:
           TEST_SHARD: ${{ matrix.shard }}/4
