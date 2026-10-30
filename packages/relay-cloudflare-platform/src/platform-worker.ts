@@ -41,6 +41,7 @@ import {
     isIdentifier,
     MOBIUS_API_PREFIX,
     ProtocolMessageError,
+    promptCompletion,
     type SessionPromptCommand,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { type Context, type Handler, Hono } from "hono";
@@ -759,7 +760,7 @@ export function createPlatformApplication(
             if (completed.kind !== "turn.completed" || completed.commandId !== turnId) {
                 throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid cancellation");
             }
-            if (completed.stopReason !== "cancelled") {
+            if (promptCompletion(completed).kind !== "cancelled") {
                 throw new PairingDirectoryError(
                     "turn_already_started",
                     "The message already executed and could not be withdrawn",
