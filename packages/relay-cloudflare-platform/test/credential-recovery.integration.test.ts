@@ -12,6 +12,7 @@ import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-sdk/protocol";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createTestMobiusPlatformApp } from "../../test-support/src/app.ts";
 import { FakeClerk } from "../../test-support/src/clerk.ts";
+import { SqlitePlatformProjectStore } from "../src/storage/sqlite-platform-project-store.ts";
 import { createPlatformGateways, PlatformAuthenticationConfiguration } from "../src/worker.ts";
 
 const origin = `https://platform.test${MOBIUS_API_PREFIX}`;
@@ -97,7 +98,10 @@ async function application() {
                         ),
                         {
                             ...env,
-                            MOBIUS_PROJECT_DATABASE: new DurableObjectDatabaseAdapter(state.storage),
+                            MOBIUS_PROJECT_STORE: new SqlitePlatformProjectStore(
+                                project.projectId,
+                                new DurableObjectDatabaseAdapter(state.storage),
+                            ),
                             MOBIUS_PROJECT_ID: project.projectId,
                         },
                     ),

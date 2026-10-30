@@ -2,17 +2,10 @@ import { RuntimeAccessContext } from "../../entity/authentication/project-authen
 import { ProjectScope } from "../../entity/do/session.ts";
 import { PairingDirectoryError, validateIdentifier } from "../../entity/pairing/pairing.ts";
 import type { PairingIdentityCredential } from "../../entity/pairing/pairing-identity.ts";
+import type { PairingScopeRow } from "../../entity/pairing/pairing-records.ts";
 import type { ProjectStorageContext, ProjectStorageDirectory } from "../../infra/project-storage-directory.ts";
+import type { ProjectStore, ProjectStoreResolver } from "../../infra/project-store.ts";
 import { DatabaseError } from "../../infra/sql-database.ts";
-import type { PairingIdentityStorage } from "../../storage/pairing-identity-storage.ts";
-
-function runtimeIdentityField(row: Readonly<Record<string, unknown>>, name: string): string {
-    const value = row[name];
-    if (typeof value !== "string") {
-        throw new PairingDirectoryError("invalid_directory_record", "The Runtime directory is invalid");
-    }
-    return validateIdentifier(value, name);
-}
 
 /** A credential that matches nothing, including one stored for a Project that is no longer served. */
 function unmatchedCredential(credential: PairingIdentityCredential): PairingDirectoryError {
@@ -27,13 +20,22 @@ function unmatchedCredential(credential: PairingIdentityCredential): PairingDire
     return new PairingDirectoryError(code, "A valid pairing or channel credential is required");
 }
 
+/**
+ * Finds the Project a credential belongs to by asking the Project stores this execution can search, then confirms
+ * that the Relay still serves that Project from the store that matched.
+ */
 export class PairingIdentityService {
-    readonly #storage: PairingIdentityStorage;
+    readonly #sources: readonly ProjectStore[];
+    readonly #stores: ProjectStoreResolver;
     readonly #projects: ProjectStorageDirectory;
-    constructor(storage: PairingIdentityStorage, projects: ProjectStorageDirectory) {
-        this.#storage = storage;
+    constructor(sources: readonly ProjectStore[], stores: ProjectStoreResolver, projects: ProjectStorageDirectory) {
+        this.#sources = [...sources];
+        this.#stores = stores;
         this.#projects = projects;
     }
+
+    private readonly matchesPlacement = (source: ProjectStore, project: ProjectStorageContext): boolean =>
+        source === this.#stores.resolve(project.storagePlacement);
 
     readonly authenticateProject = async (
         credential: PairingIdentityCredential,
@@ -45,7 +47,7 @@ export class PairingIdentityService {
         if (project === null) {
             throw unmatchedCredential(credential);
         }
-        if (!this.#storage.matchesPlacement(identity.sourceId, project)) {
+        if (!this.matchesPlacement(identity.source, project)) {
             throw new PairingDirectoryError("directory_unavailable", "Workspace storage is unavailable");
         }
         return project;
@@ -54,20 +56,25 @@ export class PairingIdentityService {
     readonly authenticateRuntime = async (tokenHash: string, signal: AbortSignal): Promise<RuntimeAccessContext> => {
         signal.throwIfAborted();
         try {
-            const matches = await this.#storage.findRuntime(tokenHash, signal);
+            const matches: { readonly source: ProjectStore; readonly row: PairingScopeRow }[] = [];
+            for (const source of this.#sources) {
+                for (const row of await source.findRuntimeCredential(tokenHash, signal)) {
+                    matches.push({ source, row });
+                }
+            }
             const match = matches[0];
             if (matches.length !== 1 || match === undefined) {
                 throw new PairingDirectoryError("unauthorized", "A valid Runtime credential is required");
             }
-            const projectId = runtimeIdentityField(match.row, "project_id");
-            const runtimeId = runtimeIdentityField(match.row, "runtime_id");
-            const channelId = runtimeIdentityField(match.row, "channel_id");
+            const projectId = validateIdentifier(match.row.project_id, "project_id");
+            const runtimeId = validateIdentifier(match.row.runtime_id, "runtime_id");
+            const channelId = validateIdentifier(match.row.channel_id, "channel_id");
             const project = await this.#projects.resolve(projectId, signal);
             signal.throwIfAborted();
             if (project === null) {
                 throw new PairingDirectoryError("unauthorized", "A valid Runtime credential is required");
             }
-            if (!this.#storage.matchesPlacement(match.sourceId, project)) {
+            if (!this.matchesPlacement(match.source, project)) {
                 throw new PairingDirectoryError("directory_unavailable", "Runtime storage is unavailable");
             }
             return new RuntimeAccessContext(new ProjectScope(projectId), runtimeId, channelId, `daemon:${channelId}`);
@@ -88,30 +95,29 @@ export class PairingIdentityService {
     private readonly authenticate = async (credential: PairingIdentityCredential, signal: AbortSignal) => {
         signal.throwIfAborted();
         try {
-            const matches: { readonly projectId: string; readonly sourceId: string }[] = [];
-            for (const { row, sourceId } of await this.#storage.find(credential, signal)) {
-                signal.throwIfAborted();
-                const projectId = row["project_id"];
-                if (typeof projectId !== "string") {
-                    throw new PairingDirectoryError("invalid_directory_record", "The Project directory is invalid");
+            const matches: { readonly projectId: string; readonly source: ProjectStore }[] = [];
+            for (const source of this.#sources) {
+                for (const row of await source.findCredential(credential, signal)) {
+                    signal.throwIfAborted();
+                    if (credential.kind === "project") {
+                        if (
+                            (row.revoked_at !== null && !Number.isSafeInteger(row.revoked_at)) ||
+                            (row.expires_at !== null && !Number.isSafeInteger(row.expires_at))
+                        ) {
+                            throw new PairingDirectoryError(
+                                "invalid_directory_record",
+                                "The Project directory is invalid",
+                            );
+                        }
+                        if (row.revoked_at !== null) {
+                            throw new PairingDirectoryError("credential_revoked", "The browser credential was revoked");
+                        }
+                        if (row.expires_at !== null && row.expires_at <= Date.now()) {
+                            throw new PairingDirectoryError("credential_expired", "The browser credential expired");
+                        }
+                    }
+                    matches.push({ projectId: validateIdentifier(row.project_id, "project_id"), source });
                 }
-                if (credential.kind === "project") {
-                    const revokedAt = row["revoked_at"];
-                    const expiresAt = row["expires_at"];
-                    if (
-                        (revokedAt !== null && (typeof revokedAt !== "number" || !Number.isSafeInteger(revokedAt))) ||
-                        (expiresAt !== null && (typeof expiresAt !== "number" || !Number.isSafeInteger(expiresAt)))
-                    ) {
-                        throw new PairingDirectoryError("invalid_directory_record", "The Project directory is invalid");
-                    }
-                    if (revokedAt !== null) {
-                        throw new PairingDirectoryError("credential_revoked", "The browser credential was revoked");
-                    }
-                    if (expiresAt !== null && expiresAt <= Date.now()) {
-                        throw new PairingDirectoryError("credential_expired", "The browser credential expired");
-                    }
-                }
-                matches.push({ projectId: validateIdentifier(projectId, "project_id"), sourceId });
             }
             const match = matches[0];
             if (matches.length !== 1 || match === undefined) {

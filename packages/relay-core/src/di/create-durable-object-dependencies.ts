@@ -1,8 +1,8 @@
 import { ProjectScope } from "../entity/do/session.ts";
 import { createRuntimeRoutes } from "../http/do/runtime-routes.ts";
-import type { DatabaseResolver } from "../infra/database-resolver.ts";
 import type { DoSqlDatabase } from "../infra/do-sql-database.ts";
 import type { ProjectStorageDirectory } from "../infra/project-storage-directory.ts";
+import type { ProjectStoreResolver } from "../infra/project-store.ts";
 import { DisabledSessionRecording, type SessionRecording } from "../infra/session-recording.ts";
 import type { SessionStatusNotifications } from "../infra/session-status-notifications.ts";
 import { BestEffortRecording } from "../service/channel/best-effort-recording.ts";
@@ -12,14 +12,13 @@ import { LocalRuntimeRequests } from "../service/channel/local-runtime-requests.
 import { NativeSessionForks } from "../service/channel/native-session-forks.ts";
 import { RuntimeConnectionService } from "../service/channel/runtime-connection-service.ts";
 import { type RuntimePeers, RuntimeService } from "../service/channel/runtime-service.ts";
-import { ChannelCredentialStorage } from "../storage/channel-credential-storage.ts";
 import { NativeSessionForkStorage } from "../storage/native-session-fork-storage.ts";
 import { RuntimeConnectionStorage } from "../storage/runtime-connection-storage.ts";
 
 function createRuntimeRelayDependencies(cx: {
     readonly database: DoSqlDatabase;
     readonly storages: {
-        readonly databaseResolver: DatabaseResolver;
+        readonly projectStores: ProjectStoreResolver;
         readonly projectDirectory: ProjectStorageDirectory;
     };
     readonly gateways: {
@@ -41,8 +40,7 @@ function createRuntimeRelayDependencies(cx: {
         if (project.projectId !== scope.projectId) {
             throw new Error("The Project placement is invalid");
         }
-        const database = cx.storages.databaseResolver.resolve(project.storagePlacement);
-        return new ChannelCredentialService(new ChannelCredentialStorage(database));
+        return new ChannelCredentialService(cx.storages.projectStores.resolve(project.storagePlacement));
     };
     const credentials: Pick<ChannelCredentialService, "isActive" | "isRuntimeActive"> = {
         isActive: async (identity, signal) => {
@@ -89,7 +87,7 @@ export type DurableObjectContext = ReturnType<typeof createDurableObjectDependen
 export function createDurableObjectDependencies(cx: {
     readonly doDatabase: DoSqlDatabase;
     readonly storages: {
-        readonly databaseResolver: DatabaseResolver;
+        readonly projectStores: ProjectStoreResolver;
         readonly projectDirectory: ProjectStorageDirectory;
     };
     readonly gateways: {

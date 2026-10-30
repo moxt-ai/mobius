@@ -1,4 +1,4 @@
-import type { LocalSessionOperations, SessionRuntimeOperations } from "@moxt-ai/mobius-relay-core";
+import type { LocalSessionOperations, ProjectStore, SessionRuntimeOperations } from "@moxt-ai/mobius-relay-core";
 import {
     acceptWebSocketHttpTransport,
     CloudflareChannelRuntime,
@@ -16,7 +16,6 @@ import {
     type WebSocketHost,
     type WorkerRuntimeGateways,
 } from "@moxt-ai/mobius-relay-core";
-import type { SqlDatabase } from "@moxt-ai/mobius-relay-core/database";
 import {
     CONTENT_WRITE_MAX_BYTES,
     decodeContentWriteCommand,
@@ -57,6 +56,7 @@ import {
     type ProjectWorkerRoutingBindings,
     routeProjectDurableObject,
 } from "./gateway/project-durable-object-routing.ts";
+import { ProjectDurableObjectStores } from "./gateway/project-durable-object-store.ts";
 import { routeRuntimeSessionRequest } from "./gateway/runtime-session-routing.ts";
 import { createPlatformControlApplication } from "./http/platform-routes.ts";
 import { createProjectApplication } from "./http/project-routes.ts";
@@ -79,11 +79,7 @@ import { SessionAccessService, type SessionAccessTarget } from "./service/sessio
 import { AppSessionStatusWebhookStorage } from "./storage/app-session-status-webhook-storage.ts";
 import { OrganizationInviteStorage } from "./storage/organization-invite-storage.ts";
 import { PlatformControlPlaneStorage } from "./storage/platform-control-plane-storage.ts";
-import {
-    PlatformDatabaseResolver,
-    type PlatformStorageBindings,
-    PlatformStorageRegistry,
-} from "./storage/platform-database-resolver.ts";
+import { type PlatformStorageBindings, PlatformStorageRegistry } from "./storage/platform-storage-registry.ts";
 import { RecordingPolicyStorage } from "./storage/recording-policy-storage.ts";
 
 export interface PlatformRelayBindings extends PlatformStorageBindings, ProjectWorkerRoutingBindings {
@@ -171,9 +167,9 @@ type DispatchEnvironment = {
     readonly Variables: {
         readonly control: PlatformControlPlaneService;
         readonly appAuthentication: AppCredentialAuthenticationService;
-        readonly databases: PlatformDatabaseResolver;
+        readonly stores: ProjectDurableObjectStores;
         readonly projects: PlatformProjectStorageDirectory;
-        readonly projectDatabases: SqlDatabase[];
+        readonly identityStores: readonly ProjectStore[];
         readonly relay: RelayContext;
         readonly recordingPolicies: RecordingPolicyService;
         readonly appSessionStatusWebhooks: AppSessionStatusWebhookService;
@@ -984,12 +980,12 @@ export function createPlatformApplication(
         .use("*", async (context, next) => {
             const environment = context.env;
             const execution =
-                "MOBIUS_PROJECT_DATABASE" in environment
-                    ? { projectId: environment.MOBIUS_PROJECT_ID, database: environment.MOBIUS_PROJECT_DATABASE }
+                "MOBIUS_PROJECT_STORE" in environment
+                    ? { projectId: environment.MOBIUS_PROJECT_ID, store: environment.MOBIUS_PROJECT_STORE }
                     : null;
-            const databases = new PlatformDatabaseResolver(environment, execution);
-            const projectDatabases = execution === null ? [] : [execution.database];
-            const controlStorage = new PlatformControlPlaneStorage(environment.PLATFORM_DIRECTORY_DATABASE, databases);
+            const stores = new ProjectDurableObjectStores(environment.PROJECT_RELAY, execution);
+            const identityStores = execution === null ? [] : [execution.store];
+            const controlStorage = new PlatformControlPlaneStorage(environment.PLATFORM_DIRECTORY_DATABASE, stores);
             const storageRegistry = new PlatformStorageRegistry(environment);
             const appAuthentication = new AppCredentialAuthenticationService(controlStorage);
             const control = new PlatformControlPlaneService(
@@ -1018,22 +1014,22 @@ export function createPlatformApplication(
                     environment.MOBIUS_SESSION_WEBHOOK_SECRET_ENCRYPTION_KEY,
                 ),
             );
-            context.set("databases", databases);
+            context.set("stores", stores);
             context.set("projects", new PlatformProjectStorageDirectory(storageRegistry, controlStorage));
-            context.set("projectDatabases", projectDatabases);
+            context.set("identityStores", identityStores);
             await next();
         })
         .route(`${MOBIUS_API_PREFIX}/dashboard`, controlRoutes)
         .use("*", initializeSessionAccessTargetMiddleware)
         .use("*", async (context, next) => {
             const environment = context.env;
-            const { control, databases, projects, projectDatabases } = context.var;
+            const { control, stores, projects, identityStores } = context.var;
             const cx = createWorkerContext({
                 applications: control,
                 gateways: gateways(environment),
                 authorization: control,
-                databases,
-                identityDatabases: projectDatabases,
+                stores,
+                identityStores,
                 projects,
                 apiPrefix: MOBIUS_API_PREFIX,
             });

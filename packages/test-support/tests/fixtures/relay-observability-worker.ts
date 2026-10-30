@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { Hono } from "hono";
+import type { ProjectDO } from "../../../relay-cloudflare-platform/src/durable-objects/project-do.ts";
 import { RuntimeRelay as PlatformRuntimeRelay } from "../../../relay-cloudflare-platform/src/durable-objects/runtime-relay.ts";
 import type { ConfiguredPlatformRelayBindings } from "../../../relay-cloudflare-platform/src/platform-worker.ts";
 import { errorMiddleware, rethrowHonoError } from "../../../relay-core/src/http/middleware/error-middleware.ts";
@@ -70,15 +71,24 @@ export class RuntimeRelay extends PlatformRuntimeRelay {
     }
 }
 
+function projectOverload(): Error {
+    return Object.assign(new Error("Project DO overloaded"), { overloaded: true });
+}
+
 export class UnavailableProject extends DurableObject {
     override fetch(): Response {
-        throw Object.assign(new Error("Project DO overloaded"), { overloaded: true });
+        throw projectOverload();
+    }
+
+    recordAudit(): never {
+        throw projectOverload();
     }
 }
 
 interface TestBindings extends ConfiguredPlatformRelayBindings {
     readonly RUNTIME_RELAY: DurableObjectNamespace<RuntimeRelay>;
-    readonly UNAVAILABLE_PROJECT: DurableObjectNamespace;
+    // Stands in for PROJECT_RELAY: every request and operation sent to it fails.
+    readonly UNAVAILABLE_PROJECT: DurableObjectNamespace<ProjectDO>;
 }
 
 const application = new Hono<{ Bindings: TestBindings }>()

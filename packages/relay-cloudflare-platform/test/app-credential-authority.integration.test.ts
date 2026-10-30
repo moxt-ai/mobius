@@ -9,8 +9,9 @@ import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createTestMobiusPlatformApp } from "../../test-support/src/app.ts";
 import { FakeClerk } from "../../test-support/src/clerk.ts";
 import { RuntimeRelay } from "../src/durable-objects/runtime-relay.ts";
+import { ProjectDurableObjectStores } from "../src/gateway/project-durable-object-store.ts";
 import { PlatformControlPlaneStorage } from "../src/storage/platform-control-plane-storage.ts";
-import { PlatformDatabaseResolver } from "../src/storage/platform-database-resolver.ts";
+import { SqlitePlatformProjectStore } from "../src/storage/sqlite-platform-project-store.ts";
 import { createPlatformGateways, PlatformAuthenticationConfiguration } from "../src/worker.ts";
 
 const origin = `https://platform.test${MOBIUS_API_PREFIX}`;
@@ -104,7 +105,10 @@ async function application() {
                     }),
                     {
                         ...env,
-                        MOBIUS_PROJECT_DATABASE: new DurableObjectDatabaseAdapter(state.storage),
+                        MOBIUS_PROJECT_STORE: new SqlitePlatformProjectStore(
+                            projectId,
+                            new DurableObjectDatabaseAdapter(state.storage),
+                        ),
                         MOBIUS_PROJECT_ID: projectId,
                         PLATFORM_DIRECTORY_DATABASE: directory,
                     },
@@ -585,7 +589,10 @@ it("Given an App deleted while its Project and AppCredential stayed active, When
 it("Given an App deleted after a request checked it, When that request creates a Project or issues an AppCredential, Then neither is created", async () => {
     const app = await application();
     expect((await app.deleteApp()).status).toBe(200);
-    const storage = new PlatformControlPlaneStorage(env.PLATFORM_DIRECTORY_DATABASE, new PlatformDatabaseResolver(env));
+    const storage = new PlatformControlPlaneStorage(
+        env.PLATFORM_DIRECTORY_DATABASE,
+        new ProjectDurableObjectStores(env.PROJECT_RELAY),
+    );
     const signal = new AbortController().signal;
     const now = Date.now();
     const audit = {
@@ -643,4 +650,23 @@ it("Given an App deleted after a request checked it, When that request creates a
     expect((await storage.listAppCredentials(app.appId, signal)).map((row) => row.credential_id)).toEqual([
         app.defaultCredential.credentialId,
     ]);
+});
+
+it("Given a Project created through the dashboard, When its developer lists the Project's audit events, Then the Worker reads the creation event from the Project's own storage", async () => {
+    const app = await application();
+
+    const listed = await responseJson(await app.dashboard(`projects/${app.projectId}/audit-events`), 200);
+
+    expect(listed).toMatchObject({
+        events: expect.arrayContaining([
+            expect.objectContaining({
+                action: "project.created",
+                auditId: `pae_created_${app.projectId}`,
+                outcome: "succeeded",
+                projectId: app.projectId,
+                subjectId: app.projectId,
+                tenantId: app.tenantId,
+            }),
+        ]),
+    });
 });

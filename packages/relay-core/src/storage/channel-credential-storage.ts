@@ -1,16 +1,11 @@
 import { and, eq, isNull } from "drizzle-orm";
+import type { ChannelCredentialIdentity } from "../entity/pairing/pairing-records.ts";
 import { relayDrizzle } from "../infra/drizzle-database.ts";
 import type { SqlDatabase } from "../infra/sql-database.ts";
 import { channelHostCredential, runtimeIdentity, runtimeRegistration } from "../schema/project-do/index.ts";
 import { hostCredentialValid } from "./host-credential-validity.ts";
 
-export interface ChannelCredentialIdentity {
-    readonly channelId: string;
-    readonly credentialId: string;
-    readonly projectId: string;
-    readonly runtimeId: string;
-}
-
+/** Whether a Runtime, or a host credential reaching it, is still active in the Project's own storage. */
 export class ChannelCredentialStorage {
     readonly #database: SqlDatabase;
 
@@ -21,7 +16,7 @@ export class ChannelCredentialStorage {
     readonly readActiveRuntime = async (
         identity: { readonly projectId: string; readonly runtimeId: string },
         signal: AbortSignal,
-    ) => {
+    ): Promise<boolean> => {
         const database = relayDrizzle(this.#database, signal);
         const runtimes = await database
             .select({ runtimeId: runtimeIdentity.runtimeId })
@@ -35,10 +30,10 @@ export class ChannelCredentialStorage {
                 ),
             )
             .limit(1);
-        return runtimes.length === 0 ? null : { active: 1 };
+        return runtimes.length === 1;
     };
 
-    readonly readActive = async (identity: ChannelCredentialIdentity, signal: AbortSignal) => {
+    readonly readActive = async (identity: ChannelCredentialIdentity, signal: AbortSignal): Promise<boolean> => {
         const database = relayDrizzle(this.#database, signal);
         const credentials = await database
             .select({ credentialId: channelHostCredential.credentialId })
@@ -54,6 +49,6 @@ export class ChannelCredentialStorage {
                 ),
             )
             .limit(1);
-        return credentials.length === 0 ? null : { active: 1 };
+        return credentials.length === 1;
     };
 }
