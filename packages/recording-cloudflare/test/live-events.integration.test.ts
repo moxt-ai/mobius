@@ -5,6 +5,11 @@ import {
     decodeSessionRecordingHistory,
     decodeSessionRecordingHistoryPage,
 } from "@moxt-ai/mobius-sdk/protocol";
+import {
+    decodeSessionRecordingHistoryPage as decodeReleasedPage,
+    decodeSessionRecordingWireWrite as decodeReleasedWrite,
+    encodeSessionRecordingWireWrite as encodeReleasedWrite,
+} from "@moxt-ai/mobius-sdk-previous/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { recordingDirectoryDurableObjectMigrations } from "../src/generated/recording-directory-do-migrations.ts";
 import { applyDurableObjectMigrations } from "../src/storage/durable-object-migrations.ts";
@@ -80,6 +85,12 @@ describe("Recording live V2 events", () => {
             (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: [next] }), env)).status,
         ).toBe(201);
         expect(decodeSessionRecordingHistoryPage(await (await waiting).text()).events).toEqual([next]);
+    });
+
+    it("Given a Relay that sends events again only to a Recording that stores each event once, When it asks what Recording supports, Then Recording announces it", async () => {
+        const response = await worker.fetch(new Request("https://recording.internal/v1/capabilities"), env);
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ storesEachEventOnce: true });
     });
 
     // @no-uc: Technical regression; abandoning a held read must cancel its wait without failing the Worker.
@@ -449,6 +460,95 @@ describe("Recording incremental reads", () => {
             "event-3",
             "event-4",
         ]);
+    });
+    it("Given more than a thousand stored batches after a late event, When the write that carried it arrives again, Then each event is stored once", async () => {
+        // Positions written in decreasing order are each stored as their own batch.
+        const earlier = numberedEvents(1024, 1).reverse();
+        for (const events of [earlier.slice(0, 1000), earlier.slice(1000)]) {
+            expect((await worker.fetch(write("runtime-live", { kind: "session.event.v2", events }), env)).status).toBe(
+                201,
+            );
+        }
+        const [late] = numberedEvents(1, 0);
+        const [next] = numberedEvents(1, 1025);
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+            expect(
+                (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: [late, next] }), env))
+                    .status,
+            ).toBe(201);
+        }
+
+        const page = decodeSessionRecordingHistoryPage(await (await worker.fetch(read("?limit=2000"), env)).text());
+        expect(page.events).toHaveLength(1026);
+        expect(new Set(page.events.map((candidate) => candidate.eventId)).size).toBe(1026);
+    });
+    it("Given a released Relay and reader, When the Relay sends recorded events again, Then the reader's earlier cursor reads nothing and then the next event", async () => {
+        /** A write as a Relay built on the released SDK encodes it. */
+        const released = (events: readonly unknown[]): Request =>
+            new Request("https://recording.internal/v1/session-event-batches", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: encodeReleasedWrite(
+                    decodeReleasedWrite(
+                        JSON.stringify({
+                            projectId,
+                            runtimeId: "runtime-live",
+                            envelope: { kind: "session.event.v2", events },
+                        }),
+                    ),
+                ),
+            });
+        const [first, second, third] = numberedEvents(3, 1);
+        expect((await worker.fetch(released([first, second]), env)).status).toBe(201);
+        const caughtUp = decodeReleasedPage(await (await worker.fetch(read("?limit=10"), env)).text());
+        expect(caughtUp.events.map((candidate) => candidate.eventId)).toEqual(["event-1", "event-2"]);
+
+        const copies = await worker.fetch(released([first, second]), env);
+        expect(copies.status).toBe(201);
+        expect(await copies.json()).toEqual({ results: [{ sessionId: "live-session", kind: "recorded" }] });
+        const unchanged = decodeReleasedPage(
+            await (await worker.fetch(read(`?after=${caughtUp.tailCursor}&limit=10`), env)).text(),
+        );
+        expect(unchanged.events).toEqual([]);
+        expect(unchanged.tailCursor).toBe(caughtUp.tailCursor);
+
+        expect((await worker.fetch(released([third]), env)).status).toBe(201);
+        const following = decodeReleasedPage(
+            await (await worker.fetch(read(`?after=${caughtUp.tailCursor}&limit=10`), env)).text(),
+        );
+        expect(following.events.map((candidate) => candidate.eventId)).toEqual(["event-3"]);
+    });
+    it("Given a frame an earlier Recording stored twice, When a reader pages through it and the frame arrives again, Then both stored copies read as before and only new events are added", async () => {
+        const [first, second, third] = numberedEvents(3, 1);
+        expect(
+            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: [first] }), env)).status,
+        ).toBe(201);
+        // An earlier deployment stored every frame it received, so a frame received twice became two rows.
+        await runInDurableObject(
+            env.SESSION_RECORDING.getByName(JSON.stringify([projectId, "runtime-live", "live-session"])),
+            (_instance, state) => {
+                for (let copy = 0; copy < 2; copy += 1) {
+                    state.storage.sql.exec(
+                        "INSERT INTO recorded_session_events_v2 (envelope_json, first_position, last_position, recorded_at, session_generation_id) VALUES (?, 2, 2, 0, ?)",
+                        JSON.stringify({ kind: "session.event.v2", events: [second] }),
+                        event.sessionGenerationId,
+                    );
+                }
+            },
+        );
+        const stored = decodeSessionRecordingHistoryPage(await (await worker.fetch(read("?limit=10"), env)).text());
+        expect(stored.events.map((candidate) => candidate.eventId)).toEqual(["event-1", "event-2", "event-2"]);
+        const caughtUp = await worker.fetch(read(`?after=${stored.tailCursor}&limit=10`), env);
+        expect(decodeSessionRecordingHistoryPage(await caughtUp.text()).events).toEqual([]);
+
+        expect(
+            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: [second, third] }), env))
+                .status,
+        ).toBe(201);
+        const following = decodeSessionRecordingHistoryPage(
+            await (await worker.fetch(read(`?after=${stored.tailCursor}&limit=10`), env)).text(),
+        );
+        expect(following.events.map((candidate) => candidate.eventId)).toEqual(["event-3"]);
     });
     it("Given a daemon reload creates a new Session generation, When a caller continues from an append cursor, Then restarted events are retained", async () => {
         const first = numberedEvents(3, 1);

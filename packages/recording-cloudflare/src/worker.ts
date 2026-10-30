@@ -715,6 +715,9 @@ export function createRecordingWorker(): RecordingWorker {
         // Durable Object fetches reject rather than returning an error Response, and every route
         // passes a Durable Object response straight through, so the envelope has to be added here.
         .onError((cause, context): Response => internalErrorResponse(cause, context.req.raw))
+        // The Relay sends events again, to retry a write or replay a reconnected daemon's output, only to a
+        // Recording that announces it stores each event once. An earlier Recording answers 404 here.
+        .get("/v1/capabilities", (context): Response => context.json({ storesEachEventOnce: true }))
         .post("/v1/session-event-batches", async (context): Promise<Response> => {
             let write: SessionRecordingWireWrite;
             try {

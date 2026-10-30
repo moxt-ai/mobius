@@ -64,15 +64,24 @@ const decodedBatchLimit = 16;
 const decodedBatchCharacters = 1_000_000;
 /** UTF-8 bytes one stored batch may take. Durable Object SQLite rejects a string or row larger than 2 MB. */
 const storedBatchBytes = 1_900_000;
-/**
- * Stored batches searched for copies of one write's events, nearest positions first. Copies come from frames a
- * daemon or Relay sends again shortly after the first copy, so they sit in the batches just recorded.
- */
-const copySearchBatches = 1024;
-
 /** A Session generation gives each of its events its own increasing position, so the pair names one event. */
 function eventIdentity(event: SessionWireEvent): string {
     return JSON.stringify([event.sessionGenerationId, Number(event.position)]);
+}
+
+/** Whether any of the ascending positions lies within first..last. */
+function enclosesAny(positions: readonly number[], first: number, last: number): boolean {
+    let low = 0;
+    let high = positions.length;
+    while (low < high) {
+        const middle = (low + high) >>> 1;
+        if ((positions[middle] ?? Number.POSITIVE_INFINITY) < first) {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    return (positions[low] ?? Number.POSITIVE_INFINITY) <= last;
 }
 
 export type AppendOutcome =
@@ -314,27 +323,37 @@ export class SessionRecordingStorage {
      * The events of a write that this Recording does not hold yet, in write order. An event whose generation and
      * position are already recorded is a copy, such as a frame sent twice or output a reconnected daemon sends
      * again. An event that arrives after later ones is still new and is kept.
+     *
+     * Each stored batch holds one generation in increasing positions, so a batch can hold a position only when its
+     * first and last positions enclose it. Every such batch is read; a write of new events encloses none and reads
+     * no batch. Batches stored before positions were kept in order may hold them out of order, but their events are
+     * too old to be sent again.
      */
     readonly #unrecorded = (events: readonly SessionWireEvent[]): readonly SessionWireEvent[] => {
-        const positions = events.map((candidate) => Number(candidate.position));
-        const latest = Math.max(...positions);
-        const generations = new Set(events.map((candidate) => candidate.sessionGenerationId));
+        const positions = [...new Set(events.map((candidate) => Number(candidate.position)))].sort(
+            (left, right) => left - right,
+        );
         const recorded = new Set<string>();
+        // The generation column follows each row's envelope, so it is checked on the decoded events instead.
         const candidates = this.#database
             .select({
                 firstPosition: recordedSessionEvent.firstPosition,
+                lastPosition: recordedSessionEvent.lastPosition,
                 ordinal: recordedSessionEvent.ordinal,
-                sessionGenerationId: recordedSessionEvent.sessionGenerationId,
             })
             .from(recordedSessionEvent)
-            .where(gte(recordedSessionEvent.lastPosition, Math.min(...positions)))
-            .orderBy(asc(recordedSessionEvent.lastPosition))
-            .limit(copySearchBatches)
+            .where(
+                and(
+                    gte(recordedSessionEvent.lastPosition, positions[0] ?? 0),
+                    lte(recordedSessionEvent.firstPosition, positions.at(-1) ?? 0),
+                ),
+            )
             .all();
         for (const candidate of candidates) {
             if (
-                (candidate.firstPosition !== null && candidate.firstPosition > latest) ||
-                (candidate.sessionGenerationId !== null && !generations.has(candidate.sessionGenerationId))
+                candidate.firstPosition === null ||
+                candidate.lastPosition === null ||
+                !enclosesAny(positions, candidate.firstPosition, candidate.lastPosition)
             ) {
                 continue;
             }
