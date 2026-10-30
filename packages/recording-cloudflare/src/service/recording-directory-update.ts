@@ -1,9 +1,5 @@
 import { conversationTitleFromText } from "@moxt-ai/mobius-sdk";
-import {
-    isSessionLiveEvent,
-    type SessionRecordingWireWrite,
-    type SessionWireEvent,
-} from "@moxt-ai/mobius-sdk/protocol";
+import { isSessionLiveEvent, type SessionWireEvent } from "@moxt-ai/mobius-sdk/protocol";
 import type {
     DirectoryChange,
     DirectoryOperation,
@@ -58,12 +54,12 @@ function appendOperation(operations: DirectoryOperation[], next: DirectoryOperat
 }
 
 /** Keeps a single Session's ordered creation/title changes while replacing other events with activity times. */
-export function projectDirectoryChange(write: SessionRecordingWireWrite): DirectoryChange {
+export function projectDirectoryChange(events: readonly SessionWireEvent[]): DirectoryChange {
     const operations: DirectoryOperation[] = [];
-    for (const event of write.envelope.events) {
+    for (const event of events) {
         appendOperation(operations, operation(event));
     }
-    return { operations, events: write.envelope.events.length };
+    return { operations, events: events.length };
 }
 
 /** The directory accepts at most this many operations, and counts at most this many events, per update. */
