@@ -14,6 +14,7 @@ import type {
 import {
     decodeSessionLiveEvent,
     ProtocolMessageError,
+    promptCompletion,
     SESSION_RECORDING_TURN_COMPACTION_MAX_ELEMENTS,
     type SessionWireEvent,
     sessionRecordingTurnItemCursor,
@@ -679,7 +680,7 @@ class ProjectionFold {
             case "prompt.completed": {
                 const turn = this.#ensureTurn(payload.commandId, event);
                 const timing = attemptTiming(turn.attempt);
-                const cancelled = payload.stopReason === "cancelled" || payload.stopReason === "canceled";
+                const cancelled = promptCompletion(payload).kind === "cancelled";
                 this.#putTurn({
                     ...turn,
                     compactions: this.#settledCompactions(turn, "cancelled"),

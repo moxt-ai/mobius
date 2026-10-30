@@ -425,6 +425,30 @@ export const isPromptTerminal = (payload: LifecycleMetadata): payload is PromptT
         }
     }
 };
+
+/**
+ * How a completed prompt ended. Agents report a cancelled prompt with the ACP stop reason `cancelled`, the Runtime
+ * reports a prompt folded into another one as `steered`, and `execution` marks a prompt withdrawn before it started.
+ * Readers classify a completion here instead of comparing stop reasons themselves.
+ */
+export type PromptCompletion =
+    | { readonly kind: "cancelled"; readonly started: boolean }
+    | { readonly kind: "steered" }
+    | { readonly kind: "ended"; readonly stopReason: string };
+
+export const promptCompletion = (completed: {
+    readonly stopReason: string;
+    readonly execution?: "not-started" | undefined;
+}): PromptCompletion => {
+    switch (completed.stopReason) {
+        case "cancelled":
+            return { kind: "cancelled", started: completed.execution !== "not-started" };
+        case "steered":
+            return { kind: "steered" };
+        default:
+            return { kind: "ended", stopReason: completed.stopReason };
+    }
+};
 export const sessionEventPayloadSchema = z.discriminatedUnion("type", [
     z.object({ payload: acpSessionUpdateSchema, type: z.literal("acp") }).readonly(),
     z.object({ payload: lifecycleMetadataSchema, type: z.literal("lifecycle-metadata") }).readonly(),

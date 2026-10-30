@@ -1,4 +1,5 @@
 import {
+    promptCompletion,
     SESSION_CANCEL_BEFORE_START_KIND,
     SESSION_CANCEL_KIND,
     SESSION_CLOSE_KIND,
@@ -56,7 +57,7 @@ export const sessionCancelBeforeStartCommand: RuntimeCommand = {
             if (
                 outcome?.type === "lifecycle-metadata" &&
                 outcome.payload.kind === "prompt.completed" &&
-                outcome.payload.stopReason === "cancelled"
+                promptCompletion(outcome.payload).kind === "cancelled"
             ) {
                 void eventProjection.replayOutcome(message.sessionId, outcome).catch((error: unknown) => {
                     reportOperationFailure(socket, message.commandId, message.sessionId, error);

@@ -5,6 +5,7 @@ import {
     encodeSessionCancelBeforeStartCommand,
     isPromptTerminal,
     type LastTurnOutcome,
+    promptCompletion,
     type SessionEventPayload,
     type SessionLiveEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
@@ -62,7 +63,7 @@ function cancelledBeforeStart(state: ExecutionState): boolean {
     return (
         outcome?.type === "lifecycle-metadata" &&
         outcome.payload.kind === "prompt.completed" &&
-        outcome.payload.stopReason === "cancelled"
+        promptCompletion(outcome.payload).kind === "cancelled"
     );
 }
 
