@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type {
     AcpSessionUpdate,
     LifecycleMetadata,
@@ -21,6 +22,7 @@ import {
 import {
     characterCount,
     emptyProjection,
+    executionInactivityMilliseconds,
     type ItemTextChange,
     type ProjectedEventIdentity,
     type ProjectionWrites,
@@ -114,6 +116,27 @@ function isTerminal(attempt: SessionRecordingTurnAttempt): boolean {
 /** An attempt that a Session generation change would leave without an outcome. */
 function isInterruptible(attempt: SessionRecordingTurnAttempt): boolean {
     return attempt.kind === "running" || attempt.kind === "waiting_input";
+}
+
+function observedAttempt(turn: StoredTurn, now: number): SessionRecordingTurnAttempt {
+    const activity = turn.activity;
+    if (
+        turn.attempt.kind !== "running" ||
+        activity === null ||
+        (activity.kind === "active" && now <= activity.observedAt + executionInactivityMilliseconds)
+    ) {
+        return turn.attempt;
+    }
+    return {
+        ...attemptTiming(turn.attempt),
+        detectedAt: new Date(
+            activity.kind === "inactive"
+                ? activity.detectedAt
+                : activity.observedAt + executionInactivityMilliseconds + 1,
+        ).toISOString(),
+        kind: "indeterminate",
+        reason: "execution_inactive",
+    };
 }
 
 /** Bounds a tool item for a page: oversized detail is omitted first, then oversized labels are cut. */
@@ -266,6 +289,7 @@ class ProjectionFold {
     readonly #events = new Map<string, ProjectedEventIdentity>();
     #state: StoredProjectionState;
     #turnCount: number;
+    #receivedAt = 0;
 
     constructor(storage: SessionTurnHistoryStorage, projection: StoredProjection) {
         this.#storage = storage;
@@ -273,7 +297,8 @@ class ProjectionFold {
         this.#turnCount = projection.turnCount;
     }
 
-    readonly fold = (wireEvents: readonly SessionWireEvent[]): void => {
+    readonly fold = (wireEvents: readonly SessionWireEvent[], receivedAt: number): void => {
+        this.#receivedAt = receivedAt;
         const inputs = foldInputs(wireEvents);
         const identities = inputs.map(({ event }) => ({
             eventId: event.eventId,
@@ -315,6 +340,37 @@ class ProjectionFold {
             }
         }
     };
+
+    readonly markInactive = (now: number): void => {
+        for (const turn of this.#storage.inactiveCandidates(now)) {
+            if (
+                turn.attempt.kind === "running" &&
+                turn.activity?.kind === "active" &&
+                now > turn.activity.observedAt + executionInactivityMilliseconds
+            ) {
+                this.#putTurn({
+                    ...turn,
+                    activity: {
+                        kind: "inactive",
+                        observedAt: turn.activity.observedAt,
+                        detectedAt: turn.activity.observedAt + executionInactivityMilliseconds + 1,
+                    },
+                });
+            }
+        }
+    };
+
+    #progress(commandId: string): void {
+        const turn = this.#turn(commandId);
+        if (
+            turn === null ||
+            !isInterruptible(turn.attempt) ||
+            (turn.activity !== null && turn.activity.observedAt > this.#receivedAt)
+        ) {
+            return;
+        }
+        this.#putTurn({ ...turn, activity: { kind: "active", observedAt: this.#receivedAt } });
+    }
 
     readonly writes = (foldedThroughOrdinal: number): ProjectionWrites => {
         const turns = [...this.#dirtyTurns].flatMap((commandId) => {
@@ -374,6 +430,7 @@ class ProjectionFold {
         this.#turnCount += 1;
         return this.#putTurn({
             answerLength: 0,
+            activity: null,
             attempt: { kind: "none" },
             commandId,
             compactions: [],
@@ -597,6 +654,7 @@ class ProjectionFold {
                 this.#pushActive(event, payload.commandId);
                 // A new attempt starts without waiting; requests of the attempt it replaces cannot be answered.
                 this.#closeInteractions(payload.commandId);
+                this.#progress(payload.commandId);
                 return;
             }
             case "prompt.completed": {
@@ -675,6 +733,7 @@ class ProjectionFold {
             return;
         }
         this.#putTurn({ ...turn, attempt: this.#waitingAttempt(turn) });
+        this.#progress(turn.commandId);
     }
 
     #resolveInteraction(interactionId: string): void {
@@ -689,6 +748,7 @@ class ProjectionFold {
             return;
         }
         this.#putTurn({ ...turn, attempt: this.#waitingAttempt(turn) });
+        this.#progress(turn.commandId);
     }
 
     #foldAcp(event: SessionLiveEvent, update: AcpSessionUpdate): void {
@@ -713,6 +773,8 @@ class ProjectionFold {
                         kind: "readable",
                         text: update.content.text,
                     });
+                } else {
+                    this.#progress(commandId);
                 }
                 const turn = this.#ensureTurn(commandId, event);
                 if (update.messageId !== undefined && update.messageId !== null) {
@@ -726,6 +788,8 @@ class ProjectionFold {
                         kind: "readable",
                         text: update.content.text,
                     });
+                } else {
+                    this.#progress(commandId);
                 }
                 return;
             case "tool_call":
@@ -775,6 +839,9 @@ class ProjectionFold {
             openAnswer: null,
             openThought: null,
         });
+        if (previous?.status !== status) {
+            this.#progress(commandId);
+        }
     }
 
     /** Folds an answer or reasoning chunk this deployment cannot read into the item it belongs to. */
@@ -794,6 +861,9 @@ class ProjectionFold {
     #appendAnswer(event: FoldedEvent, commandId: string, messageId: string | null, chunk: TextChunk): void {
         const turn = this.#ensureTurn(commandId, event);
         const length = chunk.kind === "readable" ? chunk.text.length : chunk.length;
+        if (length === 0) {
+            return;
+        }
         const open =
             turn.openAnswer !== null && turn.openAnswer.messageId === messageId
                 ? this.#item(commandId, turn.openAnswer.itemId)
@@ -801,6 +871,7 @@ class ProjectionFold {
         if (open !== null && open.item.kind === "answer") {
             this.#appendText(open, chunk);
             this.#putTurn({ ...turn, answerLength: turn.answerLength + length });
+            this.#progress(commandId);
             return;
         }
         const itemId = `answer:${event.eventId}`;
@@ -814,9 +885,13 @@ class ProjectionFold {
             openAnswer: { itemId, messageId },
             openThought: null,
         });
+        this.#progress(commandId);
     }
 
     #appendThought(event: FoldedEvent, commandId: string, messageId: string | null, chunk: TextChunk): void {
+        if ((chunk.kind === "readable" ? chunk.text.length : chunk.length) === 0) {
+            return;
+        }
         const turn = this.#ensureTurn(commandId, event);
         const open =
             turn.openThought !== null && turn.openThought.messageId === messageId
@@ -826,6 +901,7 @@ class ProjectionFold {
         if (open !== null && open.item.kind === "thought") {
             this.#appendText(open, chunk);
             this.#putTurn({ ...turn, openAnswer: null });
+            this.#progress(commandId);
             return;
         }
         const itemId = `thought:${event.eventId}`;
@@ -837,6 +913,7 @@ class ProjectionFold {
             openAnswer: null,
             openThought: { itemId, messageId },
         });
+        this.#progress(commandId);
     }
 
     #mergeTool(
@@ -856,30 +933,27 @@ class ProjectionFold {
         const rawInput = update.rawInput === undefined ? previousDetail?.rawInput : update.rawInput;
         const rawOutput = update.rawOutput === undefined ? previousDetail?.rawOutput : update.rawOutput;
         const { attemptId } = attemptTiming(turn.attempt);
-        this.#putItem(
-            owner,
-            {
-                ...(attemptId === undefined ? {} : { attemptId }),
-                detail: omitted
-                    ? { kind: "omitted" }
-                    : {
-                          content: update.content ?? previousDetail?.content ?? [],
-                          kind: "inline",
-                          ...(rawInput === undefined ? {} : { rawInput }),
-                          ...(rawOutput === undefined ? {} : { rawOutput }),
-                      },
-                itemId,
-                kind: "tool",
-                locations: update.locations ?? previous?.locations ?? [],
-                name: update.name ?? previous?.name ?? null,
-                sequence: previous?.sequence ?? turn.nextSequence,
-                status: update.status ?? previous?.status ?? "pending",
-                title: update.title ?? previous?.title ?? "",
-                toolCallId: update.toolCallId,
-                toolKind: update.kind ?? previous?.toolKind ?? null,
-            },
-            stored === null ? { droppedCharacters: 0, kind: "set", text: "" } : stored.text,
-        );
+        const next: StoredTurnItem = {
+            ...(attemptId === undefined ? {} : { attemptId }),
+            detail: omitted
+                ? { kind: "omitted" }
+                : {
+                      content: update.content ?? previousDetail?.content ?? [],
+                      kind: "inline",
+                      ...(rawInput === undefined ? {} : { rawInput }),
+                      ...(rawOutput === undefined ? {} : { rawOutput }),
+                  },
+            itemId,
+            kind: "tool",
+            locations: update.locations ?? previous?.locations ?? [],
+            name: update.name ?? previous?.name ?? null,
+            sequence: previous?.sequence ?? turn.nextSequence,
+            status: update.status ?? previous?.status ?? "pending",
+            title: update.title ?? previous?.title ?? "",
+            toolCallId: update.toolCallId,
+            toolKind: update.kind ?? previous?.toolKind ?? null,
+        };
+        this.#putItem(owner, next, stored === null ? { droppedCharacters: 0, kind: "set", text: "" } : stored.text);
         // Tool work interrupts both the answer stream and the current run of reasoning.
         this.#putTurn({
             ...turn,
@@ -887,6 +961,9 @@ class ProjectionFold {
             openAnswer: null,
             openThought: null,
         });
+        if (!isDeepStrictEqual(previous, next)) {
+            this.#progress(owner);
+        }
     }
 
     /**
@@ -936,9 +1013,14 @@ export class SessionTurnHistory {
 
     #projection(): StoredProjection | null {
         const projection = this.#history.projection();
-        if (projection !== null && (projection.state.version === 1 || projection.state.compactionVersion !== 1)) {
-            // Older projections may contain repeated text or omit compactions. Rebuild only their
-            // derived tables from the unchanged raw Recording, using the existing bounded backfill.
+        if (
+            projection !== null &&
+            (projection.state.version === 1 ||
+                projection.state.compactionVersion !== 1 ||
+                projection.state.activityVersion !== 1)
+        ) {
+            // Older projections may contain repeated text or omit compactions and activity. Rebuild
+            // only derived tables from the unchanged raw Recording, using the bounded backfill.
             this.#history.resetProjection();
             return null;
         }
@@ -950,7 +1032,7 @@ export class SessionTurnHistory {
      * the batch is left for backfill: earlier batches are unfolded, an earlier fold failed, or this
      * fold failed. A failed fold rolls back on its own and never prevents the batch from recording.
      */
-    readonly project = (ordinal: number, events: readonly SessionWireEvent[]): boolean => {
+    readonly project = (ordinal: number, events: readonly SessionWireEvent[], receivedAt = Date.now()): boolean => {
         try {
             return this.#history.transaction(() => {
                 const projection = this.#projection() ?? emptyProjection;
@@ -962,7 +1044,7 @@ export class SessionTurnHistory {
                     return false;
                 }
                 const fold = new ProjectionFold(this.#history, projection);
-                fold.fold(events);
+                fold.fold(events, receivedAt);
                 this.#history.writeProjection(fold.writes(ordinal));
                 return true;
             });
@@ -987,7 +1069,7 @@ export class SessionTurnHistory {
                     if (folded >= eventBudget) {
                         break;
                     }
-                    fold.fold(batch.events);
+                    fold.fold(batch.events, batch.receivedAt);
                     foldedThrough = batch.ordinal;
                     folded += batch.events.length;
                 }
@@ -1010,6 +1092,39 @@ export class SessionTurnHistory {
         }
     };
 
+    readonly nextInactivityDeadline = (): number | null => this.#history.nextInactivityDeadline();
+
+    readonly assessInactivity = (now: Date): boolean =>
+        this.#history.transaction(() => {
+            const projection = this.#projection();
+            if (
+                projection === null ||
+                projection.failure !== null ||
+                projection.foldedThroughOrdinal < this.#recording.latestOrdinal()
+            ) {
+                return false;
+            }
+            const fold = new ProjectionFold(this.#history, projection);
+            fold.markInactive(now.getTime());
+            const writes = fold.writes(projection.foldedThroughOrdinal);
+            if (writes.turns.length === 0) {
+                return false;
+            }
+            this.#history.writeProjection(writes);
+            return true;
+        });
+
+    #activeCommands(state: StoredProjectionState): SessionRecordingExecution["activeCommands"] {
+        const active = state.activeCommands;
+        if (active === null) {
+            return null;
+        }
+        const commandIds = this.#history
+            .progressingCommandIds(active.commandIds, Date.now())
+            .slice(-activeCommandLimit);
+        return commandIds.length === 0 ? null : { commandIds, generationId: active.generationId };
+    }
+
     readonly execution = (
         target: RecordingTarget,
         commandIds: readonly string[],
@@ -1022,20 +1137,17 @@ export class SessionTurnHistory {
         for (const commandId of new Set(commandIds)) {
             const turn = this.#history.turn(commandId);
             if (turn !== null) {
-                commands.push({ attempt: turn.attempt, commandId, generationId: turn.generationId });
+                commands.push({
+                    attempt: observedAttempt(turn, Date.now()),
+                    commandId,
+                    generationId: turn.generationId,
+                });
             }
         }
-        const active = readable.value.activeCommands;
         return {
             kind: "ready",
             value: {
-                activeCommands:
-                    active === null || active.commandIds.length === 0
-                        ? null
-                        : {
-                              commandIds: active.commandIds.slice(-activeCommandLimit),
-                              generationId: active.generationId,
-                          },
+                activeCommands: this.#activeCommands(readable.value),
                 commands,
                 sessionId: target.sessionId,
                 tailCursor: this.#recording.tailCursor(),
@@ -1084,7 +1196,7 @@ export class SessionTurnHistory {
                 budget = listed.remaining;
                 turns.push({
                     answerLength: turn.answerLength,
-                    attempt: turn.attempt,
+                    attempt: observedAttempt(turn, Date.now()),
                     commandId: turn.commandId,
                     compactions: turn.compactions,
                     createdAt: turn.createdAt,
@@ -1104,17 +1216,10 @@ export class SessionTurnHistory {
             }
         }
         const last = turns.at(-1);
-        const active = state.activeCommands;
         return {
             kind: "ready",
             value: {
-                activeCommands:
-                    active === null || active.commandIds.length === 0
-                        ? null
-                        : {
-                              commandIds: active.commandIds.slice(-activeCommandLimit),
-                              generationId: active.generationId,
-                          },
+                activeCommands: this.#activeCommands(state),
                 interactions: this.#history.pendingInteractions(interactionLimit).map((record) => record.interaction),
                 nextCursor: last !== undefined && this.#history.hasTurnBefore(last.order) ? `turn:${last.order}` : null,
                 sessionId: target.sessionId,

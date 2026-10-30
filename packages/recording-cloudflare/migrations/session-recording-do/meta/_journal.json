@@ -85,6 +85,13 @@
             "when": 1793200242412,
             "tag": "0011_right_yellow_claw",
             "breakpoints": true
+        },
+        {
+            "idx": 12,
+            "version": "6",
+            "when": 1793334263048,
+            "tag": "0012_blue_thunderball",
+            "breakpoints": true
         }
     ]
 }

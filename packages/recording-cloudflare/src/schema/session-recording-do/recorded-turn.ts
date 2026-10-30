@@ -9,7 +9,11 @@ export const recordedTurn = sqliteTable(
         turnOrder: integer("turn_order").notNull().unique(),
         // Set while the attempt has started and not ended, so a Session generation change can find it.
         open: integer("open", { mode: "boolean" }).notNull(),
+        inactivityDeadline: integer("inactivity_deadline"),
         turnJson: text("turn_json").notNull(),
     },
-    (table) => [index("recorded_turns_open").on(table.open)],
+    (table) => [
+        index("recorded_turns_open").on(table.open),
+        index("recorded_turns_inactivity_deadline").on(table.inactivityDeadline),
+    ],
 );

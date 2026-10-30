@@ -11,6 +11,13 @@ import { z } from "zod";
 
 const count = z.number().int().nonnegative().safe();
 
+export const executionInactivityMilliseconds = 60 * 60 * 1_000;
+
+const executionActivitySchema = z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("active"), observedAt: count }).readonly(),
+    z.object({ kind: z.literal("inactive"), observedAt: count, detectedAt: count }).readonly(),
+]);
+
 function decodedProtocolValue<T>(decode: (value: unknown) => T): z.ZodType<T> {
     return z.unknown().transform((value, context) => {
         try {
@@ -33,6 +40,7 @@ const sessionRecordingInteraction = decodedProtocolValue(decodeSessionRecordingI
 export const storedTurnSchema = z
     .object({
         answerLength: count,
+        activity: executionActivitySchema.nullable().default(null),
         attempt: sessionRecordingTurnAttempt,
         commandId: z.string().min(1),
         compactions: z
@@ -79,6 +87,7 @@ export const storedProjectionStateSchema = z
             .object({ commandIds: z.array(z.string().min(1)).readonly(), generationId: z.string().min(1) })
             .readonly()
             .nullable(),
+        activityVersion: z.literal(1).optional(),
         // Missing on a projection that has not folded compaction lifecycle events yet.
         compactionVersion: z.literal(1).optional(),
         // Generation of the last folded event; a different generation clears the active commands.
@@ -115,6 +124,7 @@ export const emptyProjection: StoredProjection = {
     foldedThroughOrdinal: 0,
     state: {
         activeCommands: null,
+        activityVersion: 1,
         compactionVersion: 1,
         generationId: null,
         retiredGenerationIds: [],

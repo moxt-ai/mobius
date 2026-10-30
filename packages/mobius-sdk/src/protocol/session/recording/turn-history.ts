@@ -113,7 +113,7 @@ const promptFailedOutcome = {
 };
 
 /** Where a Turn's prompt is in its lifecycle, as projected from Recording lifecycle events. */
-export const sessionRecordingTurnAttemptSchema = z.discriminatedUnion("kind", [
+const recordedAttemptSchema = z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("none") }).readonly(),
     z.object({ ...attemptTiming, kind: z.literal("running") }).readonly(),
     z
@@ -126,16 +126,47 @@ export const sessionRecordingTurnAttemptSchema = z.discriminatedUnion("kind", [
     z.object({ ...attemptTiming, ...promptSucceededOutcome, kind: z.literal("succeeded") }).readonly(),
     z.object({ ...attemptTiming, ...promptCancelledOutcome, kind: z.literal("cancelled") }).readonly(),
     z.object({ ...attemptTiming, ...promptFailedOutcome, kind: z.literal("failed") }).readonly(),
-    // A Session generation change restarted the local Agent process before this attempt ended.
+    // Recording can observe an interruption or a lack of progress without claiming execution failed.
     z
         .object({
             ...attemptTiming,
             detectedAt: isoTimestamp,
             kind: z.literal("indeterminate"),
-            reason: z.literal("session_generation_changed"),
+            reason: z.enum(["session_generation_changed", "execution_inactive"]),
         })
         .readonly(),
 ]);
+
+// Released readers accept only the generation-change reason. The wire preserves the recorded
+// running fact and adds Recording's observation; current readers expose its effective state.
+export const sessionRecordingTurnAttemptSchema = z.preprocess((value) => {
+    if (
+        typeof value !== "object" ||
+        value === null ||
+        Reflect.get(value, "kind") !== "running" ||
+        !Reflect.has(value, "inactivity")
+    ) {
+        return value;
+    }
+    const observation: unknown = Reflect.get(value, "inactivity");
+    return {
+        ...value,
+        detectedAt:
+            typeof observation === "object" && observation !== null
+                ? Reflect.get(observation, "detectedAt")
+                : undefined,
+        kind: "indeterminate",
+        reason: "execution_inactive",
+    };
+}, recordedAttemptSchema);
+
+function wireAttempt(attempt: SessionRecordingTurnAttempt): unknown {
+    if (attempt.kind !== "indeterminate" || attempt.reason !== "execution_inactive") {
+        return attempt;
+    }
+    const { detectedAt, kind: _kind, reason: _reason, ...timing } = attempt;
+    return { ...timing, kind: "running", inactivity: { detectedAt } };
+}
 
 const turnItemBase = {
     // Opaque and stable for the life of the item; derived from the event, message, or tool call it merges.
@@ -307,8 +338,13 @@ export type SessionRecordingExecution = z.infer<typeof sessionRecordingExecution
 export const decodeSessionRecordingExecution = (encoded: string): SessionRecordingExecution =>
     decodeSanitized(encoded, sanitizeExecution, sessionRecordingExecutionSchema);
 
-export const encodeSessionRecordingExecution = (value: SessionRecordingExecution): string =>
-    JSON.stringify(sessionRecordingExecutionSchema.parse(value));
+export const encodeSessionRecordingExecution = (value: SessionRecordingExecution): string => {
+    const parsed = sessionRecordingExecutionSchema.parse(value);
+    return JSON.stringify({
+        ...parsed,
+        commands: parsed.commands.map((command) => ({ ...command, attempt: wireAttempt(command.attempt) })),
+    });
+};
 
 const sessionRecordingTurnPageSchema = z
     .object({
@@ -469,8 +505,13 @@ function sanitizeExecution(value: unknown): unknown {
 export const decodeSessionRecordingTurnPage = (encoded: string): SessionRecordingTurnPage =>
     decodeSanitized(encoded, sanitizeTurnPage, sessionRecordingTurnPageSchema);
 
-export const encodeSessionRecordingTurnPage = (value: SessionRecordingTurnPage): string =>
-    JSON.stringify(sessionRecordingTurnPageSchema.parse(value));
+export const encodeSessionRecordingTurnPage = (value: SessionRecordingTurnPage): string => {
+    const parsed = sessionRecordingTurnPageSchema.parse(value);
+    return JSON.stringify({
+        ...parsed,
+        turns: parsed.turns.map((turn) => ({ ...turn, attempt: wireAttempt(turn.attempt) })),
+    });
+};
 
 export const decodeSessionRecordingTurnItemPage = (encoded: string): SessionRecordingTurnItemPage =>
     decodeSanitized(
