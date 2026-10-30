@@ -25,7 +25,8 @@ import { type Context, Hono } from "hono";
 import { decodeKnownDirectoryUpdate } from "./entity/recording-directory-update.ts";
 import { RecordingSqlMetrics } from "./infra/recording-sql-metrics.ts";
 import { RecordingDirectory } from "./service/recording-directory.ts";
-import { projectDirectoryUpdate } from "./service/recording-directory-update.ts";
+import { RecordingDirectoryOutbox } from "./service/recording-directory-outbox.ts";
+import { projectDirectoryChange } from "./service/recording-directory-update.ts";
 import { RecordingEventWaiters } from "./service/recording-event-waiters.ts";
 import { SessionTurnHistory, type TurnHistoryRead } from "./service/session-turn-history.ts";
 import { RecordingDirectoryStorage } from "./storage/recording-directory-storage.ts";
@@ -53,8 +54,8 @@ type TurnHistoryRoutes = Pick<
 const jsonHeaders = { "content-type": "application/json" } as const;
 // An opaque append-order cursor: the batch ordinal and the event position inside that batch.
 const recordingCursorPattern = /^v2:[1-9][0-9]*:(?:0|[1-9][0-9]*)$/;
-// Activity indexed after a batch is answered is abandoned after this long; later activity moves the same time.
-const directoryIndexTimeoutMilliseconds = 10_000;
+// A Session retries indexing changes the directory did not confirm after this long.
+const directoryRetryMilliseconds = 30_000;
 
 function errorResponse(code: string, status: number): Response {
     return Response.json({ error: { code, message: "The Recording request could not be completed" } }, { status });
@@ -75,15 +76,6 @@ function internalErrorResponse(cause: unknown, request: Request): Response {
     const url = new URL(request.url);
     console.error(`Recording ${request.method} ${url.pathname}${url.search} failed`, cause);
     return errorResponse("internal_error", 500);
-}
-
-/** The invocation's execution context; a direct caller, such as a test, may not provide one. */
-function optionalExecutionContext(context: Pick<Context, "executionCtx">): Context["executionCtx"] | undefined {
-    try {
-        return context.executionCtx;
-    } catch {
-        return undefined;
-    }
 }
 
 function decodedIdentifier(value: string | undefined): string | null {
@@ -110,6 +102,7 @@ function sessionRecordingRoutes(
     storage: SessionRecordingRoutes,
     history: TurnHistoryRoutes,
     scheduleBackfill: (at?: Date) => Promise<void>,
+    indexDirectory: () => Promise<void>,
     metrics: RecordingSqlMetrics,
     waiters: RecordingEventWaiters,
 ): Hono<RecordingEnvironment> {
@@ -127,7 +120,8 @@ function sessionRecordingRoutes(
             let appended: AppendOutcome;
             try {
                 // Folding never throws out of `project`, so an error here is the envelope itself.
-                appended = storage.append(write, (ordinal, events, receivedAt) => {
+                // The directory changes commit with the batch, so the index can always catch up with the history.
+                appended = storage.append(write, projectDirectoryChange(write), (ordinal, events, receivedAt) => {
                     // Every stored batch is folded in order; one left for backfill leaves the rest to it too.
                     const folded = history.project(ordinal, events, receivedAt);
                     projected = projected && folded;
@@ -156,6 +150,7 @@ function sessionRecordingRoutes(
                     await scheduleBackfill(new Date(deadline));
                 }
             }
+            await indexDirectory();
             const after = metrics.snapshot();
             console.info(
                 JSON.stringify({
@@ -586,7 +581,6 @@ async function recordSessionBatch(
     environment: RecordingWorkerBindings,
     write: SessionRecordingWireWrite,
     signal: AbortSignal,
-    background: ((task: Promise<void>) => void) | undefined,
 ): Promise<readonly BatchResult[]> {
     const startedAt = Date.now();
     const monotonicStartedAt = performance.now();
@@ -601,70 +595,7 @@ async function recordSessionBatch(
     const results = new Map<string, BatchResult>();
     let next = 0;
     let sessionRequests = 0;
-    let directoryRequests = 0;
-    let directoryBodyBytes = 0;
-    let pending: typeof entries = [];
-    let indexed = Promise.resolve();
-    let deferred = Promise.resolve();
-    const deferredSignal = background === undefined ? signal : AbortSignal.timeout(directoryIndexTimeoutMilliseconds);
-    // The directory is an index derived from Session histories, so its outcome never changes a Session's result.
-    const index = async (body: string, requestSignal: AbortSignal): Promise<void> => {
-        try {
-            const response = await durableObjectFetch(
-                environment.RECORDING_DIRECTORY,
-                JSON.stringify([write.projectId, write.runtimeId]),
-                new Request("https://directory.internal/updates", { method: "POST", body, signal: requestSignal }),
-            );
-            await response.body?.cancel();
-            if (!response.ok) {
-                console.warn("Recording directory update failed", {
-                    code: "recording_directory_update_failed",
-                    status: response.status,
-                });
-            }
-        } catch (cause) {
-            requestSignal.throwIfAborted();
-            console.warn("Recording directory update failed", { code: "recording_directory_update_failed", cause });
-        }
-    };
-    const flush = (): Promise<void> => {
-        const batch = pending;
-        pending = [];
-        if (batch.length === 0) {
-            return indexed;
-        }
-        const eventCounts = new Map(batch.map(([sessionId, events]) => [sessionId, events.length]));
-        const { updates } = projectDirectoryUpdate({
-            ...write,
-            envelope: { kind: "session.event.v2", events: batch.flatMap(([, events]) => events) },
-        });
-        const body = (selected: typeof updates): string | null => {
-            if (selected.length === 0) {
-                return null;
-            }
-            const events = selected.reduce((count, { sessionId }) => count + (eventCounts.get(sessionId) ?? 0), 0);
-            const encoded = JSON.stringify({
-                projectId: write.projectId,
-                runtimeId: write.runtimeId,
-                events,
-                updates: selected,
-            });
-            directoryBodyBytes += new TextEncoder().encode(encoded).byteLength;
-            directoryRequests += 1;
-            return encoded;
-        };
-        // A new Session or title is indexed before the batch is answered, so a Session's next batch can never
-        // overtake it. Activity only moves an update time forward, so it is indexed after the answer.
-        const ordered = body(updates.filter(({ operations }) => operations.some(({ kind }) => kind !== "activity")));
-        const activity = body(updates.filter(({ operations }) => operations.every(({ kind }) => kind === "activity")));
-        if (ordered !== null) {
-            indexed = indexed.then(() => index(ordered, signal));
-        }
-        if (activity !== null) {
-            deferred = deferred.then(() => index(activity, deferredSignal));
-        }
-        return indexed;
-    };
+    // Each Session indexes its own directory changes, committed with its history.
     await Promise.all(
         Array.from({ length: Math.min(4, entries.length) }, async () => {
             for (;;) {
@@ -697,29 +628,9 @@ async function recordSessionBatch(
                     sessionId,
                     succeeded ? { sessionId, kind: "recorded" } : { sessionId, kind: "failed", code: "write_failed" },
                 );
-                if (succeeded) {
-                    pending.push(item);
-                }
-                // Bound indexing delay by a cohort, and flush the tail without waiting for other in-flight Sessions.
-                if (pending.length >= 32 || next >= entries.length) {
-                    await flush();
-                }
             }
         }),
     );
-    await flush();
-    if (background === undefined) {
-        await deferred;
-    } else {
-        background(
-            deferred.catch((cause: unknown) => {
-                console.warn("Recording directory activity was not indexed", {
-                    code: "recording_directory_update_failed",
-                    cause,
-                });
-            }),
-        );
-    }
     console.info(
         JSON.stringify({
             event: "recording_ingest",
@@ -733,8 +644,6 @@ async function recordSessionBatch(
             durationMs: performance.now() - monotonicStartedAt,
             events: write.envelope.events.length,
             sessionRequests,
-            directoryRequests,
-            directoryBodyBytes,
         }),
     );
     return entries.map(([sessionId]) => results.get(sessionId) ?? { sessionId, kind: "failed", code: "write_failed" });
@@ -755,12 +664,7 @@ export function createRecordingWorker(): RecordingWorker {
             if (new Set(write.envelope.events.map((event) => event.sessionId)).size > 256) {
                 return errorResponse("invalid_envelope", 400);
             }
-            const execution = optionalExecutionContext(context);
-            const background = execution === undefined ? undefined : (task: Promise<void>) => execution.waitUntil(task);
-            return context.json(
-                { results: await recordSessionBatch(context.env, write, context.req.raw.signal, background) },
-                201,
-            );
+            return context.json({ results: await recordSessionBatch(context.env, write, context.req.raw.signal) }, 201);
         })
         .get("/v2/projects/:projectId/runtimes/:runtimeId/sessions", (context) =>
             recordingSummaryResponse(context, "directory"),
@@ -851,48 +755,95 @@ export function createRecordingWorker(): RecordingWorker {
 
 export class SessionRecordingDurableObject extends DurableObject<RecordingWorkerBindings> {
     readonly #history: SessionTurnHistory;
+    readonly #directory: RecordingDirectoryOutbox;
     readonly #routes: Hono<RecordingEnvironment>;
     readonly #waiters = new RecordingEventWaiters();
-    constructor(state: DurableObjectState, _environment: RecordingWorkerBindings) {
-        super(state, _environment);
+    constructor(state: DurableObjectState, environment: RecordingWorkerBindings) {
+        super(state, environment);
         const metrics = new RecordingSqlMetrics();
         const recording = new SessionRecordingStorage(state.storage, metrics);
         const historyStorage = new SessionTurnHistoryStorage(state.storage, metrics);
         this.#history = new SessionTurnHistory(recording, historyStorage);
-        this.#routes = sessionRecordingRoutes(recording, this.#history, this.#scheduleBackfill, metrics, this.#waiters);
+        this.#directory = new RecordingDirectoryOutbox(recording, async (update) => {
+            try {
+                const response = await durableObjectFetch(
+                    environment.RECORDING_DIRECTORY,
+                    JSON.stringify([update.projectId, update.runtimeId]),
+                    new Request("https://directory.internal/updates", {
+                        method: "POST",
+                        body: JSON.stringify(update),
+                        signal: AbortSignal.timeout(10_000),
+                    }),
+                );
+                await response.body?.cancel();
+                if (!response.ok) {
+                    console.warn("Recording directory update failed", {
+                        code: "recording_directory_update_failed",
+                        status: response.status,
+                    });
+                }
+                return response.ok;
+            } catch (cause) {
+                console.warn("Recording directory update failed", { code: "recording_directory_update_failed", cause });
+                return false;
+            }
+        });
+        this.#routes = sessionRecordingRoutes(
+            recording,
+            this.#history,
+            this.#scheduleBackfill,
+            this.#indexDirectory,
+            metrics,
+            this.#waiters,
+        );
     }
     override async fetch(request: Request): Promise<Response> {
         return await this.#routes.fetch(request);
     }
-    /** Folds one bounded step of unprojected Recording batches and keeps stepping until caught up. */
+    /**
+     * Folds one bounded step of unprojected Recording batches, assesses inactive executions once caught up, and
+     * indexes unconfirmed directory changes, then re-arms for whichever is left.
+     */
     override async alarm(): Promise<void> {
         const now = new Date();
         const outcome = this.#history.backfill(now);
+        const indexed = await this.#directory.deliver();
+        let historyAt: number | null;
         switch (outcome.kind) {
             case "caught_up": {
                 if (this.#history.assessInactivity(now)) {
                     this.#waiters.changed();
                 }
                 const deadline = this.#history.nextInactivityDeadline();
-                if (deadline !== null) {
-                    await this.ctx.storage.setAlarm(Math.max(Date.now(), deadline));
-                }
-                return;
+                historyAt = deadline === null ? null : Math.max(Date.now(), deadline);
+                break;
             }
             case "behind":
-                await this.ctx.storage.setAlarm(Date.now());
-                return;
+                historyAt = Date.now();
+                break;
             case "failed":
-                await this.ctx.storage.setAlarm(outcome.retryAt.getTime());
-                return;
+                historyAt = outcome.retryAt.getTime();
+                break;
+        }
+        const next = [historyAt, indexed ? null : Date.now() + directoryRetryMilliseconds].filter((at) => at !== null);
+        if (next.length > 0) {
+            await this.ctx.storage.setAlarm(Math.min(...next));
         }
     }
-    /** Arms a backfill step at `at` (now by default) unless one is already scheduled. */
+    /** Arms a backfill step at `at` (now by default) unless an earlier alarm is already scheduled. */
     readonly #scheduleBackfill = async (at?: Date): Promise<void> => {
-        const due = Math.max(Date.now(), at?.getTime() ?? 0);
-        const current = await this.ctx.storage.getAlarm();
-        if (current === null || due < current) {
-            await this.ctx.storage.setAlarm(due);
+        await this.#scheduleAt(Math.max(Date.now(), at?.getTime() ?? 0));
+    };
+    /** Indexes committed directory changes now, and retries later whatever the directory did not confirm. */
+    readonly #indexDirectory = async (): Promise<void> => {
+        if (!(await this.#directory.deliver())) {
+            await this.#scheduleAt(Date.now() + directoryRetryMilliseconds);
+        }
+    };
+    readonly #scheduleAt = async (at: number): Promise<void> => {
+        const scheduled = await this.ctx.storage.getAlarm();
+        if (scheduled === null || scheduled > at) {
+            await this.ctx.storage.setAlarm(at);
         }
     };
 }

@@ -1,4 +1,9 @@
-import { createExecutionContext, runInDurableObject, waitOnExecutionContext } from "cloudflare:test";
+import {
+    createExecutionContext,
+    runDurableObjectAlarm,
+    runInDurableObject,
+    waitOnExecutionContext,
+} from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
     decodeSessionRecordingDirectoryV2,
@@ -154,6 +159,38 @@ describe("Recording multi-Session batches", () => {
             env,
         );
         expect(await history.json()).toMatchObject({ events });
+    });
+
+    it("Given a directory that failed to index a Session's first prompt, When the directory recovers, Then the Session indexes it without another prompt", async () => {
+        const projectId = "recovering-project";
+        const runtimeId = "recovering-runtime";
+        const sessionId = "recovering-session";
+        const summaries = (statement: string) =>
+            runInDurableObject(
+                env.RECORDING_DIRECTORY.getByName(JSON.stringify([projectId, runtimeId])),
+                (_instance, state) => {
+                    state.storage.sql.exec(statement, runtimeId);
+                },
+            );
+        // An unreadable summary makes the directory fail this Session's update through its real storage boundary.
+        await summaries(
+            "INSERT INTO recording_session_summaries (session_id, runtime_id, agent_id, directory_id, additional_directory_ids_json, title, prompted, updated_at) VALUES ('recovering-session', ?, 'pressure', 'default', 'not-json', 'Unreadable', 1, 0)",
+        );
+        expect(await (await write(projectId, runtimeId, [requested(sessionId)])).json()).toEqual({
+            results: [{ sessionId, kind: "recorded" }],
+        });
+        await summaries("DELETE FROM recording_session_summaries WHERE runtime_id = ?");
+        expect(await directory(projectId, runtimeId)).toEqual({ sessions: [] });
+
+        expect(
+            await runDurableObjectAlarm(env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]))),
+        ).toBe(true);
+
+        expect(await directory(projectId, runtimeId)).toEqual({
+            sessions: [
+                { ...context, sessionId, runtimeId, title: "Batch title", updatedAt: "2026-10-21T00:00:00.000Z" },
+            ],
+        });
     });
 
     it("Given a recorded Session, When later output is recorded with an execution context, Then its activity is indexed once that context settles", async () => {
