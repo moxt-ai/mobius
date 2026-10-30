@@ -1,6 +1,13 @@
 import { abortAllDurableObjects, evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { DurableObjectSqlDatabase, RuntimeRelay, type SessionRecording } from "@moxt-ai/mobius-relay-core";
+import {
+    CloudflareChannelRuntime,
+    DurableObjectSqlDatabase,
+    ProjectScope,
+    RuntimeAccessContext,
+    RuntimeRelay,
+    type SessionRecording,
+} from "@moxt-ai/mobius-relay-core";
 import {
     decodeContentChunkFrame,
     decodeDaemonToServiceMessage,
@@ -2520,6 +2527,35 @@ it("Given a connected Runtime, When its App is deleted, Then its next message cl
     await reconnected.body?.cancel();
 });
 
+it("Given a daemon connection admitted before its App was deleted, When it reaches the Runtime Relay, Then the Relay refuses the revoked Runtime", async () => {
+    const runtime = await connectRuntimeDaemon("admitted-before-deletion");
+    // Channel authorization admitted this connection while the App still existed; nothing notifies the Relay.
+    const admitted = new RuntimeAccessContext(
+        new ProjectScope(runtime.projectId),
+        runtime.runtimeId,
+        `chn_${runtime.runtimeId}`,
+        `daemon:chn_${runtime.runtimeId}`,
+    );
+    try {
+        expect((await runtime.deleteApp()).status).toBe(200);
+        const response = await new CloudflareChannelRuntime({
+            gateways: { runtimeRelay: env.RUNTIME_RELAY },
+        }).acceptDaemon(
+            admitted,
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect`, {
+                headers: { Upgrade: "websocket" },
+            }),
+            new AbortController().signal,
+        );
+        expect(await response.json()).toEqual({
+            error: { code: "runtime_revoked", message: "The Runtime has been revoked" },
+        });
+        expect(response.status).toBe(401);
+    } finally {
+        runtime.daemon.close(1000, "Test complete");
+    }
+});
+
 it.each(["text", "binary"])(
     "Given a connected Runtime, When revocation commits but disconnect delivery fails and a %s message arrives, Then later events reach neither viewers nor Recording and the daemon is closed",
     async (format) => {
@@ -2579,30 +2615,30 @@ it.each(["text", "binary"])(
             expect(await deliver(liveEvent(runtime.sessionId, "before revocation"))).toHaveLength(1);
             expect(await messages.next()).toContain("before revocation");
             await runInDurableObject(env.RUNTIME_RELAY.getByName(runtime.runtimeId), (_instance, state) => {
-                state.storage.sql.exec(`CREATE TRIGGER reject_runtime_disconnect BEFORE INSERT ON runtime_revocations
+                state.storage.sql.exec(`CREATE TRIGGER reject_runtime_disconnect BEFORE UPDATE ON runtime_connection_state
                 BEGIN SELECT RAISE(ABORT, 'Controlled disconnect failure'); END`);
             });
             try {
                 expect(await responseJson(await runtime.revoke(), 503)).toMatchObject({
                     error: { code: "runtime_disconnect_failed" },
                 });
-                expect((await runtime.reconnect()).status).toBe(401);
-                expect(
-                    await deliver(
-                        format === "text"
-                            ? liveEvent(runtime.sessionId, "after revocation")
-                            : encodeContentChunkFrame({
-                                  bytes: new Uint8Array([1, 2]),
-                                  requestId: "revoked-file",
-                                  sequence: 0,
-                              }),
-                    ),
-                ).toEqual([]);
             } finally {
                 await runInDurableObject(env.RUNTIME_RELAY.getByName(runtime.runtimeId), (_instance, state) => {
                     state.storage.sql.exec("DROP TRIGGER reject_runtime_disconnect");
                 });
             }
+            expect((await runtime.reconnect()).status).toBe(401);
+            expect(
+                await deliver(
+                    format === "text"
+                        ? liveEvent(runtime.sessionId, "after revocation")
+                        : encodeContentChunkFrame({
+                              bytes: new Uint8Array([1, 2]),
+                              requestId: "revoked-file",
+                              sequence: 0,
+                          }),
+                ),
+            ).toEqual([]);
             expect(await runtime.daemonClosed).toMatchObject({ code: 1008, reason: "Runtime revoked" });
             expect(received).toHaveLength(1);
             expect((await runtime.revoke()).status).toBe(204);

@@ -123,6 +123,8 @@ export class RuntimeService {
     }
 
     readonly acceptDaemon = async (runtimeId: string, scope: ProjectScope, signal: AbortSignal) => {
+        // Registered before the authoritative read in acceptDaemonSocket: a revocation committed after that
+        // read is notified after it, and the notification aborts this acceptance.
         const accepting = { runtimeId, scope, controller: new AbortController() };
         this.#accepting.add(accepting);
         const operation = this.#acceptTail.then(async (): Promise<RuntimeAcceptance> => {
@@ -134,7 +136,7 @@ export class RuntimeService {
                 );
             } catch (error) {
                 signal.throwIfAborted();
-                if (this.isRevoked(runtimeId, scope)) {
+                if (accepting.controller.signal.aborted) {
                     return { kind: "revoked" };
                 }
                 throw error;
@@ -151,8 +153,9 @@ export class RuntimeService {
         }
     };
 
-    readonly isRevoked = (runtimeId: string, scope: ProjectScope): boolean =>
-        this.#cx.services.connections.isRevoked(runtimeId, scope);
+    /** Whether the Project is served and the Project's Runtime authority has not revoked this Runtime. */
+    readonly isRuntimeActive = (runtimeId: string, scope: ProjectScope, signal: AbortSignal): Promise<boolean> =>
+        this.#cx.services.credentials.isRuntimeActive({ projectId: scope.projectId, runtimeId }, signal);
 
     private readonly acceptDaemonSocket = async (
         runtimeId: string,
@@ -160,12 +163,15 @@ export class RuntimeService {
         signal: AbortSignal,
     ): Promise<RuntimeAcceptance> => {
         signal.throwIfAborted();
-        if (this.isRevoked(runtimeId, scope)) {
+        if (!(await this.isRuntimeActive(runtimeId, scope, signal))) {
             return { kind: "revoked" };
         }
-        const current = this.#cx.services.connections.current();
-        if (current !== null && current.runtimeId !== runtimeId) {
-            return { kind: "conflict" };
+        // No await may separate this fence check from accept + connect: a revocation notification either
+        // aborted this signal already or finds the accepted socket and closes it.
+        signal.throwIfAborted();
+        const prepared = this.#cx.services.connections.prepare(runtimeId);
+        if (prepared.kind === "conflict") {
+            return prepared;
         }
         const previous = this.#cx.gateways.peers
             .sockets()
@@ -177,12 +183,6 @@ export class RuntimeService {
         }
         for (const { socket } of previous) {
             socket.replaceDaemon();
-        }
-        signal.throwIfAborted();
-        // No await may separate this durable revocation check from accept + connect.
-        const prepared = this.#cx.services.connections.prepare(runtimeId, scope);
-        if (prepared.kind !== "ready") {
-            return prepared;
         }
         const identity: DaemonSocketIdentity = {
             ...prepared.identity,
@@ -217,10 +217,6 @@ export class RuntimeService {
                 await this.attachDaemon(identity.runtimeId, scope, replaced, signal);
                 signal.throwIfAborted();
                 if (!this.#cx.services.connections.isCurrent(identity)) {
-                    return;
-                }
-                if (this.isRevoked(identity.runtimeId, scope)) {
-                    socket.close(1008, "Runtime revoked");
                     return;
                 }
                 const ready: RuntimeLivenessReadyEvent = { kind: RUNTIME_LIVENESS_READY_KIND };
@@ -284,7 +280,14 @@ export class RuntimeService {
         signal: AbortSignal,
     ): Promise<void> => {
         signal.throwIfAborted();
-        this.#cx.services.connections.revoke(runtimeId, scope, Date.now());
+        // The Project's Runtime authority committed the revocation before notifying; acceptance and every
+        // daemon message read that authority, so this notification only cleans up promptly. Its one fallible
+        // step runs first, so a failed notification leaves this Relay unchanged for the caller to retry.
+        const current = this.#cx.services.connections.current();
+        const connected = current !== null && current.runtimeId === runtimeId;
+        if (connected) {
+            this.#cx.services.connections.disconnected(current, Date.now());
+        }
         for (const accepting of this.#accepting) {
             if (accepting.runtimeId === runtimeId && accepting.scope.projectId === scope.projectId) {
                 accepting.controller.abort(new DOMException("Runtime revoked", "AbortError"));
@@ -305,9 +308,7 @@ export class RuntimeService {
                 socket.close(1008, "Runtime revoked");
             }
         }
-        const current = this.#cx.services.connections.current();
-        if (current !== null && current.runtimeId === runtimeId) {
-            this.#cx.services.connections.disconnected(current, Date.now());
+        if (connected) {
             this.notifyOffline(runtimeId);
         }
     };

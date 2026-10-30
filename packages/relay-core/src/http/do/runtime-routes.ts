@@ -39,13 +39,15 @@ export function createRuntimeRoutes(runtime: RuntimeService) {
                 { error: { code: "runtime_revoked", message: "The Runtime has been revoked" } },
                 { status: 401 },
             );
-        if (runtime.isRevoked(runtimeId, scope)) {
+        const daemon = url.pathname.endsWith("/daemon");
+        // A daemon reads the same authority inside its acceptance, where a revocation notification can abort it.
+        if (!daemon && !(await runtime.isRuntimeActive(runtimeId, scope, request.signal))) {
             return revoked();
         }
         if (request.headers.get("Upgrade") !== "websocket") {
             return new Response("WebSocket upgrade required", { status: 426 });
         }
-        if (url.pathname.endsWith("/daemon")) {
+        if (daemon) {
             const result = await runtime.acceptDaemon(runtimeId, scope, request.signal);
             switch (result.kind) {
                 case "accepted":
