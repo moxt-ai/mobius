@@ -124,28 +124,7 @@ export class ExecutionReceipts {
         }
         cancellations.retain(retained);
     }
-    readonly #save = (
-        commandId: string,
-        receipt: ExecutionReceipt,
-        durableOutcome: string | null = executionOutcome(receipt.state),
-    ): void => {
-        const { state, ...identity } = receipt;
-        if (!this.#closing && cancelledBeforeStart(state)) {
-            // Commit the non-replayable fact first. A crash before saving/pruning the receipt must not reopen work.
-            this.#cancellations.retain([{ commandId, sessionId: receipt.sessionId }]);
-        }
-        const evicted = this.#closing
-            ? []
-            : this.#table.save(
-                  {
-                      ...identity,
-                      commandId,
-                      started: executionStarted(state),
-                      outcome: durableOutcome,
-                      updatedAt: new Date().toISOString(),
-                  },
-                  MAX_TERMINAL_RECEIPTS,
-              );
+    readonly #remember = (commandId: string, receipt: ExecutionReceipt, evicted: readonly string[]): void => {
         // Live failure detail may quote user input; only the durable receipt goes to the table.
         this.#executions.set(commandId, receipt);
         for (const evictedCommandId of evicted) {
@@ -159,6 +138,32 @@ export class ExecutionReceipts {
             }
         }
         this.#onCount(activeCount);
+    };
+    readonly #save = (
+        commandId: string,
+        receipt: ExecutionReceipt,
+        durableOutcome: string | null = executionOutcome(receipt.state),
+    ): void => {
+        const { state, ...identity } = receipt;
+        if (!this.#closing && cancelledBeforeStart(state)) {
+            // Commit the non-replayable fact first. A crash before saving/pruning the receipt must not reopen work.
+            this.#cancellations.retain([{ commandId, sessionId: receipt.sessionId }]);
+            // Cancellation is already authoritative even if the detailed receipt write fails.
+            this.#remember(commandId, receipt, []);
+        }
+        const evicted = this.#closing
+            ? []
+            : this.#table.save(
+                  {
+                      ...identity,
+                      commandId,
+                      started: executionStarted(state),
+                      outcome: durableOutcome,
+                      updatedAt: new Date().toISOString(),
+                  },
+                  MAX_TERMINAL_RECEIPTS,
+              );
+        this.#remember(commandId, receipt, evicted);
     };
     readonly #nextAdmissionOrder = (): number => {
         let latest = 0;
@@ -352,35 +357,48 @@ export class ExecutionReceipts {
         const recovered: { sessionId: string; event: SessionEventPayload; recordedAt: string }[] = [];
         for (const [commandId, receipt] of [...this.#executions]) {
             const outcome = executionOutcome(receipt.state);
-            const event: SessionEventPayload | null =
-                outcome === null
-                    ? {
-                          type: "lifecycle-metadata",
-                          payload: executionStarted(receipt.state)
-                              ? {
-                                    kind: "prompt.failed",
-                                    commandId,
-                                    attemptId: receipt.attemptId,
-                                    code: "runtime_restarted",
-                                    message: "The local runtime restarted while this request was running",
-                                }
-                              : {
-                                    kind: "prompt.failed-before-start",
-                                    commandId,
-                                    code: "runtime_restarted",
-                                    message: "The local runtime restarted before this request started",
-                                },
-                      }
-                    : decodeKnownSessionEventPayload(JSON.parse(outcome));
+            const restoreCancellation =
+                !this.hasStarted(commandId, receipt.sessionId) &&
+                !cancelledBeforeStart(receipt.state) &&
+                this.#cancellations.read(commandId)?.sessionId === receipt.sessionId;
+            const event: SessionEventPayload | null = restoreCancellation
+                ? {
+                      type: "lifecycle-metadata",
+                      payload: {
+                          kind: "prompt.completed",
+                          commandId,
+                          stopReason: "cancelled",
+                          execution: "not-started",
+                      },
+                  }
+                : outcome === null
+                  ? {
+                        type: "lifecycle-metadata",
+                        payload: executionStarted(receipt.state)
+                            ? {
+                                  kind: "prompt.failed",
+                                  commandId,
+                                  attemptId: receipt.attemptId,
+                                  code: "runtime_restarted",
+                                  message: "The local runtime restarted while this request was running",
+                              }
+                            : {
+                                  kind: "prompt.failed-before-start",
+                                  commandId,
+                                  code: "runtime_restarted",
+                                  message: "The local runtime restarted before this request started",
+                              },
+                    }
+                  : decodeKnownSessionEventPayload(JSON.parse(outcome));
             if (event === null) {
                 continue;
             }
             const recordedAt =
-                outcome === null
+                restoreCancellation || outcome === null
                     ? new Date().toISOString()
                     : z.object({ recordedAt: z.string() }).parse(JSON.parse(outcome)).recordedAt;
             recovered.push({ sessionId: receipt.sessionId, event, recordedAt });
-            if (outcome === null) {
+            if (restoreCancellation || outcome === null) {
                 this.#save(commandId, {
                     ...receipt,
                     state: settledExecution(receipt.state, JSON.stringify({ ...event, recordedAt })),

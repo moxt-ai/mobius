@@ -1,6 +1,7 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { copyFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { backup, DatabaseSync } from "node:sqlite";
 import {
     decodeMessageKind,
     decodeSessionEventEnvelope,
@@ -8,6 +9,7 @@ import {
     encodeSessionPromptCommand,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test, vi } from "vitest";
+import { channelSessionDatabasePaths } from "../../src/engine/storage/sqlite/local-databases.ts";
 import { ControlledAcpAgentSpecification } from "../support/agents/controlled-acp.ts";
 import { type RealDaemonPeer, withControlledDaemon } from "../support/agents/real-daemon.ts";
 import { writeControlledAcpExecutable } from "../support/controlled-acp-executable.ts";
@@ -192,3 +194,97 @@ for (const admission of ["before-admission", "queued"] as const) {
         }
     }, 90_000);
 }
+
+test("Given cancellation committed before its receipt, When the Runtime recovers, Then cancellation retries confirm not-started work and replay cannot execute it", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-30T08:00:00Z"));
+    const directory = await mkdtemp(join(tmpdir(), "mobius-cancellation-recovery-"));
+    try {
+        const executable = await writeControlledAcpExecutable(directory);
+        await withControlledDaemon(
+            new ControlledAcpAgentSpecification(),
+            { MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(directory, "agent"), PATH: executable },
+            async (peer) => {
+                const prompt = (commandId: string, content: string, targetCommandId = "") =>
+                    encodeSessionPromptCommand({
+                        additionalDirectoryIds: [],
+                        agentId: "controlled-acp",
+                        attachments: [],
+                        bindingId: peer.bindingId,
+                        commandId,
+                        directoryId: "default",
+                        disposition: targetCommandId === "" ? "reject" : "queue",
+                        kind: "session.prompt",
+                        prompt: content,
+                        sessionId: peer.sessionId,
+                        targetCommandId,
+                    });
+                const cancel = (commandId: string) =>
+                    peer.send(
+                        JSON.stringify({
+                            kind: "session.cancel-before-start",
+                            sessionId: peer.sessionId,
+                            commandId,
+                        }),
+                    );
+                peer.send(prompt("running", "hold after first delta"));
+                for (;;) {
+                    const raw = await peer.nextMessage();
+                    if (
+                        decodeMessageKind(raw) === "session.event.v2" &&
+                        decodeSessionEventEnvelope(raw).events.some(
+                            (event) => event.type === "acp" && event.payload.sessionUpdate === "agent_message_chunk",
+                        )
+                    ) {
+                        break;
+                    }
+                }
+                const queued = prompt("cancelled-pending", "Must not execute", "running");
+                peer.send(queued);
+                for (;;) {
+                    const raw = await peer.nextMessage();
+                    if (
+                        decodeMessageKind(raw) === "session.event.v2" &&
+                        decodeSessionEventEnvelope(raw).events.some(
+                            (event) =>
+                                event.type === "lifecycle-metadata" && event.payload.kind === "session.queue.changed",
+                        )
+                    ) {
+                        break;
+                    }
+                }
+                const sessions = channelSessionDatabasePaths(peer.stateDirectory, "real-agent").sessions;
+                const beforeCancellation = join(directory, "before-cancellation.sqlite");
+                const database = new DatabaseSync(sessions, { readOnly: true });
+                try {
+                    await backup(database, beforeCancellation);
+                } finally {
+                    database.close();
+                }
+                cancel("cancelled-pending");
+                expect(await observe(peer, ["cancelled-pending"])).toEqual({
+                    started: [],
+                    failures: [],
+                    cancelled: ["cancelled-pending"],
+                    output: "",
+                });
+                // Retain real committed cancellation data but restore the previous receipt file,
+                // reproducing interruption between the two commits without fabricating a row.
+                await peer.restart(undefined, () => copyFile(beforeCancellation, sessions));
+                const cancelled = { started: [], failures: [], cancelled: ["cancelled-pending"], output: "" };
+                expect(await observe(peer, ["cancelled-pending"])).toEqual(cancelled);
+                cancel("cancelled-pending");
+                expect(await observe(peer, ["cancelled-pending"])).toEqual(cancelled);
+                peer.send(queued);
+                expect(await observe(peer, ["cancelled-pending"])).toEqual(cancelled);
+                cancel("running");
+                expect((await observe(peer, ["running"])).failures).toEqual(["turn_already_started"]);
+                peer.send(prompt("new-intent", "A new intent still runs"));
+                expect((await observe(peer, ["new-intent"])).output).toContain("A new intent still runs");
+            },
+        );
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+        vi.useRealTimers();
+    }
+}, 90_000);
