@@ -153,7 +153,15 @@ for (const agentId of ["codex", "claude", "pi"] as const) {
                 expect(text).toContain(answer);
                 const page = await readPage(1);
                 expect(page).toHaveProperty("throughPosition");
-                expect(page.throughPosition).toBe(after.throughPosition);
+                if (page.throughPosition === undefined) {
+                    throw new Error("Missing paginated snapshot position");
+                }
+                // A null cursor starts a fresh snapshot; Agent metadata can arrive
+                // after prompt completion and advance its live-event boundary.
+                const pagePosition = BigInt(page.throughPosition);
+                expect(pagePosition).toBeGreaterThanOrEqual(afterPosition);
+                expect(observed.every((event) => BigInt(event.position) <= pagePosition)).toBe(true);
+                expect(page.sessionGenerationId).toBe(after.sessionGenerationId);
                 expect(page.events).toHaveLength(1);
                 expect(page.nextCursor).not.toBeNull();
             });
