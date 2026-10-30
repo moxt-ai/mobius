@@ -60,11 +60,7 @@ import {
 import { routeRuntimeSessionRequest } from "./gateway/runtime-session-routing.ts";
 import { createPlatformControlApplication } from "./http/platform-routes.ts";
 import { createProjectApplication } from "./http/project-routes.ts";
-import {
-    recordingReadRoutes,
-    recordingSessionStatusRoutes,
-    recordingSummaryV2Routes,
-} from "./http/recording-read-routes.ts";
+import { recordingReadRoutes, recordingSummaryV2Routes } from "./http/recording-read-routes.ts";
 import { ClerkOrganizationGateway } from "./infra/clerk-organization-gateway.ts";
 import type { OrganizationMembershipGateway } from "./infra/organization-membership-gateway.ts";
 import { PlatformProjectStorageDirectory } from "./infra/platform-project-storage-directory.ts";
@@ -956,7 +952,6 @@ export function createPlatformApplication(
     const projectRoutes = new Hono<DispatchEnvironment>()
         .route("/recording", recordingReadRoutes)
         .route("/sessions", sessionRoutes)
-        .route("/runtimes/:runtimeId", recordingSessionStatusRoutes)
         .all("/runtime-pairings/*", projectHandler)
         .all("/runtimes/*", projectHandler)
         .all("/*", projectHandler);

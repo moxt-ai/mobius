@@ -2,7 +2,6 @@ import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { DurableObjectSqlDatabase, RuntimeRelay } from "@moxt-ai/mobius-relay-core";
 import {
-    decodeSessionRecordingDirectory,
     decodeSessionRecordingDirectoryV2,
     decodeSessionRecordingHistory,
     decodeSessionRecordingSummaryV2,
@@ -260,7 +259,7 @@ describe.sequential("Mini-client Recording integration", () => {
             await recordThroughRelay(projectId, runtimeId, [
                 JSON.stringify({ kind: "session.event.v2", events: [event] }),
             ]);
-            for (const paging of ["", "&after=0&limit=100"]) {
+            for (const paging of ["", "&limit=100"]) {
                 const response = await worker.request(
                     `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/recording/sessions/${sessionId}/events?runtimeId=${runtimeId}${paging}`,
                     { headers: { authorization: `Bearer ${credential}` } },
@@ -310,17 +309,6 @@ describe.sequential("Mini-client Recording integration", () => {
                 },
                 { eventId: `${sessionId}-completed`, position: "2" },
             ],
-        });
-        const directory = await json(
-            await worker.request(
-                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/recording/sessions?runtimeId=${runtimeId}`,
-                { headers: { authorization: `Bearer ${credential}` } },
-                environment,
-            ),
-            200,
-        );
-        expect(decodeSessionRecordingDirectory(JSON.stringify(directory))).toMatchObject({
-            sessions: [{ sessionId, status: "idle", title: "Mini-client recording prompt" }],
         });
         const summaryPath = `${relayOrigin}${MOBIUS_API_PREFIX}/v2/projects/${projectId}/recording/sessions`;
         const metadata = await json(

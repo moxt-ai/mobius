@@ -35,22 +35,11 @@ interface ResolvedCursor {
     readonly batch: RecordedBatch | null;
     readonly generation: string;
     readonly index: number;
-    readonly legacy: boolean;
     readonly ordinal: number;
 }
 
-interface BatchSummary {
-    readonly firstPosition: number | null;
-    readonly lastPosition: number | null;
-    readonly ordinal: number;
-    readonly sessionGenerationId: string | null;
-}
-
-interface BatchBounds {
-    readonly firstPosition: number;
-    readonly generation: string;
-    readonly lastPosition: number;
-}
+/** The start of the Recording: before the first event of any batch, in no generation. */
+const recordingStart: ResolvedCursor = { batch: null, generation: "", index: -1, ordinal: 0 };
 
 /** Batches decoded per query while paging; small enough that one read stays far below Durable Object memory. */
 const batchReadChunk = 32;
@@ -233,37 +222,6 @@ export class SessionRecordingStorage {
         }
     }
 
-    /** Lists batch boundaries from indexed columns without decoding any envelope. */
-    readonly #summaries = (): readonly BatchSummary[] =>
-        this.#database
-            .select({
-                firstPosition: recordedSessionEvent.firstPosition,
-                lastPosition: recordedSessionEvent.lastPosition,
-                ordinal: recordedSessionEvent.ordinal,
-                sessionGenerationId: recordedSessionEvent.sessionGenerationId,
-            })
-            .from(recordedSessionEvent)
-            .orderBy(asc(recordedSessionEvent.ordinal))
-            .all();
-
-    /** Rows recorded before the boundary columns existed are decoded to recover the same values. */
-    readonly #bounds = (summary: BatchSummary): BatchBounds => {
-        if (summary.firstPosition !== null && summary.lastPosition !== null && summary.sessionGenerationId !== null) {
-            return {
-                firstPosition: summary.firstPosition,
-                generation: summary.sessionGenerationId,
-                lastPosition: summary.lastPosition,
-            };
-        }
-        const batch = this.#batchAt(summary.ordinal);
-        const firstPosition = Number(batch?.events[0]?.position ?? 0);
-        return {
-            firstPosition,
-            generation: batch?.generation ?? "",
-            lastPosition: Number(batch?.events.at(-1)?.position ?? firstPosition),
-        };
-    };
-
     readonly #tail = () =>
         this.#database
             .select({ lastPosition: recordedSessionEvent.lastPosition, ordinal: recordedSessionEvent.ordinal })
@@ -378,34 +336,6 @@ export class SessionRecordingStorage {
     /** Yields the batches appended after `ordinal`, in append order and bounded decoding chunks. */
     readonly batchesAfter = (ordinal: number): Generator<RecordedBatch> => this.#batchesFrom(ordinal + 1);
 
-    /** Reads the tail first so legacy status reads stop at the newest recorded lifecycle event. */
-    readonly batchesNewestFirst = (): Generator<RecordedBatch> => this.#batchesNewestFirst();
-
-    *#batchesNewestFirst(): Generator<RecordedBatch> {
-        let beforeOrdinal = this.latestOrdinal() + 1;
-        for (;;) {
-            const rows = this.#database
-                .select({
-                    envelopeJson: recordedSessionEvent.envelopeJson,
-                    ordinal: recordedSessionEvent.ordinal,
-                    sessionGenerationId: recordedSessionEvent.sessionGenerationId,
-                })
-                .from(recordedSessionEvent)
-                .where(lt(recordedSessionEvent.ordinal, beforeOrdinal))
-                .orderBy(desc(recordedSessionEvent.ordinal))
-                .limit(batchReadChunk)
-                .all();
-            for (const row of rows) {
-                yield this.#batch(row);
-            }
-            const last = rows.at(-1);
-            if (last === undefined || rows.length < batchReadChunk) {
-                return;
-            }
-            beforeOrdinal = last.ordinal;
-        }
-    }
-
     /** True when a batch was appended after `afterOrdinal` and before `beforeOrdinal`. */
     readonly hasBatchBetween = (afterOrdinal: number, beforeOrdinal: number): boolean =>
         this.#database
@@ -426,29 +356,23 @@ export class SessionRecordingStorage {
         }
         return { events: rows.flatMap((row) => this.#decode(row)), sessionId };
     };
-    /** Reads events after an opaque append-order cursor in a bounded page. */
+    /** Reads events after an opaque append-order cursor, or from the start when `after` is null, in a bounded page. */
     readonly readPage = (
         projectId: string,
         runtimeId: string,
         sessionId: string,
-        after: string,
+        after: string | null,
         limit: number,
     ): PageRead => {
         const metadata = this.#metadata(projectId, runtimeId, sessionId);
         if (metadata === undefined) {
             return { kind: "not_found" };
         }
-        const cursor = this.#resolveCursor(after);
-        if (cursor === null) {
+        const start = after === null ? recordingStart : this.#resolveCursor(after);
+        if (start === null) {
             return { kind: "cursor_expired" };
         }
         const tailCursor = this.#tailCursor();
-        // Position-only legacy cursors have no generation scope. Once a generation switch exists,
-        // replay the full durable history so clients replace reconstructed state instead of dropping it.
-        const replay = cursor.legacy && this.#hasGenerationReset();
-        const start: ResolvedCursor = replay
-            ? { batch: null, generation: "", index: -1, legacy: true, ordinal: 0 }
-            : cursor;
         let selected: SelectedEvent[] = [];
         let truncated = false;
         for (const batch of this.#batchesAfterCursor(start)) {
@@ -488,7 +412,7 @@ export class SessionRecordingStorage {
         // A caller replaces its state only when this page carries events of a generation other than the one
         // its cursor was in. The start of the Recording names no generation, so it never asks for one.
         const generationReset =
-            replay || (start.generation !== "" && selected.some(({ batch }) => batch.generation !== start.generation));
+            start.generation !== "" && selected.some(({ batch }) => batch.generation !== start.generation);
         return {
             kind: "page",
             page: {
@@ -513,95 +437,35 @@ export class SessionRecordingStorage {
 
     readonly #resolveCursor = (after: string): ResolvedCursor | null => {
         const [cursorKind, ordinalToken, positionToken] = after.split(":");
-        if (cursorKind === "v2" && ordinalToken !== undefined && positionToken !== undefined) {
-            const ordinal = Number(ordinalToken);
-            const bounds = this.#database
-                .select({
-                    lastPosition: recordedSessionEvent.lastPosition,
-                    sessionGenerationId: recordedSessionEvent.sessionGenerationId,
-                })
-                .from(recordedSessionEvent)
-                .where(eq(recordedSessionEvent.ordinal, ordinal))
-                .all()[0];
-            if (bounds === undefined) {
-                return null;
-            }
-            // A tail cursor, and most page cursors, name the last event of their batch: reading resumes at the
-            // next batch without decoding this one. Its last event is also the last copy of its position.
-            if (bounds.lastPosition === Number(positionToken) && bounds.sessionGenerationId !== null) {
-                const end = Number.POSITIVE_INFINITY;
-                return { batch: null, generation: bounds.sessionGenerationId, index: end, legacy: false, ordinal };
-            }
-            const batch = this.#batchAt(ordinal);
-            if (batch === undefined) {
-                return null;
-            }
-            // A batch recorded before positions were kept increasing per batch can repeat a frame. Its cursor
-            // names the last copy, so a caller never receives the repeat again; skipping a repeat loses nothing.
-            const index = batch.events.findLastIndex((event) => Number(event.position) === Number(positionToken));
-            return index === -1 ? null : { batch, generation: batch.generation, index, legacy: false, ordinal };
-        }
-        if (!/^(?:0|[1-9][0-9]*)$/.test(after)) {
+        if (cursorKind !== "v2" || ordinalToken === undefined || positionToken === undefined) {
             return null;
         }
-        return this.#resolveLegacyCursor(Number(after));
-    };
-
-    /**
-     * Finds the last event at or before a position in the first contiguous generation run. Batch
-     * boundaries come from indexed columns, so only the batch holding the cursor is decoded; the
-     * daemon assigns increasing positions inside one batch, so its bounds order its events.
-     */
-    readonly #resolveLegacyCursor = (position: number): ResolvedCursor => {
-        const initial: ResolvedCursor = { batch: null, generation: "", index: -1, legacy: true, ordinal: 0 };
-        let containing: { readonly generation: string; readonly ordinal: number } | null = null;
-        let generation: string | null = null;
-        let previousPosition = 0;
-        for (const summary of this.#summaries()) {
-            const bounds = this.#bounds(summary);
-            if (
-                (generation !== null && bounds.generation !== generation) ||
-                bounds.firstPosition < previousPosition ||
-                bounds.firstPosition > position
-            ) {
-                break;
-            }
-            generation = bounds.generation;
-            containing = { generation: bounds.generation, ordinal: summary.ordinal };
-            if (bounds.lastPosition > position) {
-                break;
-            }
-            previousPosition = bounds.lastPosition;
+        const ordinal = Number(ordinalToken);
+        const bounds = this.#database
+            .select({
+                lastPosition: recordedSessionEvent.lastPosition,
+                sessionGenerationId: recordedSessionEvent.sessionGenerationId,
+            })
+            .from(recordedSessionEvent)
+            .where(eq(recordedSessionEvent.ordinal, ordinal))
+            .all()[0];
+        if (bounds === undefined) {
+            return null;
         }
-        if (containing === null) {
-            return initial;
+        // A tail cursor, and most page cursors, name the last event of their batch: reading resumes at the
+        // next batch without decoding this one. Its last event is also the last copy of its position.
+        if (bounds.lastPosition === Number(positionToken) && bounds.sessionGenerationId !== null) {
+            const end = Number.POSITIVE_INFINITY;
+            return { batch: null, generation: bounds.sessionGenerationId, index: end, ordinal };
         }
-        const batch = this.#batchAt(containing.ordinal) ?? null;
-        let index = -1;
-        for (const [candidateIndex, event] of (batch?.events ?? []).entries()) {
-            if (Number(event.position) > position) {
-                break;
-            }
-            index = candidateIndex;
+        const batch = this.#batchAt(ordinal);
+        if (batch === undefined) {
+            return null;
         }
-        return { batch, generation: containing.generation, index, legacy: true, ordinal: containing.ordinal };
-    };
-
-    readonly #hasGenerationReset = (): boolean => {
-        let previousGeneration: string | null = null;
-        let previousPosition = 0;
-        for (const summary of this.#summaries()) {
-            const bounds = this.#bounds(summary);
-            if (
-                previousGeneration !== null &&
-                (bounds.generation !== previousGeneration || bounds.firstPosition < previousPosition)
-            ) {
-                return true;
-            }
-            previousGeneration = bounds.generation;
-            previousPosition = bounds.lastPosition;
-        }
-        return false;
+        // A batch recorded before positions were kept increasing per batch can repeat a frame. Its cursor
+        // names the last copy, so a caller never receives the repeat again; skipping a repeat loses nothing.
+        const index = batch.events.findLastIndex((event) => Number(event.position) === Number(positionToken));
+        return index === -1 ? null : { batch, generation: batch.generation, index, ordinal };
     };
     readonly #metadata = (projectId: string, runtimeId: string, sessionId: string) =>
         this.#database

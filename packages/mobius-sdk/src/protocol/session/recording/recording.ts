@@ -47,8 +47,6 @@ const sessionRecordingHistorySchema = z
 
 /** Legacy lifecycle observations from recorded events; never authoritative execution state. */
 export const sessionRecordingStatusSchema = z.enum(["running", "idle", "failed"]);
-export const decodeSessionRecordingStatus = (value: unknown): SessionRecordingStatus =>
-    sessionRecordingStatusSchema.parse(value);
 
 // Recording cursors are opaque append-order tokens. The ordinal locates a recorded batch and the
 // position locates an event inside that batch; event positions alone restart after a Session reload.
@@ -85,25 +83,10 @@ const sessionRecordingDirectoryV2Schema = z
     .object({ sessions: z.array(sessionRecordingSummaryV2Schema).max(100_000).readonly() })
     .readonly();
 
-// Preserve the V1 wire contract for existing SDKs while V2 carries metadata only.
-const sessionRecordingSummarySchema = z
-    .object({ ...sessionRecordingSummaryFields, status: sessionRecordingStatusSchema })
-    .readonly();
-
-const sessionRecordingDirectorySchema = z
-    .object({
-        sessions: z.array(sessionRecordingSummarySchema).max(100_000).readonly(),
-    })
-    .readonly();
-
 export type SessionRecordingWrite = z.infer<typeof sessionRecordingWriteSchema>;
 export type SessionRecordingHistory = z.infer<typeof sessionRecordingHistorySchema>;
 export type SessionRecordingHistoryPage = z.infer<typeof sessionRecordingHistoryPageSchema>;
-/** @deprecated Use SessionRecordingSummaryV2; query the daemon for current execution state. */
-export type SessionRecordingSummary = z.infer<typeof sessionRecordingSummarySchema>;
 export type SessionRecordingStatus = z.infer<typeof sessionRecordingStatusSchema>;
-/** @deprecated Use SessionRecordingDirectoryV2 with the V2 Recording summary endpoints. */
-export type SessionRecordingDirectory = z.infer<typeof sessionRecordingDirectorySchema>;
 export type SessionRecordingSummaryV2 = z.infer<typeof sessionRecordingSummaryV2Schema>;
 export type SessionRecordingDirectoryV2 = z.infer<typeof sessionRecordingDirectoryV2Schema>;
 
@@ -124,13 +107,6 @@ export const decodeSessionRecordingHistoryPage = (encoded: string): SessionRecor
 
 export const encodeSessionRecordingHistoryPage = (value: SessionRecordingHistoryPage): string =>
     encode(value, sessionRecordingHistoryPageSchema);
-
-/** @deprecated Use decodeSessionRecordingDirectoryV2 with the V2 Recording summary endpoints. */
-export const decodeSessionRecordingDirectory = (encoded: string): SessionRecordingDirectory =>
-    decode(encoded, sessionRecordingDirectorySchema);
-
-export const encodeSessionRecordingDirectory = (value: SessionRecordingDirectory): string =>
-    encode(value, sessionRecordingDirectorySchema);
 
 export const decodeSessionRecordingSummaryV2 = (encoded: string): SessionRecordingSummaryV2 =>
     decode(encoded, sessionRecordingSummaryV2Schema);

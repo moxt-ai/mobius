@@ -266,6 +266,7 @@ async function exercise(count) {
         );
         await api(`/dashboard/v1/apps/${app.appId}/recording-policy`, "PUT", { mode: "enabled" });
         const base = `/v1/projects/${project.projectId}`;
+        const summaries = `/v2/projects/${project.projectId}/recording/sessions?runtimeId=`;
         const pairing = await api(`${base}/runtime-pairings`, "POST", { idempotencyKey: "pressure" }, credential, 201);
         const claimed = await api(`/v1/runtime-pairings/${pairing.pairingId}/redeem`, "POST", {
             pairingCode: pairing.pairingCode,
@@ -503,7 +504,9 @@ async function exercise(count) {
             }
             return totals;
         };
-        const convergeDirectory = async (status, label, since, minimumTimes = new Map()) => {
+        // The directory has converged once it indexes each Session's latest recorded activity.
+        const latestActivity = () => new Map(sessions.map((id) => [id, Date.parse(live.get(id).at(-1).recordedAt)]));
+        const convergeDirectory = async (label, since, minimumTimes = latestActivity()) => {
             const visible = new Map();
             let reads = 0;
             do {
@@ -511,16 +514,10 @@ async function exercise(count) {
                 if (fatal !== undefined) {
                     throw fatal;
                 }
-                const directory = await api(
-                    `${base}/recording/sessions?runtimeId=${claimed.runtimeId}`,
-                    "GET",
-                    undefined,
-                    credential,
-                );
+                const directory = await api(`${summaries}${claimed.runtimeId}`, "GET", undefined, credential);
                 reads += 1;
                 for (const entry of directory.sessions) {
                     if (
-                        entry.status === status &&
                         Date.parse(entry.updatedAt) >= (minimumTimes.get(entry.sessionId) ?? 0) &&
                         !visible.has(entry.sessionId)
                     ) {
@@ -556,12 +553,7 @@ async function exercise(count) {
             "The daemon disconnected during simultaneous output",
         );
         result.outputPingMilliseconds = await ping("during-output");
-        await convergeDirectory(
-            "running",
-            "initialRunning",
-            started,
-            new Map(sessions.map((id) => [id, Date.parse(live.get(id).at(-1).recordedAt)])),
-        );
+        await convergeDirectory("initialRunning", started);
         stage(`sustained output for ${durationSeconds} seconds at 20 events per Session per second`);
         const beforeMetrics = ingestMetrics();
         const sustainedStarted = performance.now();
@@ -573,15 +565,9 @@ async function exercise(count) {
             wave("first", round, 2, 1024);
             if ((round - 2) % 10 === 0) {
                 const latest = new Map(sessions.map((id) => [id, Date.parse(live.get(id).at(-1).recordedAt)]));
-                const probe = api(
-                    `${base}/recording/sessions?runtimeId=${claimed.runtimeId}`,
-                    "GET",
-                    undefined,
-                    credential,
-                )
+                const probe = api(`${summaries}${claimed.runtimeId}`, "GET", undefined, credential)
                     .then((directory) => {
                         for (const entry of directory.sessions) {
-                            assert.equal(entry.status, "running", `Directory status during output: ${entry.sessionId}`);
                             activityLags.push(Math.max(0, latest.get(entry.sessionId) - Date.parse(entry.updatedAt)));
                             activityAges.push(Math.max(0, Date.now() - Date.parse(entry.updatedAt)));
                         }
@@ -668,14 +654,14 @@ async function exercise(count) {
         await check(() => sessions.every((id) => terminals.has(`first-${id}`)), "all stop requests settled");
         result.stopMaximumMilliseconds = Math.max(...sessions.map((id) => terminals.get(`first-${id}`).at - stopped));
         assert.equal(sessions.filter((id) => terminals.get(`first-${id}`).stopReason === "cancelled").length, count);
-        await convergeDirectory("idle", "stopped", stopped);
+        await convergeDirectory("stopped", stopped);
         const followUpStarted = performance.now();
         for (const id of sessions) {
             sendPrompt(id, "next");
         }
         stage("sending follow-up messages");
         await check(() => sessions.every((id) => streams.has(`next/${id}`)), "all follow-up prompts started");
-        await convergeDirectory("running", "followUpRunning", followUpStarted);
+        await convergeDirectory("followUpRunning", followUpStarted);
         wave("next", 0, 2, 1024);
         await check(() => sessions.every((id) => emitted.has(`next/${id}/0`)), "follow-up output emitted");
         const followUpFinishing = performance.now();
@@ -685,7 +671,7 @@ async function exercise(count) {
         await check(() => sessions.every((id) => terminals.has(`next-${id}`)), "all follow-up prompts completed");
         assert.equal(sessions.filter((id) => terminals.get(`next-${id}`).stopReason === "end_turn").length, count);
         result.followUpPingMilliseconds = await ping("after-follow-up");
-        await convergeDirectory("idle", "followUpCompleted", followUpFinishing);
+        await convergeDirectory("followUpCompleted", followUpFinishing);
         await check(
             () => sessions.every((id) => sessionViewers.get(id).events === live.get(id).length),
             "scoped viewers received exactly their Session events",
@@ -740,17 +726,8 @@ async function exercise(count) {
         let directory;
         do {
             deadline.throwIfAborted();
-            directory = await api(
-                `${base}/recording/sessions?runtimeId=${claimed.runtimeId}`,
-                "GET",
-                undefined,
-                credential,
-            );
-        } while (
-            !sessions.every((id) =>
-                directory.sessions.some((session) => session.sessionId === id && session.status === "idle"),
-            )
-        );
+            directory = await api(`${summaries}${claimed.runtimeId}`, "GET", undefined, credential);
+        } while (!sessions.every((id) => directory.sessions.some((session) => session.sessionId === id)));
         assert.equal(directory.sessions.length, count);
         assert.equal(failures.length, 0, JSON.stringify(failures));
         assert.equal(fatal, undefined);

@@ -4155,19 +4155,19 @@ describe.sequential("Platform Turn submission", () => {
         }
     });
 
-    it("Given a daemon that has never sent a heartbeat, When Chat submits a Turn long after it connected, Then the Relay still delivers the Turn to it", async () => {
+    it("Given a daemon that never heartbeats after it connected, When its first heartbeat is overdue, Then it is reported offline and its connection is closed", async () => {
         const runtime = await connectRuntimeDaemon("unproven-daemon");
+        const connectedAt = Date.now();
         try {
-            vi.setSystemTime(Date.now() + 10 * 60_000);
+            // The first heartbeat follows attachment, which has 30 seconds, then the usual silence limit applies.
+            vi.setSystemTime(connectedAt + 65_000);
             expect(await runtime.readOnline()).toBe(true);
-            const delivered = runtime.submitTurn("unproven-turn");
-            expect(decodeServiceToDaemonMessage(await runtime.daemonMessages.next())).toMatchObject({
-                commandId: "unproven-turn",
-                kind: "session.prompt",
-            });
-            runtime.startTurn("unproven-turn", "1");
-            expect(await responseJson(await delivered, 200)).toMatchObject({ turnId: "unproven-turn" });
+
+            vi.setSystemTime(connectedAt + 65_001);
+            expect(await runtime.readOnline()).toBe(false);
+            expect(await runtime.daemonClosed).toMatchObject({ code: 4001, reason: "Runtime heartbeat timed out" });
         } finally {
+            vi.setSystemTime(connectedAt);
             runtime.daemon.close();
         }
     });

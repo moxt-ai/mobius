@@ -115,28 +115,6 @@ it("Given independently versioned daemon content, When a mixed-session batch is 
             ...envelope,
             events: events.filter((event) => event.sessionId === "session-1"),
         });
-
-        // Retain the old V2 sender/reader representation independently of the SDK's current codecs.
-        const legacy = {
-            kind: "session.event.v2",
-            events: [
-                {
-                    eventId: "old-event",
-                    position: "2",
-                    recordedAt: "2026-10-27T00:00:00.000Z",
-                    sessionGenerationId: "generation-1",
-                    sessionId: "session-1",
-                    type: "acp",
-                    payload: {
-                        sessionUpdate: "agent_message_chunk",
-                        content: { type: "text", text: "Still connected" },
-                    },
-                },
-            ],
-        };
-        daemon.socket.send(JSON.stringify(legacy));
-        expect(await all.inbox.next()).toEqual(legacy);
-        expect(await selected.inbox.next()).toEqual(legacy);
     });
 });
 
