@@ -11,6 +11,8 @@ export const recordedSessionEvent = sqliteTable(
         ordinal: integer("ordinal").primaryKey({ autoIncrement: true }),
         envelopeJson: text("envelope_json").notNull(),
         recordedAt: integer("recorded_at").notNull(),
+        // Server receipt time survives projection rebuilds and does not trust the Runtime's clock.
+        receivedAt: integer("received_at"),
         sessionGenerationId: text("session_generation_id"),
     },
     (table) => [index("recorded_session_events_v2_last_position").on(table.lastPosition)],

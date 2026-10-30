@@ -17,6 +17,7 @@ export interface RecordedBatch {
     readonly events: readonly SessionWireEvent[];
     readonly generation: string;
     readonly ordinal: number;
+    readonly receivedAt: number;
 }
 
 interface SelectedEvent {
@@ -164,6 +165,7 @@ export class SessionRecordingStorage {
         readonly envelopeJson: string;
         readonly ordinal: number;
         readonly sessionGenerationId: string | null;
+        readonly receivedAt: number | null;
     }): RecordedBatch => {
         const cached = this.#decoded.get(row.ordinal);
         if (cached !== undefined) {
@@ -175,6 +177,9 @@ export class SessionRecordingStorage {
             events,
             generation: row.sessionGenerationId ?? events[0]?.sessionGenerationId ?? "",
             ordinal: row.ordinal,
+            receivedAt:
+                row.receivedAt ??
+                Math.max(0, Math.min(Date.now(), Date.parse(events.at(-1)?.recordedAt ?? new Date().toISOString()))),
         };
         this.#remember(batch, row.envelopeJson.length);
         return batch;
@@ -186,6 +191,7 @@ export class SessionRecordingStorage {
                 envelopeJson: recordedSessionEvent.envelopeJson,
                 ordinal: recordedSessionEvent.ordinal,
                 sessionGenerationId: recordedSessionEvent.sessionGenerationId,
+                receivedAt: recordedSessionEvent.receivedAt,
             })
             .from(recordedSessionEvent)
             .where(eq(recordedSessionEvent.ordinal, ordinal))
@@ -205,6 +211,7 @@ export class SessionRecordingStorage {
                     envelopeJson: recordedSessionEvent.envelopeJson,
                     ordinal: recordedSessionEvent.ordinal,
                     sessionGenerationId: recordedSessionEvent.sessionGenerationId,
+                    receivedAt: recordedSessionEvent.receivedAt,
                 })
                 .from(recordedSessionEvent)
                 .where(gte(recordedSessionEvent.ordinal, nextOrdinal))
@@ -251,7 +258,7 @@ export class SessionRecordingStorage {
      */
     readonly append = (
         write: SessionRecordingWireWrite,
-        project: (ordinal: number, events: readonly SessionWireEvent[]) => void = () => undefined,
+        project: (ordinal: number, events: readonly SessionWireEvent[], receivedAt: number) => void = () => undefined,
     ): AppendOutcome => {
         const appended: { readonly batch: RecordedBatch; readonly characters: number }[] = [];
         const outcome = this.#storage.transactionSync((): AppendOutcome => {
@@ -298,6 +305,7 @@ export class SessionRecordingStorage {
                 if (first === undefined || last === undefined) {
                     throw new Error("A stored batch holds no events");
                 }
+                const receivedAt = Date.now();
                 const inserted = this.#database
                     .insert(recordedSessionEvent)
                     .values({
@@ -305,6 +313,7 @@ export class SessionRecordingStorage {
                         firstPosition: Number(first.position),
                         lastPosition: Number(last.position),
                         recordedAt: Date.parse(first.recordedAt),
+                        receivedAt,
                         sessionGenerationId: first.sessionGenerationId,
                     })
                     .returning({ ordinal: recordedSessionEvent.ordinal })
@@ -312,9 +321,14 @@ export class SessionRecordingStorage {
                 if (inserted === undefined) {
                     throw new Error("The recorded batch did not return an append ordinal");
                 }
-                project(inserted.ordinal, batch.events);
+                project(inserted.ordinal, batch.events, receivedAt);
                 appended.push({
-                    batch: { events: batch.events, generation: first.sessionGenerationId, ordinal: inserted.ordinal },
+                    batch: {
+                        events: batch.events,
+                        generation: first.sessionGenerationId,
+                        ordinal: inserted.ordinal,
+                        receivedAt,
+                    },
                     characters: batch.encoded.length,
                 });
             }

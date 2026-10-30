@@ -1,8 +1,9 @@
-import { and, asc, desc, eq, gt, inArray, lt, or, type SQL, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, lte, or, type SQL, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/durable-sqlite";
 import {
     characterCount,
     emptyProjection,
+    executionInactivityMilliseconds,
     type ItemTextChange,
     type ProjectedEventIdentity,
     type ProjectionWrites,
@@ -164,6 +165,10 @@ export class SessionTurnHistoryStorage {
         const turnRows = writes.turns.map(({ open, turn }) => ({
             commandId: turn.commandId,
             open,
+            inactivityDeadline:
+                turn.attempt.kind === "running" && turn.activity?.kind === "active"
+                    ? turn.activity.observedAt + executionInactivityMilliseconds + 1
+                    : null,
             turnJson: JSON.stringify(storedTurnSchema.parse(turn)),
             turnOrder: turn.order,
         }));
@@ -258,6 +263,48 @@ export class SessionTurnHistoryStorage {
             .where(eq(recordedTurn.open, true))
             .all()
             .map((row) => decodeTurn(row.turnJson));
+
+    readonly nextInactivityDeadline = (): number | null =>
+        this.#database
+            .select({ deadline: recordedTurn.inactivityDeadline })
+            .from(recordedTurn)
+            .where(isNotNull(recordedTurn.inactivityDeadline))
+            .orderBy(asc(recordedTurn.inactivityDeadline))
+            .limit(1)
+            .all()[0]?.deadline ?? null;
+
+    readonly inactiveCandidates = (now: number): readonly StoredTurn[] =>
+        this.#database
+            .select({ turnJson: recordedTurn.turnJson })
+            .from(recordedTurn)
+            .where(lte(recordedTurn.inactivityDeadline, now))
+            .orderBy(asc(recordedTurn.inactivityDeadline))
+            .limit(100)
+            .all()
+            .map((row) => decodeTurn(row.turnJson));
+
+    readonly progressingCommandIds = (commandIds: readonly string[], now: number): readonly string[] => {
+        const active: string[] = [];
+        for (let index = 0; index < commandIds.length; index += 90) {
+            active.push(
+                ...this.#database
+                    .select({ commandId: recordedTurn.commandId })
+                    .from(recordedTurn)
+                    .where(
+                        and(
+                            inArray(recordedTurn.commandId, commandIds.slice(index, index + 90)),
+                            eq(recordedTurn.open, true),
+                            sql`json_extract(${recordedTurn.turnJson}, '$.activity.kind') IS NOT 'inactive'`,
+                            or(isNull(recordedTurn.inactivityDeadline), gt(recordedTurn.inactivityDeadline, now)),
+                        ),
+                    )
+                    .all()
+                    .map((row) => row.commandId),
+            );
+        }
+        const included = new Set(active);
+        return commandIds.filter((id) => included.has(id));
+    };
 
     /** Reads Turns newest first, strictly older than `beforeOrder` when it is given. */
     readonly turnsBefore = (beforeOrder: number | null, limit: number): readonly StoredTurn[] =>
