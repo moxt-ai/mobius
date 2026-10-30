@@ -1,7 +1,7 @@
 import { isIdentifier } from "@moxt-ai/mobius-sdk/protocol";
 import { Hono } from "hono";
 import { ProjectScope } from "../../entity/do/session.ts";
-import type { RuntimeService } from "../../service/channel/runtime-service.ts";
+import type { RuntimeAdmission, RuntimeService } from "../../service/channel/runtime-service.ts";
 
 function unauthorized(message: string): Response {
     return Response.json({ error: { code: "unauthorized", message } }, { status: 401 });
@@ -39,15 +39,11 @@ export function createRuntimeRoutes(runtime: RuntimeService) {
                 { error: { code: "runtime_revoked", message: "The Runtime has been revoked" } },
                 { status: 401 },
             );
-        const daemon = url.pathname.endsWith("/daemon");
-        // A daemon reads the same authority inside its acceptance, where a revocation notification can abort it.
-        if (!daemon && !(await runtime.isRuntimeActive(runtimeId, scope, request.signal))) {
-            return revoked();
-        }
+        const admitted = (result: RuntimeAdmission) => (result.kind === "accepted" ? result.response : revoked());
         if (request.headers.get("Upgrade") !== "websocket") {
             return new Response("WebSocket upgrade required", { status: 426 });
         }
-        if (daemon) {
+        if (url.pathname.endsWith("/daemon")) {
             const result = await runtime.acceptDaemon(runtimeId, scope, request.signal);
             switch (result.kind) {
                 case "accepted":
@@ -80,21 +76,25 @@ export function createRuntimeRoutes(runtime: RuntimeService) {
             if (sessionFilter !== null && !isIdentifier(sessionFilter)) {
                 return new Response("A valid Session identifier is required", { status: 400 });
             }
-            return runtime.acceptHost(
-                {
-                    role: "host",
-                    channelId,
-                    credentialId,
-                    runtimeId,
-                    projectId,
-                    ...(nativeRequestId === null ? {} : { nativeRequestId }),
-                    ...(sessionFilter === null ? {} : { sessionFilter }),
-                },
-                request.signal,
+            return admitted(
+                await runtime.acceptHost(
+                    {
+                        role: "host",
+                        channelId,
+                        credentialId,
+                        runtimeId,
+                        projectId,
+                        ...(nativeRequestId === null ? {} : { nativeRequestId }),
+                        ...(sessionFilter === null ? {} : { sessionFilter }),
+                    },
+                    request.signal,
+                ),
             );
         }
         if (url.pathname.endsWith("/live-history")) {
-            return runtime.acceptRelay({ role: "relay", channelId, runtimeId, projectId }, request.signal);
+            return admitted(
+                await runtime.acceptHost({ role: "relay", channelId, runtimeId, projectId }, request.signal),
+            );
         }
         return new Response(null, { status: 404 });
     });

@@ -94,10 +94,11 @@ interface RuntimeContext {
     };
 }
 
-type RuntimeAcceptance =
-    | { readonly kind: "conflict" }
+export type RuntimeAdmission =
     | { readonly kind: "revoked" }
     | { readonly kind: "accepted"; readonly response: Response };
+
+type RuntimeAcceptance = RuntimeAdmission | { readonly kind: "conflict" };
 
 type DaemonSocketIdentity = Extract<RuntimeSocketIdentity, { readonly role: "daemon" | "replaced-daemon" }> & {
     readonly role: "daemon";
@@ -122,52 +123,54 @@ export class RuntimeService {
         this.#cx = cx;
     }
 
-    readonly acceptDaemon = async (runtimeId: string, scope: ProjectScope, signal: AbortSignal) => {
-        // Registered before the authoritative read in acceptDaemonSocket: a revocation committed after that
-        // read is notified after it, and the notification aborts this acceptance.
-        const accepting = { runtimeId, scope, controller: new AbortController() };
-        this.#accepting.add(accepting);
-        const operation = this.#acceptTail.then(async (): Promise<RuntimeAcceptance> => {
-            try {
-                return await this.acceptDaemonSocket(
-                    runtimeId,
-                    scope,
-                    AbortSignal.any([signal, accepting.controller.signal]),
-                );
-            } catch (error) {
-                signal.throwIfAborted();
-                if (accepting.controller.signal.aborted) {
-                    return { kind: "revoked" };
-                }
-                throw error;
-            }
+    readonly acceptDaemon = (runtimeId: string, scope: ProjectScope, signal: AbortSignal) =>
+        this.admit(runtimeId, scope, signal, (admission) => {
+            const operation = this.#acceptTail.then(() => this.acceptDaemonSocket(runtimeId, scope, admission));
+            this.#acceptTail = operation.then(
+                () => undefined,
+                () => undefined,
+            );
+            return operation;
         });
-        this.#acceptTail = operation.then(
-            () => undefined,
-            () => undefined,
-        );
-        try {
-            return await operation;
-        } finally {
-            this.#accepting.delete(accepting);
-        }
-    };
 
-    /** Whether the Project is served and the Project's Runtime authority has not revoked this Runtime. */
-    readonly isRuntimeActive = (runtimeId: string, scope: ProjectScope, signal: AbortSignal): Promise<boolean> =>
-        this.#cx.services.credentials.isRuntimeActive({ projectId: scope.projectId, runtimeId }, signal);
-
-    private readonly acceptDaemonSocket = async (
+    /**
+     * Admits a connection only while the Project serves this Runtime and has not revoked it. The pending
+     * admission is registered before that authority is read: a revocation committed after the read is notified
+     * after it, and the notification aborts the admission. `accept` must check the admission signal and then
+     * accept without awaiting, so a later notification finds the accepted socket and closes it.
+     */
+    private readonly admit = async <T>(
         runtimeId: string,
         scope: ProjectScope,
         signal: AbortSignal,
-    ): Promise<RuntimeAcceptance> => {
-        signal.throwIfAborted();
-        if (!(await this.isRuntimeActive(runtimeId, scope, signal))) {
-            return { kind: "revoked" };
+        accept: (admission: AbortSignal) => Promise<T>,
+    ): Promise<T | { readonly kind: "revoked" }> => {
+        const pending = { runtimeId, scope, controller: new AbortController() };
+        this.#accepting.add(pending);
+        try {
+            const admission = AbortSignal.any([signal, pending.controller.signal]);
+            const runtime = { projectId: scope.projectId, runtimeId };
+            if (!(await this.#cx.services.credentials.isRuntimeActive(runtime, admission))) {
+                return { kind: "revoked" };
+            }
+            return await accept(admission);
+        } catch (error) {
+            signal.throwIfAborted();
+            if (pending.controller.signal.aborted) {
+                return { kind: "revoked" };
+            }
+            throw error;
+        } finally {
+            this.#accepting.delete(pending);
         }
-        // No await may separate this fence check from accept + connect: a revocation notification either
-        // aborted this signal already or finds the accepted socket and closes it.
+    };
+
+    private readonly acceptDaemonSocket = (
+        runtimeId: string,
+        scope: ProjectScope,
+        signal: AbortSignal,
+    ): RuntimeAcceptance => {
+        // Nothing below awaits, so this admission check and accept + connect are one step.
         signal.throwIfAborted();
         const prepared = this.#cx.services.connections.prepare(runtimeId);
         if (prepared.kind === "conflict") {
@@ -239,24 +242,17 @@ export class RuntimeService {
         this.#cx.utilities.waitUntil(operation);
     };
 
-    readonly acceptHost = async (
-        identity: Extract<RuntimeSocketIdentity, { readonly role: "host" }>,
+    readonly acceptHost = (
+        identity: Extract<RuntimeSocketIdentity, { readonly role: "host" | "relay" }>,
         signal: AbortSignal,
-    ): Promise<Response> => {
-        signal.throwIfAborted();
-        const accepted = this.#cx.gateways.peers.accept(identity);
-        await this.attachHost(identity.runtimeId, new ProjectScope(identity.projectId), accepted.socket, signal);
-        return accepted.response;
-    };
-
-    readonly acceptRelay = async (
-        identity: Extract<RuntimeSocketIdentity, { readonly role: "relay" }>,
-        signal: AbortSignal,
-    ): Promise<Response> => {
-        signal.throwIfAborted();
-        const accepted = this.#cx.gateways.peers.accept(identity);
-        await this.attachHost(identity.runtimeId, new ProjectScope(identity.projectId), accepted.socket, signal);
-        return accepted.response;
+    ): Promise<RuntimeAdmission> => {
+        const scope = new ProjectScope(identity.projectId);
+        return this.admit(identity.runtimeId, scope, signal, async (admission): Promise<RuntimeAdmission> => {
+            admission.throwIfAborted();
+            const accepted = this.#cx.gateways.peers.accept(identity);
+            await this.attachHost(identity.runtimeId, scope, accepted.socket, signal);
+            return { kind: "accepted", response: accepted.response };
+        });
     };
 
     readonly revokeHost = (channelId: string, credentialId: string, runtimeId: string, scope: ProjectScope): void => {
