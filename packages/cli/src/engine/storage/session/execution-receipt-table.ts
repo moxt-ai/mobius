@@ -17,7 +17,14 @@ const receiptSchema = z
     .readonly();
 export type PersistedExecutionReceipt = z.infer<typeof receiptSchema>;
 
-const identitySchema = z.object({ sessionId: z.string(), commandHash: z.string() }).readonly();
+const identitySchema = z
+    .object({
+        commandId: z.string(),
+        sessionId: z.string(),
+        commandHash: z.string(),
+    })
+    .readonly();
+export type PersistedExecutionIdentity = z.infer<typeof identitySchema>;
 
 /** Prompt bodies and Agent error text never enter the execution ledger. */
 export class ExecutionReceiptTable {
@@ -27,7 +34,7 @@ export class ExecutionReceiptTable {
     }
     readonly identity = (commandId: string): z.infer<typeof identitySchema> | undefined => {
         const row = this.#database.orm
-            .select({ sessionId: executionIdentity.sessionId, commandHash: executionIdentity.commandHash })
+            .select()
             .from(executionIdentity)
             .where(eq(executionIdentity.commandId, commandId))
             .get();
@@ -40,8 +47,30 @@ export class ExecutionReceiptTable {
             .orderBy(asc(executionReceipt.admissionOrder), asc(executionReceipt.commandId))
             .all()
             .map((row) => receiptSchema.parse(row));
-    readonly save = (receipt: PersistedExecutionReceipt, terminalLimit: number): readonly string[] =>
+    /** Backfills identities from receipts written before replay reasons were stored independently. */
+    readonly retainIdentities = (identities: readonly PersistedExecutionIdentity[]): void => {
         this.#database.transaction(() => {
+            for (const identity of identities) {
+                this.#retainIdentity(identity);
+            }
+        });
+    };
+    readonly #retainIdentity = (identity: PersistedExecutionIdentity): void => {
+        this.#database.orm.insert(executionIdentity).values(identity).onConflictDoNothing().run();
+    };
+    readonly save = (
+        receipt: PersistedExecutionReceipt,
+        terminalLimit: number,
+        identityHash: string | null,
+    ): readonly string[] =>
+        this.#database.transaction(() => {
+            if (identityHash !== null) {
+                this.#retainIdentity({
+                    commandId: receipt.commandId,
+                    sessionId: receipt.sessionId,
+                    commandHash: identityHash,
+                });
+            }
             this.#database.orm
                 .insert(executionReceipt)
                 .values(receipt)
@@ -78,22 +107,7 @@ export class ExecutionReceiptTable {
         if (condition === undefined) {
             throw new Error("Execution receipt removal requires a scope");
         }
-        // Move the non-replayable identity into the ledger atomically with receipt eviction.
-        // Unstarted commands remain retryable after a restart, so they leave no identity behind.
-        this.#database.orm
-            .insert(executionIdentity)
-            .select(
-                this.#database.orm
-                    .select({
-                        commandId: executionReceipt.commandId,
-                        sessionId: executionReceipt.sessionId,
-                        commandHash: executionReceipt.commandHash,
-                    })
-                    .from(executionReceipt)
-                    .where(and(condition, eq(executionReceipt.started, true))),
-            )
-            .onConflictDoNothing()
-            .run();
+        // Replay protection was committed with the execution or cancellation, before any receipt can be evicted.
         return this.#database.orm
             .delete(executionReceipt)
             .where(condition)
