@@ -61,7 +61,7 @@ export class PlatformSessionRecording implements SessionRecording {
     ): Promise<readonly SessionRecordingBatchResult[]> => {
         const sessions = [...new Set(envelope.events.map((event) => event.sessionId))];
         const failed = (
-            code: "policy_unavailable" | "provider_unavailable" | "write_failed",
+            code: "policy_unavailable" | "provider_unavailable" | "write_failed" | "write_rejected",
         ): readonly SessionRecordingBatchResult[] => sessions.map((sessionId) => ({ sessionId, kind: "failed", code }));
         const policy = await this.#projectPolicy(target.projectId, signal);
         if (policy === null) {
@@ -89,7 +89,13 @@ export class PlatformSessionRecording implements SessionRecording {
             signal.throwIfAborted();
             if (!response.ok) {
                 await response.body?.cancel();
-                return failed("write_failed");
+                // A client error refuses the batch itself; a timeout, throttling or server error can pass.
+                const rejected =
+                    response.status >= 400 &&
+                    response.status < 500 &&
+                    response.status !== 408 &&
+                    response.status !== 429;
+                return failed(rejected ? "write_rejected" : "write_failed");
             }
             const results = v.parse(batchResponseSchema, await response.json()).results;
             const identifiers = new Set(results.map((result) => result.sessionId));

@@ -9,7 +9,11 @@ export interface SessionRecordingTarget {
 export type SessionRecordingDeliveryResult =
     | { readonly kind: "recorded" }
     | { readonly kind: "skipped" }
-    | { readonly kind: "failed"; readonly code: "policy_unavailable" | "provider_unavailable" | "write_failed" };
+    | {
+          readonly kind: "failed";
+          // `write_rejected`: Recording refused the batch itself, so delivering it again cannot succeed.
+          readonly code: "policy_unavailable" | "provider_unavailable" | "write_failed" | "write_rejected";
+      };
 
 export interface SessionRecordingScope {
     readonly projectId: string;

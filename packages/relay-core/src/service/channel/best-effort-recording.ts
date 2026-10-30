@@ -18,22 +18,45 @@ const MAX_DELIVERY_BYTES = 1024 * 1024;
 // Each Session needs a separate storage request within the delivery deadline.
 // Keep recovery bursts in small independent deliveries so their tail can make progress.
 const MAX_DELIVERY_SESSIONS = 32;
+// How long the Relay waits before repeating a Session's first, second and third failed deliveries in a row. A
+// failure that can pass, such as Recording restarting for a deployment, has usually passed by then. Recording
+// stores an event once, so repeating a delivery that did commit is safe.
+const RETRY_BACKOFF_MILLISECONDS = [1_000, 2_000, 4_000];
+
+type DeliveryFailure =
+    | Extract<SessionRecordingBatchResult, { readonly kind: "failed" }>["code"]
+    | "recording_incomplete";
+
+/** Whether delivering the same events again can succeed: Recording failed, or did not answer in time. */
+function retryable(failure: DeliveryFailure): boolean {
+    return failure === "write_failed" || failure === "recording_incomplete";
+}
+
+function laneKey(target: SessionRecordingTarget): string {
+    return JSON.stringify([target.projectId, target.runtimeId, target.sessionId]);
+}
 
 interface BufferedEvent {
     readonly event: SessionWireEvent;
     readonly bytes: number;
 }
+interface Batch {
+    readonly events: readonly SessionWireEvent[];
+    readonly bytes: number;
+}
 interface SessionLane {
     readonly target: SessionRecordingTarget;
     readonly events: BufferedEvent[];
+    /** A batch whose delivery failed; it is delivered again before any later event of the Session. */
+    retry: Batch | null;
+    /** The Session's failed deliveries since its last recorded one. */
+    failures: number;
     /** The next recorded event exposes any earlier capacity or delivery loss. */
     gap: boolean;
-    state: "idle" | "ready" | "delivering";
+    state: "idle" | "ready" | "delivering" | "backing-off";
 }
-interface Delivery {
+interface Delivery extends Batch {
     readonly lane: SessionLane;
-    readonly events: readonly SessionWireEvent[];
-    readonly bytes: number;
 }
 
 /** Recording never blocks live fanout. Lanes preserve Session order across bounded multi-Session writes. */
@@ -58,14 +81,16 @@ export class BestEffortRecording {
             grouped.set(event.sessionId, events);
         }
         for (const [sessionId, events] of grouped) {
-            const laneKey = JSON.stringify([scope.projectId, scope.runtimeId, sessionId]);
-            const lane: SessionLane = this.#lanes.get(laneKey) ?? {
-                target: { ...scope, sessionId },
+            const target = { ...scope, sessionId };
+            const lane: SessionLane = this.#lanes.get(laneKey(target)) ?? {
+                target,
                 events: [],
+                retry: null,
+                failures: 0,
                 gap: false,
                 state: "idle",
             };
-            this.#lanes.set(laneKey, lane);
+            this.#lanes.set(laneKey(target), lane);
             const bytes = events.reduce((sum, item) => sum + item.bytes, 0);
             if (this.#pendingBytes + bytes > MAX_PENDING_BYTES) {
                 console.warn("Recording event dropped", { code: "recording_capacity_exceeded" });
@@ -81,7 +106,7 @@ export class BestEffortRecording {
     };
 
     #enqueue(lane: SessionLane): void {
-        if (lane.state !== "idle" || lane.events.length === 0) {
+        if (lane.state !== "idle" || (lane.events.length === 0 && lane.retry === null)) {
             return;
         }
         lane.state = "ready";
@@ -108,6 +133,24 @@ export class BestEffortRecording {
                     bytes >= MAX_DELIVERY_BYTES
                 ) {
                     break;
+                }
+                const retry = lane.retry;
+                if (retry !== null) {
+                    // The batch fit one delivery when it was first sent, so it is repeated whole and unchanged.
+                    if (
+                        deliveries.length > 0 &&
+                        (count + retry.events.length > SESSION_EVENT_BATCH_MAX_SIZE ||
+                            bytes + retry.bytes > MAX_DELIVERY_BYTES)
+                    ) {
+                        break;
+                    }
+                    lane.retry = null;
+                    lane.state = "delivering";
+                    this.#ready.delete(lane);
+                    deliveries.push({ lane, ...retry });
+                    bytes += retry.bytes;
+                    count += retry.events.length;
+                    continue;
                 }
                 let length = 0;
                 let laneBytes = 0;
@@ -141,33 +184,61 @@ export class BestEffortRecording {
             const delivery = this.#deliver(
                 scope,
                 deliveries.flatMap((item) => item.events),
-            )
-                .then((results) => {
-                    for (const { lane } of deliveries) {
-                        const result = results.find((item) => item.sessionId === lane.target.sessionId);
-                        if (result === undefined || result.kind === "failed") {
-                            lane.gap = true;
-                            console.warn("Recording event dropped", {
-                                code: result?.kind === "failed" ? result.code : "recording_incomplete",
-                            });
-                        }
+            ).then((results) => {
+                try {
+                    for (const item of deliveries) {
+                        this.#settle(
+                            item,
+                            results.find((result) => result.sessionId === item.lane.target.sessionId),
+                        );
                     }
-                })
-                .finally(() => {
+                } finally {
                     this.#active -= 1;
-                    for (const { lane, bytes } of deliveries) {
-                        this.#pendingBytes -= bytes;
+                    this.#pump();
+                }
+            });
+            this.#waitUntil(delivery);
+        }
+    }
+
+    /**
+     * Applies one Session's delivery result. A failure that can pass repeats the batch after a backoff, before any
+     * later event of the Session. Any other failure drops the batch, as does a failure that outlasts the retries;
+     * after that, the Session's failed deliveries are dropped at once until one is recorded, so a Session that
+     * Recording keeps refusing cannot hold the shared buffer.
+     */
+    #settle(delivery: Delivery, result: SessionRecordingBatchResult | undefined): void {
+        const { lane, events, bytes } = delivery;
+        const failure: DeliveryFailure | null =
+            result === undefined ? "recording_incomplete" : result.kind === "failed" ? result.code : null;
+        lane.failures = failure === null ? 0 : lane.failures + 1;
+        const backoff = RETRY_BACKOFF_MILLISECONDS[lane.failures - 1];
+        if (failure !== null && retryable(failure) && backoff !== undefined) {
+            // The batch keeps its bytes, and its Session keeps its place, until the repeat settles.
+            console.warn("Recording delivery will be retried", { code: failure, retry: lane.failures });
+            lane.retry = { events, bytes };
+            lane.state = "backing-off";
+            this.#waitUntil(
+                new Promise((resolve) => {
+                    setTimeout(() => {
                         lane.state = "idle";
                         this.#enqueue(lane);
-                        if (lane.events.length === 0 && !lane.gap) {
-                            this.#lanes.delete(
-                                JSON.stringify([lane.target.projectId, lane.target.runtimeId, lane.target.sessionId]),
-                            );
-                        }
-                    }
-                    this.#pump();
-                });
-            this.#waitUntil(delivery);
+                        this.#pump();
+                        resolve();
+                    }, backoff);
+                }),
+            );
+            return;
+        }
+        if (failure !== null) {
+            lane.gap = true;
+            console.warn("Recording event dropped", { code: failure });
+        }
+        this.#pendingBytes -= bytes;
+        lane.state = "idle";
+        this.#enqueue(lane);
+        if (lane.events.length === 0 && !lane.gap) {
+            this.#lanes.delete(laneKey(lane.target));
         }
     }
 

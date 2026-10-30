@@ -82,7 +82,8 @@ class ControlledRecording implements SessionRecording {
                 signal.removeEventListener("abort", cancel);
             }
             signal.throwIfAborted();
-            return sessions.map((sessionId) => ({ sessionId, kind: "failed", code: "write_failed" }));
+            // The Relay drops a rejected write instead of retrying it, so the next event follows it at once.
+            return sessions.map((sessionId) => ({ sessionId, kind: "failed", code: "write_rejected" }));
         }
         this.contents.push(...envelope.events.map((event) => JSON.stringify(event)));
         return sessions.map((sessionId) => ({ sessionId, kind: "recorded" }));
@@ -260,7 +261,7 @@ afterAll(async () => {
 });
 
 describe.sequential("Platform Session-only boundary", () => {
-    it("Given no viewers are connected, When the daemon broadcasts and Recording first fails, Then later events are still recorded without redelivery", async () => {
+    it("Given no viewers are connected, When the daemon broadcasts and Recording rejects the first write, Then later events are still recorded without redelivery", async () => {
         const runtime = await connectRuntimeDaemon("unwatched-runtime");
         try {
             await runInDurableObject(env.RUNTIME_RELAY.getByName(runtime.runtimeId), async (_instance, state) => {
@@ -1075,7 +1076,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 ),
             ).toContain("local answer");
 
-            // Given Recording stalls then fails, subsequent live events still reach the viewer.
+            // Given Recording stalls then rejects the write, subsequent live events still reach the viewer.
             await runInDurableObject(environment.RUNTIME_RELAY.getByName(runtimeId), async (_instance, state) => {
                 const recording = new ControlledRecording();
                 const pending: Promise<void>[] = [];

@@ -182,10 +182,11 @@ class StalledRecording implements SessionRecording {
         try {
             await Promise.race([this.release.promise, cancelled.promise]);
             signal.throwIfAborted();
+            // The Relay drops a rejected write instead of retrying it, so the buffered events drain at once.
             return [...new Set(envelope.events.map((event) => event.sessionId))].map((sessionId) => ({
                 sessionId,
                 kind: "failed",
-                code: "write_failed",
+                code: "write_rejected",
             }));
         } finally {
             signal.removeEventListener("abort", cancel);
@@ -351,7 +352,7 @@ describe("App Session status webhook delivery", () => {
         ]);
     });
 
-    it("Given Recording stalls at capacity and then fails, When commands finish, Then their notifications are delivered independently", async () => {
+    it("Given Recording stalls at capacity and then rejects every write, When commands finish, Then their notifications are delivered independently", async () => {
         const { projectId } = await provisionProject("recording-unavailable");
         const recording = new StalledRecording();
         await throughRelay(
