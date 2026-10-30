@@ -4,7 +4,7 @@ import { join } from "node:path";
 import * as acp from "@agentclientprotocol/sdk";
 import { readAgentName } from "../../support/acp-process.ts";
 import { sessionConfiguration } from "./acp-session-settings.ts";
-import { acquireWriter, nativeHistory, readPersistedState, sessions } from "./acp-session-state.ts";
+import { acquireWriter, nativeHistory, readRecoveredState, sessions } from "./acp-session-state.ts";
 
 const replayedSessionHistory = new Set<string>();
 
@@ -131,7 +131,7 @@ export function registerHistory(agent: ReturnType<typeof acp.agent>) {
             });
             context.signal.throwIfAborted();
         }
-        const state = readPersistedState(context.params.sessionId);
+        const state = readRecoveredState(context.params.sessionId);
         sessions.set(context.params.sessionId, state);
         const history =
             process.argv.includes("--replay-history-once") && replayedSessionHistory.has(context.params.sessionId)

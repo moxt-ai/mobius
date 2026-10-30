@@ -5,6 +5,7 @@ import type { AcpAgentDefinition } from "../../acp/agent/agent-definition.ts";
 import type { Adapter } from "../../acp/native-history/preview-contract.ts";
 import { applyAgentLaunchSettings } from "../../agent/settings/agent-settings-adapter.ts";
 import type { SessionManager } from "../manager/session-manager.ts";
+import { inDependencyOrder } from "../settings/configuration-dependencies.ts";
 
 function invalidSessionConfiguration(message: string): AcpExecutionError {
     return new AcpExecutionError(message, {}, "invalid_session_configuration");
@@ -63,23 +64,6 @@ function sessionConfigurationMatches(option: SessionConfigOption, selection: Ses
     return option.type === "boolean"
         ? option.booleanValue === selection.booleanValue
         : option.currentValue === selection.value;
-}
-
-function sessionConfigurationPriority(
-    selection: SessionConfigurationSelection,
-    options: readonly SessionConfigOption[],
-): number {
-    const option = options.find((candidate) => candidate.id === selection.configId);
-    if (selection.configId === "model" || option?.category === "model") {
-        return 0;
-    }
-    if (selection.configId === "reasoning_effort" || option?.category === "thought_level") {
-        return 1;
-    }
-    if (option?.category === "model_config") {
-        return 2;
-    }
-    return 3;
 }
 
 function assertAppliedSessionConfiguration(
@@ -205,12 +189,7 @@ export async function applyCompleteSessionConfiguration(
     signal: AbortSignal,
 ): Promise<void> {
     let options = initialOptions;
-    const orderedSelections = selections.toSorted((left, right) => {
-        const priority =
-            sessionConfigurationPriority(left, initialOptions) - sessionConfigurationPriority(right, initialOptions);
-        return priority === 0 ? left.configId.localeCompare(right.configId) : priority;
-    });
-    for (const selection of orderedSelections) {
+    for (const selection of inDependencyOrder(selections, initialOptions)) {
         options = await applySessionConfigurationSelection(
             sessions,
             options,

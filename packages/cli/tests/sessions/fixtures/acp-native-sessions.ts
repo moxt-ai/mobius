@@ -10,6 +10,7 @@ import {
     nativeMetadata,
     persistState,
     readPersistedState,
+    readRecoveredState,
     releaseWriter,
     sessions,
 } from "./acp-session-state.ts";
@@ -67,7 +68,7 @@ export function registerNativeSessions(agent: ReturnType<typeof acp.agent>) {
         })
         .onRequest(acp.methods.agent.session.resume, (context) => {
             acquireWriter(context.params.sessionId);
-            const state = readPersistedState(context.params.sessionId);
+            const state = readRecoveredState(context.params.sessionId);
             sessions.set(context.params.sessionId, state);
             return sessionConfiguration(state);
         })
