@@ -4,16 +4,18 @@ import type {
     RequestPermissionResponse,
 } from "@agentclientprotocol/sdk";
 
+import type { SessionElicitationRequestedEvent, SessionPermissionRequestedEvent } from "@moxt-ai/mobius-sdk/protocol";
+
 export class PendingPermission {
     readonly completion: PromiseWithResolvers<RequestPermissionResponse> =
         Promise.withResolvers<RequestPermissionResponse>();
-    readonly interactionId: string;
+    readonly request: SessionPermissionRequestedEvent;
     readonly optionIds: ReadonlySet<string>;
     #settled = false;
 
-    constructor(interactionId: string, optionIds: ReadonlySet<string>) {
-        this.interactionId = interactionId;
-        this.optionIds = optionIds;
+    constructor(request: SessionPermissionRequestedEvent) {
+        this.request = request;
+        this.optionIds = new Set(request.options.map((option) => option.optionId));
     }
 
     readonly cancel = (): boolean => {
@@ -41,13 +43,13 @@ export class PendingElicitation {
     readonly completion: PromiseWithResolvers<CreateElicitationResponse> =
         Promise.withResolvers<CreateElicitationResponse>();
     readonly elicitationId: string;
-    readonly interactionId: string;
+    readonly request: SessionElicitationRequestedEvent;
     readonly requestedSchema: unknown;
     #settled = false;
 
-    constructor(interactionId: string, elicitationId: string, requestedSchema: unknown) {
-        this.elicitationId = elicitationId;
-        this.interactionId = interactionId;
+    constructor(request: SessionElicitationRequestedEvent, requestedSchema: unknown) {
+        this.request = request;
+        this.elicitationId = request.elicitationId;
         this.requestedSchema = requestedSchema;
     }
 

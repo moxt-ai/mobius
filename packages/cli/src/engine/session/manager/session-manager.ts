@@ -1,3 +1,4 @@
+import type { SessionInteractionSnapshot } from "@moxt-ai/mobius-sdk/protocol";
 import {
     SESSION_CLOSE_NOTICE_KIND,
     SESSION_CLOSED_ERROR_CODE,
@@ -874,6 +875,31 @@ export class SessionManager {
 
     readonly findLinkedSessions = (agentId: string, nativeSessionId: string) =>
         this.#store.findNative(agentId, nativeSessionId);
+
+    readonly interactionSnapshot = (options: SessionPrepareOptions): SessionInteractionSnapshot | undefined => {
+        options.signal.throwIfAborted();
+        const runtime = this.#executionProcesses.get(options.sessionId);
+        if (runtime !== undefined) {
+            return runtime.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)
+                ? runtime.interactionSnapshot()
+                : undefined;
+        }
+        const stored = this.#store.read(options.sessionId);
+        if (
+            !(stored instanceof FoundStoredSession) ||
+            stored.session.agentId !== options.agent.id ||
+            stored.session.cwd !== options.cwd ||
+            stored.session.additionalDirectories.length !== options.additionalDirectories.length ||
+            !stored.session.additionalDirectories.every(
+                (directory, index) => directory === options.additionalDirectories[index],
+            )
+        ) {
+            return undefined;
+        }
+        // No live Agent owns an actionable request after its session process has gone away.
+        const { sessionGenerationId, throughPosition } = this.#store.events.livePosition(options.sessionId);
+        return { sessionGenerationId, throughPosition, interactions: [] };
+    };
 
     readonly hasPreparedSession = (
         sessionId: string,

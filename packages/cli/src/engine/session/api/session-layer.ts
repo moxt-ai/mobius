@@ -149,8 +149,13 @@ export function buildSessionLayer(options: SessionLayerOptions) {
             });
             // Read after the snapshot, so neither is older than the execution beside it.
             const lastTurn = snapshot.turn === null ? operations.lastTurn(request.targetSessionId) : undefined;
+            const interactionState = manager.interactionSnapshot({
+                ...requestOptions,
+                sessionId: request.targetSessionId,
+            });
             return {
                 ...snapshot,
+                ...(interactionState === undefined ? {} : { interactionState }),
                 ...(request.deliveryCommandId === undefined
                     ? {}
                     : { command: operations.delivery(request.deliveryCommandId, request.targetSessionId) }),
