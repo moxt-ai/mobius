@@ -13,7 +13,7 @@ import { prepareMobiusEngineDataDir, resolveMaxAcpProcesses } from "../config.ts
 import { sendLocalRequest } from "../control/local-client.ts";
 import { serveLocalControl } from "../control/local-server.ts";
 import { openMobiusControlInstallation } from "../pairing/pair-local-machine.ts";
-import { prepareUpgradeData, recordCurrentData } from "../upgrades/data.ts";
+import { prepareVersionData, recordCurrentData } from "../upgrades/data.ts";
 import { reportDaemonUpgradeAvailability, runDaemonReleaseUpgrades } from "../upgrades/upgrade.ts";
 import { surviveUnhandledRejections, type UnhandledRejectionGuard } from "./unhandled-rejection.ts";
 
@@ -90,7 +90,7 @@ async function runWorkerRuntime(
     rejectionGuard: UnhandledRejectionGuard,
 ): Promise<void> {
     const control = await openMobiusControlInstallation(combined, process.env);
-    await prepareUpgradeData(control.stateDirectory, version, combined);
+    await prepareVersionData(version, combined);
     const engineDataDir = await prepareMobiusEngineDataDir(version, combined, process.env);
     const installation = await RuntimeInstallationStore.open(engineDataDir, combined);
     const deadline = AbortSignal.any([combined, AbortSignal.timeout(15_000)]);
