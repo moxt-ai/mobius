@@ -380,6 +380,7 @@ export type {
     NativeSessionEntry,
     NativeSessionRequest,
     NativeSessionResult,
+    SessionInteractionSnapshot,
 } from "./session/native/index.ts";
 
 export {

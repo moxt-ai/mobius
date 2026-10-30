@@ -1,4 +1,5 @@
 import { conversationTitleFromText } from "@moxt-ai/mobius-sdk";
+import type { SessionInteractionSnapshot } from "@moxt-ai/mobius-sdk/protocol";
 import {
     type AgentModelEffort,
     SESSION_COMMANDS_UPDATED_KIND,
@@ -877,6 +878,11 @@ export class AgentSession implements AgentSessionRestore {
             return await this.#adapter.cancel({ ...this.#target(), signal });
         }
         return "retained";
+    };
+
+    readonly interactionSnapshot = (): SessionInteractionSnapshot => {
+        const { sessionGenerationId, throughPosition } = this.#store.events.livePosition(this.#mobiusSessionId);
+        return { sessionGenerationId, throughPosition, interactions: this.#interactions.snapshot() };
     };
 
     readonly respondPermission = async (options: PermissionResponseOptions): Promise<void> => {

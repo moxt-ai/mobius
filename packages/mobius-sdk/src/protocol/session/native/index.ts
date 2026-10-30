@@ -22,6 +22,22 @@ const envelope = {
     requestId: identifier,
     sessionId: identifier,
 };
+export const sessionInteractionSnapshotSchema = z
+    .object({
+        sessionGenerationId: identifier,
+        throughPosition: z.string().regex(/^(0|[1-9][0-9]*)$/),
+        interactions: z
+            .array(
+                z.discriminatedUnion("kind", [
+                    sessionPermissionRequestedEventSchema,
+                    sessionElicitationRequestedEventSchema,
+                ]),
+            )
+            .readonly(),
+    })
+    .readonly();
+export type SessionInteractionSnapshot = z.infer<typeof sessionInteractionSnapshotSchema>;
+
 export const activeTurnSnapshotSchema = z
     .object({
         commandId: identifier,
@@ -179,6 +195,8 @@ const nativeSessionResultSchema = z.discriminatedUnion("action", [
                 )
                 .readonly(),
             turn: activeTurnSnapshotSchema.nullable(),
+            // Absent when an older Runtime or Relay cannot provide session-scoped interaction recovery.
+            interactionState: sessionInteractionSnapshotSchema.optional(),
             // Present only when the request named a command and every hop understands it. An
             // unrecognized delivery from a newer peer reads as absent instead of failing the snapshot.
             command: commandDeliverySchema.optional().catch(undefined),

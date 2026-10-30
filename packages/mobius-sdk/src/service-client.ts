@@ -1408,7 +1408,7 @@ export class MobiusSessionResources {
     ): Promise<
         Pick<
             Extract<NativeSessionResult, { readonly action: "active-turn" }>,
-            "turn" | "queued" | "command" | "lastTurn" | "queuedCancellation"
+            "turn" | "queued" | "command" | "lastTurn" | "queuedCancellation" | "interactionState"
         >
     > => {
         const path = requestUrl(
@@ -1435,6 +1435,7 @@ export class MobiusSessionResources {
             ...(result.command === undefined ? {} : { command: result.command }),
             ...(result.lastTurn === undefined ? {} : { lastTurn: result.lastTurn }),
             queuedCancellation: result.queuedCancellation,
+            ...(result.interactionState === undefined ? {} : { interactionState: result.interactionState }),
         };
     };
 

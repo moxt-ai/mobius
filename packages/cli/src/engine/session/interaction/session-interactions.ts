@@ -43,8 +43,14 @@ interface SessionInteractionContext {
 export class SessionInteractions {
     readonly #pendingPermissions = new Map<string, PendingPermission>();
     readonly #pendingElicitations = new Map<string, PendingElicitation>();
-    readonly #acceptedUrlElicitations = new Map<string, string>();
+    readonly #acceptedUrlElicitations = new Map<string, SessionElicitationRequestedEvent>();
     readonly #context: SessionInteractionContext;
+
+    readonly snapshot = (): readonly (SessionPermissionRequestedEvent | SessionElicitationRequestedEvent)[] => [
+        ...[...this.#pendingPermissions.values()].map((pending) => pending.request),
+        ...[...this.#pendingElicitations.values()].map((pending) => pending.request),
+        ...this.#acceptedUrlElicitations.values(),
+    ];
     constructor(context: SessionInteractionContext) {
         this.#context = context;
     }
@@ -124,7 +130,7 @@ export class SessionInteractions {
             if (pending.elicitationId.length > 0) {
                 resolved = pending.accept({});
                 if (resolved) {
-                    this.#acceptedUrlElicitations.set(pending.elicitationId, pending.interactionId);
+                    this.#acceptedUrlElicitations.set(pending.elicitationId, { ...pending.request, accepted: true });
                 }
             } else {
                 resolved = pending.accept(validateElicitationContent(options.content, pending.requestedSchema));
@@ -168,36 +174,37 @@ export class SessionInteractions {
                 "invalid_agent_permission_request",
             );
         }
-        const pending = new PendingPermission(interactionId, new Set(options.map((option) => option.optionId)));
+        // A permission request is a partial ToolCallUpdate: a field it
+        // omits keeps the value announced for the same tool call, which
+        // the event history projection holds in merged form.
+        const announced = this.#context.getToolCall(request.toolCall.toolCallId);
+        const title = request.toolCall.title ?? announced?.title;
+        const kind = request.toolCall.kind ?? announced?.kind;
+        const rawInput = request.toolCall.rawInput ?? announced?.rawInput;
+        const locations = request.toolCall.locations ?? announced?.locations ?? [];
+        const event: SessionPermissionRequestedEvent = {
+            commandId: this.#context.commandId(),
+            details: {
+                cwd: this.#context.cwd(),
+                rawInput,
+                locations,
+            },
+            interactionId,
+            kind: SESSION_PERMISSION_REQUESTED_KIND,
+            options,
+            sessionId: this.#context.sessionId(),
+            title: truncate(title ?? "Permission required", 500),
+            toolCallId: truncate(request.toolCall.toolCallId, 255),
+            toolKind: truncate(kind ?? "other", 64),
+        };
+        const pending = new PendingPermission(event);
         this.#pendingPermissions.set(interactionId, pending);
         const abort = (): void => {
             void this.cancelPermission(interactionId);
         };
         signal.addEventListener("abort", abort, { once: true });
         try {
-            // A permission request is a partial ToolCallUpdate: a field it
-            // omits keeps the value announced for the same tool call, which
-            // the event history projection holds in merged form.
-            const announced = this.#context.getToolCall(request.toolCall.toolCallId);
-            const title = request.toolCall.title ?? announced?.title;
-            const kind = request.toolCall.kind ?? announced?.kind;
-            const rawInput = request.toolCall.rawInput ?? announced?.rawInput;
-            const locations = request.toolCall.locations ?? announced?.locations ?? [];
-            await this.#notifyPermissionRequested({
-                commandId: this.#context.commandId(),
-                details: {
-                    cwd: this.#context.cwd(),
-                    rawInput,
-                    locations,
-                },
-                interactionId,
-                kind: SESSION_PERMISSION_REQUESTED_KIND,
-                options,
-                sessionId: this.#context.sessionId(),
-                title: truncate(title ?? "Permission required", 500),
-                toolCallId: truncate(request.toolCall.toolCallId, 255),
-                toolKind: truncate(kind ?? "other", 64),
-            });
+            await this.#notifyPermissionRequested(event);
             return await pending.completion.promise;
         } finally {
             signal.removeEventListener("abort", abort);
@@ -231,28 +238,29 @@ export class SessionInteractions {
         const elicitationIdValue = Reflect.get(request, "elicitationId");
         const elicitationId =
             request.mode === "url" && typeof elicitationIdValue === "string" ? truncate(elicitationIdValue, 255) : "";
-        const pending = new PendingElicitation(interactionId, elicitationId, requestedSchema);
+        const event: SessionElicitationRequestedEvent = {
+            accepted: false,
+            commandId: this.#context.commandId(),
+            elicitationId,
+            fields: normalizeElicitationFields(requestedSchema),
+            interactionId,
+            kind: SESSION_ELICITATION_REQUESTED_KIND,
+            message: truncate(request.message, 2_000),
+            mode: request.mode,
+            sessionId: this.#context.sessionId(),
+            url:
+                request.mode === "url" && typeof Reflect.get(request, "url") === "string"
+                    ? truncate(readString(Reflect.get(request, "url")), 4_096)
+                    : "",
+        };
+        const pending = new PendingElicitation(event, requestedSchema);
         this.#pendingElicitations.set(interactionId, pending);
         const abort = (): void => {
             void this.cancelElicitation(interactionId);
         };
         signal.addEventListener("abort", abort, { once: true });
         try {
-            await this.#notifyElicitationRequested({
-                accepted: false,
-                commandId: this.#context.commandId(),
-                elicitationId,
-                fields: normalizeElicitationFields(requestedSchema),
-                interactionId,
-                kind: SESSION_ELICITATION_REQUESTED_KIND,
-                message: truncate(request.message, 2_000),
-                mode: request.mode,
-                sessionId: this.#context.sessionId(),
-                url:
-                    request.mode === "url" && typeof Reflect.get(request, "url") === "string"
-                        ? truncate(readString(Reflect.get(request, "url")), 4_096)
-                        : "",
-            });
+            await this.#notifyElicitationRequested(event);
             return await pending.completion.promise;
         } finally {
             signal.removeEventListener("abort", abort);
@@ -261,14 +269,14 @@ export class SessionInteractions {
     };
 
     readonly onElicitationComplete = async (notification: CompleteElicitationNotification): Promise<void> => {
-        const interactionId = this.#acceptedUrlElicitations.get(notification.elicitationId);
-        if (interactionId === undefined) {
+        const accepted = this.#acceptedUrlElicitations.get(notification.elicitationId);
+        if (accepted === undefined) {
             return;
         }
         this.#acceptedUrlElicitations.delete(notification.elicitationId);
         await this.#notifyElicitationResolved({
             action: "complete",
-            interactionId,
+            interactionId: accepted.interactionId,
             kind: SESSION_ELICITATION_RESOLVED_KIND,
             sessionId: this.#context.sessionId(),
         });
@@ -306,7 +314,9 @@ export class SessionInteractions {
     readonly cancelPendingInteractions = async (): Promise<void> => {
         const permissionIds = [...this.#pendingPermissions.keys()];
         const elicitationIds = [...this.#pendingElicitations.keys()];
-        const acceptedElicitationIds = [...this.#acceptedUrlElicitations.values()];
+        const acceptedElicitationIds = [...this.#acceptedUrlElicitations.values()].map(
+            (request) => request.interactionId,
+        );
         this.#acceptedUrlElicitations.clear();
         for (const interactionId of permissionIds) {
             await this.cancelPermission(interactionId);
