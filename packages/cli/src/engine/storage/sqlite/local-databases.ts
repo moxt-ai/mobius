@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { acpSessionStoreMigrations } from "../../generated/acp-session-store-migrations.ts";
 import { sessionEventCacheMigrations } from "../../generated/session-event-cache-migrations.ts";
-import { LocalSqliteDatabase, type LocalSqliteMigration } from "./local-sqlite-database.ts";
+import { LocalSqliteDatabase } from "./local-sqlite-database.ts";
 
 export interface ChannelSessionDatabasePaths {
     readonly events: string;
@@ -18,20 +20,32 @@ export function channelSessionDatabasePaths(stateDirectory: string, channelId: s
     };
 }
 
-export const openAcpSessionDatabase = (path: string): LocalSqliteDatabase =>
-    new LocalSqliteDatabase(
-        path,
-        "ACP Session database",
-        acpSessionStoreMigrations.map(
-            (migration): LocalSqliteMigration =>
-                migration.name === "0009_receipt_admission_order.sql"
-                    ? {
-                          ...migration,
-                          compatibleColumn: { table: "execution_receipt", column: "admission_order" },
-                      }
-                    : migration,
-        ),
-    );
+/**
+ * CLI 0.0.350 and later releases before this repair applied migration 0009 without recording it in `user_version`,
+ * so their databases report 9 while already holding `admission_order`. Record it so 0009 does not run again.
+ */
+function recordAppliedAdmissionOrder(path: string): void {
+    if (!existsSync(path)) {
+        return;
+    }
+    const database = new DatabaseSync(path);
+    try {
+        const version = database.prepare("PRAGMA user_version").get()?.["user_version"];
+        const column = database
+            .prepare("SELECT name FROM pragma_table_info('execution_receipt') WHERE name = 'admission_order'")
+            .get();
+        if (version === 9 && column !== undefined) {
+            database.exec("PRAGMA user_version = 10");
+        }
+    } finally {
+        database.close();
+    }
+}
+
+export const openAcpSessionDatabase = (path: string): LocalSqliteDatabase => {
+    recordAppliedAdmissionOrder(path);
+    return new LocalSqliteDatabase(path, "ACP Session database", acpSessionStoreMigrations);
+};
 
 export const openSessionEventCacheDatabase = (path: string): LocalSqliteDatabase =>
     new LocalSqliteDatabase(path, "V2 Session event cache", sessionEventCacheMigrations, [

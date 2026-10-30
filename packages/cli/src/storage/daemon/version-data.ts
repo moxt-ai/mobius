@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { cp, lstat, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join, relative, sep } from "node:path";
+import { join } from "node:path";
 import { decodeRuntimeUpgradeVersion } from "@moxt-ai/mobius-sdk/protocol";
 import { ensurePrivateDirectory } from "../../engine/storage/files/local-files.ts";
 import { validateLocalPath } from "../../engine/util/filesystem/private-path.ts";
 import { isNodeError } from "../../engine/util/node-error.ts";
 import type { StateRoot } from "../state-directory.ts";
-import { STATE_ROOT_ENTRY_NAMES, STATE_ROOT_LAYOUT } from "../state-root-layout.ts";
+import { STATE_ROOT_LAYOUT } from "../state-root-layout.ts";
 
 // Each daemon version keeps its data in `versions/<version>/` under the state root, and
 // `current-data.txt` names the version whose data is current.
@@ -52,7 +52,7 @@ export async function readCurrentDataVersion(root: StateRoot, signal: AbortSigna
     }
 }
 
-export async function versionDataExists(root: StateRoot, version: string, signal: AbortSignal): Promise<boolean> {
+async function versionDataExists(root: StateRoot, version: string, signal: AbortSignal): Promise<boolean> {
     try {
         await validateLocalPath(join(root, STATE_ROOT_LAYOUT.versions, version), true, true, signal);
         return true;
@@ -64,30 +64,13 @@ export async function versionDataExists(root: StateRoot, version: string, signal
     }
 }
 
-/**
- * Whether a path in a version's data is a state root entry inside an installation, as `installations/<application>/
- * <installation>/npm`. An earlier Mobius that ran with that installation as its root left it; it is not the
- * installation's data, and its release links would otherwise block every later version from starting.
- */
-function nestedRootEntry(segments: readonly string[]): boolean {
-    return (
-        segments.length >= 4 &&
-        segments[0] === STATE_ROOT_LAYOUT.installations &&
-        STATE_ROOT_ENTRY_NAMES.has(segments[3] ?? "")
-    );
-}
-
-/**
- * Copies one version's data into a new version's directory and returns the nested state root entries it left
- * behind. Any other symbolic link is rejected.
- */
+/** Copies one version's data into a new version's directory. A symbolic link is rejected. */
 export async function copyVersionData(
     root: StateRoot,
     sourceVersion: string,
     targetVersion: string,
     signal: AbortSignal,
-): Promise<readonly string[]> {
-    const leftBehind: string[] = [];
+): Promise<void> {
     const versions = join(root, STATE_ROOT_LAYOUT.versions);
     const source = join(versions, sourceVersion);
     const target = join(versions, targetVersion);
@@ -100,13 +83,6 @@ export async function copyVersionData(
             recursive: true,
             filter: async (path) => {
                 signal.throwIfAborted();
-                const segments = relative(source, path).split(sep);
-                if (nestedRootEntry(segments)) {
-                    if (segments.length === 4) {
-                        leftBehind.push(segments.join("/"));
-                    }
-                    return false;
-                }
                 if ((await lstat(path)).isSymbolicLink()) {
                     throw new DataInheritanceError("The inherited data contains a symbolic link");
                 }
@@ -123,7 +99,6 @@ export async function copyVersionData(
             }
             await validateLocalPath(target, true, true, signal);
         }
-        return leftBehind;
     } finally {
         await rm(staging, { recursive: true, force: true });
     }

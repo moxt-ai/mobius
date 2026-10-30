@@ -1,3 +1,4 @@
+import type { SessionInteractionSnapshot } from "@moxt-ai/mobius-sdk/protocol";
 import {
     SESSION_CLOSE_NOTICE_KIND,
     SESSION_CLOSED_ERROR_CODE,
@@ -50,6 +51,9 @@ import {
     type SessionTurnOptions,
 } from "../api/session-api.ts";
 import type { SessionEventPage } from "../history/session-event-store.ts";
+
+/** Identifies a native session while an import, fork, or continuation manages it. */
+const nativeOperationKey = (agentId: string, nativeSessionId: string): string => `${agentId}:${nativeSessionId}`;
 
 export class SessionManager {
     readonly #operations = new RuntimeOperations();
@@ -118,7 +122,7 @@ export class SessionManager {
         const stored = this.#store.read(sessionId);
         return (
             stored instanceof FoundStoredSession &&
-            this.#nativeOperations.has(`${stored.session.agentId}:${stored.session.nativeSessionId}`)
+            this.#nativeOperations.has(nativeOperationKey(stored.session.agentId, stored.session.nativeSessionId))
         );
     }
 
@@ -308,6 +312,7 @@ export class SessionManager {
                                 ...options,
                                 booleanValue: desired.booleanValue,
                                 configId: desired.id,
+                                expectedConfigurationRevision: null,
                                 requestId: `execution-prepare-${desired.id}`,
                                 value: "",
                                 valueType: "boolean",
@@ -323,6 +328,7 @@ export class SessionManager {
                             ...options,
                             booleanValue: false,
                             configId: desired.id,
+                            expectedConfigurationRevision: null,
                             requestId: `execution-prepare-${desired.id}`,
                             value: desired.currentValue,
                             valueType: "select",
@@ -334,6 +340,49 @@ export class SessionManager {
                 throw error;
             }
             return runtime;
+        });
+    }
+
+    /**
+     * Reuses an idle process only while it still continues the latest native conversation.
+     * Otherwise its Agent would answer from, and append to, an earlier copy, so the process is
+     * released and the Session reopens from native history as after idle reclamation.
+     */
+    async #currentSessionProcess(
+        existing: AgentSession,
+        options: SessionPrepareOptions,
+        recovery: SessionRecovery,
+    ): Promise<AgentSession> {
+        const changed =
+            !this.#isNativeSessionOperationActive(options.sessionId) &&
+            (await existing.nativeHistoryChanged(options.signal));
+        // Another operation may have reopened the Session while the native history was read.
+        const pending = this.#executionProcesses.pending(options.sessionId);
+        if (pending !== undefined) {
+            return await waitForSharedOperation(pending, options.signal);
+        }
+        const current = this.#executionProcesses.get(options.sessionId);
+        if (current !== undefined && current !== existing) {
+            return current;
+        }
+        if (!changed) {
+            return existing;
+        }
+        return await this.#executionProcesses.prepare(options.sessionId, async () => {
+            await this.#stopSessionProcess(options.sessionId, existing);
+            return await this.#startRetainedSessionProcess(
+                options,
+                async (capabilities) =>
+                    await AgentSession.start(
+                        options,
+                        recovery,
+                        () => this.#observer,
+                        this.#store,
+                        unmeasuredOperationMetrics,
+                        options.adapter,
+                        capabilities,
+                    ),
+            );
         });
     }
 
@@ -355,11 +404,10 @@ export class SessionManager {
                 } else {
                     this.#assertOpen(options.sessionId);
                 }
-                const stored = metrics.measureSync("session-state-read", () => this.#store.read(options.sessionId));
-
                 if (
-                    stored instanceof FoundStoredSession &&
-                    this.#nativeOperations.has(`${stored.session.agentId}:${stored.session.nativeSessionId}`)
+                    metrics.measureSync("session-state-read", () =>
+                        this.#isNativeSessionOperationActive(options.sessionId),
+                    )
                 ) {
                     throw new AcpExecutionError("The native session is being managed", {}, "session_busy");
                 }
@@ -384,14 +432,15 @@ export class SessionManager {
                 const existing = this.#executionProcesses.get(options.sessionId);
                 if (existing !== undefined) {
                     if (existing.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)) {
-                        this.#executionProcesses.touch(options.sessionId, existing);
+                        const runtime = await this.#currentSessionProcess(existing, options, recovery);
+                        this.#executionProcesses.touch(options.sessionId, runtime);
                         if (recovery.kind === "history-required") {
                             await metrics.measure(
                                 "session-load",
-                                async () => await existing.ensureHistoryLoaded(options.signal),
+                                async () => await runtime.ensureHistoryLoaded(options.signal),
                             );
                         }
-                        return existing.prepared();
+                        return runtime.prepared();
                     }
                     if (!existing.canRebind()) {
                         throw new AcpExecutionError(
@@ -463,6 +512,7 @@ export class SessionManager {
                                       ...options,
                                       booleanValue: false,
                                       configId: modelOption?.id ?? "model",
+                                      expectedConfigurationRevision: null,
                                       requestId: "agent-settings-model",
                                       sessionId: `agent-settings-${crypto.randomUUID()}`,
                                       value: model,
@@ -536,11 +586,12 @@ export class SessionManager {
                 );
             }
             if (existing.usesEnvironment(options.agent.environment)) {
+                const runtime = await this.#currentSessionProcess(existing, options, recovery);
                 if (recovery.kind === "execution-only") {
-                    existing.startExecutionOnlyCapture();
+                    runtime.startExecutionOnlyCapture();
                 }
-                this.#executionProcesses.touch(options.sessionId, existing);
-                return existing.prepared();
+                this.#executionProcesses.touch(options.sessionId, runtime);
+                return runtime.prepared();
             }
             if (existing.hasRunningTurn()) {
                 throw new AcpExecutionError(
@@ -569,8 +620,11 @@ export class SessionManager {
                 this.#assertOpen(options.sessionId);
                 // Process reclamation must not turn a native rename into a metadata-only write.
                 // Keep the same process borrowed through recovery and the acknowledged rename.
-                if (this.#executionProcesses.get(options.sessionId) === undefined) {
+                const existing = this.#executionProcesses.get(options.sessionId);
+                if (existing === undefined) {
                     await this.#prepareSession(options, { kind: "interactive-only" }, "keep-closed");
+                } else {
+                    await this.#currentSessionProcess(existing, options, { kind: "interactive-only" });
                 }
                 const runtime = this.#executionProcesses.get(options.sessionId);
                 if (runtime === undefined) {
@@ -657,11 +711,7 @@ export class SessionManager {
         this.#operations.run(options, async (options) => {
             // A close can land after the prompt was prepared; fail before the Session is reported working.
             this.#assertOpen(options.sessionId);
-            const stored = this.#store.read(options.sessionId);
-            if (
-                stored instanceof FoundStoredSession &&
-                this.#nativeOperations.has(`${stored.session.agentId}:${stored.session.nativeSessionId}`)
-            ) {
+            if (this.#isNativeSessionOperationActive(options.sessionId)) {
                 throw new AcpExecutionError("The native session is being managed", {}, "session_busy");
             }
             this.#executions.begin(options.sessionId, options.commandId);
@@ -675,7 +725,7 @@ export class SessionManager {
                     return { stopReason: "cancelled" };
                 }
                 const runtime = await this.ensureSession(options);
-                if (this.#nativeOperations.has(`${options.agent.id}:${runtime.nativeSessionId()}`)) {
+                if (this.#nativeOperations.has(nativeOperationKey(options.agent.id, runtime.nativeSessionId()))) {
                     throw new AcpExecutionError("The native session is being managed", {}, "session_busy");
                 }
                 if (this.#executions.cancellation(options.sessionId) !== undefined) {
@@ -826,6 +876,31 @@ export class SessionManager {
     readonly findLinkedSessions = (agentId: string, nativeSessionId: string) =>
         this.#store.findNative(agentId, nativeSessionId);
 
+    readonly interactionSnapshot = (options: SessionPrepareOptions): SessionInteractionSnapshot | undefined => {
+        options.signal.throwIfAborted();
+        const runtime = this.#executionProcesses.get(options.sessionId);
+        if (runtime !== undefined) {
+            return runtime.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)
+                ? runtime.interactionSnapshot()
+                : undefined;
+        }
+        const stored = this.#store.read(options.sessionId);
+        if (
+            !(stored instanceof FoundStoredSession) ||
+            stored.session.agentId !== options.agent.id ||
+            stored.session.cwd !== options.cwd ||
+            stored.session.additionalDirectories.length !== options.additionalDirectories.length ||
+            !stored.session.additionalDirectories.every(
+                (directory, index) => directory === options.additionalDirectories[index],
+            )
+        ) {
+            return undefined;
+        }
+        // No live Agent owns an actionable request after its session process has gone away.
+        const { sessionGenerationId, throughPosition } = this.#store.events.livePosition(options.sessionId);
+        return { sessionGenerationId, throughPosition, interactions: [] };
+    };
+
     readonly hasPreparedSession = (
         sessionId: string,
         agentId: string,
@@ -887,11 +962,16 @@ export class SessionManager {
                         "session_identity_mismatch",
                     );
                 }
+                const runtime = await this.#currentSessionProcess(
+                    existing,
+                    options,
+                    options.recovery ?? { kind: "interactive-only" },
+                );
                 if (options.recovery?.kind === "execution-only") {
-                    existing.startExecutionOnlyCapture();
+                    runtime.startExecutionOnlyCapture();
                 }
-                this.#executionProcesses.touch(options.sessionId, existing);
-                return existing;
+                this.#executionProcesses.touch(options.sessionId, runtime);
+                return runtime;
             }
             await this.#prepareSession(options, options.recovery ?? { kind: "interactive-only" }, "reopen");
             const started = this.#executionProcesses.get(options.sessionId);
@@ -908,7 +988,7 @@ export class SessionManager {
         operation: (options: SessionPrepareOptions) => Promise<Result>,
     ): Promise<Result> =>
         this.#operations.run(options, async (options) => {
-            const key = `${options.agent.id}:${nativeSessionId}`;
+            const key = nativeOperationKey(options.agent.id, nativeSessionId);
             if (this.#nativeOperations.has(key)) {
                 throw new AcpExecutionError(
                     "Wait for the native session's running operation to finish",
@@ -957,7 +1037,7 @@ export class SessionManager {
         readonly prepared: PreparedSession;
     }> =>
         this.#operations.run(options, async (options) => {
-            const key = `${options.agent.id}:${origin.nativeSessionId}`;
+            const key = nativeOperationKey(options.agent.id, origin.nativeSessionId);
             if (this.#nativeOperations.has(key)) {
                 throw new AcpExecutionError("The native session is being managed", {}, "session_busy");
             }
@@ -1019,7 +1099,7 @@ export class SessionManager {
                 this.#nativeOperations.add(key);
                 try {
                     const runtime = await this.#startPreparation({ ...target, origin }, { kind: "interactive-only" });
-                    const openedKey = `${options.agent.id}:${runtime.nativeSessionId()}`;
+                    const openedKey = nativeOperationKey(options.agent.id, runtime.nativeSessionId());
                     this.#nativeOperations.add(openedKey);
                     try {
                         const prepared = runtime.prepared();

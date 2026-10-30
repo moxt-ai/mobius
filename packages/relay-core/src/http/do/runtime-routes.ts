@@ -32,7 +32,7 @@ export function createRuntimeRoutes(runtime: RuntimeService) {
         }
         if (request.method === "GET" && url.pathname.endsWith("/runtime-status")) {
             await runtime.expireSilentDaemons();
-            return Response.json({ online: runtime.isOnline(runtimeId), nativeForkRecovery: true });
+            return Response.json({ online: runtime.isOnline(runtimeId) });
         }
         const revoked = () =>
             Response.json(
@@ -46,12 +46,7 @@ export function createRuntimeRoutes(runtime: RuntimeService) {
             return new Response("WebSocket upgrade required", { status: 426 });
         }
         if (url.pathname.endsWith("/daemon")) {
-            const result = await runtime.acceptDaemon(
-                runtimeId,
-                scope,
-                url.searchParams.get("liveness") === "1",
-                request.signal,
-            );
+            const result = await runtime.acceptDaemon(runtimeId, scope, request.signal);
             switch (result.kind) {
                 case "accepted":
                     return result.response;

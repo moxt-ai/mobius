@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -54,30 +54,19 @@ async function startNewerDaemon(environment: Readonly<NodeJS.ProcessEnv>) {
     return await runCli(["start"], environment);
 }
 
-/**
- * A state root whose current data is an earlier CLI version. Its installation keeps a Pi session, and an Agent shell
- * once ran Mobius with that installation as its root, leaving a nested root's entries and npm release links there.
- */
-async function rootWithNestedInstallation() {
+/** A state root whose current data is an earlier CLI version. Its installation keeps a Pi session. */
+async function rootWithEarlierInstallation() {
     const home = await mkdtemp(join(tmpdir(), "mobius-version-inheritance-"));
     temporaryDirectories.push(home);
     const root = join(home, "state");
     const application = join(root, "versions", earlierVersion, "installations", "dev.mobius.cli");
     const installation = join(application, installationId);
     const session = join(installation, "agents", "pi", "sessions", "workspace-hash", "session.jsonl");
-    const releaseBin = join(installation, "npm", "0.0.309", "node_modules", ".bin");
-    await Promise.all([
-        mkdir(dirname(session), { recursive: true }),
-        mkdir(releaseBin, { recursive: true }),
-        mkdir(join(installation, "versions", "0.0.309", "installations"), { recursive: true }),
-        mkdir(join(installation, "installations", "dev.mobius.cli"), { recursive: true }),
-    ]);
+    await mkdir(dirname(session), { recursive: true });
     await Promise.all([
         writeFile(join(root, "current-data.txt"), `versions/${earlierVersion}\n`),
         writeFile(join(application, "current.json"), JSON.stringify({ installationId, version: 1 })),
         writeFile(session, '{"type":"session"}\n'),
-        writeFile(join(installation, "current-data.txt"), "versions/0.0.309\n"),
-        symlink("../@moxt-ai/mobius/dist/cli.js", join(releaseBin, "mobius")),
     ]);
     const inherited = join(
         root,
@@ -92,8 +81,8 @@ async function rootWithNestedInstallation() {
 }
 
 describe("Mobius version data inheritance", () => {
-    it("Given an earlier version's installation that an Agent shell once used as a nested state root, When a newer daemon first starts, Then it starts, keeps the installation's data, and leaves the nested root's entries behind", async () => {
-        const { environment, inherited } = await rootWithNestedInstallation();
+    it("Given an earlier version's current data, When a newer daemon first starts, Then it starts with the installation's data", async () => {
+        const { environment, inherited } = await rootWithEarlierInstallation();
 
         const started = await startNewerDaemon(environment);
 
@@ -101,14 +90,10 @@ describe("Mobius version data inheritance", () => {
         expect(
             await readFile(join(inherited, "agents", "pi", "sessions", "workspace-hash", "session.jsonl"), "utf8"),
         ).toBe('{"type":"session"}\n');
-        const entries = await readdir(inherited);
-        for (const nestedRootEntry of ["current-data.txt", "installations", "npm", "versions"]) {
-            expect(entries).not.toContain(nestedRootEntry);
-        }
     });
 
     it("Given a symbolic link inside an earlier version's installation data, When a newer daemon first starts, Then inheritance still refuses it", async () => {
-        const { environment, installation } = await rootWithNestedInstallation();
+        const { environment, installation } = await rootWithEarlierInstallation();
         await symlink("/etc/hostname", join(installation, "agents", "pi", "linked"));
 
         const started = await startNewerDaemon(environment);

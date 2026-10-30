@@ -46,7 +46,6 @@ import {
 } from "./errors.ts";
 import { MobiusPublicRequestExecutor } from "./public-request.ts";
 import {
-    type CancelMobiusTurnRequest,
     type CreateMobiusSessionRequest,
     decodeMobiusBrowserCredential,
     decodeMobiusChannelAccessGrant,
@@ -75,6 +74,7 @@ import {
     type MobiusRuntimePairingWaitOptions,
     MobiusSessionAccess,
     type MobiusTurn,
+    type MobiusTurnCancellation,
     type SubmitMobiusTurnRequest,
 } from "./resources.ts";
 
@@ -239,6 +239,18 @@ function normalizeEndpoint(value: string): URL {
         endpoint.pathname = `${endpoint.pathname}/`;
     }
     return endpoint;
+}
+
+function decodeTurnCancellation(value: unknown, turnId: string): MobiusTurnCancellation {
+    if (
+        typeof value !== "object" ||
+        value === null ||
+        Reflect.get(value, "turnId") !== turnId ||
+        typeof Reflect.get(value, "stopReason") !== "string"
+    ) {
+        throw new MobiusProtocolError("The service returned an invalid Turn cancellation");
+    }
+    return { turnId, stopReason: Reflect.get(value, "stopReason") };
 }
 
 function projectPath(projectId: string, resourcePath: string): string {
@@ -915,7 +927,7 @@ export class MobiusRuntimeResources {
             | (Omit<
                   Extract<NativeSessionRequest, { readonly action: "import" | "fork" }>,
                   "kind" | "requestId" | "sessionId" | "targetSessionId" | "bindingId" | "action"
-              > & { readonly action: "import" | "fork"; readonly discoveryId: string }),
+              > & { readonly action: "import"; readonly discoveryId: string }),
         signal: AbortSignal,
     ) =>
         decodeNativeSessionResult(
@@ -929,8 +941,8 @@ export class MobiusRuntimeResources {
         );
 
     /**
-     * Requires the Relay's nativeForkRecovery capability. Reuse an operationId and its inputs after an ambiguous
-     * failure. This method never falls back to a legacy Fork; an unknown result must not create another Session.
+     * Reuse an operationId and its inputs after an ambiguous failure; an unknown result must not create another
+     * Session.
      */
     readonly forkNativeSession = async (
         runtimeId: string,
@@ -1396,7 +1408,7 @@ export class MobiusSessionResources {
     ): Promise<
         Pick<
             Extract<NativeSessionResult, { readonly action: "active-turn" }>,
-            "turn" | "queued" | "command" | "lastTurn" | "queuedCancellation"
+            "turn" | "queued" | "command" | "lastTurn" | "queuedCancellation" | "interactionState"
         >
     > => {
         const path = requestUrl(
@@ -1422,7 +1434,8 @@ export class MobiusSessionResources {
             queued: result.queued,
             ...(result.command === undefined ? {} : { command: result.command }),
             ...(result.lastTurn === undefined ? {} : { lastTurn: result.lastTurn }),
-            ...(result.queuedCancellation === undefined ? {} : { queuedCancellation: result.queuedCancellation }),
+            queuedCancellation: result.queuedCancellation,
+            ...(result.interactionState === undefined ? {} : { interactionState: result.interactionState }),
         };
     };
 
@@ -1507,77 +1520,25 @@ export class MobiusTurnResources {
         return { turnId };
     };
 
-    readonly cancel = async (
-        sessionId: string,
-        turnId: string,
-        request: CancelMobiusTurnRequest,
-        signal: AbortSignal,
-    ): Promise<MobiusTurn> => {
-        const turn = decodeMobiusTurn(
+    readonly cancel = async (sessionId: string, turnId: string, signal: AbortSignal): Promise<MobiusTurnCancellation> =>
+        decodeTurnCancellation(
             await this.#executor.post(
                 sessionPath(this.#projectId, sessionId, `turns/${encodeURIComponent(turnId)}/cancel`),
-                request,
+                {},
                 signal,
             ),
+            turnId,
         );
-        if (turn === null) {
-            throw new MobiusProtocolError("The service returned an invalid Turn");
-        }
-        return turn;
-    };
 
     /** Withdraws a queued prompt only when the Runtime confirms it did not execute. */
-    readonly cancelQueued = async (
-        sessionId: string,
-        turnId: string,
-        request: CancelMobiusTurnRequest & {
-            readonly additionalDirectoryIds: readonly string[];
-            readonly agentId: string;
-            readonly directoryId: string;
-        },
-        signal: AbortSignal,
-    ): Promise<void> => {
-        const { idempotencyKey, ...identity } = request;
-        const sessions = new MobiusSessionResources(this.#executor, this.#projectId);
-        const before = await sessions.readSessionExecution(sessionId, identity, signal, turnId);
-        if (before.queuedCancellation === "before-start") {
-            const result = await this.#executor.post(
-                sessionPath(this.#projectId, sessionId, `turns/${encodeURIComponent(turnId)}/cancel-before-start`),
-                { idempotencyKey },
-                signal,
-            );
-            if (
-                typeof result !== "object" ||
-                result === null ||
-                Reflect.get(result, "turnId") !== turnId ||
-                Reflect.get(result, "idempotencyKey") !== idempotencyKey
-            ) {
-                throw new MobiusProtocolError("The service returned an invalid queued cancellation");
-            }
-            return;
-        }
-        // Older peers retain their existing cancellation path. The same FIFO head before and
-        // after cancellation proves the queued prompt never acquired the execution slot.
-        const head = before.turn;
-        if (head === null || head.commandId === turnId || !before.queued.some((item) => item.commandId === turnId)) {
-            throw new MobiusError(
-                "turn_already_started",
-                "The message is no longer queued and could not be withdrawn.",
-            );
-        }
-        const cancelled = await this.cancel(sessionId, turnId, { idempotencyKey }, signal);
-        const after = await sessions.readSessionExecution(sessionId, identity, signal, turnId);
-        if (
-            cancelled.state.kind !== "cancelled" ||
-            after.turn?.commandId !== head.commandId ||
-            after.queued.some((item) => item.commandId === turnId) ||
-            (after.command !== undefined &&
-                (after.command.state !== "completed" || after.command.stopReason !== "cancelled"))
-        ) {
-            throw new MobiusError(
-                "queued_cancellation_unconfirmed",
-                "The message may have started. Its withdrawal could not be confirmed, so it was not restored for editing.",
-            );
+    readonly cancelQueued = async (sessionId: string, turnId: string, signal: AbortSignal): Promise<void> => {
+        const result = await this.#executor.post(
+            sessionPath(this.#projectId, sessionId, `turns/${encodeURIComponent(turnId)}/cancel-before-start`),
+            {},
+            signal,
+        );
+        if (typeof result !== "object" || result === null || Reflect.get(result, "turnId") !== turnId) {
+            throw new MobiusProtocolError("The service returned an invalid queued cancellation");
         }
     };
 

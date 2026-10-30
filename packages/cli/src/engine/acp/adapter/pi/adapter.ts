@@ -230,6 +230,23 @@ export class PiAdapter implements Adapter {
 
     readonly closeSession: Adapter["closeSession"] = this.releaseSession;
 
+    /** Pi records its native history in a session file, so the revision is read without its process. */
+    readonly readNativeHistoryRevision: Adapter["readNativeHistoryRevision"] = async (params) => {
+        const session = this.#session(params);
+        const revision = await waitForAgentOperation(
+            session.agent.readSessionRevision({ sessionId: session.nativeSessionId }),
+            AbortSignal.any([params.signal, AbortSignal.timeout(30_000)]),
+        );
+        if (revision.latestEntryId.length > 256) {
+            throw new AcpExecutionError(
+                "Pi returned an invalid native history revision",
+                {},
+                "invalid_native_session_response",
+            );
+        }
+        return { kind: "tracked", latestEntryId: revision.latestEntryId };
+    };
+
     readonly #release = async (nativeSessionId: NativeSessionId): Promise<void> => {
         const session = this.#sessions.get(nativeSessionId);
         if (session !== undefined) {

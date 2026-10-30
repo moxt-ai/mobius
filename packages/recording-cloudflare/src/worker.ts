@@ -1,11 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 import {
-    decodeSessionRecordingDirectory,
     decodeSessionRecordingDirectoryV2,
-    decodeSessionRecordingStatus,
     decodeSessionRecordingSummaryV2,
     decodeSessionRecordingWireWrite,
-    encodeSessionRecordingDirectory,
     encodeSessionRecordingDirectoryV2,
     encodeSessionRecordingExecution,
     encodeSessionRecordingTurnItemDetail,
@@ -21,15 +18,12 @@ import {
     SESSION_RECORDING_TURN_ITEM_ID_MAX_LENGTH,
     SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT,
     SESSION_RECORDING_TURN_PAGE_MAX_LIMIT,
-    type SessionRecordingSummary,
-    type SessionRecordingSummaryV2,
     type SessionRecordingTurnItemCursorDirection,
     type SessionRecordingWireWrite,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { type Context, Hono } from "hono";
 import { decodeKnownDirectoryUpdate } from "./entity/recording-directory-update.ts";
 import { RecordingSqlMetrics } from "./infra/recording-sql-metrics.ts";
-import { readLegacyRecordingStatus } from "./service/legacy-recording-status.ts";
 import { RecordingDirectory } from "./service/recording-directory.ts";
 import { projectDirectoryUpdate } from "./service/recording-directory-update.ts";
 import { RecordingEventWaiters } from "./service/recording-event-waiters.ts";
@@ -51,30 +45,13 @@ export interface RecordingWorker {
 }
 
 type RecordingEnvironment = { readonly Bindings: RecordingWorkerBindings };
-type SessionRecordingRoutes = Pick<
-    SessionRecordingStorage,
-    "append" | "read" | "readPage" | "records" | "batchesNewestFirst"
->;
+type SessionRecordingRoutes = Pick<SessionRecordingStorage, "append" | "read" | "readPage">;
 type TurnHistoryRoutes = Pick<SessionTurnHistory, "execution" | "item" | "itemPage" | "project" | "turnPage">;
 const jsonHeaders = { "content-type": "application/json" } as const;
-// Each invocation stays below the Durable Object subrequest budget. A full 100k-entry
-// legacy directory needs fewer than 800 batch requests from the outer Worker.
-const legacySummaryBatchSize = 128;
+// An opaque append-order cursor: the batch ordinal and the event position inside that batch.
+const recordingCursorPattern = /^v2:[1-9][0-9]*:(?:0|[1-9][0-9]*)$/;
 // Activity indexed after a batch is answered is abandoned after this long; later activity moves the same time.
 const directoryIndexTimeoutMilliseconds = 10_000;
-const legacySummaryHeaders = {
-    ...jsonHeaders,
-    "cache-control": "no-store",
-    "Mobius-Recording-Status-Source": "recorded-events",
-};
-
-class LegacyRecordingStatusUnavailableError extends Error {
-    readonly code = "recording_status_unavailable";
-    constructor() {
-        super("Recorded lifecycle status is unavailable");
-        this.name = "LegacyRecordingStatusUnavailableError";
-    }
-}
 
 function errorResponse(code: string, status: number): Response {
     return Response.json({ error: { code, message: "The Recording request could not be completed" } }, { status });
@@ -182,21 +159,6 @@ function sessionRecordingRoutes(
             );
             return context.json({ recorded: true }, 201);
         })
-        .get("/legacy-status", (context): Response => {
-            const target = eventTarget(context.req.raw);
-            if (target === null) {
-                return errorResponse("invalid_target", 400);
-            }
-            const read = readLegacyRecordingStatus(storage, target);
-            switch (read.kind) {
-                case "available":
-                    return context.json(read.status);
-                case "not_found":
-                    return errorResponse("not_found", 404);
-                case "unavailable":
-                    return errorResponse("recording_status_unavailable", 503);
-            }
-        })
         .get("/execution", async (context): Promise<Response> => {
             const target = eventTarget(context.req.raw);
             const commandIds = context.req.queries("commandId") ?? [];
@@ -284,15 +246,14 @@ function sessionRecordingRoutes(
         })
         .get("/page-events", async (context): Promise<Response> => {
             const target = eventTarget(context.req.raw);
-            const after = context.req.query("after");
+            const after = context.req.query("after") ?? null;
             const limit = context.req.query("limit");
             const waitValue = context.req.query("waitMs");
             const waitMilliseconds = waitValue === undefined ? 0 : parseSessionRecordingWaitMilliseconds(waitValue);
             if (
                 target === null ||
-                after === undefined ||
                 limit === undefined ||
-                !/^(?:(?:0|[1-9][0-9]*)|v2:[1-9][0-9]*:(?:0|[1-9][0-9]*))$/.test(after) ||
+                (after !== null && !recordingCursorPattern.test(after)) ||
                 !/^[1-9][0-9]{0,4}$/.test(limit) ||
                 waitMilliseconds === null
             ) {
@@ -329,9 +290,6 @@ function sessionRecordingRoutes(
                     `recording-total;dur=${(performance.now() - startedAt).toFixed(1)}`,
                 ].join(","),
             );
-            if (waitValue !== undefined) {
-                response.headers.set("Mobius-Recording-Wait-Supported", "1");
-            }
             return response;
         })
         .all("*", (): Response => errorResponse("not_found", 404));
@@ -396,73 +354,7 @@ function recordingDirectoryRoutes(
                 ? errorResponse("not_found", 404)
                 : context.json(summary);
         })
-        .post("/legacy-sessions", async (context): Promise<Response> => {
-            const projectId = decodedIdentifier(context.req.query("projectId"));
-            const runtimeId = decodedIdentifier(context.req.query("runtimeId"));
-            const sessionIds = await context.req.json<unknown>();
-            if (
-                projectId === null ||
-                runtimeId === null ||
-                !Array.isArray(sessionIds) ||
-                sessionIds.length > legacySummaryBatchSize ||
-                !sessionIds.every(isIdentifier)
-            ) {
-                return errorResponse("invalid_target", 400);
-            }
-            const summaries: SessionRecordingSummaryV2[] = [];
-            for (const sessionId of sessionIds) {
-                const summary = storage.find(sessionId);
-                if (summary === null || summary.runtimeId !== runtimeId) {
-                    return errorResponse("recording_status_unavailable", 503);
-                }
-                summaries.push(summary);
-            }
-            return await legacySummaryBatch(context, projectId, runtimeId, summaries);
-        })
         .all("*", (): Response => errorResponse("not_found", 404));
-}
-
-async function legacySummaryBatch(
-    context: Context<RecordingEnvironment>,
-    projectId: string,
-    runtimeId: string,
-    summaries: readonly SessionRecordingSummaryV2[],
-): Promise<Response> {
-    const cancellation = new AbortController();
-    const timer = setTimeout(() => cancellation.abort(new DOMException("Read timed out", "TimeoutError")), 10_000);
-    const signal = AbortSignal.any([context.req.raw.signal, cancellation.signal]);
-    const legacy: SessionRecordingSummary[] = [];
-    try {
-        for (let offset = 0; offset < summaries.length; offset += 4) {
-            signal.throwIfAborted();
-            const batch = await Promise.all(
-                summaries.slice(offset, offset + 4).map(async (summary) => {
-                    const query = new URLSearchParams({ projectId, runtimeId, sessionId: summary.sessionId });
-                    const response = await durableObjectFetch(
-                        context.env.SESSION_RECORDING,
-                        JSON.stringify([projectId, summary.sessionId]),
-                        new Request(`https://recording.internal/legacy-status?${query}`, { signal }),
-                    );
-                    if (!response.ok) {
-                        await response.body?.cancel();
-                        return null;
-                    }
-                    const status = decodeSessionRecordingStatus(await response.json<unknown>());
-                    return { ...summary, status };
-                }),
-            );
-            for (const summary of batch) {
-                if (summary === null) {
-                    return errorResponse("recording_status_unavailable", 503);
-                }
-                legacy.push(summary);
-            }
-        }
-        return new Response(encodeSessionRecordingDirectory({ sessions: legacy }), { headers: jsonHeaders });
-    } finally {
-        clearTimeout(timer);
-        cancellation.abort();
-    }
 }
 
 async function decode(request: Request): Promise<SessionRecordingWireWrite> {
@@ -577,7 +469,7 @@ function incrementalReadQuery(query: Record<string, string | undefined>) {
     if (after === undefined && limit === undefined) {
         return null;
     }
-    if (after !== undefined && !/^(?:(?:0|[1-9][0-9]*)|v2:[1-9][0-9]*:(?:0|[1-9][0-9]*))$/.test(after)) {
+    if (after !== undefined && !recordingCursorPattern.test(after)) {
         return { error: true };
     }
     const pageLimit = boundedLimit(limit, maximumPageEvents, maximumPageEvents);
@@ -585,7 +477,7 @@ function incrementalReadQuery(query: Record<string, string | undefined>) {
         return { error: true };
     }
     return {
-        after: after === undefined ? "0" : after,
+        after,
         limit: pageLimit,
         ...(waitValue === undefined ? {} : { waitMs: waitMilliseconds }),
     };
@@ -646,7 +538,6 @@ function durableObjectFetch(namespace: DurableObjectNamespace, name: string, req
 
 async function recordingSummaryResponse(
     context: Context<RecordingEnvironment>,
-    version: 1 | 2,
     kind: "directory" | "summary",
 ): Promise<Response> {
     const target = readTarget(context);
@@ -672,88 +563,11 @@ async function recordingSummaryResponse(
         return response;
     }
     const encoded = await response.text();
-    const summaries =
+    return Response.json(
         kind === "directory"
-            ? decodeSessionRecordingDirectoryV2(encoded).sessions
-            : [decodeSessionRecordingSummaryV2(encoded)];
-    if (version === 2) {
-        return Response.json(kind === "directory" ? { sessions: summaries } : summaries[0]);
-    }
-
-    // V1 still returns its entire JSON collection. Batch through separate DO invocations
-    // so neither invocation needs a per-Session subrequest for the whole directory.
-    const cancellation = new AbortController();
-    const streamSignal = AbortSignal.any([context.req.raw.signal, cancellation.signal]);
-    const batchQuery = new URLSearchParams({ projectId: target.projectId, runtimeId: target.runtimeId });
-    const readBatch = async (offset: number): Promise<readonly SessionRecordingSummary[] | null> => {
-        streamSignal.throwIfAborted();
-        const deadline = new AbortController();
-        const timer = setTimeout(() => deadline.abort(new DOMException("Read timed out", "TimeoutError")), 10_000);
-        try {
-            const batchResponse = await durableObjectFetch(
-                context.env.RECORDING_DIRECTORY,
-                JSON.stringify([target.projectId, target.runtimeId]),
-                new Request(`https://directory.internal/legacy-sessions?${batchQuery}`, {
-                    method: "POST",
-                    body: JSON.stringify(
-                        summaries.slice(offset, offset + legacySummaryBatchSize).map((s) => s.sessionId),
-                    ),
-                    signal: AbortSignal.any([streamSignal, deadline.signal]),
-                }),
-            );
-            if (!batchResponse.ok) {
-                await batchResponse.body?.cancel();
-                return null;
-            }
-            return decodeSessionRecordingDirectory(await batchResponse.text()).sessions;
-        } finally {
-            clearTimeout(timer);
-        }
-    };
-    // Before sending headers, preserve the typed failure for single/small legacy reads.
-    const first = await readBatch(0);
-    if (first === null) {
-        return errorResponse("recording_status_unavailable", 503);
-    }
-    if (kind === "summary" || summaries.length <= legacySummaryBatchSize) {
-        return new Response(
-            kind === "summary" ? JSON.stringify(first[0]) : encodeSessionRecordingDirectory({ sessions: first }),
-            { headers: legacySummaryHeaders },
-        );
-    }
-    let offset = legacySummaryBatchSize;
-    const encoder = new TextEncoder();
-    const body = new ReadableStream<Uint8Array>(
-        {
-            start(controller) {
-                controller.enqueue(encoder.encode(`{"sessions":[${first.map((s) => JSON.stringify(s)).join(",")}`));
-            },
-            async pull(controller) {
-                try {
-                    const batch = await readBatch(offset);
-                    if (batch === null) {
-                        // Headers have already been sent. An errored body cannot be decoded as
-                        // a successful partial directory by an existing V1 client.
-                        throw new LegacyRecordingStatusUnavailableError();
-                    }
-                    controller.enqueue(encoder.encode(`,${batch.map((s) => JSON.stringify(s)).join(",")}`));
-                    offset += legacySummaryBatchSize;
-                    if (offset >= summaries.length) {
-                        controller.enqueue(encoder.encode("]}"));
-                        controller.close();
-                    }
-                } catch (cause) {
-                    cancellation.abort(cause);
-                    controller.error(cause);
-                }
-            },
-            cancel(reason) {
-                cancellation.abort(reason);
-            },
-        },
-        { highWaterMark: 0 },
+            ? { sessions: decodeSessionRecordingDirectoryV2(encoded).sessions }
+            : decodeSessionRecordingSummaryV2(encoded),
     );
-    return new Response(body, { headers: legacySummaryHeaders });
 }
 
 type BatchResult =
@@ -940,17 +754,11 @@ export function createRecordingWorker(): RecordingWorker {
                 201,
             );
         })
-        .get("/v1/projects/:projectId/runtimes/:runtimeId/sessions", (context) =>
-            recordingSummaryResponse(context, 1, "directory"),
-        )
-        .get("/v1/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId", (context) =>
-            recordingSummaryResponse(context, 1, "summary"),
-        )
         .get("/v2/projects/:projectId/runtimes/:runtimeId/sessions", (context) =>
-            recordingSummaryResponse(context, 2, "directory"),
+            recordingSummaryResponse(context, "directory"),
         )
         .get("/v2/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId", (context) =>
-            recordingSummaryResponse(context, 2, "summary"),
+            recordingSummaryResponse(context, "summary"),
         )
         .get(
             "/v1/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/execution",
@@ -1015,7 +823,9 @@ export function createRecordingWorker(): RecordingWorker {
                     return errorResponse("invalid_request", 400);
                 }
                 if (incremental !== null) {
-                    query.set("after", incremental.after);
+                    if (incremental.after !== undefined) {
+                        query.set("after", incremental.after);
+                    }
                     query.set("limit", incremental.limit.toString());
                     if (incremental.waitMs !== undefined) {
                         query.set("waitMs", incremental.waitMs.toString());

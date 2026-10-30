@@ -1,5 +1,5 @@
 import { relayDrizzle } from "@moxt-ai/mobius-relay-core/database";
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import {
     type ActiveCountRow,
     ActiveCountRowSchema,
@@ -7,8 +7,6 @@ import {
     AppRowSchema,
     type AuditRow,
     AuditRowSchema,
-    type CredentialRevisionRow,
-    CredentialRevisionRowSchema,
     type CredentialRow,
     CredentialRowSchema,
     type PlatformAppCredentialInsert,
@@ -128,12 +126,7 @@ export class PlatformControlPlaneStorage {
                         platformDrizzle(this.#database)
                             .update(platformApp)
                             .set({ lifecycle: "deleted", deletedAt, updatedAt: deletedAt })
-                            .where(
-                                and(
-                                    eq(platformApp.appId, appId),
-                                    inArray(platformApp.lifecycle, ["active", "suspended"]),
-                                ),
-                            ),
+                            .where(and(eq(platformApp.appId, appId), eq(platformApp.lifecycle, "active"))),
                     ),
                     this.auditOfPreviousChange(audit),
                     this.#database
@@ -220,7 +213,11 @@ export class PlatformControlPlaneStorage {
             await waitForD1(
                 () =>
                     this.#database
-                        .prepare("SELECT * FROM platform_projects WHERE app_id = ? AND idempotency_key = ?")
+                        .prepare(
+                            `SELECT projects.*, apps.tenant_id
+                               FROM platform_projects AS projects JOIN platform_apps AS apps ON apps.app_id = projects.app_id
+                              WHERE projects.app_id = ? AND projects.idempotency_key = ?`,
+                        )
                         .bind(appId, idempotencyKey)
                         .first(),
                 signal,
@@ -237,9 +234,9 @@ export class PlatformControlPlaneStorage {
                 () =>
                     this.#database
                         .prepare(
-                            `SELECT app_id, tenant_id, project_id, lifecycle
-                               FROM platform_projects
-                              WHERE project_id = ? AND lifecycle = 'active'`,
+                            `SELECT projects.app_id, apps.tenant_id, projects.project_id, projects.lifecycle
+                               FROM platform_projects AS projects JOIN platform_apps AS apps ON apps.app_id = projects.app_id
+                              WHERE projects.project_id = ? AND projects.lifecycle = 'active'`,
                         )
                         .bind(projectId)
                         .first(),
@@ -254,7 +251,9 @@ export class PlatformControlPlaneStorage {
                 () =>
                     this.#database
                         .prepare(
-                            "SELECT COUNT(*) AS active_count FROM platform_projects WHERE tenant_id = ? AND lifecycle = 'active'",
+                            `SELECT COUNT(*) AS active_count
+                               FROM platform_projects AS projects JOIN platform_apps AS apps ON apps.app_id = projects.app_id
+                              WHERE apps.tenant_id = ? AND projects.lifecycle = 'active'`,
                         )
                         .bind(tenantId)
                         .first(),
@@ -276,15 +275,14 @@ export class PlatformControlPlaneStorage {
                     this.#database
                         .prepare(
                             `INSERT INTO platform_projects (
-                                project_id, tenant_id, app_id, display_name, client_reference,
+                                project_id, app_id, display_name, client_reference,
                                 idempotency_key, request_digest, lifecycle, location_hint, created_at, updated_at
-                              ) SELECT ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?
-                               WHERE (SELECT COUNT(*) FROM platform_projects
-                                       WHERE tenant_id = ? AND lifecycle = 'active') < ?`,
+                              ) SELECT ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?
+                               WHERE (SELECT COUNT(*) FROM platform_projects AS projects JOIN platform_apps AS apps ON apps.app_id = projects.app_id
+                                       WHERE apps.tenant_id = ? AND projects.lifecycle = 'active') < ?`,
                         )
                         .bind(
                             project.project_id,
-                            project.tenant_id,
                             project.app_id,
                             project.display_name,
                             project.client_reference,
@@ -323,7 +321,12 @@ export class PlatformControlPlaneStorage {
         const rows = await waitForD1(
             () =>
                 this.#database
-                    .prepare("SELECT * FROM platform_projects WHERE app_id = ? ORDER BY created_at, project_id")
+                    .prepare(
+                        `SELECT projects.*, apps.tenant_id
+                           FROM platform_projects AS projects JOIN platform_apps AS apps ON apps.app_id = projects.app_id
+                          WHERE projects.app_id = ?
+                          ORDER BY projects.created_at, projects.project_id`,
+                    )
                     .bind(appId)
                     .all(),
             signal,
@@ -346,7 +349,9 @@ export class PlatformControlPlaneStorage {
                         .first(),
                     this.#database
                         .prepare(
-                            "SELECT COUNT(*) AS active_count FROM platform_projects WHERE tenant_id = ? AND lifecycle = 'active'",
+                            `SELECT COUNT(*) AS active_count
+                               FROM platform_projects AS projects JOIN platform_apps AS apps ON apps.app_id = projects.app_id
+                              WHERE apps.tenant_id = ? AND projects.lifecycle = 'active'`,
                         )
                         .bind(tenantId)
                         .first(),
@@ -437,7 +442,6 @@ export class PlatformControlPlaneStorage {
         audit: PlatformAuditRecord,
         signal: AbortSignal,
     ): Promise<boolean> => {
-        await this.writeRollbackScope(credential, projectIds, signal);
         const scope = projectIds.map((projectId) =>
             this.statement(this.scopeInsert(credential.credentialId, projectId, credential.issuedAt)),
         );
@@ -557,7 +561,6 @@ export class PlatformControlPlaneStorage {
         readonly credentialInserted: boolean;
         readonly sourceRotated: boolean;
     }> => {
-        await this.writeRollbackScope(credential, projectIds, signal);
         const database = platformDrizzle(this.#database);
         // A zero-row update does not abort a D1 batch. Gate every insert on this
         // attempt's replacement ID within the same transaction.
@@ -585,10 +588,7 @@ export class PlatformControlPlaneStorage {
                                 secretDigest: sql<string>`${credential.secretDigest}`.as("secretDigest"),
                                 permissionsJson: sql<string>`${credential.permissionsJson}`.as("permissionsJson"),
                                 allProjects: sql<number>`${credential.allProjects ? 1 : 0}`.as("allProjects"),
-                                revision: sql<number>`${credential.revision}`.as("revision"),
                                 issuedAt: sql<number>`${credential.issuedAt}`.as("issuedAt"),
-                                lastUsedAt: sql<number>`${credential.issuedAt}`.as("lastUsedAt"),
-                                lastObservedUsedAt: sql<null>`NULL`.as("lastObservedUsedAt"),
                                 overlapEndsAt: sql<null>`NULL`.as("overlapEndsAt"),
                                 replacedByCredentialId: sql<null>`NULL`.as("replacedByCredentialId"),
                                 revokedAt: sql<null>`NULL`.as("revokedAt"),
@@ -676,30 +676,6 @@ export class PlatformControlPlaneStorage {
         return row === null ? null : decodeStorageRecord(ProjectStorageScopeRowSchema, row).created_at;
     };
 
-    /**
-     * A rolled-back Worker reads AppCredential scope from Project storage, so keep writing it there. This Worker never
-     * reads it back; a copy left by an attempt that then fails names a credential that does not exist.
-     */
-    private readonly writeRollbackScope = async (
-        credential: PlatformAppCredentialInsert,
-        projectIds: readonly string[],
-        signal: AbortSignal,
-    ): Promise<void> => {
-        for (const projectId of projectIds) {
-            await waitForD1(
-                () =>
-                    projectDatabase(this.#databases, projectId)
-                        .prepare(
-                            `INSERT INTO platform_app_credential_projects (credential_id, project_id, created_at)
-                         VALUES (?, ?, ?)`,
-                        )
-                        .bind(credential.credentialId, projectId, credential.issuedAt)
-                        .run(),
-                signal,
-            );
-        }
-    };
-
     /** A scope row exists only when its credential was inserted in the same batch. */
     private readonly scopeInsert = (credentialId: string, projectId: string, createdAt: number) => {
         const database = platformDrizzle(this.#database);
@@ -778,23 +754,6 @@ export class PlatformControlPlaneStorage {
         return projects.map((project) => project.project_id);
     };
 
-    readonly nextCredentialRevision = async (appId: string, signal: AbortSignal): Promise<number | null> => {
-        const row: CredentialRevisionRow | null = decodeOptionalStorageRecord(
-            CredentialRevisionRowSchema,
-            await waitForD1(
-                () =>
-                    this.#database
-                        .prepare(
-                            "SELECT COALESCE(MAX(revision), 0) + 1 AS revision FROM platform_app_credentials WHERE app_id = ?",
-                        )
-                        .bind(appId)
-                        .first(),
-                signal,
-            ),
-        );
-        return row?.revision ?? null;
-    };
-
     readonly projectBelongsToApp = async (projectId: string, appId: string, signal: AbortSignal): Promise<boolean> => {
         const row = await waitForD1(
             () =>
@@ -842,8 +801,8 @@ export class PlatformControlPlaneStorage {
             .prepare(
                 `INSERT INTO platform_app_credentials (
                    credential_id, public_credential_id, app_id, secret_digest, permissions_json,
-                   all_projects, revision, issued_at, last_used_at
-                 ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+                   all_projects, issued_at
+                 ) SELECT ?, ?, ?, ?, ?, ?, ?
                    WHERE EXISTS (SELECT 1 FROM platform_apps WHERE app_id = ?)`,
             )
             .bind(
@@ -853,8 +812,6 @@ export class PlatformControlPlaneStorage {
                 credential.secretDigest,
                 credential.permissionsJson,
                 credential.allProjects ? 1 : 0,
-                credential.revision,
-                credential.issuedAt,
                 credential.issuedAt,
                 credential.appId,
             );

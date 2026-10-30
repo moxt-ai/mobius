@@ -27,7 +27,7 @@ type PlatformApplicationEnvironment = {
 };
 
 const recordingQuery = v.object({ runtimeId: v.string() });
-const recordingCursor = v.pipe(v.string(), v.regex(/^(?:(?:0|[1-9][0-9]*)|v2:[1-9][0-9]*:(?:0|[1-9][0-9]*))$/u));
+const recordingCursor = v.pipe(v.string(), v.regex(/^v2:[1-9][0-9]*:(?:0|[1-9][0-9]*)$/u));
 function pageLimit(maximum: number) {
     return v.pipe(
         v.string(),
@@ -183,17 +183,6 @@ function turnTarget(context: Context<PlatformApplicationEnvironment>): {
 }
 
 export const recordingReadRoutes = new Hono<PlatformApplicationEnvironment>()
-    .get("/sessions", async (context): Promise<Response> => {
-        const query = v.safeParse(recordingQuery, { runtimeId: context.req.query("runtimeId") ?? "" });
-        const projectId = decodedIdentifier(context.req.param("projectId"));
-        if (!query.success || projectId === null || !isIdentifier(query.output.runtimeId)) {
-            return errorResponse("invalid_request", "The Recording target is invalid", 400);
-        }
-        const recordingPath = `/v1/projects/${encodeURIComponent(projectId)}/runtimes/${encodeURIComponent(
-            query.output.runtimeId,
-        )}/sessions`;
-        return await readRecording(context, projectId, recordingPath);
-    })
     .get("/sessions/:sessionId/events", async (context): Promise<Response> => {
         const query = v.safeParse(recordingQuery, { runtimeId: context.req.query("runtimeId") ?? "" });
         const incremental = v.safeParse(recordingIncrementalQuery, {
@@ -323,42 +312,3 @@ async function readRecordingSummaryV2(context: Context<PlatformApplicationEnviro
 export const recordingSummaryV2Routes = new Hono<PlatformApplicationEnvironment>()
     .get("/sessions", readRecordingSummaryV2)
     .get("/sessions/:sessionId", readRecordingSummaryV2);
-
-export const recordingSessionStatusRoutes = new Hono<PlatformApplicationEnvironment>()
-    .get("/sessions", async (context, next) => {
-        const projectId = decodedIdentifier(context.req.param("projectId"));
-        const runtimeId = decodedIdentifier(context.req.param("runtimeId"));
-        const sessionIds = new URL(context.req.raw.url).searchParams.getAll("sessionId");
-        if (sessionIds.length === 0) {
-            await next();
-            return;
-        }
-        if (
-            projectId === null ||
-            runtimeId === null ||
-            sessionIds.length === 0 ||
-            sessionIds.some((id) => !isIdentifier(id))
-        ) {
-            return errorResponse("invalid_request", "The Recording Session status target is invalid", 400);
-        }
-        const forwarded = new URLSearchParams();
-        for (const sessionId of sessionIds) {
-            forwarded.append("sessionId", sessionId);
-        }
-        const recordingPath = `/v1/projects/${encodeURIComponent(projectId)}/runtimes/${encodeURIComponent(
-            runtimeId,
-        )}/sessions`;
-        return await readRecording(context, projectId, recordingPath, forwarded);
-    })
-    .get("/sessions/:sessionId", async (context): Promise<Response> => {
-        const projectId = decodedIdentifier(context.req.param("projectId"));
-        const runtimeId = decodedIdentifier(context.req.param("runtimeId"));
-        const sessionId = decodedIdentifier(context.req.param("sessionId"));
-        if (projectId === null || runtimeId === null || sessionId === null) {
-            return errorResponse("invalid_request", "The Recording Session status target is invalid", 400);
-        }
-        const recordingPath = `/v1/projects/${encodeURIComponent(projectId)}/runtimes/${encodeURIComponent(
-            runtimeId,
-        )}/sessions/${encodeURIComponent(sessionId)}`;
-        return await readRecording(context, projectId, recordingPath);
-    });

@@ -78,7 +78,7 @@ export class NativeSessionService {
     ) => Promise<
         Pick<
             Extract<NativeSessionResult, { readonly action: "active-turn" }>,
-            "turn" | "queued" | "command" | "lastTurn"
+            "turn" | "queued" | "command" | "lastTurn" | "interactionState"
         >
     >;
 
@@ -93,7 +93,7 @@ export class NativeSessionService {
         ) => Promise<
             Pick<
                 Extract<NativeSessionResult, { readonly action: "active-turn" }>,
-                "turn" | "queued" | "command" | "lastTurn"
+                "turn" | "queued" | "command" | "lastTurn" | "interactionState"
             >
         >,
     ) {
@@ -323,6 +323,7 @@ export class NativeSessionService {
             capabilities: opened.prepared.capabilities,
             commands: opened.prepared.commands,
             configOptions: opened.prepared.configOptions,
+            configurationRevision: opened.prepared.configurationRevision,
             directoryId: target.directoryId,
             directoryLabel: target.directoryLabel,
             kind: "session.ready",

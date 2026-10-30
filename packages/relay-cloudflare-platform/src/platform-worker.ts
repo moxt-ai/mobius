@@ -60,11 +60,7 @@ import {
 import { routeRuntimeSessionRequest } from "./gateway/runtime-session-routing.ts";
 import { createPlatformControlApplication } from "./http/platform-routes.ts";
 import { createProjectApplication } from "./http/project-routes.ts";
-import {
-    recordingReadRoutes,
-    recordingSessionStatusRoutes,
-    recordingSummaryV2Routes,
-} from "./http/recording-read-routes.ts";
+import { recordingReadRoutes, recordingSummaryV2Routes } from "./http/recording-read-routes.ts";
 import { ClerkOrganizationGateway } from "./infra/clerk-organization-gateway.ts";
 import type { OrganizationMembershipGateway } from "./infra/organization-membership-gateway.ts";
 import { PlatformProjectStorageDirectory } from "./infra/platform-project-storage-directory.ts";
@@ -147,7 +143,7 @@ const sessionConfigurationBody = v.strictObject({
     agentId: sessionIdentifier,
     booleanValue: v.boolean(),
     configId: sessionIdentifier,
-    expectedConfigurationRevision: v.optional(sessionIdentifier),
+    expectedConfigurationRevision: sessionIdentifier,
     directoryId: v.custom<string>(isDirectoryIdentifier),
     value: v.pipe(v.string(), v.maxLength(500)),
     valueType: v.picklist(["select", "boolean"]),
@@ -756,7 +752,6 @@ export function createPlatformApplication(
             );
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
             const turnId = v.parse(sessionIdentifier, context.req.param("turnId"));
-            const body = v.parse(v.strictObject({ idempotencyKey: sessionIdentifier }), await context.req.json());
             const completed = await sessionOperations(context).requestProjectScopeControl(
                 new ProjectScope(access.projectId),
                 access.runtimeId,
@@ -775,7 +770,7 @@ export function createPlatformApplication(
                 );
             }
             context.header("Cache-Control", "no-store");
-            return context.json({ turnId, idempotencyKey: body.idempotencyKey });
+            return context.json({ turnId });
         })
         .post("/:sessionId/turns/:turnId/cancel", sessionAccessTargetMiddleware, async (context) => {
             const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];
@@ -792,7 +787,6 @@ export function createPlatformApplication(
             );
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
             const turnId = v.parse(sessionIdentifier, context.req.param("turnId"));
-            const body = v.parse(v.strictObject({ idempotencyKey: sessionIdentifier }), await context.req.json());
             const completed = await sessionOperations(context).requestProjectScopeControl(
                 new ProjectScope(access.projectId),
                 access.runtimeId,
@@ -802,24 +796,8 @@ export function createPlatformApplication(
             if (completed.kind !== "turn.completed") {
                 throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid cancellation");
             }
-            const cancelledAt = new Date().toISOString();
             context.header("Cache-Control", "no-store");
-            return context.json({
-                acceptedAt: cancelledAt,
-                bindingId: "workspace",
-                idempotencyKey: body.idempotencyKey,
-                request: { content: "", kind: "prompt", sessionConfigurations: [] },
-                sessionId,
-                state:
-                    completed.stopReason === "cancelled"
-                        ? { cancelledAt, kind: "cancelled" }
-                        : {
-                              completedAt: cancelledAt,
-                              kind: "succeeded",
-                              result: { kind: "agent_result", stopReason: completed.stopReason },
-                          },
-                turnId,
-            });
+            return context.json({ turnId, stopReason: completed.stopReason });
         })
         .post("/:sessionId/interactions/:interactionId/responses", sessionAccessTargetMiddleware, async (context) => {
             const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];
@@ -974,7 +952,6 @@ export function createPlatformApplication(
     const projectRoutes = new Hono<DispatchEnvironment>()
         .route("/recording", recordingReadRoutes)
         .route("/sessions", sessionRoutes)
-        .route("/runtimes/:runtimeId", recordingSessionStatusRoutes)
         .all("/runtime-pairings/*", projectHandler)
         .all("/runtimes/*", projectHandler)
         .all("/*", projectHandler);

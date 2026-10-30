@@ -1,7 +1,7 @@
 import { createExecutionContext, runInDurableObject, waitOnExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
-    decodeSessionRecordingDirectory,
+    decodeSessionRecordingDirectoryV2,
     encodeSessionRecordingWrite,
     type SessionLiveEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
@@ -56,48 +56,15 @@ async function write(projectId: string, runtimeId: string, events: readonly Sess
 
 async function directory(projectId: string, runtimeId: string) {
     const response = await worker.fetch(
-        new Request(`https://recording.test/v1/projects/${projectId}/runtimes/${runtimeId}/sessions`),
+        new Request(`https://recording.test/v2/projects/${projectId}/runtimes/${runtimeId}/sessions`),
         env,
     );
     expect(response.status).toBe(200);
-    return decodeSessionRecordingDirectory(await response.text());
+    return decodeSessionRecordingDirectoryV2(await response.text());
 }
 
 // @no-uc: Performance; bounded multi-Session ingestion must preserve each history and directory lifecycle.
 describe("Recording multi-Session batches", () => {
-    it("Given a large legacy directory, When it is read across batches, Then every summary survives and a later missing history fails the body instead of returning a partial directory", async () => {
-        const projectId = "large-legacy-project";
-        const runtimeId = "large-legacy-runtime";
-        const sessions = Array.from({ length: 257 }, (_, index) => `large-${String(index).padStart(4, "0")}`);
-        for (let offset = 0; offset < sessions.length; offset += 128) {
-            const response = await write(
-                projectId,
-                runtimeId,
-                sessions.slice(offset, offset + 128).flatMap((id) => [requested(id), completed(id, 2)]),
-            );
-            expect(response.status).toBe(201);
-            await response.body?.cancel();
-        }
-        const summaries = await directory(projectId, runtimeId);
-        expect(summaries.sessions.map(({ sessionId, status }) => ({ sessionId, status }))).toEqual(
-            [...sessions].reverse().map((sessionId) => ({ sessionId, status: "idle" })),
-        );
-
-        const response = await worker.fetch(
-            new Request(`https://recording.test/v1/projects/${projectId}/runtimes/${runtimeId}/sessions`),
-            env,
-        );
-        expect(response.status).toBe(200);
-        // Remove a history still ahead of the reader through the real storage boundary.
-        await runInDurableObject(
-            env.SESSION_RECORDING.getByName(JSON.stringify([projectId, "large-0000"])),
-            (_instance, state) => {
-                state.storage.sql.exec("DELETE FROM recorded_session_events_v2");
-            },
-        );
-        await expect(response.text()).rejects.toThrow();
-    });
-
     it("Given interleaved Sessions, When one batch is recorded, Then each complete history and directory outcome is retained", async () => {
         const sessions = ["batch-one", "batch-two", "batch-three"];
         const events = [
@@ -129,7 +96,6 @@ describe("Recording multi-Session batches", () => {
                     sessionId,
                     runtimeId: "batch-runtime",
                     title: "Batch title",
-                    status: "idle",
                     updatedAt: "2026-10-21T00:00:00.000Z",
                 }))
                 .sort((a, b) => b.sessionId.localeCompare(a.sessionId)),
@@ -151,7 +117,7 @@ describe("Recording multi-Session batches", () => {
             ],
         });
         expect(await directory("partial-project", "new-runtime")).toMatchObject({
-            sessions: [{ sessionId: "healthy-session", status: "idle" }],
+            sessions: [{ sessionId: "healthy-session" }],
         });
         const old = await worker.fetch(
             new Request(
@@ -256,7 +222,7 @@ describe("Recording multi-Session batches", () => {
         });
     });
 
-    it("Given completion followed by a new request and title reset, When a batch is folded, Then its ordered status, context and fallback title survive", async () => {
+    it("Given completion followed by a new request and title reset, When a batch is folded, Then its ordered context and fallback title survive", async () => {
         const id = "ordered-session";
         const reset: SessionLiveEvent = {
             ...chunk(id, 3),
@@ -286,7 +252,6 @@ describe("Recording multi-Session batches", () => {
                     sessionId: id,
                     runtimeId: "ordered-runtime",
                     title: "New fallback",
-                    status: "running",
                     updatedAt: "2026-10-21T00:00:00.000Z",
                 },
             ],
@@ -317,7 +282,7 @@ it("Given long primary and additional directory references, When a turn is recor
     const response = await write(id, "long-runtime", [event, completed(id, 2)]);
     expect(response.status).toBe(201);
     expect(await directory(id, "long-runtime")).toMatchObject({
-        sessions: [{ ...longContext, sessionId: id, status: "idle", title: "Long workspace recording" }],
+        sessions: [{ ...longContext, sessionId: id, title: "Long workspace recording" }],
     });
     const history = await worker.fetch(
         new Request(`https://recording.test/v1/projects/${id}/runtimes/long-runtime/sessions/${id}/events`),

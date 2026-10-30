@@ -27,52 +27,105 @@ export type RuntimeExecutionReceipt =
     | { readonly kind: "conflict" }
     | { readonly kind: "expired" };
 
-type StoredExecution = Readonly<{
+type ExecutionState =
+    | { readonly kind: "pending" }
+    | { readonly kind: "started" }
+    | { readonly kind: "settled-before-start"; readonly outcome: string }
+    | { readonly kind: "settled-after-start"; readonly outcome: string };
+
+// Keep the execution claim after settlement: the outcome alone cannot decide replay safety.
+function executionStarted(state: ExecutionState): boolean {
+    switch (state.kind) {
+        case "pending":
+        case "settled-before-start":
+            return false;
+        case "started":
+        case "settled-after-start":
+            return true;
+        default: {
+            const unreachable: never = state;
+            throw new Error("Unexpected execution state", { cause: unreachable });
+        }
+    }
+}
+
+function executionOutcome(state: ExecutionState): string | null {
+    switch (state.kind) {
+        case "pending":
+        case "started":
+            return null;
+        case "settled-before-start":
+        case "settled-after-start":
+            return state.outcome;
+        default: {
+            const unreachable: never = state;
+            throw new Error("Unexpected execution state", { cause: unreachable });
+        }
+    }
+}
+
+function settledExecution(state: ExecutionState, outcome: string): ExecutionState {
+    return { kind: executionStarted(state) ? "settled-after-start" : "settled-before-start", outcome };
+}
+
+type ExecutionReceipt = Readonly<{
     admissionOrder: number;
     attemptId: string;
     commandHash: string;
     sessionId: string;
-    started: boolean;
-    outcome: string | null;
+    state: ExecutionState;
 }>;
 
 export class ExecutionReceipts {
-    readonly #executions = new Map<string, StoredExecution>();
+    readonly #executions = new Map<string, ExecutionReceipt>();
     readonly #recoveredCommands = new Set<string>();
 
     readonly #table: ExecutionReceiptTable;
     #closing = false;
-    #activeCount = 0;
     readonly #onCount: (count: number) => void;
     constructor(table: ExecutionReceiptTable, onCount: (count: number) => void = () => undefined) {
         this.#onCount = onCount;
         this.#table = table;
-        for (const row of table.list()) {
-            this.#executions.set(row.commandId, row);
-            this.#recoveredCommands.add(row.commandId);
-            if (row.outcome === null) {
-                this.#activeCount += 1;
-            }
+        for (const { commandId, started, outcome, updatedAt: _updatedAt, ...identity } of table.list()) {
+            const state: ExecutionState = { kind: started ? "started" : "pending" };
+            this.#executions.set(commandId, {
+                ...identity,
+                state: outcome === null ? state : settledExecution(state, outcome),
+            });
+            this.#recoveredCommands.add(commandId);
         }
     }
     readonly #save = (
         commandId: string,
-        receipt: StoredExecution,
-        liveOutcome: string | null = receipt.outcome,
+        receipt: ExecutionReceipt,
+        durableOutcome: string | null = executionOutcome(receipt.state),
     ): void => {
+        const { state, ...identity } = receipt;
         const evicted = this.#closing
             ? []
-            : this.#table.save({ ...receipt, commandId, updatedAt: new Date().toISOString() }, MAX_TERMINAL_RECEIPTS);
-        const previous = this.#executions.get(commandId);
-        const wasActive = previous?.outcome === null;
+            : this.#table.save(
+                  {
+                      ...identity,
+                      commandId,
+                      started: executionStarted(state),
+                      outcome: durableOutcome,
+                      updatedAt: new Date().toISOString(),
+                  },
+                  MAX_TERMINAL_RECEIPTS,
+              );
         // Live failure detail may quote user input; only the durable receipt goes to the table.
-        this.#executions.set(commandId, { ...receipt, outcome: liveOutcome });
+        this.#executions.set(commandId, receipt);
         for (const evictedCommandId of evicted) {
             this.#executions.delete(evictedCommandId);
             this.#recoveredCommands.delete(evictedCommandId);
         }
-        this.#activeCount += Number(receipt.outcome === null) - Number(wasActive);
-        this.#onCount(this.#activeCount);
+        let activeCount = 0;
+        for (const entry of this.#executions.values()) {
+            if (executionOutcome(entry.state) === null) {
+                activeCount += 1;
+            }
+        }
+        this.#onCount(activeCount);
     };
     readonly #nextAdmissionOrder = (): number => {
         let latest = 0;
@@ -86,9 +139,8 @@ export class ExecutionReceipts {
     };
     readonly outcome = (commandId: string): SessionEventPayload | undefined => {
         const receipt = this.#executions.get(commandId);
-        return receipt?.outcome === null || receipt === undefined
-            ? undefined
-            : (decodeKnownSessionEventPayload(JSON.parse(receipt.outcome)) ?? undefined);
+        const outcome = receipt === undefined ? null : executionOutcome(receipt.state);
+        return outcome === null ? undefined : (decodeKnownSessionEventPayload(JSON.parse(outcome)) ?? undefined);
     };
     /** The command's delivery as these receipts know it; another Session's command reads as unknown. */
     readonly delivery = (commandId: string, sessionId: string): CommandDelivery => {
@@ -101,7 +153,7 @@ export class ExecutionReceipts {
         if (receipt.sessionId !== sessionId) {
             return { state: "unknown" };
         }
-        if (receipt.outcome === null) {
+        if (executionOutcome(receipt.state) === null) {
             return { state: "accepted" };
         }
         const outcome = this.outcome(commandId);
@@ -130,10 +182,10 @@ export class ExecutionReceipts {
             if (receipt.sessionId !== sessionId) {
                 continue;
             }
-            const outcome = receipt.outcome === null ? undefined : this.outcome(commandId);
+            const outcome = this.outcome(commandId);
             const failedBeforeStart =
                 outcome?.type === "lifecycle-metadata" && outcome.payload.kind === "prompt.failed-before-start";
-            if ((receipt.started || failedBeforeStart) && receipt.admissionOrder > latestOrder) {
+            if ((executionStarted(receipt.state) || failedBeforeStart) && receipt.admissionOrder > latestOrder) {
                 last = commandId;
                 latestOrder = receipt.admissionOrder;
             }
@@ -161,7 +213,7 @@ export class ExecutionReceipts {
     readonly hasStarted = (commandId: string, sessionId: string): boolean => {
         const receipt = this.#executions.get(commandId);
         return (
-            (receipt?.sessionId === sessionId && receipt.started) ||
+            (receipt?.sessionId === sessionId && executionStarted(receipt.state)) ||
             this.#table.identity(commandId)?.sessionId === sessionId
         );
     };
@@ -205,8 +257,10 @@ export class ExecutionReceipts {
             attemptId: randomUUID(),
             commandHash,
             sessionId,
-            started: false,
-            outcome: JSON.stringify({ ...outcome, recordedAt: new Date().toISOString() }),
+            state: {
+                kind: "settled-before-start",
+                outcome: JSON.stringify({ ...outcome, recordedAt: new Date().toISOString() }),
+            },
         });
         return outcome;
     };
@@ -233,8 +287,8 @@ export class ExecutionReceipts {
         const outcome = { type: "lifecycle-metadata", payload, recordedAt: event.recordedAt };
         this.#save(
             payload.commandId,
-            { ...receipt, outcome: JSON.stringify({ ...outcome, payload: sanitized }) },
-            JSON.stringify(outcome),
+            { ...receipt, state: settledExecution(receipt.state, JSON.stringify(outcome)) },
+            JSON.stringify({ ...outcome, payload: sanitized }),
         );
     };
     readonly recover = (): readonly {
@@ -244,11 +298,12 @@ export class ExecutionReceipts {
     }[] => {
         const recovered: { sessionId: string; event: SessionEventPayload; recordedAt: string }[] = [];
         for (const [commandId, receipt] of [...this.#executions]) {
+            const outcome = executionOutcome(receipt.state);
             const event: SessionEventPayload | null =
-                receipt.outcome === null
+                outcome === null
                     ? {
                           type: "lifecycle-metadata",
-                          payload: receipt.started
+                          payload: executionStarted(receipt.state)
                               ? {
                                     kind: "prompt.failed",
                                     commandId,
@@ -263,17 +318,20 @@ export class ExecutionReceipts {
                                     message: "The local runtime restarted before this request started",
                                 },
                       }
-                    : decodeKnownSessionEventPayload(JSON.parse(receipt.outcome));
+                    : decodeKnownSessionEventPayload(JSON.parse(outcome));
             if (event === null) {
                 continue;
             }
             const recordedAt =
-                receipt.outcome === null
+                outcome === null
                     ? new Date().toISOString()
-                    : z.object({ recordedAt: z.string() }).parse(JSON.parse(receipt.outcome)).recordedAt;
+                    : z.object({ recordedAt: z.string() }).parse(JSON.parse(outcome)).recordedAt;
             recovered.push({ sessionId: receipt.sessionId, event, recordedAt });
-            if (receipt.outcome === null) {
-                this.#save(commandId, { ...receipt, outcome: JSON.stringify({ ...event, recordedAt }) });
+            if (outcome === null) {
+                this.#save(commandId, {
+                    ...receipt,
+                    state: settledExecution(receipt.state, JSON.stringify({ ...event, recordedAt })),
+                });
             }
         }
         return recovered;
@@ -285,7 +343,7 @@ export class ExecutionReceipts {
         const previous = this.outcome(commandId);
         if (
             existing?.sessionId === sessionId &&
-            !existing.started &&
+            !executionStarted(existing.state) &&
             previous?.type === "lifecycle-metadata" &&
             previous.payload.kind === "prompt.failed-before-start" &&
             previous.payload.code === "runtime_restarted"
@@ -318,8 +376,7 @@ export class ExecutionReceipts {
             attemptId,
             commandHash,
             sessionId,
-            started: false,
-            outcome: null,
+            state: { kind: "pending" },
         });
         return { attemptId, commandId, kind: "accepted" };
     };
@@ -329,28 +386,36 @@ export class ExecutionReceipts {
         if (current === undefined) {
             throw new Error("The runtime execution receipt does not exist");
         }
-        if (current.outcome !== null) {
-            throw new Error("The runtime execution transition is invalid");
-        }
-        if (!current.started) {
-            this.#save(commandId, { ...current, started: true });
+        const state = current.state;
+        switch (state.kind) {
+            case "pending":
+                this.#save(commandId, { ...current, state: { kind: "started" } });
+                return;
+            case "started":
+                return;
+            case "settled-before-start":
+            case "settled-after-start":
+                throw new Error("The runtime execution transition is invalid");
+            default: {
+                const unreachable: never = state;
+                throw new Error("Unexpected execution state", { cause: unreachable });
+            }
         }
     };
 
     /** Only commands without a terminal result can still be cancelled. */
     readonly findUnsettledAttemptId = (commandId: string, sessionId: string): string | null => {
         const receipt = this.#executions.get(commandId);
-        return receipt?.sessionId === sessionId && receipt.outcome === null ? receipt.attemptId : null;
+        return receipt?.sessionId === sessionId && executionOutcome(receipt.state) === null ? receipt.attemptId : null;
     };
 
     readonly isTerminalExecution = (commandId: string, sessionId: string): boolean => {
         const receipt = this.#executions.get(commandId);
-        return receipt?.sessionId === sessionId && receipt.outcome !== null;
+        return receipt?.sessionId === sessionId && executionOutcome(receipt.state) !== null;
     };
 
     readonly close = (): void => {
         this.#executions.clear();
         this.#recoveredCommands.clear();
-        this.#activeCount = 0;
     };
 }

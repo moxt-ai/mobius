@@ -26,8 +26,6 @@ const runtimePairingSchema = v.object({
 
 export function fakeAgentHarnessCatalog(definitions: readonly FakeAgentHarnessDefinition[]) {
     return definitions.map((agent) => ({
-        agentSettingsDiscovery: true,
-        sessionTurnConfiguration: true,
         agentPath: `/controlled-harness/${agent.id}`,
         agentVersion: "controlled-harness",
         capabilities: fakeAgentHarnessCapabilities(agent),
@@ -118,7 +116,16 @@ export async function createFakeAgentHarnessRuntime(options: {
             harnesses.map((definition) => fakeAgentHarness(definition, harnessState)),
             localContext,
         );
-        runtime = runRuntime(config, signal, undefined, options.runtimeOptions);
+        const online = Promise.withResolvers<void>();
+        runtime = runRuntime(config, signal, undefined, {
+            ...options.runtimeOptions,
+            onConnectionStatus: (status) => {
+                options.runtimeOptions?.onConnectionStatus?.(status);
+                if (status === "online") {
+                    online.resolve();
+                }
+            },
+        });
         void runtime.catch((error: unknown) => {
             if (!signal.aborted) {
                 console.error("Controlled Agent harness daemon failed", error);
@@ -128,6 +135,16 @@ export async function createFakeAgentHarnessRuntime(options: {
             throw new Error("The production daemon stopped unexpectedly");
         });
         void failure.catch(() => undefined);
+        const startup = AbortSignal.any([signal, AbortSignal.timeout(30_000)]);
+        startup.throwIfAborted();
+        const aborted = Promise.withResolvers<never>();
+        const abort = (): void => aborted.reject(startup.reason);
+        startup.addEventListener("abort", abort, { once: true });
+        try {
+            await Promise.race([online.promise, failure, aborted.promise]);
+        } finally {
+            startup.removeEventListener("abort", abort);
+        }
         const client = new MobiusClient({
             endpoint: options.origin,
             projectId: pairing.projectId,

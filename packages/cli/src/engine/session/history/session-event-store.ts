@@ -192,6 +192,8 @@ export interface SessionEventStore {
         events: readonly SessionEventPayload[],
     ) => void;
     readonly page: (sessionId: string, eventLimit: number, cursor: string | null) => SessionEventPage;
+    /** The live stream boundary, including events omitted from projected history. */
+    readonly livePosition: (sessionId: string) => Pick<SessionEventPage, "sessionGenerationId" | "throughPosition">;
     readonly remove: (sessionId: string) => void;
     readonly reset: (sessionId: string) => void;
 }
@@ -305,6 +307,11 @@ export class MemorySessionEventStore implements SessionEventStore {
         for (const event of events) {
             this.append(sessionId, event);
         }
+    };
+
+    readonly livePosition = (sessionId: string): Pick<SessionEventPage, "sessionGenerationId" | "throughPosition"> => {
+        const session = this.#session(sessionId);
+        return { sessionGenerationId: session.sessionGenerationId, throughPosition: session.throughPosition };
     };
 
     readonly page = (sessionId: string, eventLimit: number, cursor: string | null): SessionEventPage => {
@@ -456,6 +463,11 @@ export class CachedSessionEventStore implements SessionEventStore {
                 this.#sessions.get(batch.sessionId)?.commitDrops(batch.events);
             }
         }
+    };
+
+    readonly livePosition = (sessionId: string): Pick<SessionEventPage, "sessionGenerationId" | "throughPosition"> => {
+        const session = this.#session(sessionId);
+        return { sessionGenerationId: session.sessionGenerationId, throughPosition: session.throughPosition };
     };
 
     readonly page = (sessionId: string, eventLimit: number, cursor: string | null): SessionEventPage => {

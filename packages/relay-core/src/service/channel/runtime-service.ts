@@ -122,7 +122,7 @@ export class RuntimeService {
         this.#cx = cx;
     }
 
-    readonly acceptDaemon = async (runtimeId: string, scope: ProjectScope, liveness: boolean, signal: AbortSignal) => {
+    readonly acceptDaemon = async (runtimeId: string, scope: ProjectScope, signal: AbortSignal) => {
         const accepting = { runtimeId, scope, controller: new AbortController() };
         this.#accepting.add(accepting);
         const operation = this.#acceptTail.then(async (): Promise<RuntimeAcceptance> => {
@@ -130,7 +130,6 @@ export class RuntimeService {
                 return await this.acceptDaemonSocket(
                     runtimeId,
                     scope,
-                    liveness,
                     AbortSignal.any([signal, accepting.controller.signal]),
                 );
             } catch (error) {
@@ -158,7 +157,6 @@ export class RuntimeService {
     private readonly acceptDaemonSocket = async (
         runtimeId: string,
         scope: ProjectScope,
-        liveness: boolean,
         signal: AbortSignal,
     ): Promise<RuntimeAcceptance> => {
         signal.throwIfAborted();
@@ -194,21 +192,7 @@ export class RuntimeService {
         const accepted = this.#cx.gateways.peers.accept(identity);
         this.#cx.services.connections.connected(prepared.identity, Date.now());
         logger.info({ ...identity, event: "runtime_websocket_accepted" }, "Runtime WebSocket accepted");
-        if (liveness) {
-            this.deferDaemonAttachment(identity, accepted.socket, scope, previous.length > 0);
-            return { kind: "accepted", response: accepted.response };
-        }
-        try {
-            await this.attachDaemon(runtimeId, scope, previous.length > 0, signal);
-        } catch (error) {
-            accepted.socket.close(1011, "Runtime attachment failed");
-            throw error;
-        }
-        if (this.isRevoked(runtimeId, scope)) {
-            accepted.socket.close(1008, "Runtime revoked");
-            return { kind: "revoked" };
-        }
-        signal.throwIfAborted();
+        this.deferDaemonAttachment(identity, accepted.socket, scope, previous.length > 0);
         return { kind: "accepted", response: accepted.response };
     };
 
@@ -582,9 +566,8 @@ export class RuntimeService {
                 socket.replaceDaemon();
                 continue;
             }
-            // A daemon that never heartbeated predates liveness or has just connected; only the
-            // connection's own close tells the Relay it has gone.
-            if (heartbeat.kind === "none" || now - heartbeat.at <= DAEMON_HEARTBEAT_SILENCE_LIMIT_MILLISECONDS) {
+            const heardAt = heartbeat.kind === "received" ? heartbeat.at : this.firstHeartbeatDue();
+            if (heardAt === null || now - heardAt <= DAEMON_HEARTBEAT_SILENCE_LIMIT_MILLISECONDS) {
                 continue;
             }
             logger.warn(
@@ -592,7 +575,7 @@ export class RuntimeService {
                     ...identity,
                     closeCode: 4001,
                     event: "runtime_heartbeat_silence",
-                    silenceMilliseconds: now - heartbeat.at,
+                    silenceMilliseconds: now - heardAt,
                 },
                 "Runtime daemon stopped heartbeating",
             );
@@ -600,6 +583,15 @@ export class RuntimeService {
             silent.push({ identity, socket });
         }
         return silent;
+    };
+
+    /**
+     * A daemon sends its first heartbeat once its attachment is ready, which the attachment deadline
+     * bounds, so a connection still silent past that deadline counts as silent from it.
+     */
+    private readonly firstHeartbeatDue = (): number | null => {
+        const current = this.#cx.services.connections.current();
+        return current === null ? null : current.connectedAt + DAEMON_ATTACHMENT_TIMEOUT_MILLISECONDS;
     };
 
     // The connection may never report its close, so the Relay detaches it itself. The command or

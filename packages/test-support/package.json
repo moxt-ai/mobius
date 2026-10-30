@@ -15,19 +15,19 @@
         "./websocket": "./src/websocket.ts"
     },
     "dependencies": {
-        "@cloudflare/vitest-plugin": "^1.1.12",
-        "@cloudflare/workers-types": "^5.20260918.1",
+        "@cloudflare/vitest-plugin": "^1.4.9",
+        "@cloudflare/workers-types": "^5.20261028.1",
+        "@moxt-ai/mobius-relay-cloudflare-platform": "workspace:*",
+        "@moxt-ai/mobius-relay-core": "workspace:*",
         "@moxt-ai/mobius-sdk": "workspace:*",
         "@types/ws": "^8.18.1",
-        "@moxt-ai/mobius-relay-core": "workspace:*",
-        "@moxt-ai/mobius-relay-cloudflare-platform": "workspace:*",
         "drizzle-orm": "^0.45.2",
         "esbuild": "0.28.2",
-        "hono": "^4.13.8",
-        "miniflare": "5.20260903.0-alpha",
+        "hono": "^4.13.14",
+        "miniflare": "5.20261023.1-beta",
         "undici": "8.12.2",
         "valibot": "1.5.0",
-        "wrangler": "^4.134.0",
+        "wrangler": "^4.154.0",
         "ws": "^8.21.3"
     }
 }

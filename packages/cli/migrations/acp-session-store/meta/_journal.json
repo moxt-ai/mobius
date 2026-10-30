@@ -71,6 +71,20 @@
             "when": 1793202300176,
             "tag": "0009_receipt_admission_order",
             "breakpoints": true
+        },
+        {
+            "idx": 10,
+            "version": "6",
+            "when": 1793318977226,
+            "tag": "0010_receipt_admission_order_backfill",
+            "breakpoints": true
+        },
+        {
+            "idx": 11,
+            "version": "6",
+            "when": 1793318987284,
+            "tag": "0011_receipt_admission_order_required",
+            "breakpoints": true
         }
     ]
 }

@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import type { RuntimeUpgradeResult } from "@moxt-ai/mobius-sdk/protocol";
 import { supportedLocalAgentSpecifications } from "../agent/discovery/discover-local-agents.ts";
 import { RuntimeAgentDependencies } from "../agent/runtime-agents.ts";
+import type { RuntimeAgentProcesses } from "../session/process/runtime-agent-processes.ts";
 import type { RuntimeTurnActivity } from "../session/turn/runtime-turn-activity.ts";
 import { ensureCanonicalDirectory } from "../storage/files/local-files.ts";
 import { discoverRuntimeAgentInventory } from "./catalog/discover-agent-catalog.ts";
@@ -159,6 +160,7 @@ export class RuntimeLoop {
             this.#state = { kind: "running", config };
             await runRuntime(config, signal, undefined, {
                 ...(this.#options.turnActivity === undefined ? {} : { turnActivity: this.#options.turnActivity }),
+                ...(this.#options.agentProcesses === undefined ? {} : { agentProcesses: this.#options.agentProcesses }),
                 onExecutionCountChange: (count) => {
                     this.#options.onExecutionCountChange?.(count);
                 },
@@ -183,6 +185,7 @@ export interface RuntimeLoopOptions {
     /** Session-scoped Agent environment for this execution only; never persisted with the connection. */
     readonly sessionEnvironment?: RuntimeConfig["sessionEnvironment"];
     readonly turnActivity?: RuntimeTurnActivity;
+    readonly agentProcesses?: RuntimeAgentProcesses;
     readonly onConnectionStatus?: (status: "online" | "reconnecting") => void;
     readonly onExecutionCountChange?: (count: number) => void;
     /** Reports a finished daemon upgrade to the relay. The daemon worker supplies it. */

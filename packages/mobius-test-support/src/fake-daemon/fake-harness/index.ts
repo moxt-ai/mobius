@@ -594,13 +594,11 @@ export function createFakeHarness(options: FakeAgentHarnessOptions) {
             name: agent.name,
         })),
         catalog: agents.map((agent) => ({
-            agentSettingsDiscovery: true,
             agentPath: `/fake-daemon/${agent.id}`,
             agentVersion: "controlled-harness",
             capabilities: fakeHarnessCapabilities,
             id: agent.id,
             label: agent.name,
-            sessionTurnConfiguration: true,
         })),
         continueReply: state.continueReply,
     };

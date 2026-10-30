@@ -1,4 +1,3 @@
-import { RUNTIME_WORKSPACE_BINDING_ID } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, it } from "vitest";
 import { startTestPlatform } from "../support/platform.ts";
 
@@ -22,11 +21,9 @@ it("Given a prompted local conversation, When the Session is renamed, Then the d
             {
                 additionalDirectoryIds: [],
                 agentId: "claude",
-                bindingId: RUNTIME_WORKSPACE_BINDING_ID,
                 directoryId: "default",
                 runtimeId: runtime.runtimeId,
                 sessionId,
-                title: "Remembered conversation",
             },
             cancellation.signal,
         );

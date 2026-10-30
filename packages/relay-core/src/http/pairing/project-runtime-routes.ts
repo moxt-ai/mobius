@@ -42,16 +42,16 @@ const sessionIdentitySchema = v.strictObject({
 });
 const createSessionSchema = v.strictObject({
     ...sessionIdentitySchema.entries,
-    bindingId: identifier,
+    bindingId: v.optional(identifier),
     runtimeId: identifier,
     sessionId: identifier,
-    title: v.pipe(v.string(), v.maxLength(512)),
+    title: v.optional(v.pipe(v.string(), v.maxLength(512))),
 });
 const configureSessionSchema = v.strictObject({
     ...sessionIdentitySchema.entries,
     booleanValue: v.boolean(),
     configId: identifier,
-    expectedConfigurationRevision: v.optional(identifier),
+    expectedConfigurationRevision: identifier,
     value: v.string(),
     valueType: v.picklist(["boolean", "select"]),
 });
@@ -242,7 +242,7 @@ export function createProjectRuntimeRoutes() {
                     JSON.stringify({
                         additionalDirectoryIds: body.additionalDirectoryIds,
                         agentId: body.agentId,
-                        bindingId: "workspace",
+                        bindingId: RUNTIME_WORKSPACE_BINDING_ID,
                         directoryId: body.directoryId,
                         kind: "session.prepare",
                         requestId: crypto.randomUUID(),
@@ -563,12 +563,7 @@ export function createProjectRuntimeRoutes() {
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {
                 const body = context.req.valid("json");
-                if (
-                    body["action"] !== "list" &&
-                    body["action"] !== "find" &&
-                    body["action"] !== "import" &&
-                    body["action"] !== "fork"
-                ) {
+                if (body["action"] !== "list" && body["action"] !== "find" && body["action"] !== "import") {
                     throw new PairingDirectoryError("invalid_request", "Choose a supported native session operation");
                 }
                 assertRequiredKeys(
@@ -591,9 +586,7 @@ export function createProjectRuntimeRoutes() {
                         requestId: crypto.randomUUID(),
                         sessionId,
                         bindingId: RUNTIME_WORKSPACE_BINDING_ID,
-                        ...(body["action"] === "import" || body["action"] === "fork"
-                            ? { targetSessionId: crypto.randomUUID() }
-                            : {}),
+                        ...(body["action"] === "import" ? { targetSessionId: crypto.randomUUID() } : {}),
                     }),
                 );
                 const result = await context.env.services.runtimePairings.requestControl(

@@ -177,7 +177,6 @@ export class MobiusPlatformTenant {
     readonly displayName: string;
     readonly lifecycle: string;
     readonly quotas: Readonly<Record<string, unknown>>;
-    readonly suspendedAt: string;
     readonly tenantId: string;
     readonly updatedAt: string;
 
@@ -187,7 +186,6 @@ export class MobiusPlatformTenant {
         this.displayName = string(value, "displayName", 120);
         this.lifecycle = string(value, "lifecycle", 32);
         this.quotas = record(value["quotas"], "Tenant quotas");
-        this.suspendedAt = timestamp(value, "suspendedAt");
         this.tenantId = identifier(value, "tenantId");
         this.updatedAt = timestamp(value, "updatedAt");
     }
@@ -260,7 +258,6 @@ export class MobiusPlatformAppCredential {
      * @deprecated Legacy compatibility value; not unique or an App-wide sequence.
      * Use credentialId for identity and rotation replacement IDs for lineage.
      */
-    readonly revision: number;
 
     constructor(value: Readonly<Record<string, unknown>>) {
         this.appId = identifier(value, "appId");
@@ -272,13 +269,12 @@ export class MobiusPlatformAppCredential {
         this.issuedAt = timestamp(value, "issuedAt");
         this.permissions = strings(value, "permissions");
         this.publicCredentialId = string(value, "publicCredentialId", 64);
-        this.revision = integer(value, "revision");
     }
 }
 
 export class MobiusPlatformAppCredentialMetadata {
-    /** Whether the Platform authenticates this credential now. Undefined from a Platform that predates it. */
-    readonly active: boolean | undefined;
+    /** Whether the Platform authenticates this credential now. */
+    readonly active: boolean;
     readonly allProjects: boolean;
     readonly appId: string;
     readonly credentialId: string;
@@ -288,11 +284,6 @@ export class MobiusPlatformAppCredentialMetadata {
     readonly projectIds: readonly string[];
     readonly publicCredentialId: string;
     readonly replacedByCredentialId: string;
-    /**
-     * @deprecated Legacy compatibility value; not unique or an App-wide sequence.
-     * Use credentialId for identity and replacedByCredentialId for the replacement.
-     */
-    readonly revision: number;
     readonly revokedAt: string;
 
     constructor(value: Readonly<Record<string, unknown>>) {
@@ -300,7 +291,7 @@ export class MobiusPlatformAppCredentialMetadata {
             throw new MobiusProtocolError("The Platform returned an invalid AppCredential scope");
         }
         const active = value["active"];
-        if (active !== undefined && typeof active !== "boolean") {
+        if (typeof active !== "boolean") {
             throw new MobiusProtocolError("The Platform returned an invalid AppCredential state");
         }
         this.active = active;
@@ -313,7 +304,6 @@ export class MobiusPlatformAppCredentialMetadata {
         this.projectIds = strings(value, "projectIds");
         this.publicCredentialId = string(value, "publicCredentialId", 64);
         this.replacedByCredentialId = string(value, "replacedByCredentialId", 128);
-        this.revision = integer(value, "revision");
         this.revokedAt = timestamp(value, "revokedAt");
     }
 }
@@ -332,29 +322,21 @@ export class MobiusRotatedPlatformAppCredential extends MobiusPlatformAppCredent
 export class MobiusPlatformApp {
     readonly appId: string;
     readonly createdAt: string;
-    /** @deprecated Use initialCredentialId. This is the creation-time credential, which may no longer be valid. */
-    readonly defaultCredentialId: string;
     readonly deletedAt: string;
     readonly displayName: string;
+    /** The credential issued at App creation; rotation and revocation do not change this historical ID. */
+    readonly initialCredentialId: string;
     readonly lifecycle: string;
-    readonly suspendedAt: string;
     readonly tenantId: string;
     readonly updatedAt: string;
-
-    /** The credential issued at App creation; rotation and revocation do not change this historical ID. */
-    get initialCredentialId(): string {
-        // The v1 field remains an own property for existing consumers and works with older Workers.
-        return this.defaultCredentialId;
-    }
 
     constructor(value: Readonly<Record<string, unknown>>) {
         this.appId = identifier(value, "appId");
         this.createdAt = timestamp(value, "createdAt");
-        this.defaultCredentialId = identifier(value, "defaultCredentialId");
         this.deletedAt = timestamp(value, "deletedAt");
         this.displayName = string(value, "displayName", 120);
+        this.initialCredentialId = identifier(value, "initialCredentialId");
         this.lifecycle = string(value, "lifecycle", 32);
-        this.suspendedAt = timestamp(value, "suspendedAt");
         this.tenantId = identifier(value, "tenantId");
         this.updatedAt = timestamp(value, "updatedAt");
     }
@@ -379,7 +361,6 @@ export class MobiusPlatformProject {
     readonly displayName: string;
     readonly lifecycle: string;
     readonly projectId: string;
-    readonly suspendedAt: string;
     readonly tenantId: string;
     readonly updatedAt: string;
 
@@ -391,7 +372,6 @@ export class MobiusPlatformProject {
         this.displayName = string(value, "displayName", 120);
         this.lifecycle = string(value, "lifecycle", 32);
         this.projectId = identifier(value, "projectId");
-        this.suspendedAt = timestamp(value, "suspendedAt");
         this.tenantId = identifier(value, "tenantId");
         this.updatedAt = timestamp(value, "updatedAt");
     }

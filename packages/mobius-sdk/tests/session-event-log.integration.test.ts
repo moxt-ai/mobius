@@ -57,6 +57,7 @@ describe("Session Event Log V2 SDK", () => {
                         events: [sourceEvent],
                         nextCursor: null,
                         tailCursor: sourceEvent.eventId,
+                        throughPosition: "1",
                         truncated: false,
                         version: 2,
                     }),
@@ -87,6 +88,7 @@ describe("Session Event Log V2 SDK", () => {
                 events: [sourceEvent],
                 nextCursor: null,
                 tailCursor: sourceEvent.eventId,
+                throughPosition: "1",
                 truncated: false,
                 version: 2,
             });

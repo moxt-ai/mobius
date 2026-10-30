@@ -183,11 +183,9 @@ async function claimPairing(
     const agents = localAgents.map((agent) => ({
         agentPath: agent.agentIdentity.requestedPath,
         agentVersion: agent.agentVersion,
-        agentSettingsDiscovery: true,
         capabilities: agent.capabilities,
         id: agent.id,
         label: agent.label,
-        sessionTurnConfiguration: true,
     }));
     const endpoint =
         options.pairingId.length > 0

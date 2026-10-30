@@ -1,4 +1,3 @@
-import { decodeKnownSessionEventPayload } from "@moxt-ai/mobius-sdk/protocol";
 import { and, asc, desc, eq, isNotNull, notInArray, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { executionIdentity, executionReceipt } from "../../schema/acp-session-store/index.ts";
@@ -20,22 +19,6 @@ export type PersistedExecutionReceipt = z.infer<typeof receiptSchema>;
 
 const identitySchema = z.object({ sessionId: z.string(), commandHash: z.string() }).readonly();
 
-/** Keep rollback readers working without treating their state column as an independent fact. */
-function legacyState(receipt: PersistedExecutionReceipt): string {
-    if (receipt.outcome === null) {
-        return receipt.started ? "running" : "dispatching";
-    }
-    const event = decodeKnownSessionEventPayload(JSON.parse(receipt.outcome));
-    if (event === null) {
-        return "failed";
-    }
-    return event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed"
-        ? event.payload.stopReason === "cancelled"
-            ? "cancelled"
-            : "succeeded"
-        : "failed";
-}
-
 /** Prompt bodies and Agent error text never enter the execution ledger. */
 export class ExecutionReceiptTable {
     readonly #database: LocalSqliteDatabase;
@@ -51,37 +34,18 @@ export class ExecutionReceiptTable {
         return row === undefined ? undefined : identitySchema.parse(row);
     };
     readonly list = (): readonly PersistedExecutionReceipt[] =>
-        this.#database.transaction(() => {
-            const rows = this.#database.orm
-                .select()
-                .from(executionReceipt)
-                .orderBy(asc(executionReceipt.updatedAt), asc(executionReceipt.commandId))
-                .all();
-            let latestOrder = rows.reduce((latest, row) => Math.max(latest, row.admissionOrder ?? 0), 0);
-            return rows
-                .map((row) => {
-                    if (row.admissionOrder !== null) {
-                        return receiptSchema.parse(row);
-                    }
-                    // Legacy receipts have no admission order. Freeze their available ordering once,
-                    // before recovery changes updatedAt. Rollback writers' new rows follow known ones.
-                    const admissionOrder = ++latestOrder;
-                    this.#database.orm
-                        .update(executionReceipt)
-                        .set({ admissionOrder })
-                        .where(eq(executionReceipt.commandId, row.commandId))
-                        .run();
-                    return receiptSchema.parse({ ...row, admissionOrder });
-                })
-                .sort((left, right) => left.admissionOrder - right.admissionOrder);
-        });
+        this.#database.orm
+            .select()
+            .from(executionReceipt)
+            .orderBy(asc(executionReceipt.admissionOrder), asc(executionReceipt.commandId))
+            .all()
+            .map((row) => receiptSchema.parse(row));
     readonly save = (receipt: PersistedExecutionReceipt, terminalLimit: number): readonly string[] =>
         this.#database.transaction(() => {
-            const row = { ...receipt, state: legacyState(receipt) };
             this.#database.orm
                 .insert(executionReceipt)
-                .values(row)
-                .onConflictDoUpdate({ target: executionReceipt.commandId, set: row })
+                .values(receipt)
+                .onConflictDoUpdate({ target: executionReceipt.commandId, set: receipt })
                 .run();
             if (receipt.outcome === null) {
                 return [];

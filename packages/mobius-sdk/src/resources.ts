@@ -129,11 +129,9 @@ export class MobiusSessionAccess {
 export interface CreateMobiusSessionRequest {
     readonly additionalDirectoryIds: readonly string[];
     readonly agentId: string;
-    readonly bindingId: string;
     readonly directoryId: string;
     readonly runtimeId: string;
     readonly sessionId: string;
-    readonly title: string;
 }
 
 export interface SubmitMobiusTurnRequest {
@@ -147,8 +145,10 @@ export interface SubmitMobiusTurnRequest {
     readonly targetCommandId?: string;
 }
 
-export interface CancelMobiusTurnRequest {
-    readonly idempotencyKey: string;
+/** How a cancelled Turn ended: `cancelled`, or the Agent's stop reason when the Turn finished first. */
+export interface MobiusTurnCancellation {
+    readonly turnId: string;
+    readonly stopReason: string;
 }
 
 export class MobiusBrowserCredentialRequest {
@@ -280,32 +280,16 @@ export function decodeMobiusRedeemedChannelCredential(value: unknown): MobiusRed
 export class MobiusAgentDescriptor {
     readonly agentPath: string;
     readonly agentVersion: string;
-    readonly agentSettingsDiscovery?: boolean;
     readonly capabilities: SessionCapabilities;
     readonly id: string;
     readonly label: string;
-    readonly sessionTurnConfiguration?: boolean;
 
-    constructor(
-        agentPath: string,
-        agentVersion: string,
-        capabilities: SessionCapabilities,
-        id: string,
-        label: string,
-        agentSettingsDiscovery?: boolean,
-        sessionTurnConfiguration?: boolean,
-    ) {
+    constructor(agentPath: string, agentVersion: string, capabilities: SessionCapabilities, id: string, label: string) {
         this.agentPath = agentPath;
         this.agentVersion = agentVersion;
-        if (agentSettingsDiscovery === true) {
-            this.agentSettingsDiscovery = true;
-        }
         this.capabilities = Object.freeze({ ...capabilities });
         this.id = id;
         this.label = label;
-        if (sessionTurnConfiguration === true) {
-            this.sessionTurnConfiguration = true;
-        }
     }
 }
 
@@ -331,26 +315,13 @@ export function decodeMobiusAgentCapabilities(value: unknown): SessionCapabiliti
 
 function decodeAgentDescriptor(value: unknown): MobiusAgentDescriptor {
     const agent = record(value, "Agent descriptor");
+    // Fields a newer service adds are ignored, so an older SDK can still list the Agent.
     if (
-        Object.keys(agent).length < 5 ||
-        Object.keys(agent).length > 7 ||
         !Object.hasOwn(agent, "agentPath") ||
         !Object.hasOwn(agent, "agentVersion") ||
         !Object.hasOwn(agent, "capabilities") ||
         !Object.hasOwn(agent, "id") ||
-        !Object.hasOwn(agent, "label") ||
-        Object.keys(agent).some(
-            (key) =>
-                key !== "agentPath" &&
-                key !== "agentVersion" &&
-                key !== "agentSettingsDiscovery" &&
-                key !== "capabilities" &&
-                key !== "id" &&
-                key !== "label" &&
-                key !== "sessionTurnConfiguration",
-        ) ||
-        (Object.hasOwn(agent, "agentSettingsDiscovery") && typeof agent["agentSettingsDiscovery"] !== "boolean") ||
-        (Object.hasOwn(agent, "sessionTurnConfiguration") && typeof agent["sessionTurnConfiguration"] !== "boolean")
+        !Object.hasOwn(agent, "label")
     ) {
         throw invalidResponse("The service returned an invalid Agent descriptor");
     }
@@ -366,14 +337,10 @@ function decodeAgentDescriptor(value: unknown): MobiusAgentDescriptor {
         decodeMobiusAgentCapabilities(agent["capabilities"]),
         identifierField(agent, "id"),
         label.trim(),
-        agent["agentSettingsDiscovery"] === true,
-        agent["sessionTurnConfiguration"] === true,
     );
 }
 
 export class MobiusRuntimeDescriptor {
-    /** Relay-owned Fork receipt contract; independent of the installed Agent and Runtime versions. */
-    readonly nativeForkRecovery: boolean;
     readonly agents: readonly MobiusAgentDescriptor[];
     readonly channelId: string;
     readonly machineName: string;
@@ -390,9 +357,7 @@ export class MobiusRuntimeDescriptor {
         projectId: string,
         runtimeId: string,
         workspaceName: string,
-        nativeForkRecovery = false,
     ) {
-        this.nativeForkRecovery = nativeForkRecovery;
         this.agents = agents;
         this.channelId = channelId;
         this.machineName = machineName;
@@ -450,7 +415,6 @@ export function decodeRuntimeDescriptor(value: unknown): MobiusRuntimeDescriptor
         identifierField(runtime, "projectId"),
         identifierField(runtime, "runtimeId"),
         stringField(runtime, "workspaceName", 255),
-        runtime["nativeForkRecovery"] === true,
     );
 }
 

@@ -5,5 +5,5 @@
         "skipLibCheck": true,
         "types": ["node"]
     },
-    "include": ["scripts/**/*.ts", "vitest.config.ts"]
+    "include": ["scripts/**/*.ts", "packages/cli/scripts/**/*.ts", "vitest.config.ts"]
 }

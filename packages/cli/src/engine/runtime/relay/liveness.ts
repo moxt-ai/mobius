@@ -7,7 +7,7 @@ const HEARTBEAT_INTERVAL_MILLISECONDS = 20_000;
 
 abstract class RelayLivenessState {}
 
-class UnsupportedRelayLivenessState extends RelayLivenessState {}
+class NotStartedRelayLivenessState extends RelayLivenessState {}
 
 // Heartbeats carry no identifier so the Relay's host can answer them without waking the Relay.
 // At most one is unacknowledged, so the next acknowledgement always answers it.
@@ -39,7 +39,7 @@ export interface RelayLivenessTransport {
 export class RelayConnectionLiveness {
     readonly #timer: Timer;
     readonly #transport: RelayLivenessTransport;
-    #state: RelayLivenessState = new UnsupportedRelayLivenessState();
+    #state: RelayLivenessState = new NotStartedRelayLivenessState();
 
     constructor(timer: Timer, transport: RelayLivenessTransport) {
         this.#timer = timer;
@@ -62,7 +62,7 @@ export class RelayConnectionLiveness {
         } else if (this.#state instanceof WaitingForHeartbeatState) {
             this.#state.schedule.cancel();
         } else if (
-            !(this.#state instanceof UnsupportedRelayLivenessState) &&
+            !(this.#state instanceof NotStartedRelayLivenessState) &&
             !(this.#state instanceof FinishedRelayLivenessState)
         ) {
             throw new Error("Unknown relay liveness state");
@@ -71,7 +71,7 @@ export class RelayConnectionLiveness {
     };
 
     readonly start = (): void => {
-        if (this.#state instanceof UnsupportedRelayLivenessState) {
+        if (this.#state instanceof NotStartedRelayLivenessState) {
             this.#sendHeartbeat();
             return;
         }
@@ -99,7 +99,7 @@ export class RelayConnectionLiveness {
     readonly #sendHeartbeat = (): void => {
         if (this.#state instanceof WaitingForHeartbeatState) {
             this.#state.schedule.cancel();
-        } else if (!(this.#state instanceof UnsupportedRelayLivenessState)) {
+        } else if (!(this.#state instanceof NotStartedRelayLivenessState)) {
             if (this.#state instanceof FinishedRelayLivenessState) {
                 return;
             }

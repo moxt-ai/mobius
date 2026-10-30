@@ -358,16 +358,13 @@ async function createSessionCommand(directory: string, flags: ReadonlyMap<string
             );
         }
         const sessionId = optionalFlag(flags, "session", identifier("session"));
-        const title = optionalFlag(flags, "title", "Mini-client Session");
         const ready = await service.sessions.create(
             {
                 additionalDirectoryIds: [],
                 agentId: agent.id,
-                bindingId: RUNTIME_WORKSPACE_BINDING_ID,
                 directoryId: "default",
                 runtimeId: state.runtimeId,
                 sessionId,
-                title,
             },
             operationSignal(),
         );
@@ -380,7 +377,7 @@ async function createSessionCommand(directory: string, flags: ReadonlyMap<string
             turns: [],
         };
         await writeState(directory, replaceSession(state, session));
-        output({ agentId: agent.id, configOptions: ready.configOptions, sessionId, title });
+        output({ agentId: agent.id, configOptions: ready.configOptions, sessionId });
     } finally {
         connection.close();
     }
@@ -421,7 +418,8 @@ async function configurationCommand(
     const connection = client(state);
     const service = connection.service;
     try {
-        let options = (await loadSession(service, state.runtimeId, session)).configOptions;
+        const loaded = await loadSession(service, state.runtimeId, session);
+        let options = loaded.configOptions;
         if (update) {
             const configId = requireFlag(flags, "config-id");
             const value = requireFlag(flags, "value");
@@ -442,6 +440,7 @@ async function configurationCommand(
                     booleanValue,
                     configId,
                     directoryId: session.directoryId,
+                    expectedConfigurationRevision: loaded.configurationRevision,
                     value: option.type === "select" ? value : "",
                     valueType: option.type,
                 },
@@ -614,13 +613,12 @@ async function cancelCommand(directory: string, flags: ReadonlyMap<string, strin
     const connection = await sessionClient(state, session);
     const service = connection.service;
     try {
-        const turn = await service.turns.cancel(
+        const cancellation = await service.turns.cancel(
             session.sessionId,
             requireFlag(flags, "turn"),
-            { idempotencyKey: identifier("cancel") },
             operationSignal(),
         );
-        output({ sessionId: session.sessionId, state: turn.state, turnId: turn.turnId });
+        output({ sessionId: session.sessionId, stopReason: cancellation.stopReason, turnId: cancellation.turnId });
     } finally {
         connection.close();
     }
@@ -652,6 +650,7 @@ async function sessionEvents(
             nextCursor: cursor,
             sessionGenerationId: newest.events.sessionGenerationId,
             tailCursor: events.at(-1)?.eventId ?? "",
+            throughPosition: newest.events.throughPosition,
             truncated: cursor !== null,
             version: 2,
         },
@@ -840,8 +839,7 @@ function createProgram(): Command {
     add("list-sessions", "list Runtime Sessions");
     add("create-session", "create an Agent Session")
         .option("--agent <id>", "Agent identifier")
-        .option("--session <id>", "Session identifier")
-        .option("--title <title>", "Session title");
+        .option("--session <id>", "Session identifier");
     add("get-agent-configuration", "show Agent configuration").option("--session <id>", "Session identifier");
     add("update-agent-configuration", "update Agent configuration")
         .option("--session <id>", "Session identifier")

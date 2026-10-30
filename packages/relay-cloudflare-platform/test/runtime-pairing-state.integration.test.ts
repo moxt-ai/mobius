@@ -1,8 +1,13 @@
 import { abortAllDurableObjects, evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { DurableObjectDatabaseAdapter, DurableObjectSqlDatabase } from "@moxt-ai/mobius-relay-core";
-import { channelHostCredential, runtimePairingAuditEvent } from "@moxt-ai/mobius-relay-core/schema/project-do";
+import {
+    channelAccessGrant,
+    channelHostCredential,
+    runtimePairingAuditEvent,
+} from "@moxt-ai/mobius-relay-core/schema/project-do";
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-sdk/protocol";
+import { eq } from "drizzle-orm";
 import * as v from "valibot";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { hashSecret, MAX_RUNTIMES_PER_PROJECT } from "../../relay-core/src/entity/pairing/pairing.ts";
@@ -256,24 +261,6 @@ it.each(["claim", "redeem"] as const)(
             runtimeId: pairing.runtimeId,
         });
         expect((await app.publish(pairing, runtimeCredential)).status).toBe(204);
-        // Retain the pre-fix daemon authentication contract (e5ef604), independent
-        // of the current storage reader: a rollback must still accept this token.
-        const tokenHash = await hashSecret(runtimeCredential);
-        expect(
-            await app.storage((storage) =>
-                storage.sql
-                    .exec(
-                        `SELECT r.channel_id, r.runtime_id, r.project_id FROM runtimes r
-                         JOIN runtime_registrations s ON s.runtime_id = r.runtime_id
-                         JOIN runtime_daemon_credentials c ON c.runtime_id = r.runtime_id
-                         WHERE r.project_id = ? AND r.channel_id = ? AND r.revoked_at IS NULL AND c.token_hash = ?`,
-                        app.projectId,
-                        pairing.channelId,
-                        tokenHash,
-                    )
-                    .toArray(),
-            ),
-        ).toEqual([{ channel_id: pairing.channelId, runtime_id: pairing.runtimeId, project_id: app.projectId }]);
         expect(await responseJson(await app.list(), 200)).toMatchObject({
             runtimes: [{ runtimeId: pairing.runtimeId, machineName: "Runtime machine" }],
         });
@@ -309,6 +296,110 @@ it("Given a revocation whose audit cannot commit, When it is retried, Then acces
     expect(await responseJson(await app.status(pairing), 200)).toEqual({
         status: "revoked",
         revokedAt: new Date().toISOString(),
+    });
+});
+
+async function pairedChannelWithLegacyOwner() {
+    const app = await project();
+    const pairing = await app.pair("channel-access");
+    const { runtimeCredential } = v.parse(
+        v.object({ runtimeCredential: v.string() }),
+        await responseJson(await app.claim(pairing), 200),
+    );
+    const hostToken = `${app.projectId}_${"H".repeat(43)}`;
+    // Owner credentials issued before Runtime pairing remain valid channel callers.
+    await app.storage(async (storage) => {
+        new DurableObjectSqlDatabase(storage).orm
+            .insert(channelHostCredential)
+            .values({
+                credentialId: "legacy-owner",
+                channelId: pairing.channelId,
+                tokenHash: await hashSecret(hostToken),
+                authority: "owner",
+                createdAt: Date.now(),
+                lastUsedAt: Date.now(),
+            })
+            .run();
+    });
+    const grant = async () =>
+        v.parse(
+            v.strictObject({ expiresAt: v.string(), grantId: v.string(), grantSecret: v.string() }),
+            await responseJson(await app.createGrant(pairing, hostToken), 201),
+        );
+    return { app, pairing, hostToken, runtimeCredential, grant };
+}
+
+it("Given channel credentials and an unused access link, When their Runtime is revoked, Then access is denied without rewriting credential or grant facts", async () => {
+    const { app, pairing, hostToken, runtimeCredential, grant } = await pairedChannelWithLegacyOwner();
+    const used = await grant();
+    const redemptions = await Promise.all([
+        app.redeemGrant(pairing, used.grantId, used.grantSecret),
+        app.redeemGrant(pairing, used.grantId, used.grantSecret),
+    ]);
+    redemptions.sort((left, right) => left.status - right.status);
+    const [redeemed, repeated] = redemptions;
+    if (redeemed === undefined || repeated === undefined) {
+        throw new Error("Expected both redemption responses");
+    }
+    const linked = v.parse(
+        v.strictObject({ hostToken: v.string(), channelId: v.string(), projectId: v.string() }),
+        await responseJson(redeemed, 200),
+    );
+    expect(await responseJson(repeated, 409)).toMatchObject({ error: { code: "access_grant_redeemed" } });
+    expect((await app.readChannel(pairing, linked.hostToken)).status).toBe(200);
+    const unused = await grant();
+    const facts = () =>
+        app.storage((storage) => {
+            const database = new DurableObjectSqlDatabase(storage).orm;
+            return {
+                hosts: database
+                    .select({ id: channelHostCredential.credentialId, revokedAt: channelHostCredential.revokedAt })
+                    .from(channelHostCredential)
+                    .orderBy(channelHostCredential.credentialId)
+                    .all(),
+                grants: database.select().from(channelAccessGrant).orderBy(channelAccessGrant.grantId).all(),
+            };
+        });
+    const before = await facts();
+    expect((await app.revoke(pairing)).status).toBe(204);
+    expect(await facts()).toEqual(before);
+    await app.restart();
+    expect((await app.publish(pairing, runtimeCredential)).status).toBe(401);
+    expect((await app.readChannel(pairing, hostToken)).status).toBe(401);
+    expect((await app.readChannel(pairing, linked.hostToken)).status).toBe(401);
+    expect(await responseJson(await app.redeemGrant(pairing, used.grantId, used.grantSecret), 409)).toMatchObject({
+        error: { code: "access_grant_redeemed" },
+    });
+    expect(await responseJson(await app.redeemGrant(pairing, unused.grantId, unused.grantSecret), 401)).toEqual({
+        error: { code: "runtime_revoked", message: "The Runtime has been revoked" },
+    });
+    // Refusing a revoked Runtime must neither consume the link nor issue a credential.
+    expect(await facts()).toEqual(before);
+});
+
+it("Given expired links and stored links shortened by an older revoker, When they are redeemed, Then genuine expiry and Runtime revocation remain distinguishable", async () => {
+    const { app, pairing, grant } = await pairedChannelWithLegacyOwner();
+    const expired = await grant();
+    vi.setSystemTime(new Date(expired.expiresAt));
+    expect(await responseJson(await app.redeemGrant(pairing, expired.grantId, expired.grantSecret), 410)).toMatchObject(
+        {
+            error: { code: "access_grant_expired" },
+        },
+    );
+    const legacy = await grant();
+    expect((await app.revoke(pairing)).status).toBe(204);
+    // Retain the pre-fix writer's persisted representation. Its lost deadline
+    // cannot be reconstructed, but the authoritative revocation is still known.
+    await app.storage((storage) => {
+        new DurableObjectSqlDatabase(storage).orm
+            .update(channelAccessGrant)
+            .set({ expiresAt: Date.now() })
+            .where(eq(channelAccessGrant.grantId, legacy.grantId))
+            .run();
+    });
+    await app.restart();
+    expect(await responseJson(await app.redeemGrant(pairing, legacy.grantId, legacy.grantSecret), 401)).toEqual({
+        error: { code: "runtime_revoked", message: "The Runtime has been revoked" },
     });
 });
 

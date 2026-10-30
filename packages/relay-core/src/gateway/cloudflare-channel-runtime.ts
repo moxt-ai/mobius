@@ -125,7 +125,7 @@ export class CloudflareChannelRuntime implements ChannelGateway {
         ) {
             throw new Error("The Runtime returned an invalid status");
         }
-        return new RuntimeStatus(Reflect.get(value, "online"), Reflect.get(value, "nativeForkRecovery") === true);
+        return new RuntimeStatus(Reflect.get(value, "online"));
     };
 
     private readonly forward = async (

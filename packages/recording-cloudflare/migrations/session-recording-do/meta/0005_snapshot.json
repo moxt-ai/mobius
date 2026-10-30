@@ -107,11 +107,6 @@
         "columns": {}
     },
     "internal": {
-        "indexes": {
-            "recorded_session_events_v2_last_position": {
-                "columns": ["last_position"],
-                "isUnique": false
-            }
-        }
+        "indexes": {}
     }
 }

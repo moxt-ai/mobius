@@ -192,6 +192,7 @@ describe("Session settings reads after a daemon restart", () => {
                 agent,
                 booleanValue: false,
                 configId: "model",
+                expectedConfigurationRevision: null,
                 cwd: process.cwd(),
                 requestId: "config-read-retired-configure",
                 sessionId,

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { setTimeout } from "node:timers/promises";
 import type { ContentBlock, PromptResponse } from "@agentclientprotocol/sdk";
 import { z } from "zod";
+import { systemTimer, type Timer } from "../../../util/timer.ts";
 import { AcpExecutionError } from "../../acp-error.ts";
 import { type AcpEndpointTermination, acpEndpointTerminationError } from "../../agent/in-process-endpoint.ts";
 import type { CodexAppServerClient, CodexAppServerServerRequest } from "./app-server-client.ts";
@@ -21,6 +21,30 @@ const queuePageSchema = z.object({
     data: z.array(z.object({ id: z.string().min(1), clientUserMessageId: z.string().min(1) })).max(100),
     nextCursor: z.string().nullish(),
 });
+
+/**
+ * A reader of a thread it does not own sees the owner's running turn as "interrupted", because
+ * Codex marks every unfinished turn of a thread that is not active in this process that way. Only
+ * a turn the owner finished carries a completion time.
+ */
+function turnRunning(turn: z.infer<typeof threadTurnsPageSchema>["data"][number]): boolean {
+    return turn.status === "inProgress" || (turn.status === "interrupted" && turn.completedAt == null);
+}
+
+function waitForNextPoll(timer: Timer, signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted();
+    return new Promise((resolve, reject) => {
+        const poll = timer.schedule(() => {
+            signal.removeEventListener("abort", abort);
+            resolve();
+        }, POLL_INTERVAL);
+        const abort = (): void => {
+            poll.cancel();
+            reject(signal.reason);
+        };
+        signal.addEventListener("abort", abort, { once: true });
+    });
+}
 
 interface PendingPrompt {
     readonly content: readonly ContentBlock[];
@@ -68,7 +92,7 @@ export class CodexBorrowedAcpAgent implements CodexSessionAgent {
         const signal = this.#closed.signal;
         try {
             for (;;) {
-                await setTimeout(POLL_INTERVAL, undefined, { signal });
+                await waitForNextPoll(systemTimer, signal);
                 await this.#refresh(signal, false);
             }
         } catch (cause) {
@@ -155,7 +179,7 @@ export class CodexBorrowedAcpAgent implements CodexSessionAgent {
                     }
                     // Proposed plans can change until completion; publish their final body once,
                     // rather than append transient snapshots to the assistant message.
-                    if (item.type === "plan" && turn.status === "inProgress") {
+                    if (item.type === "plan" && turnRunning(turn)) {
                         continue;
                     }
                     const previous = this.#seen.get(key);
@@ -189,7 +213,7 @@ export class CodexBorrowedAcpAgent implements CodexSessionAgent {
                         }
                     }
                 }
-                if (matches && turn.status !== undefined && turn.status !== "inProgress") {
+                if (matches && turn.status !== undefined && !turnRunning(turn)) {
                     if (turn.status === "failed") {
                         this.#pending?.completion.reject(
                             new AcpExecutionError("The owning Codex turn failed", {}, "codex_turn_failed"),

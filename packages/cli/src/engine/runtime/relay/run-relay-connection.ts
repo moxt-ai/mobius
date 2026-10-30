@@ -78,8 +78,9 @@ export async function runRelayConnection({
     timer,
 }: RelayConnectionOptions): Promise<void> {
     const relayUrl = new URL(config.relayUrl);
-    relayUrl.searchParams.set("liveness", "1");
-    const relay = await connectRelay(relayUrl, signal);
+    const relay = await connectRelay(relayUrl, signal, (failure, source) => {
+        diagnostics.transportFailed(connectionEpoch, failure, source);
+    });
     const { socket } = relay;
     diagnostics.connectionOpened(connectionEpoch);
     const connectionController = new AbortController();

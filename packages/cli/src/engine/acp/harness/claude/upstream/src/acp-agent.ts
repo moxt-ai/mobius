@@ -117,6 +117,7 @@ import {
 import { forkEnvironmentSession } from "./environment-session-fork.js";
 import { listEnvironmentSessions } from "./environment-session-list.js";
 import { getEnvironmentSessionMessages } from "./environment-session-messages.js";
+import { getEnvironmentSessionRevision } from "./environment-session-revision.js";
 import {
     acceptedPlanToolResult,
     ExitPlanCoordinator,
@@ -384,6 +385,33 @@ function parseRenameRequest(params: unknown): RenameRequest {
     return { sessionId, title };
 }
 
+/** Custom (extension) request method Mobius uses to learn whether another client
+ *  continued a session's transcript while this Agent kept an earlier copy. Named
+ *  `_session/revision` per the ACP extension convention. */
+const REVISION_METHOD = "_session/revision";
+
+/** Params of a {@link REVISION_METHOD} request. */
+export type RevisionRequest = {
+    sessionId: string;
+};
+
+/** Result of a {@link REVISION_METHOD} request. */
+export type RevisionResponse = {
+    latestEntryId: string;
+};
+
+/** Validate raw JSON-RPC params into a {@link RevisionRequest}. */
+function parseRevisionRequest(params: unknown): RevisionRequest {
+    if (!params || typeof params !== "object") {
+        throw RequestError.invalidParams(undefined, "revision params must be an object");
+    }
+    const { sessionId } = params as Record<string, unknown>;
+    if (typeof sessionId !== "string" || sessionId.length === 0) {
+        throw RequestError.invalidParams(undefined, "revision params require a non-empty sessionId");
+    }
+    return { sessionId };
+}
+
 /** Internal model-selection state. Mirrors the shape the ACP SDK exposed as
  *  `SessionModelState` before model selection moved entirely into
  *  `SessionConfigOption` (category "model"). Retained internally to track the
@@ -595,6 +623,10 @@ export type Session = {
      *  hanging (or silently restarting a consumer that resolves `end_turn`
      *  without ever reaching the model). */
     queryClosed?: boolean;
+    /** Transcript message ids this query submitted or streamed. The CLI flushes
+     *  them to the transcript after the turn reports completion, so they never
+     *  identify another client's continuation (see readSessionRevision). */
+    streamedMessageIds: Set<string>;
     cwd: string;
     /** Serialized snapshot of session-defining params (cwd, mcpServers) used to
      *  detect when loadSession/resumeSession is called with changed values. */
@@ -1879,6 +1911,10 @@ export class ClaudeAcpAgent {
     }
 
     async listSessions(params: ListSessionsRequest, signal: AbortSignal): Promise<ListSessionsResponse> {
+        const offset = params.cursor == null ? 0 : Number(params.cursor);
+        if (!Number.isSafeInteger(offset) || offset < 0) {
+            throw RequestError.invalidParams("Invalid native session cursor");
+        }
         const sdk_sessions = await listEnvironmentSessions(this.environment, params.cwd ?? undefined, signal);
         const sessions = [];
 
@@ -1893,8 +1929,16 @@ export class ClaudeAcpAgent {
                 updatedAt: new Date(session.lastModified).toISOString(),
             });
         }
+        // Keep equal timestamps deterministic across requests without relying on filesystem order.
+        sessions.sort(
+            (left, right) =>
+                right.updatedAt.localeCompare(left.updatedAt) || left.sessionId.localeCompare(right.sessionId),
+        );
+        const pageSize = 500;
+        const end = offset + pageSize;
         return {
-            sessions,
+            sessions: sessions.slice(offset, end),
+            ...(end < sessions.length ? { nextCursor: String(end) } : {}),
         };
     }
 
@@ -2157,6 +2201,7 @@ export class ClaudeAcpAgent {
 
         session.turnQueue ??= [];
         session.turnQueue.push(turn);
+        session.streamedMessageIds.add(promptUuid);
         session.input.push(userMessage);
         this.ensureConsumer(session, params.sessionId);
         onSubmitted();
@@ -2327,6 +2372,7 @@ export class ClaudeAcpAgent {
             turnInFlight.steeredSettle = turnInFlight.deferredSettle;
             turnInFlight.deferredSettle = undefined;
         }
+        session.streamedMessageIds.add(steeredUuid);
         session.input.push(userMessage);
         const firstText = params.prompt[0]?.type === "text" ? params.prompt[0].text : "";
         for (const content of params.prompt) {
@@ -2985,6 +3031,10 @@ export class ClaudeAcpAgent {
                     // front rather than restarting a consumer on the exhausted stream.
                     this.closeQueryStream(session);
                     return;
+                }
+
+                if ("uuid" in message && typeof message.uuid === "string") {
+                    session.streamedMessageIds.add(message.uuid);
                 }
 
                 if (session.emitRawSDKMessages && shouldEmitRawMessage(session.emitRawSDKMessages, message)) {
@@ -5143,6 +5193,21 @@ export class ClaudeAcpAgent {
         return {};
     }
 
+    async readSessionRevision(params: RevisionRequest, signal: AbortSignal): Promise<RevisionResponse> {
+        const session = this.sessions[params.sessionId];
+        if (!session) {
+            throw new Error("Session not found");
+        }
+        return {
+            latestEntryId: await getEnvironmentSessionRevision(
+                this.environment,
+                params.sessionId,
+                session.streamedMessageIds,
+                signal,
+            ),
+        };
+    }
+
     async setSessionMode(params: SetSessionModeRequest): Promise<SetSessionModeResponse> {
         return this.sessionModes.setSessionMode(params);
     }
@@ -6656,6 +6721,7 @@ export class ClaudeAcpAgent {
             query: q,
             input: input,
             cancelled: false,
+            streamedMessageIds: new Set(),
             cwd: params.cwd,
             sessionFingerprint: computeSessionFingerprint(params),
             creationParams: params,
@@ -8795,6 +8861,9 @@ export function createClaudeAcpApp(options: ClaudeAcpAppOptions = {}): ClaudeAcp
         )
         .onRequest<RenameRequest, RenameResponse>(RENAME_METHOD, { parse: parseRenameRequest }, (ctx) =>
             requiredAgent(agent).renameSession(ctx.params),
+        )
+        .onRequest<RevisionRequest, RevisionResponse>(REVISION_METHOD, { parse: parseRevisionRequest }, (ctx) =>
+            requiredAgent(agent).readSessionRevision(ctx.params, ctx.signal),
         )
         .onRequest<GoalRequest, GoalControlResponse>(GOAL_CONTROL_METHOD, { parse: parseGoalRequest }, (ctx) =>
             requiredAgent(agent).goal(ctx.params),

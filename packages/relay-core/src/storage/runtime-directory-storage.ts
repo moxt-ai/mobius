@@ -10,8 +10,6 @@ import type {
 import { type RelayDrizzleDatabase, relayDrizzle } from "../infra/drizzle-database.ts";
 import type { SqlDatabase } from "../infra/sql-database.ts";
 import {
-    channelAccessGrant,
-    channelHostCredential,
     runtimeDaemonCredential,
     runtimeIdentity,
     runtimePairingAuditEvent,
@@ -376,11 +374,6 @@ export class RuntimeDirectoryStorage {
             eq(runtimeIdentity.projectId, this.#projectId),
             eq(runtimeIdentity.runtimeId, value.runtimeId),
         );
-        const channel = database.select({ channelId: runtimeIdentity.channelId }).from(runtimeIdentity).where(identity);
-        const revokedAt = database
-            .select({ revokedAt: runtimeIdentity.revokedAt })
-            .from(runtimeIdentity)
-            .where(identity);
         const revocation = database
             .update(runtimeIdentity)
             .set({
@@ -399,14 +392,6 @@ export class RuntimeDirectoryStorage {
                     ),
                 ),
             );
-        const hosts = database
-            .update(channelHostCredential)
-            .set({ revokedAt: sql`coalesce(${channelHostCredential.revokedAt}, (${revokedAt}))` })
-            .where(eq(channelHostCredential.channelId, channel));
-        const grants = database
-            .update(channelAccessGrant)
-            .set({ expiresAt: sql`min(${channelAccessGrant.expiresAt}, (${revokedAt}))` })
-            .where(eq(channelAccessGrant.channelId, channel));
         const audit = database
             .insert(runtimePairingAuditEvent)
             .select(
@@ -427,10 +412,7 @@ export class RuntimeDirectoryStorage {
                     .where(identity),
             )
             .onConflictDoNothing();
-        const results = await this.#database.batch(
-            [revocation, credential, hosts, grants, audit].map(this.statement),
-            signal,
-        );
+        const results = await this.#database.batch([revocation, credential, audit].map(this.statement), signal);
         // All writers preserve the first revocation time. Reading the committed
         // fact also makes overlapping retries return that same timestamp.
         return results[0]?.meta.changes === 1 ? this.readRuntime(value.runtimeId, signal) : null;

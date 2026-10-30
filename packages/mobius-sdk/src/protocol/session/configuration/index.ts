@@ -117,8 +117,7 @@ const sessionConfigureCommandSchema = z
         ...sessionIdentityFields,
         booleanValue: z.boolean(),
         configId: z.string().min(1).max(128),
-        // Omitted by legacy clients: explicit edits retain last-write-wins behavior.
-        expectedConfigurationRevision: IDENTIFIER.optional(),
+        expectedConfigurationRevision: IDENTIFIER,
         kind: z.literal(SESSION_CONFIGURE_KIND),
         requestId: IDENTIFIER,
         value: z.string().max(500),
@@ -131,8 +130,8 @@ export type SessionConfigureCommand = z.infer<typeof sessionConfigureCommandSche
 const sessionConfigUpdatedEventSchema = z
     .object({
         configOptions: sessionConfigOptionsSchema,
-        // An opaque Runtime generation token; absent on older Runtimes.
-        configurationRevision: IDENTIFIER.optional(),
+        // An opaque Runtime generation token.
+        configurationRevision: IDENTIFIER,
         kind: z.literal(SESSION_CONFIG_UPDATED_KIND),
         requestId: IDENTIFIER,
         sessionId: IDENTIFIER,
@@ -175,8 +174,8 @@ export type SessionConfigReadCommand = z.infer<typeof sessionConfigReadCommandSc
 const sessionConfigReadResultSchema = z
     .object({
         configOptions: sessionConfigOptionsSchema,
-        // An opaque Runtime generation token; absent on older Runtimes.
-        configurationRevision: IDENTIFIER.optional(),
+        // An opaque Runtime generation token.
+        configurationRevision: IDENTIFIER,
         kind: z.literal(SESSION_CONFIG_READ_RESULT_KIND),
         requestId: IDENTIFIER,
         sessionId: IDENTIFIER,

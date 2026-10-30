@@ -122,7 +122,6 @@ const readyAgents = [
         },
         id: "codex",
         label: "Codex",
-        sessionTurnConfiguration: true,
     },
 ];
 
@@ -696,7 +695,7 @@ describe.sequential("Platform Session-only boundary", () => {
         ).toMatchObject({ agents: [{ id: "codex", label: "Codex" }], runtimeId });
         const sessionId = "local-codex-session";
         const daemonResponse = await worker.fetch(
-            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?liveness=1`, {
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect`, {
                 headers: { authorization: `Bearer ${text(claimed, "runtimeCredential")}`, Upgrade: "websocket" },
             }),
             environment,
@@ -803,6 +802,7 @@ describe.sequential("Platform Session-only boundary", () => {
                               targetSessionId: sessionId,
                               turn: null,
                               queued: [],
+                              queuedCancellation: "before-start",
                           })
                         : encodeSessionOperationFailedEvent({
                               kind: "session.operation.failed",
@@ -941,6 +941,7 @@ describe.sequential("Platform Session-only boundary", () => {
                         capabilities,
                         commands: [],
                         configOptions: [],
+                        configurationRevision: "revision-1",
                         directoryId: directoryId,
                         directoryLabel: "Workspace",
                         kind: "session.ready",
@@ -1006,6 +1007,7 @@ describe.sequential("Platform Session-only boundary", () => {
                     booleanValue: false,
                     configId: "model",
                     directoryId: "root",
+                    expectedConfigurationRevision: "configuration-revision",
                     kind: "session.configure",
                     requestId: "local-config-request",
                     sessionId,
@@ -1018,6 +1020,7 @@ describe.sequential("Platform Session-only boundary", () => {
             daemon.send(
                 encodeSessionConfigUpdatedEvent({
                     configOptions: [],
+                    configurationRevision: "revision-1",
                     kind: "session.config.updated",
                     requestId: "local-config-request",
                     sessionId,
@@ -1025,6 +1028,7 @@ describe.sequential("Platform Session-only boundary", () => {
             );
             expect(decodeDaemonToServiceMessage(await hostMessages.next())).toEqual({
                 configOptions: [],
+                configurationRevision: "revision-1",
                 kind: "session.config.updated",
                 requestId: "local-config-request",
                 sessionId,
@@ -1228,6 +1232,7 @@ describe.sequential("Platform Session-only boundary", () => {
                         events: [futureEvent, historicalEvent],
                         nextCursor: null,
                         tailCursor: rawEvent.eventId,
+                        throughPosition: "1",
                         truncated: false,
                         version: 2,
                     },
@@ -1243,6 +1248,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 events: [futureEvent, historicalEvent],
                 nextCursor: null,
                 tailCursor: rawEvent.eventId,
+                throughPosition: "1",
                 truncated: false,
                 version: 2,
             });
@@ -1269,6 +1275,7 @@ describe.sequential("Platform Session-only boundary", () => {
                         events: [rawEvent],
                         nextCursor: null,
                         tailCursor: rawEvent.eventId,
+                        throughPosition: "1",
                         truncated: false,
                         version: 2,
                     },
@@ -1285,6 +1292,7 @@ describe.sequential("Platform Session-only boundary", () => {
                     events: [historicalEvent],
                     nextCursor: null,
                     tailCursor: rawEvent.eventId,
+                    throughPosition: "1",
                     truncated: false,
                     version: 2,
                 },
@@ -1413,7 +1421,7 @@ describe.sequential("Platform Session-only boundary", () => {
             });
             expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: false });
             const reconnectResponse = await worker.fetch(
-                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?liveness=1`, {
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect`, {
                     headers: { authorization: `Bearer ${text(claimed, "runtimeCredential")}`, Upgrade: "websocket" },
                 }),
                 environment,
@@ -1440,7 +1448,7 @@ describe.sequential("Platform Session-only boundary", () => {
             });
             await evictDurableObject(environment.RUNTIME_RELAY.getByName(runtimeId), { webSockets: "hibernate" });
             const replacementResponse = await worker.fetch(
-                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?liveness=1`, {
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect`, {
                     headers: { authorization: `Bearer ${text(claimed, "runtimeCredential")}`, Upgrade: "websocket" },
                 }),
                 environment,
@@ -1684,8 +1692,6 @@ describe.sequential("Platform Recording policy configuration", () => {
     it.each([
         { lifecycle: "deleted", configured: false },
         { lifecycle: "deleted", configured: true },
-        { lifecycle: "suspended", configured: false },
-        { lifecycle: "suspended", configured: true },
     ] as const)(
         "Given a $lifecycle App with configured=$configured, When its policies or webhook are changed, Then no configuration, secret, or success audit is written",
         async ({ lifecycle, configured }) => {
@@ -2168,7 +2174,7 @@ async function connectRuntimeDaemon(slug: string, options: { readonly anchorCloc
     const runtimeId = text(claimed, "runtimeId");
     const sessionId = `${slug}-session`;
     const daemonResponse = await worker.fetch(
-        new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?liveness=1`, {
+        new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect`, {
             headers: { authorization: `Bearer ${text(claimed, "runtimeCredential")}`, Upgrade: "websocket" },
         }),
         environment,
@@ -2226,7 +2232,7 @@ async function connectRuntimeDaemon(slug: string, options: { readonly anchorCloc
             ),
         reconnect: () =>
             worker.fetch(
-                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?liveness=1`, {
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect`, {
                     headers: { authorization: `Bearer ${text(claimed, "runtimeCredential")}`, Upgrade: "websocket" },
                 }),
                 environment,
@@ -2588,50 +2594,59 @@ it.each(["text", "binary"])(
     },
 );
 
-// @no-uc: Compatibility; Chat recovers an unconfirmed submission from the Runtime that received it, and older Runtimes keep the previous answer.
-it("Given Chat reads the Session execution naming an unconfirmed command, When the Runtime reports that command's delivery or predates delivery reads, Then the Relay returns the delivery only when the Runtime supplied it", async () => {
+it("Given Chat reads the Session execution naming an unconfirmed command, When the Runtime reports that command's delivery, Then the Relay returns the delivery", async () => {
     const runtime = await connectRuntimeDaemon("command-delivery");
     try {
-        for (const runtimeVersion of ["current", "previous"] as const) {
-            const response = runtime.readSessionExecution("unconfirmed-command");
-            const first = await Promise.race([
-                runtime.daemonMessages.next().then((message) => ({ kind: "command" as const, message })),
-                response.then((answered) => ({ kind: "response" as const, response: answered })),
-            ]);
-            if (first.kind === "response") {
-                throw new Error(
-                    `Expected a daemon request, received ${first.response.status}: ${await first.response.text()}`,
-                );
-            }
-            const query = decodeServiceToDaemonMessage(first.message);
-            if (query.kind !== "native.session.request" || query.action !== "active-turn") {
-                throw new Error("Expected the Session execution read to reach the daemon");
-            }
-            expect(query.deliveryCommandId).toBe("unconfirmed-command");
-            runtime.daemon.send(
-                encodeNativeSessionResult({
-                    kind: "native.session.result",
-                    action: "active-turn",
-                    requestId: query.requestId,
-                    sessionId: runtime.sessionId,
-                    targetSessionId: runtime.sessionId,
-                    turn: null,
-                    queued: [],
-                    ...(runtimeVersion === "current"
-                        ? { command: { state: "completed", stopReason: "end_turn" } as const }
-                        : {}),
-                }),
+        const response = runtime.readSessionExecution("unconfirmed-command");
+        const first = await Promise.race([
+            runtime.daemonMessages.next().then((message) => ({ kind: "command" as const, message })),
+            response.then((answered) => ({ kind: "response" as const, response: answered })),
+        ]);
+        if (first.kind === "response") {
+            throw new Error(
+                `Expected a daemon request, received ${first.response.status}: ${await first.response.text()}`,
             );
-            const body = await responseJson(await response, 200);
-            if (runtimeVersion === "current") {
-                expect(body).toMatchObject({ command: { state: "completed", stopReason: "end_turn" } });
-            } else {
-                expect(body).not.toHaveProperty("command");
-            }
         }
-        // A client released before delivery reads names no command, and the Runtime is asked nothing new.
+        const query = decodeServiceToDaemonMessage(first.message);
+        if (query.kind !== "native.session.request" || query.action !== "active-turn") {
+            throw new Error("Expected the Session execution read to reach the daemon");
+        }
+        expect(query.deliveryCommandId).toBe("unconfirmed-command");
+        runtime.daemon.send(
+            encodeNativeSessionResult({
+                kind: "native.session.result",
+                action: "active-turn",
+                requestId: query.requestId,
+                sessionId: runtime.sessionId,
+                targetSessionId: runtime.sessionId,
+                turn: null,
+                queued: [],
+                command: { state: "completed", stopReason: "end_turn" },
+                queuedCancellation: "before-start",
+            }),
+        );
+        expect(await responseJson(await response, 200)).toMatchObject({
+            command: { state: "completed", stopReason: "end_turn" },
+        });
+    } finally {
+        runtime.daemon.close(1000, "Test complete");
+    }
+});
+
+it("Given Chat reads the Session execution after missing a turn's outcome, When the Runtime reports the last turn, Then the Relay returns the outcome", async () => {
+    const runtime = await connectRuntimeDaemon("last-turn");
+    try {
         const response = runtime.readSessionExecution();
-        const query = decodeServiceToDaemonMessage(await runtime.daemonMessages.next());
+        const first = await Promise.race([
+            runtime.daemonMessages.next().then((message) => ({ kind: "command" as const, message })),
+            response.then((answered) => ({ kind: "response" as const, response: answered })),
+        ]);
+        if (first.kind === "response") {
+            throw new Error(
+                `Expected a daemon request, received ${first.response.status}: ${await first.response.text()}`,
+            );
+        }
+        const query = decodeServiceToDaemonMessage(first.message);
         if (query.kind !== "native.session.request" || query.action !== "active-turn") {
             throw new Error("Expected the Session execution read to reach the daemon");
         }
@@ -2645,81 +2660,33 @@ it("Given Chat reads the Session execution naming an unconfirmed command, When t
                 targetSessionId: runtime.sessionId,
                 turn: null,
                 queued: [],
+                queuedCancellation: "before-start",
+                lastTurn: {
+                    code: "model_unavailable",
+                    commandId: "failed-command",
+                    message: "The local Agent could not complete the request",
+                    state: "failed",
+                },
             }),
         );
-        expect(await responseJson(await response, 200)).not.toHaveProperty("command");
-    } finally {
-        runtime.daemon.close(1000, "Test complete");
-    }
-});
-
-// @no-uc: Compatibility; Chat shows a missed turn's outcome from the Runtime, and older Runtimes keep the previous answer.
-it("Given Chat reads the Session execution after missing a turn's outcome, When the Runtime reports the last turn or predates that report, Then the Relay returns the outcome only when the Runtime supplied it", async () => {
-    const runtime = await connectRuntimeDaemon("last-turn");
-    try {
-        for (const runtimeVersion of ["current", "previous"] as const) {
-            const response = runtime.readSessionExecution();
-            const first = await Promise.race([
-                runtime.daemonMessages.next().then((message) => ({ kind: "command" as const, message })),
-                response.then((answered) => ({ kind: "response" as const, response: answered })),
-            ]);
-            if (first.kind === "response") {
-                throw new Error(
-                    `Expected a daemon request, received ${first.response.status}: ${await first.response.text()}`,
-                );
-            }
-            const query = decodeServiceToDaemonMessage(first.message);
-            if (query.kind !== "native.session.request" || query.action !== "active-turn") {
-                throw new Error("Expected the Session execution read to reach the daemon");
-            }
-            runtime.daemon.send(
-                encodeNativeSessionResult({
-                    kind: "native.session.result",
-                    action: "active-turn",
-                    requestId: query.requestId,
-                    sessionId: runtime.sessionId,
-                    targetSessionId: runtime.sessionId,
-                    turn: null,
-                    queued: [],
-                    ...(runtimeVersion === "current"
-                        ? {
-                              queuedCancellation: "before-start" as const,
-                              lastTurn: {
-                                  code: "model_unavailable",
-                                  commandId: "failed-command",
-                                  message: "The local Agent could not complete the request",
-                                  state: "failed",
-                              } as const,
-                          }
-                        : {}),
-                }),
-            );
-            const body = await responseJson(await response, 200);
-            if (runtimeVersion === "current") {
-                expect(body).toMatchObject({
-                    queuedCancellation: "before-start",
-                    lastTurn: { commandId: "failed-command", state: "failed", code: "model_unavailable" },
-                });
-            } else {
-                expect(body).not.toHaveProperty("lastTurn");
-                expect(body).not.toHaveProperty("queuedCancellation");
-            }
-        }
+        expect(await responseJson(await response, 200)).toMatchObject({
+            queuedCancellation: "before-start",
+            lastTurn: { commandId: "failed-command", state: "failed", code: "model_unavailable" },
+        });
     } finally {
         runtime.daemon.close(1000, "Test complete");
     }
 });
 
 describe.sequential("Platform Turn submission", () => {
-    // Frozen legacy client request/response contract; no new SDK decoder participates.
     it.each(["app", "session"] as const)(
-        "Given an older %s client cancels a queued message, When the Runtime reports cancellation or prior completion, Then the existing turn contract preserves the actual outcome",
+        "Given %s access cancels a Turn, When the Runtime reports cancellation or prior completion, Then the response reports the Turn's actual stop reason",
         async (access) => {
             const runtime = await connectRuntimeDaemon(`legacy-queue-cancel-${access}`);
             try {
                 for (const stopReason of ["cancelled", "end_turn"] as const) {
                     const turnId = `legacy-${stopReason}`;
-                    const body = { idempotencyKey: `edit-${turnId}` };
+                    const body = {};
                     const path = `/turns/${turnId}/cancel`;
                     const response =
                         access === "app"
@@ -2746,22 +2713,7 @@ describe.sequential("Platform Turn submission", () => {
                             ],
                         }),
                     );
-                    expect(await responseJson(await response, 200)).toEqual({
-                        acceptedAt: expect.any(String),
-                        bindingId: "workspace",
-                        idempotencyKey: body.idempotencyKey,
-                        request: { kind: "prompt", content: "", sessionConfigurations: [] },
-                        sessionId: runtime.sessionId,
-                        turnId,
-                        state:
-                            stopReason === "cancelled"
-                                ? { kind: "cancelled", cancelledAt: expect.any(String) }
-                                : {
-                                      kind: "succeeded",
-                                      completedAt: expect.any(String),
-                                      result: { kind: "agent_result", stopReason },
-                                  },
-                    });
+                    expect(await responseJson(await response, 200)).toEqual({ turnId, stopReason });
                 }
             } finally {
                 runtime.daemon.close(1000, "Test complete");
@@ -2779,7 +2731,7 @@ describe.sequential("Platform Turn submission", () => {
         async ({ access, outcome }) => {
             const runtime = await connectRuntimeDaemon(`conditional-queue-cancel-${access}-${outcome}`);
             try {
-                const body = { idempotencyKey: "conditional-edit" };
+                const body = {};
                 const path = "/turns/queued-command/cancel-before-start";
                 const response =
                     access === "app"
@@ -2833,19 +2785,19 @@ describe.sequential("Platform Turn submission", () => {
             label: "cancels the selected message",
             path: "/turns/app-command/cancel",
             method: "POST",
-            body: { idempotencyKey: "cancel-app-command" },
+            body: {},
             command: { commandId: "app-command", kind: "session.cancel" },
             payload: { commandId: "app-command", kind: "prompt.completed", stopReason: "cancelled" },
-            expected: { turnId: "app-command", idempotencyKey: "cancel-app-command", state: { kind: "cancelled" } },
+            expected: { turnId: "app-command", stopReason: "cancelled" },
         },
         {
             label: "cancels the selected message only before it starts",
             path: "/turns/app-command/cancel-before-start",
             method: "POST",
-            body: { idempotencyKey: "cancel-app-command" },
+            body: {},
             command: { commandId: "app-command", kind: "session.cancel-before-start" },
             payload: { commandId: "app-command", kind: "prompt.completed", stopReason: "cancelled" },
-            expected: { turnId: "app-command", idempotencyKey: "cancel-app-command" },
+            expected: { turnId: "app-command" },
         },
         {
             label: "steers the selected queued message",
@@ -2977,6 +2929,7 @@ describe.sequential("Platform Turn submission", () => {
                 nextCursor: "next-event",
                 sessionGenerationId: "session-generation-1",
                 tailCursor: "tail-event",
+                throughPosition: "3",
                 truncated: true,
                 version: 2 as const,
             };
@@ -3013,6 +2966,7 @@ describe.sequential("Platform Turn submission", () => {
                 kind: "session.config.read.result",
                 requestId: command.requestId,
                 sessionId: runtime.sessionId,
+                configurationRevision: "revision-1",
                 configOptions: [],
             };
             runtime.daemon.send(encodeSessionConfigReadResult(result));
@@ -3029,7 +2983,7 @@ describe.sequential("Platform Turn submission", () => {
         try {
             const readOnly = await runtime.issueAppCredential(["session:read"]);
             for (const operation of [
-                { path: "/turns/app-command/cancel", method: "POST", body: { idempotencyKey: "cancel-app-command" } },
+                { path: "/turns/app-command/cancel", method: "POST", body: {} },
                 { path: "/turns/app-command/disposition", method: "PUT", body: { disposition: "steer" } },
                 {
                     path: "/interactions/app-interaction/responses",
@@ -3071,13 +3025,6 @@ describe.sequential("Platform Turn submission", () => {
 
     // @no-uc: Compatibility; malformed control requests must be distinguishable from retryable server failures.
     it.each([
-        { label: "missing cancellation key", path: "/turns/app-command/cancel", method: "POST", body: {} },
-        {
-            label: "numeric cancellation key",
-            path: "/turns/app-command/cancel",
-            method: "POST",
-            body: { idempotencyKey: 123 },
-        },
         {
             label: "unsupported queue disposition",
             path: "/turns/app-command/disposition",
@@ -3260,6 +3207,7 @@ describe.sequential("Platform Turn submission", () => {
                     action: "active-turn",
                     kind: "native.session.result",
                     queued: [],
+                    queuedCancellation: "before-start",
                     requestId: command.requestId,
                     sessionId: runtime.sessionId,
                     targetSessionId: runtime.sessionId,
@@ -3497,7 +3445,7 @@ describe.sequential("Platform Turn submission", () => {
         const runtimeId = text(claimed, "runtimeId");
         const sessionId = "long-prompt-session";
         const daemonResponse = await worker.fetch(
-            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?liveness=1`, {
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect`, {
                 headers: { authorization: `Bearer ${text(claimed, "runtimeCredential")}`, Upgrade: "websocket" },
             }),
             environment,
@@ -3585,7 +3533,7 @@ describe.sequential("Platform Turn submission", () => {
                 new Request(
                     `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns/long-first-turn/cancel`,
                     {
-                        body: JSON.stringify({ idempotencyKey: "cancel-long-first" }),
+                        body: JSON.stringify({}),
                         headers: credentialHeaders(text(sessionAccess, "credential")),
                         method: "POST",
                     },
@@ -3635,8 +3583,8 @@ describe.sequential("Platform Turn submission", () => {
                     ],
                 }),
             );
-            expect(await responseJson(await cancelTurn, 200)).toMatchObject({
-                state: { kind: "cancelled" },
+            expect(await responseJson(await cancelTurn, 200)).toEqual({
+                stopReason: "cancelled",
                 turnId: "long-first-turn",
             });
 
@@ -3915,7 +3863,7 @@ describe.sequential("Platform Turn submission", () => {
         // to the Runtime, whose own rejection answers with the same
         // machine-readable code and a terminal status.
         const daemonResponse = await worker.fetch(
-            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?liveness=1`, {
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect`, {
                 headers: { authorization: `Bearer ${text(claimed, "runtimeCredential")}`, Upgrade: "websocket" },
             }),
             environment,
@@ -3989,7 +3937,7 @@ describe.sequential("Platform Turn submission", () => {
         }
     });
 
-    it("Given an Agent whose capability advertisement carries values the Relay cannot interpret, When it pairs, Then pairing succeeds and the unreadable capabilities stay withheld", async () => {
+    it("Given an Agent advertisement carrying fields and capability values the Relay cannot interpret, When it pairs, Then pairing succeeds and the unreadable capabilities stay withheld", async () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
@@ -4058,6 +4006,8 @@ describe.sequential("Platform Turn submission", () => {
         }
         const malformed = {
             ...advertised,
+            // A newer daemon may add descriptor fields this Relay does not know.
+            futureAgentField: { format: 2 },
             capabilities: {
                 ...advertised.capabilities,
                 // Non-boolean advertisement values used to reject the whole
@@ -4178,19 +4128,19 @@ describe.sequential("Platform Turn submission", () => {
         }
     });
 
-    it("Given a daemon that has never sent a heartbeat, When Chat submits a Turn long after it connected, Then the Relay still delivers the Turn to it", async () => {
+    it("Given a daemon that never heartbeats after it connected, When its first heartbeat is overdue, Then it is reported offline and its connection is closed", async () => {
         const runtime = await connectRuntimeDaemon("unproven-daemon");
+        const connectedAt = Date.now();
         try {
-            vi.setSystemTime(Date.now() + 10 * 60_000);
+            // The first heartbeat follows attachment, which has 30 seconds, then the usual silence limit applies.
+            vi.setSystemTime(connectedAt + 65_000);
             expect(await runtime.readOnline()).toBe(true);
-            const delivered = runtime.submitTurn("unproven-turn");
-            expect(decodeServiceToDaemonMessage(await runtime.daemonMessages.next())).toMatchObject({
-                commandId: "unproven-turn",
-                kind: "session.prompt",
-            });
-            runtime.startTurn("unproven-turn", "1");
-            expect(await responseJson(await delivered, 200)).toMatchObject({ turnId: "unproven-turn" });
+
+            vi.setSystemTime(connectedAt + 65_001);
+            expect(await runtime.readOnline()).toBe(false);
+            expect(await runtime.daemonClosed).toMatchObject({ code: 4001, reason: "Runtime heartbeat timed out" });
         } finally {
+            vi.setSystemTime(connectedAt);
             runtime.daemon.close();
         }
     });
@@ -4255,6 +4205,7 @@ it.each(["completed", "interrupted"] as const)(
                             restored: true,
                             directoryId: "default",
                             directoryLabel: "Workspace",
+                            configurationRevision: "revision-1",
                             additionalDirectories: [],
                             capabilities: readyAgents[0]?.capabilities,
                             commands: [],

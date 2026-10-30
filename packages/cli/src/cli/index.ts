@@ -5,6 +5,7 @@ import { StateRootError, validateStateRoot } from "../storage/state-root.ts";
 import type { CliContext } from "./context.ts";
 import { registerAgentsHandler } from "./handler/agents/index.ts";
 import { registerDaemonProcessLifecycleHandlers, registerInternalRuntimeHandlers } from "./handler/daemon/index.ts";
+import { registerDiagnoseCommand } from "./handler/diagnose/index.ts";
 import { registerLogsCommand } from "./handler/logs/index.ts";
 import { registerPairHandlers } from "./handler/pair/index.ts";
 import { registerVersionHandler } from "./handler/version/index.ts";
@@ -24,6 +25,7 @@ function createProgram(cliContext: CliContext): Command {
     registerVersionHandler(program, cliContext);
     registerAgentsHandler(program, cliContext);
     registerLogsCommand(program, cliContext);
+    registerDiagnoseCommand(program, cliContext);
     registerInternalRuntimeHandlers(program, cliContext);
     registerPairHandlers(program, cliContext);
     registerDaemonProcessLifecycleHandlers(program, cliContext);

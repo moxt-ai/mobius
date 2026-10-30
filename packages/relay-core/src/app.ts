@@ -13,9 +13,7 @@ export function createMobiusApplication(apiPrefix: string = MOBIUS_API_PREFIX) {
         .onError(rethrowHonoError)
         .notFound(notFoundResponse)
         .route("/pairings", createPairingClaimRoutes())
-        .route("/", createProjectRuntimePairingRoutes())
         .route("/v1", createProjectRuntimePairingRoutes())
-        .route("/", createProjectRuntimeRoutes())
         .route("/v1", createProjectRuntimeRoutes())
         .route("/channels", createChannelRoutes());
 }

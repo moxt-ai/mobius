@@ -15,26 +15,6 @@ const origin = `https://platform.test${MOBIUS_API_PREFIX}`;
 const clerk = new FakeClerk();
 const credentialResource = v.object({ credential: v.string(), credentialId: v.string() });
 
-// Independent App reader contract retained from d337a61 (SDK 0.0.128).
-// That reader requires defaultCredentialId and ignores unknown response fields.
-const legacyIdentifier = v.pipe(v.string(), v.regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/));
-const legacyTimestamp = v.pipe(
-    v.string(),
-    v.maxLength(128),
-    v.check((value) => value.length === 0 || !Number.isNaN(Date.parse(value))),
-);
-const legacyAppResource = v.object({
-    appId: legacyIdentifier,
-    createdAt: legacyTimestamp,
-    defaultCredentialId: legacyIdentifier,
-    deletedAt: legacyTimestamp,
-    displayName: v.pipe(v.string(), v.maxLength(120)),
-    lifecycle: v.pipe(v.string(), v.maxLength(32)),
-    suspendedAt: legacyTimestamp,
-    tenantId: legacyIdentifier,
-    updatedAt: legacyTimestamp,
-});
-
 async function responseJson(response: Response, status: number): Promise<unknown> {
     const body: unknown = await response.json();
     expect(response.status).toBe(status);
@@ -134,26 +114,6 @@ async function application() {
     ) => await sessionRequest("access-credentials", credential, { expiresInSeconds: 900, runtimeId }, directory);
     const session = v.parse(v.object({ credential: v.string() }), await responseJson(await authenticateApp(), 201));
 
-    // Capture the pre-change record, then publish it after the mutation to model a late KV fill.
-    const snapshot = await env.PLATFORM_DIRECTORY_DATABASE.prepare(
-        `SELECT credentials.*, apps.tenant_id, apps.lifecycle AS app_lifecycle,
-                tenants.lifecycle AS tenant_lifecycle
-           FROM platform_app_credentials AS credentials
-           JOIN platform_apps AS apps ON apps.app_id = credentials.app_id
-           JOIN platform_tenants AS tenants ON tenants.tenant_id = apps.tenant_id
-          WHERE credentials.credential_id = ?`,
-    )
-        .bind(defaultCredential.credentialId)
-        .first();
-    const keys = v.parse(v.object({ secret_digest: v.string(), public_credential_id: v.string() }), snapshot);
-    const validatedAt = Date.now();
-    const legacyCacheRecord = JSON.stringify({
-        version: 1,
-        validatedAt,
-        expiresAt: validatedAt + 2 * 60 * 60 * 1_000,
-        credential: snapshot,
-    });
-
     return {
         appId,
         createdApp,
@@ -227,10 +187,6 @@ async function application() {
             ),
         rotate: async () =>
             await developer.rotateAppCredential(defaultCredential.credentialId, 60, new AbortController().signal),
-        publishOldCache: async () => {
-            await env.APP_CREDENTIAL_CACHE.put(`app-secret:v1:${keys.secret_digest}`, legacyCacheRecord);
-            await env.APP_CREDENTIAL_CACHE.put(`app-public:v1:${keys.public_credential_id}`, legacyCacheRecord);
-        },
     };
 }
 
@@ -238,13 +194,13 @@ function expectedScope(credentialId: string, projectIds: readonly string[]) {
     return expect.objectContaining({ allProjects: false, credentialId, projectIds });
 }
 
-it("Given an App's initial credential, When it is rotated, revoked and the App is deleted, Then App resources retain its historical ID and the legacy alias", async () => {
+it("Given an App's initial credential, When it is rotated, revoked and the App is deleted, Then App resources retain its historical ID", async () => {
     const app = await application();
     const signal = new AbortController().signal;
     const initialCredentialId = app.defaultCredential.credentialId;
-    const expected = { initialCredentialId, defaultCredentialId: initialCredentialId };
+    const expected = { initialCredentialId };
     expect(app.createdApp).toMatchObject(expected);
-    expect(v.parse(legacyAppResource, app.createdApp).defaultCredentialId).toBe(initialCredentialId);
+    expect(app.createdApp).not.toHaveProperty("defaultCredentialId");
     expect(await app.readApp()).toMatchObject(expected);
 
     const replacement = await app.rotate();
@@ -253,60 +209,10 @@ it("Given an App's initial credential, When it is rotated, revoked and the App i
 
     const resource = await app.readApp();
     expect(resource).toMatchObject(expected);
-    expect(v.parse(legacyAppResource, resource).defaultCredentialId).toBe(initialCredentialId);
     const listed = await app.developer.listApps(app.tenantId, signal);
     expect(listed.find((item) => item.appId === app.appId)).toMatchObject(expected);
     expect(await app.developer.updateApp(app.appId, "Renamed credential authority", signal)).toMatchObject(expected);
     expect(await app.developer.deleteApp(app.appId, signal)).toMatchObject({ ...expected, lifecycle: "deleted" });
-});
-
-it("Given a v1 Worker that only returns defaultCredentialId, When the new SDK reads and updates an App, Then both names expose the initial ID", async () => {
-    // A stateful old peer at the SDK's HTTP port, independent of the current Worker serializer.
-    let storedApp = {
-        appId: "app_legacy",
-        createdAt: "2026-10-27T00:00:00.000Z",
-        defaultCredentialId: "pac_initial",
-        deletedAt: "",
-        displayName: "Legacy App",
-        lifecycle: "active",
-        suspendedAt: "",
-        tenantId: "tenant_legacy",
-        updatedAt: "2026-10-27T00:00:00.000Z",
-    };
-    const legacyPeer = {
-        fetch: async (request: Request): Promise<Response> => {
-            if (request.headers.get("authorization") !== "Bearer legacy-developer") {
-                return new Response(null, { status: 401 });
-            }
-            if (request.url !== `${origin}/dashboard/v1/apps/${storedApp.appId}`) {
-                return new Response(null, { status: 404 });
-            }
-            if (request.method === "PUT") {
-                const { displayName } = v.parse(
-                    v.object({ displayName: v.pipe(v.string(), v.minLength(1), v.maxLength(120)) }),
-                    await request.json(),
-                );
-                storedApp = { ...storedApp, displayName };
-            } else if (request.method !== "GET") {
-                return new Response(null, { status: 405 });
-            }
-            return Response.json(v.parse(legacyAppResource, storedApp));
-        },
-    };
-    const developer = new MobiusPlatformDeveloperClient({
-        endpoint: origin,
-        authenticationProviderId: "clerk",
-        credentialProvider: new StaticMobiusCredentialProvider("legacy-developer"),
-        transport: legacyPeer,
-    });
-    const signal = new AbortController().signal;
-    const expected = { initialCredentialId: "pac_initial", defaultCredentialId: "pac_initial" };
-    expect(await developer.readApp("app_legacy", signal)).toMatchObject(expected);
-    expect(await developer.updateApp("app_legacy", "Updated legacy App", signal)).toMatchObject(expected);
-    const app = await developer.readApp("app_legacy", signal);
-    expect(app).toMatchObject({ ...expected, displayName: "Updated legacy App" });
-    // Preserve the old own property for callers that serialize SDK resources.
-    expect(JSON.parse(JSON.stringify(app))).toMatchObject({ defaultCredentialId: "pac_initial" });
 });
 
 async function expectRejected(response: Response, code: string, status = 401): Promise<void> {
@@ -314,7 +220,7 @@ async function expectRejected(response: Response, code: string, status = 401): P
     expect.soft(await response.json()).toMatchObject({ error: { code } });
 }
 
-it("Given independently issued and rotated credentials with the same legacy revision, When one is revoked by ID, Then the other remains listed and authorized", async () => {
+it("Given independently issued and rotated credentials, When one is revoked by ID, Then the other remains listed and authorized", async () => {
     const app = await application();
     const signal = new AbortController().signal;
     const issued = await app.developer.issueAppCredential(
@@ -324,9 +230,6 @@ it("Given independently issued and rotated credentials with the same legacy revi
     );
     const rotated = await app.rotate();
 
-    // Preserve the v1 values without treating them as identity, ordering or authorization state.
-    expect(issued.revision).toBe(2);
-    expect(rotated.revision).toBe(2);
     expect(issued.credentialId).not.toBe(rotated.credentialId);
     expect(rotated.replacedCredentialId).toBe(app.defaultCredential.credentialId);
     expect((await app.authenticateApp(issued.credential)).status).toBe(201);
@@ -338,8 +241,8 @@ it("Given independently issued and rotated credentials with the same legacy revi
     expect((await app.authenticateApp(rotated.credential)).status).toBe(201);
     expect(await app.developer.listAppCredentials(app.appId, signal)).toEqual(
         expect.arrayContaining([
-            expect.objectContaining({ active: false, credentialId: issued.credentialId, revision: 2 }),
-            expect.objectContaining({ active: true, credentialId: rotated.credentialId, revision: 2 }),
+            expect.objectContaining({ active: false, credentialId: issued.credentialId }),
+            expect.objectContaining({ active: true, credentialId: rotated.credentialId }),
         ]),
     );
 });
@@ -414,14 +317,26 @@ it("Given an active AppCredential, When two rotations compete, Then only the ret
     expect((await app.authenticateApp(replacement.credential)).status).toBe(201);
 });
 
-it("Given a scoped AppCredential whose scope only Project storage holds, When it is used, listed and rotated, Then it keeps exactly that scope, D1 answers for it, and Project storage keeps what a rolled-back Worker reads", async () => {
+// Workers before D1 owned AppCredential scope wrote it only to Project storage.
+async function moveScopeToProjectStorage(credentialId: string, projectId: string): Promise<void> {
+    await runInDurableObject(env.PROJECT_RELAY.getByName(projectId), (_instance, state) =>
+        state.storage.sql.exec(
+            "INSERT INTO platform_app_credential_projects (credential_id, project_id, created_at) VALUES (?, ?, ?)",
+            credentialId,
+            projectId,
+            Date.now(),
+        ),
+    );
+    await env.PLATFORM_DIRECTORY_DATABASE.prepare("DELETE FROM platform_app_credential_scopes WHERE credential_id = ?")
+        .bind(credentialId)
+        .run();
+}
+
+it("Given a scoped AppCredential whose scope only Project storage holds, When it is used, listed and rotated, Then it keeps exactly that scope", async () => {
     const app = await application();
     await app.createProject("credential-authority-other-project");
     const legacy = await app.issueScopedCredential();
-    // Workers before D1 owned AppCredential scope wrote it only to Project storage.
-    await env.PLATFORM_DIRECTORY_DATABASE.prepare("DELETE FROM platform_app_credential_scopes WHERE credential_id = ?")
-        .bind(legacy.credentialId)
-        .run();
+    await moveScopeToProjectStorage(legacy.credentialId, app.projectId);
 
     expect((await app.authenticateApp(legacy.credential)).status).toBe(201);
     expect(await app.listCredentials()).toMatchObject({
@@ -435,38 +350,52 @@ it("Given a scoped AppCredential whose scope only Project storage holds, When it
     expect(await app.listCredentials()).toMatchObject({
         credentials: expect.arrayContaining([expectedScope(replacement.credentialId, [app.projectId])]),
     });
-
-    // D1 alone answers for credentials issued now; the Project storage copy only serves a rollback.
-    const current = await app.issueScopedCredential();
-    await runInDurableObject(env.PROJECT_RELAY.getByName(app.projectId), (_instance, state) =>
-        state.storage.sql.exec(
-            "DELETE FROM platform_app_credential_projects WHERE credential_id = ?",
-            current.credentialId,
-        ),
-    );
-    expect((await app.authenticateApp(current.credential)).status).toBe(201);
-
-    const rollbackScope = await runInDurableObject(env.PROJECT_RELAY.getByName(app.projectId), (_instance, state) =>
-        state.storage.sql
-            .exec("SELECT credential_id FROM platform_app_credential_projects ORDER BY credential_id")
-            .toArray()
-            .map((row) => row["credential_id"]),
-    );
-    expect(rollbackScope).toEqual([legacy.credentialId, replacement.credentialId].sort());
 });
 
 it("Given a scoped AppCredential whose scope only Project storage holds, When an unrelated Project's storage fails, Then it is still authorized for its own Project", async () => {
     const app = await application();
     const other = await app.createProject("credential-authority-failing-project");
     const legacy = await app.issueScopedCredential();
-    await env.PLATFORM_DIRECTORY_DATABASE.prepare("DELETE FROM platform_app_credential_scopes WHERE credential_id = ?")
-        .bind(legacy.credentialId)
-        .run();
+    await moveScopeToProjectStorage(legacy.credentialId, app.projectId);
     await runInDurableObject(env.PROJECT_RELAY.getByName(other.projectId), (_instance, state) =>
         state.storage.sql.exec("DROP TABLE platform_app_credential_projects"),
     );
 
     expect((await app.authenticateApp(legacy.credential)).status).toBe(201);
+});
+
+it("Given a Tenant whose active Projects across its Apps reach the quota, When one of its Apps creates another Project, Then the quota rejects it", async () => {
+    const app = await application();
+    const { appId, tenantId } = v.parse(v.object({ appId: v.string(), tenantId: v.string() }), await app.readApp());
+    const { appId: otherAppId } = v.parse(
+        v.object({ appId: v.string() }),
+        await responseJson(await app.dashboard("apps", { displayName: "Second quota App", tenantId }), 201),
+    );
+    const createProject = async (projectAppId: string, idempotencyKey: string) =>
+        await app.dashboard(`apps/${projectAppId}/projects`, {
+            displayName: idempotencyKey,
+            idempotencyKey,
+            locationHint: "apac",
+        });
+    await responseJson(await createProject(otherAppId, "other-app-quota-project"), 201);
+    const { activeProjects } = v.parse(
+        v.object({ activeProjects: v.number() }),
+        await responseJson(await app.dashboard(`platform/tenants/${tenantId}/usage`), 200),
+    );
+    const setQuota = async (projects: number) =>
+        await env.PLATFORM_DIRECTORY_DATABASE.prepare("UPDATE platform_tenants SET quotas_json = ? WHERE tenant_id = ?")
+            .bind(JSON.stringify({ activeApps: 100, activeProjects: projects }), tenantId)
+            .run();
+    await setQuota(activeProjects);
+    try {
+        await expectRejected(
+            await createProject(appId, "quota-overflow-project"),
+            "tenant_project_quota_exceeded",
+            429,
+        );
+    } finally {
+        await setQuota(1_000);
+    }
 });
 
 it("Given an active AppCredential, When rotation storage fails, Then the credential and audit changes roll back and a retry succeeds", async () => {
@@ -489,20 +418,18 @@ it("Given an active AppCredential, When rotation storage fails, Then the credent
     expect((await app.authenticateApp(replacement.credential)).status).toBe(201);
 });
 
-it("Given an active AppCredential and its Session credential, When revocation succeeds before an old cache fill arrives, Then both reject new requests", async () => {
+it("Given an active AppCredential and its Session credential, When revocation succeeds, Then both reject new requests", async () => {
     const app = await application();
     expect((await app.authenticateSession()).status).toBe(200);
     await app.revoke();
-    await app.publishOldCache();
 
     await expectRejected(await app.authenticateApp(), "credential_revoked");
     await expectRejected(await app.authenticateSession(), "credential_revoked");
 });
 
-it("Given a rotated AppCredential with a stale cache record, When the overlap ends, Then its App and Session credentials fail while its replacement works", async () => {
+it("Given a rotated AppCredential and its Session credential, When the overlap ends, Then its App and Session credentials fail while its replacement works", async () => {
     const app = await application();
     const replacement = await app.rotate();
-    await app.publishOldCache();
     vi.setSystemTime(new Date(Date.parse(replacement.overlapEndsAt) - 1));
     expect((await app.authenticateApp()).status).toBe(201);
     expect((await app.authenticateSession()).status).toBe(200);
@@ -541,9 +468,8 @@ it("Given a rotated AppCredential, When its overlap ends, Then the credential li
     });
 });
 
-it("Given previously valid App and Session credentials, When directory storage is unavailable, Then neither can authorize from an old cache record", async () => {
+it("Given previously valid App and Session credentials, When directory storage is unavailable, Then neither authorizes", async () => {
     const app = await application();
-    await app.publishOldCache();
 
     await expectRejected(
         await app.authenticateApp(undefined, env.TEST_UNINITIALIZED_SHARD),
@@ -581,45 +507,15 @@ it("Given an active App and Project, When deletion rolls back and is retried, Th
     await expectRejected(await app.authenticateSession(), "credential_revoked");
 });
 
-it("Given an active Project with App and Session credentials, When its directory lifecycle is suspended, Then listing and every credential observe the suspension", async () => {
-    const app = await application();
-    const scoped = await app.issueScopedCredential();
-    expect((await app.authenticateApp(scoped.credential)).status).toBe(201);
-    await env.PLATFORM_DIRECTORY_DATABASE.prepare(
-        "UPDATE platform_projects SET lifecycle = 'suspended', suspended_at = ? WHERE project_id = ?",
-    )
-        .bind(Date.now(), app.projectId)
-        .run();
-
-    expect(await responseJson(await app.listProjects(), 200)).toMatchObject({
-        projects: [{ projectId: app.projectId, lifecycle: "suspended" }],
-    });
-    await expectRejected(await app.authenticateApp(), "project_access_denied", 403);
-    await expectRejected(await app.authenticateApp(scoped.credential), "project_access_denied", 403);
-    await expectRejected(await app.authenticateSession(), "project_access_denied", 403);
-});
-
-it("Given a suspended App with active and suspended Projects, When its owner deletes it, Then deletion is atomic, terminal and preserves suspension history", async () => {
+it("Given an App with two active Projects, When its owner deletes it, Then deletion is atomic and terminal", async () => {
     const app = await application();
     const activeProject = await app.createProject("active-project");
-    const suspendedAt = new Date().toISOString();
-    // Retain existing stored suspension states without introducing a management API.
-    await env.PLATFORM_DIRECTORY_DATABASE.batch([
-        env.PLATFORM_DIRECTORY_DATABASE.prepare(
-            "UPDATE platform_apps SET lifecycle = 'suspended', suspended_at = ? WHERE app_id = ?",
-        ).bind(Date.now(), app.appId),
-        env.PLATFORM_DIRECTORY_DATABASE.prepare(
-            "UPDATE platform_projects SET lifecycle = 'suspended', suspended_at = ? WHERE project_id = ?",
-        ).bind(Date.now(), app.projectId),
-    ]);
     const beforeDeletion = await app.readApp();
     const projectsBeforeDeletion = await responseJson(await app.listProjects(), 200);
     const auditsBeforeDeletion = await app.listAuditEvents();
-    await expectRejected(await app.authenticateApp(), "credential_revoked");
-    await expectRejected(await app.authenticateSession(), "credential_revoked");
 
     await env.PLATFORM_DIRECTORY_DATABASE.prepare(
-        `CREATE TRIGGER reject_suspended_app_deletion BEFORE UPDATE OF lifecycle ON platform_projects
+        `CREATE TRIGGER reject_app_deletion BEFORE UPDATE OF lifecycle ON platform_projects
          WHEN NEW.lifecycle = 'deleted'
          BEGIN SELECT RAISE(ABORT, 'Controlled deletion failure'); END`,
     ).run();
@@ -629,33 +525,26 @@ it("Given a suspended App with active and suspended Projects, When its owner del
         expect(await responseJson(await app.listProjects(), 200)).toEqual(projectsBeforeDeletion);
         expect(await app.listAuditEvents()).toEqual(auditsBeforeDeletion);
     } finally {
-        await env.PLATFORM_DIRECTORY_DATABASE.prepare("DROP TRIGGER reject_suspended_app_deletion").run();
+        await env.PLATFORM_DIRECTORY_DATABASE.prepare("DROP TRIGGER reject_app_deletion").run();
     }
 
     const deletedAt = "2026-10-27T00:01:00.000Z";
     vi.setSystemTime(new Date(deletedAt));
     const deleted = await responseJson(await app.deleteApp(), 200);
-    expect(v.parse(legacyAppResource, deleted)).toMatchObject({
+    expect(deleted).toMatchObject({
         appId: app.appId,
         lifecycle: "deleted",
-        suspendedAt,
         deletedAt,
         updatedAt: deletedAt,
     });
     expect(await app.developer.readApp(app.appId, new AbortController().signal)).toMatchObject({
         lifecycle: "deleted",
-        suspendedAt,
         deletedAt,
     });
     expect(await responseJson(await app.listProjects(), 200)).toMatchObject({
         projects: expect.arrayContaining([
-            expect.objectContaining({ projectId: app.projectId, lifecycle: "deleted", suspendedAt, deletedAt }),
-            expect.objectContaining({
-                projectId: activeProject.projectId,
-                lifecycle: "deleted",
-                suspendedAt: "",
-                deletedAt,
-            }),
+            expect.objectContaining({ projectId: app.projectId, lifecycle: "deleted", deletedAt }),
+            expect.objectContaining({ projectId: activeProject.projectId, lifecycle: "deleted", deletedAt }),
         ]),
     });
     await expectRejected(await app.authenticateApp(), "credential_revoked");

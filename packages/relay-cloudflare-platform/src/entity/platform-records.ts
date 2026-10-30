@@ -2,8 +2,7 @@ import { PROJECT_LOCATION_HINTS } from "@moxt-ai/mobius-sdk/protocol";
 import * as v from "valibot";
 
 const nonNegativeInteger = v.pipe(v.number(), v.safeInteger(), v.minValue(0));
-const positiveInteger = v.pipe(v.number(), v.safeInteger(), v.minValue(1));
-const lifecycle = v.picklist(["active", "suspended", "deleted"]);
+const lifecycle = v.picklist(["active", "deleted"]);
 
 export const ActiveCountRowSchema = v.object({ active_count: nonNegativeInteger });
 export type ActiveCountRow = Readonly<v.InferOutput<typeof ActiveCountRowSchema>>;
@@ -16,7 +15,6 @@ export const AppRowSchema = v.object({
     deleted_at: v.nullable(nonNegativeInteger),
     display_name: v.string(),
     lifecycle,
-    suspended_at: v.nullable(nonNegativeInteger),
     tenant_id: v.string(),
     updated_at: nonNegativeInteger,
 });
@@ -38,9 +36,6 @@ export const AuditRowSchema = v.object({
 });
 export type AuditRow = Readonly<v.InferOutput<typeof AuditRowSchema>>;
 
-export const CredentialRevisionRowSchema = v.object({ revision: positiveInteger });
-export type CredentialRevisionRow = Readonly<v.InferOutput<typeof CredentialRevisionRowSchema>>;
-
 export const CredentialRowSchema = v.object({
     all_projects: v.picklist([0, 1]),
     app_id: v.string(),
@@ -51,7 +46,6 @@ export const CredentialRowSchema = v.object({
     permissions_json: v.string(),
     public_credential_id: v.string(),
     replaced_by_credential_id: v.nullable(v.string()),
-    revision: positiveInteger,
     revoked_at: v.nullable(nonNegativeInteger),
     secret_digest: v.string(),
     tenant_id: v.string(),
@@ -66,7 +60,6 @@ export interface PlatformAppCredentialInsert {
     readonly issuedAt: number;
     readonly permissionsJson: string;
     readonly publicCredentialId: string;
-    readonly revision: number;
     readonly secretDigest: string;
 }
 
@@ -107,7 +100,6 @@ export const ProjectRowSchema = v.object({
     location_hint: v.picklist(PROJECT_LOCATION_HINTS),
     project_id: v.string(),
     request_digest: v.string(),
-    suspended_at: v.nullable(nonNegativeInteger),
     tenant_id: v.string(),
     updated_at: nonNegativeInteger,
 });
@@ -124,7 +116,6 @@ export const TenantRowSchema = v.object({
     display_name: v.string(),
     lifecycle,
     quotas_json: v.string(),
-    suspended_at: v.nullable(nonNegativeInteger),
     tenant_id: v.string(),
     updated_at: nonNegativeInteger,
 });

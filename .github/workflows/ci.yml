@@ -19,7 +19,7 @@ jobs:
     outputs:
       docs-only: ${{ steps.classify.outputs.docs-only }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.4.0
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -59,10 +59,12 @@ jobs:
   validate-worker-config:
     name: Validate Worker config (${{ matrix.environment }})
     needs: changes
+    # Environment credentials belong to deployments from the protected main branch.
     if: >-
       needs.changes.outputs.docs-only == 'false' &&
       github.repository == 'moxt-ai/mobius' &&
-      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
@@ -71,10 +73,10 @@ jobs:
         environment: [staging, production]
     environment: ${{ matrix.environment }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4.4.0
         with:
           node-version-file: .nvmrc
       - name: Validate GitHub runtime configuration
@@ -102,16 +104,26 @@ jobs:
           - name: Hosting tests
             command: pnpm test:ci:hosting
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.4.0
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4.3.0
         with:
           run_install: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4.4.0
         with:
           node-version-file: .nvmrc
           cache: pnpm
+      - name: Validate Worker config with public fixtures
+        if: matrix.name == 'Static checks'
+        run: node scripts/validate-worker-config.ts
+        env:
+          CLERK_SECRET_KEY: ci-placeholder
+          MOBIUS_SESSION_WEBHOOK_SECRET_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          MOBIUS_PLATFORM_ALLOWED_ORIGINS: https://example.invalid
+          MOBIUS_PLATFORM_OIDC_PROVIDERS: '[]'
+          MOBIUS_PLATFORM_OPERATOR_SUBJECTS: '[]'
+          SESSION_ACTIVE_SESSIONS_PER_PROJECT: '10'
       - run: pnpm install --frozen-lockfile
       - run: ${{ matrix.command }}
 
@@ -128,20 +140,20 @@ jobs:
     env:
       TEST_SHARD: ${{ matrix.shard }}/4
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.4.0
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4.3.0
         with:
           run_install: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4.4.0
         with:
           node-version-file: .nvmrc
           cache: pnpm
       # setup-node caches package contents, but not pnpm's registry metadata and policy-verification receipts.
       # pnpm still validates the lockfile hash and active policy before trusting a cached receipt.
       - name: Cache pnpm verification metadata
-        uses: actions/cache@v4
+        uses: actions/cache@v4.3.0
         with:
           path: ${{ runner.temp }}/pnpm-metadata
           key: pnpm-metadata-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', '.nvmrc', '.npmrc', '.pnpmfile.cjs', 'pnpmfile.cjs') }}
@@ -176,25 +188,36 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
+    env:
+      REAL_AGENT_PACKAGES: >-
+        @openai/codex@0.154.0
+        @anthropic-ai/claude-code@2.1.273
+        @earendil-works/pi-coding-agent@1.1.0
+        pi-acp@0.0.34
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.4.0
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4.3.0
         with:
           run_install: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4.4.0
         with:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Every shard installs the same pinned Agents; reuse their tarballs instead of
+      # downloading them from the registry on each run.
+      - name: Restore the real Agent npm cache
+        uses: actions/cache@v4.3.0
+        with:
+          path: ~/.npm/_cacache
+          key: real-agents-npm-${{ runner.os }}-${{ env.REAL_AGENT_PACKAGES }}
       - name: Install real Agents
         run: >-
-          npm install --global
-          @openai/codex@0.154.0
-          @anthropic-ai/claude-code@2.1.273
-          @earendil-works/pi-coding-agent@1.1.0
-          pi-acp@0.0.34
+          npm install --global --prefer-offline
+          --fetch-retries=5 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=30000
+          $REAL_AGENT_PACKAGES
       - run: pnpm test:agent-daemon:real --shard="$TEST_SHARD"
         env:
           TEST_SHARD: ${{ matrix.shard }}/4
@@ -209,11 +232,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.4.0
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4.4.0
         with:
           node-version-file: .nvmrc
       - name: Require versions above the base for published package changes
@@ -223,46 +246,6 @@ jobs:
           MERGE_GROUP_REF: ${{ github.event.merge_group.head_ref }}
         run: node scripts/ci-check-package-version-bumps.cjs
 
-  npm-compatibility:
-    # The daemon finds and installs its own upgrades through the user's npm, so its
-    # upgrade journeys run against every supported npm major, not only the bundled one.
-    name: npm compatibility (npm ${{ matrix.npm }}${{ matrix.os == 'windows-latest' && ', Windows' || '' }})
-    needs: changes
-    if: needs.changes.outputs.docs-only == 'false'
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest]
-        npm: ["10", "11", "12"]
-        include:
-          - os: windows-latest
-            npm: "12"
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: pnpm/action-setup@v4
-        with:
-          run_install: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: Install npm ${{ matrix.npm }}
-        if: runner.os != 'Windows'
-        env:
-          NPM_MAJOR: ${{ matrix.npm }}
-        run: npm install --global "npm@$NPM_MAJOR" && npm --version
-      - name: Install npm ${{ matrix.npm }} on Windows
-        if: runner.os == 'Windows'
-        env:
-          NPM_MAJOR: ${{ matrix.npm }}
-        run: npm install --global "npm@$env:NPM_MAJOR" && npm --version
-      - run: pnpm test:npm-compatibility
-
   cli-compatibility:
     needs: changes
     if: needs.changes.outputs.docs-only == 'false'
@@ -270,7 +253,7 @@ jobs:
 
   validate:
     if: always()
-    needs: [changes, checks, client-check, real-agents, npm-compatibility, package-versions, cli-compatibility]
+    needs: [changes, checks, client-check, real-agents, package-versions, cli-compatibility]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -281,7 +264,6 @@ jobs:
           CHECKS_RESULT: ${{ needs.checks.result }}
           CLIENT_TESTS_RESULT: ${{ needs.client-check.result }}
           REAL_AGENTS_RESULT: ${{ needs.real-agents.result }}
-          NPM_COMPATIBILITY_RESULT: ${{ needs.npm-compatibility.result }}
           PACKAGE_VERSIONS_RESULT: ${{ needs.package-versions.result }}
           CLI_COMPATIBILITY_RESULT: ${{ needs.cli-compatibility.result }}
           EVENT_NAME: ${{ github.event_name }}
@@ -290,11 +272,11 @@ jobs:
           if [[ "$DOCS_ONLY" == "true" ]]; then
             [[ "$CLIENT_TESTS_RESULT" == "skipped" ]]
             [[ "$CLI_COMPATIBILITY_RESULT" == "skipped" ]]
-            [[ "$CHECKS_RESULT" == "skipped" && "$REAL_AGENTS_RESULT" == "skipped" && "$NPM_COMPATIBILITY_RESULT" == "skipped" && "$PACKAGE_VERSIONS_RESULT" == "skipped" ]]
+            [[ "$CHECKS_RESULT" == "skipped" && "$REAL_AGENTS_RESULT" == "skipped" && "$PACKAGE_VERSIONS_RESULT" == "skipped" ]]
           else
             [[ "$CLIENT_TESTS_RESULT" == "success" ]]
             [[ "$CLI_COMPATIBILITY_RESULT" == "success" ]]
-            [[ "$DOCS_ONLY" == "false" && "$CHECKS_RESULT" == "success" && "$REAL_AGENTS_RESULT" == "success" && "$NPM_COMPATIBILITY_RESULT" == "success" ]]
+            [[ "$DOCS_ONLY" == "false" && "$CHECKS_RESULT" == "success" && "$REAL_AGENTS_RESULT" == "success" ]]
             # Pushes and manual runs have no pull request whose version bump to check.
             if [[ "$EVENT_NAME" == "pull_request" || "$EVENT_NAME" == "merge_group" ]]; then
               [[ "$PACKAGE_VERSIONS_RESULT" == "success" ]]
@@ -336,13 +318,13 @@ jobs:
       group: deploy-mobius-platform-${{ matrix.environment }}
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4.4.0
         with:
           node-version-file: .nvmrc
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4.3.0
         with:
           run_install: false
       - run: pnpm install --frozen-lockfile
@@ -458,13 +440,13 @@ jobs:
       group: deploy-mobius-recording-${{ matrix.environment }}
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4.4.0
         with:
           node-version-file: .nvmrc
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4.3.0
         with:
           run_install: false
       - run: pnpm install --frozen-lockfile

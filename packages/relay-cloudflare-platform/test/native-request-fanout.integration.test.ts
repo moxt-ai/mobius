@@ -148,6 +148,7 @@ it("isolates native query replies from live fanout across hibernation and daemon
                 targetSessionId: "session-7",
                 turn: null,
                 queued: [],
+                queuedCancellation: "before-start",
             });
         daemon.socket.send(reply("query-7"));
         expect(await queries[7]?.inbox.next()).toMatchObject({ kind: "native.session.result", requestId: "query-7" });

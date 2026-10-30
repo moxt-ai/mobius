@@ -458,18 +458,10 @@ export class PairingService {
         const deadline =
             this.#runtimeOperations === undefined ? AbortSignal.any([signal, AbortSignal.timeout(120000)]) : signal;
         const runtimes = await this.#pairings.listProjectRuntimes(projectId, token, deadline);
-        const runtime = runtimes.find((candidate) => candidate.runtimeId === runtimeId);
-        if (runtime === undefined) {
+        if (!runtimes.some((candidate) => candidate.runtimeId === runtimeId)) {
             throw new PairingDirectoryError(
                 "runtime_access_denied",
                 "The project credential cannot access this Runtime",
-            );
-        }
-        const agent = runtime.agents.find((candidate) => candidate.id === command.agentId);
-        if (agent?.agentSettingsDiscovery !== true) {
-            throw new PairingDirectoryError(
-                "agent_settings_discovery_unsupported",
-                "The selected local Agent does not support settings discovery",
             );
         }
         if (this.#runtimeOperations !== undefined) {

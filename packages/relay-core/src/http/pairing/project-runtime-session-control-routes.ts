@@ -18,7 +18,6 @@ import { errorMiddleware, rethrowHonoError } from "../middleware/error-middlewar
 import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
 
 const identifier = v.custom<Identifier>(isIdentifier);
-const cancellation = v.strictObject({ idempotencyKey: identifier });
 const disposition = v.strictObject({ disposition: v.literal("steer") });
 const interactionResponse = v.variant("kind", [
     v.strictObject({
@@ -59,47 +58,22 @@ export function createProjectRuntimeSessionControlRoutes() {
     return new Hono<RelayHttpEnvironment>()
         .onError(rethrowHonoError)
         .use("*", errorMiddleware)
-        .post(
-            "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/turns/:turnId/cancel",
-            bodyParser<RelayHttpEnvironment>(),
-            async (context) => {
-                const body = validated(cancellation, context.req.valid("json"));
-                const sessionId = validateIdentifier(context.req.param("sessionId"), "session_id");
-                const turnId = validateIdentifier(context.req.param("turnId"), "turn_id");
-                const completed = await requestControl(
-                    context,
-                    decodeSessionCancelCommand(
-                        JSON.stringify({ commandId: turnId, kind: "session.cancel", sessionId }),
-                    ),
-                );
-                if (completed.kind !== "turn.completed" || completed.commandId !== turnId) {
-                    throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid cancellation");
-                }
-                const cancelledAt = new Date().toISOString();
-                context.header("Cache-Control", "no-store");
-                return context.json({
-                    acceptedAt: cancelledAt,
-                    bindingId: "workspace",
-                    idempotencyKey: body.idempotencyKey,
-                    request: { content: "", kind: "prompt", sessionConfigurations: [] },
-                    sessionId,
-                    state:
-                        completed.stopReason === "cancelled"
-                            ? { cancelledAt, kind: "cancelled" }
-                            : {
-                                  completedAt: cancelledAt,
-                                  kind: "succeeded",
-                                  result: { kind: "agent_result", stopReason: completed.stopReason },
-                              },
-                    turnId,
-                });
-            },
-        )
+        .post("/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/turns/:turnId/cancel", async (context) => {
+            const sessionId = validateIdentifier(context.req.param("sessionId"), "session_id");
+            const turnId = validateIdentifier(context.req.param("turnId"), "turn_id");
+            const completed = await requestControl(
+                context,
+                decodeSessionCancelCommand(JSON.stringify({ commandId: turnId, kind: "session.cancel", sessionId })),
+            );
+            if (completed.kind !== "turn.completed" || completed.commandId !== turnId) {
+                throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid cancellation");
+            }
+            context.header("Cache-Control", "no-store");
+            return context.json({ turnId, stopReason: completed.stopReason });
+        })
         .post(
             "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/turns/:turnId/cancel-before-start",
-            bodyParser<RelayHttpEnvironment>(),
             async (context) => {
-                const body = validated(cancellation, context.req.valid("json"));
                 const sessionId = validateIdentifier(context.req.param("sessionId"), "session_id");
                 const turnId = validateIdentifier(context.req.param("turnId"), "turn_id");
                 const completed = await requestControl(
@@ -118,7 +92,7 @@ export function createProjectRuntimeSessionControlRoutes() {
                     );
                 }
                 context.header("Cache-Control", "no-store");
-                return context.json({ turnId, idempotencyKey: body.idempotencyKey });
+                return context.json({ turnId });
             },
         )
         .put(

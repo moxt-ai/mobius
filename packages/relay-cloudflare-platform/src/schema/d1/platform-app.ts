@@ -7,16 +7,15 @@ export const platformApp = sqliteTable(
         appId: text("app_id").primaryKey(),
         tenantId: text("tenant_id").notNull(),
         displayName: text("display_name").notNull(),
-        lifecycle: text("lifecycle", { enum: ["active", "suspended", "deleted"] }).notNull(),
+        lifecycle: text("lifecycle", { enum: ["active", "deleted"] }).notNull(),
         // Retain the SQL name so existing Workers and stored data remain compatible.
         initialCredentialId: text("default_credential_id"),
         createdAt: integer("created_at").notNull(),
         updatedAt: integer("updated_at").notNull(),
-        suspendedAt: integer("suspended_at"),
         deletedAt: integer("deleted_at"),
     },
     (table) => [
-        check("platform_apps_lifecycle_check", sql`${table.lifecycle} in ('active', 'suspended', 'deleted')`),
+        check("platform_apps_lifecycle_check", sql`${table.lifecycle} in ('active', 'deleted')`),
         unique().on(table.tenantId, table.displayName),
         index("platform_apps_tenant").on(table.tenantId, table.lifecycle, table.createdAt, table.appId),
     ],

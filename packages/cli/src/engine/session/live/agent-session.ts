@@ -1,4 +1,5 @@
 import { conversationTitleFromText } from "@moxt-ai/mobius-sdk";
+import type { SessionInteractionSnapshot } from "@moxt-ai/mobius-sdk/protocol";
 import {
     type AgentModelEffort,
     SESSION_COMMANDS_UPDATED_KIND,
@@ -21,6 +22,7 @@ import type {
     AdapterSessionOpened,
     AdapterSessionScope,
     AdapterSessionTarget,
+    NativeHistoryRevision,
 } from "../../acp/native-history/preview-contract.ts";
 import type { NativeSessionOrigin } from "../../acp/protocol/native-session.ts";
 import { unsupportedSessionCapabilities } from "../../acp/protocol/session-capabilities.ts";
@@ -70,6 +72,12 @@ type NativeHistoryOwnership =
     | { readonly kind: "unbound" }
     | { readonly kind: "fresh-session" }
     | { readonly kind: "agent-owned" };
+
+/** The native conversation entry this process continues from, recorded after its own writes settle. */
+type NativeHistoryBaseline =
+    | { readonly kind: "unavailable" }
+    | { readonly kind: "recording"; readonly completion: Promise<void> }
+    | { readonly kind: "recorded"; readonly latestEntryId: string };
 
 interface LoadedSession {
     readonly history: HistoryReplayCapture;
@@ -135,6 +143,8 @@ export class AgentSession implements AgentSessionRestore {
     #configOptions: readonly SessionConfigOption[] = [];
     readonly #sessionConfigurations = new SessionConfigurations();
     #nativeHistoryOwnership: NativeHistoryOwnership = { kind: "unbound" };
+    #nativeHistoryBaseline: NativeHistoryBaseline = { kind: "unavailable" };
+    #nativeHistoryWrites = 0;
     #prompted = false;
     #sessionLoad: SessionLoadState = { kind: "not-requested" };
     #restored = false;
@@ -190,8 +200,13 @@ export class AgentSession implements AgentSessionRestore {
                 await this.#processEvent(event);
             },
             onBackgroundActivity: (activity) => {
+                const previous = this.#backgroundActivity;
                 this.#backgroundActivity = activity;
                 this.#getObserver().onBackgroundActivity?.(this, activity);
+                if (previous !== "none" && activity === "none") {
+                    // Background work may have appended to native history on this process's behalf.
+                    void this.#recordNativeHistoryRevision();
+                }
             },
             interactions: {
                 onPermission: this.#interactions.onPermission,
@@ -316,7 +331,9 @@ export class AgentSession implements AgentSessionRestore {
         }
         const nativeSessionId = this.#nativeSessionId;
         if (nativeSessionId.length > 0) {
-            await this.#adapter.renameSession({ ...this.#target(), title: normalized, signal });
+            await this.#writeNativeHistory(
+                async () => await this.#adapter.renameSession({ ...this.#target(), title: normalized, signal }),
+            );
         }
         const updatedAt = new Date().toISOString();
         await this.#processEvent({
@@ -473,10 +490,13 @@ export class AgentSession implements AgentSessionRestore {
         const history = new HistoryReplayCapture(this.#store.events, this.#mobiusSessionId);
         const completion = Promise.resolve().then(async (): Promise<LoadedSession> => {
             try {
-                const opened = await this.#adapter.openSessionWithReplay({
-                    ...this.#sessionParams(signal),
-                    nativeSessionId: this.nativeSessionId(),
-                });
+                const opened = await this.#writeNativeHistory(
+                    async () =>
+                        await this.#adapter.openSessionWithReplay({
+                            ...this.#sessionParams(signal),
+                            nativeSessionId: this.nativeSessionId(),
+                        }),
+                );
                 signal.throwIfAborted();
                 this.#capabilities = opened.capabilities;
                 const loaded = { history, kind: "loaded", opened } satisfies LoadedSession;
@@ -495,7 +515,99 @@ export class AgentSession implements AgentSessionRestore {
         signal: AbortSignal,
         recovery: SessionRecovery,
         origin?: NativeSessionOrigin,
-    ): Promise<void> => await restoreSession(this, signal, recovery, origin);
+    ): Promise<void> =>
+        await this.#writeNativeHistory(async () => await restoreSession(this, signal, recovery, origin));
+
+    /**
+     * Native clients, such as the Agent's own terminal, can continue the conversation
+     * while this process is idle. The Agent would then answer from, and append to, the
+     * copy it loaded earlier, so the caller must reopen the conversation from native history.
+     */
+    readonly nativeHistoryChanged = async (signal: AbortSignal): Promise<boolean> => {
+        const baseline = this.#nativeHistoryBaseline;
+        if (this.#writingNativeHistory()) {
+            return false;
+        }
+        switch (baseline.kind) {
+            case "unavailable":
+                return false;
+            case "recording":
+                await waitForSharedOperation(baseline.completion, signal);
+                return await this.nativeHistoryChanged(signal);
+            case "recorded": {
+                let current: NativeHistoryRevision;
+                try {
+                    current = await this.#readNativeHistoryRevision(signal);
+                } catch (error) {
+                    signal.throwIfAborted();
+                    console.warn(`[${this.#agentId}-acp] Native history revision could not be read`, error);
+                    return false;
+                }
+                // Our own writes that began meanwhile record a new baseline when they settle.
+                return (
+                    !this.#writingNativeHistory() &&
+                    this.#nativeHistoryBaseline === baseline &&
+                    current.kind === "tracked" &&
+                    current.latestEntryId !== baseline.latestEntryId
+                );
+            }
+            default: {
+                const unreachable: never = baseline;
+                throw new AcpExecutionError("Unexpected native history baseline", { cause: unreachable });
+            }
+        }
+    };
+
+    readonly #writingNativeHistory = (): boolean =>
+        this.#nativeHistoryWrites > 0 || this.#backgroundActivity !== "none";
+
+    /**
+     * Runs an operation that may append to native history, then records what it left there.
+     * The recording starts synchronously; a later comparison waits for it instead of the operation.
+     */
+    readonly #writeNativeHistory = async <T>(operation: () => Promise<T>): Promise<T> => {
+        this.#nativeHistoryWrites += 1;
+        try {
+            return await operation();
+        } finally {
+            this.#nativeHistoryWrites -= 1;
+            void this.#recordNativeHistoryRevision();
+        }
+    };
+
+    readonly #readNativeHistoryRevision = async (signal: AbortSignal): Promise<NativeHistoryRevision> =>
+        this.#nativeIdentity.kind === "bound"
+            ? await this.#adapter.readNativeHistoryRevision({
+                  ...this.#target(),
+                  signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
+              })
+            : { kind: "untracked" };
+
+    readonly #recordNativeHistoryRevision = async (): Promise<void> => {
+        if (this.#writingNativeHistory()) {
+            return;
+        }
+        const recorded = Promise.withResolvers<void>();
+        const recording: NativeHistoryBaseline = { kind: "recording", completion: recorded.promise };
+        this.#nativeHistoryBaseline = recording;
+        let baseline: NativeHistoryBaseline = { kind: "unavailable" };
+        try {
+            const revision = await this.#readNativeHistoryRevision(AbortSignal.timeout(30_000));
+            if (revision.kind === "tracked") {
+                baseline = { kind: "recorded", latestEntryId: revision.latestEntryId };
+            }
+        } catch (error) {
+            // A released process has no writer left to compare; any other failure keeps reuse unchanged.
+            if (!(error instanceof AcpExecutionError && error.code === "invalid_agent_session")) {
+                console.warn(`[${this.#agentId}-acp] Native history revision could not be recorded`, error);
+            }
+        } finally {
+            if (this.#nativeHistoryBaseline === recording) {
+                this.#nativeHistoryBaseline = baseline;
+            }
+            recorded.resolve();
+        }
+    };
 
     readonly nativeSessionId = (): string => this.#nativeSessionId;
 
@@ -526,7 +638,9 @@ export class AgentSession implements AgentSessionRestore {
         signal: AbortSignal,
     ): Promise<void> => {
         const configRevision = this.#configRevision;
-        const configured = await this.#adapter.configureSession({ ...this.#target(), selection, signal });
+        const configured = await this.#writeNativeHistory(
+            async () => await this.#adapter.configureSession({ ...this.#target(), selection, signal }),
+        );
         if (this.#configRevision === configRevision) {
             this.#configOptions = configured;
             this.#configRevision = crypto.randomUUID();
@@ -534,12 +648,12 @@ export class AgentSession implements AgentSessionRestore {
         }
     };
 
-    // The revision check and Agent mutation share one queue, including legacy callers.
+    // The revision check and Agent mutation share one queue, including settings the Runtime applies itself.
     // A lost response may have committed: reread after a conflict, never replay an edit blindly.
     readonly configure = async (options: SessionConfigureOptions): Promise<SessionConfigurationSnapshot> =>
         this.#configurationChanges.run(async (signal) => {
             if (
-                options.expectedConfigurationRevision !== undefined &&
+                options.expectedConfigurationRevision !== null &&
                 options.expectedConfigurationRevision !== this.#configRevision
             ) {
                 throw new AcpExecutionError(
@@ -643,7 +757,9 @@ export class AgentSession implements AgentSessionRestore {
             });
         }
         try {
-            const result = await this.#adapter.prompt({ ...this.#target(), content: options, signal: options.signal });
+            const result = await this.#writeNativeHistory(
+                async () => await this.#adapter.prompt({ ...this.#target(), content: options, signal: options.signal }),
+            );
             this.writeStoredSession(new Date().toISOString());
             if (lifecycle !== undefined) {
                 await this.recordLifecycleEvent({
@@ -762,6 +878,11 @@ export class AgentSession implements AgentSessionRestore {
             return await this.#adapter.cancel({ ...this.#target(), signal });
         }
         return "retained";
+    };
+
+    readonly interactionSnapshot = (): SessionInteractionSnapshot => {
+        const { sessionGenerationId, throughPosition } = this.#store.events.livePosition(this.#mobiusSessionId);
+        return { sessionGenerationId, throughPosition, interactions: this.#interactions.snapshot() };
     };
 
     readonly respondPermission = async (options: PermissionResponseOptions): Promise<void> => {

@@ -36,11 +36,9 @@ const KNOWN_SESSION_CAPABILITY_FIELDS: readonly (keyof SessionCapabilities)[] = 
 export interface AgentDescriptor {
     readonly agentPath: string;
     readonly agentVersion: string;
-    readonly agentSettingsDiscovery?: boolean;
     readonly capabilities: SessionCapabilities;
     readonly id: string;
     readonly label: string;
-    readonly sessionTurnConfiguration?: boolean;
 }
 
 export class CreatedRuntimePairing {
@@ -141,7 +139,11 @@ export class ChannelDescriptor {
         projectId: string,
         runtimeId: string,
     ) {
-        this.agents = agents;
+        this.agents = agents.map((agent) => ({
+            ...agent,
+            agentSettingsDiscovery: true,
+            sessionTurnConfiguration: true,
+        }));
         this.channelId = channelId;
         this.machineName = machineName;
         this.projectId = projectId;
@@ -253,6 +255,7 @@ function pairingDirectoryErrorStatus(code: string): number {
         case "unauthorized":
         case "credential_expired":
         case "credential_revoked":
+        case "runtime_revoked":
             return 401;
         case "owner_access_required":
         case "runtime_access_denied":
@@ -262,8 +265,6 @@ function pairingDirectoryErrorStatus(code: string): number {
             return 410;
         case "access_grant_redeemed":
         case "runtime_unavailable":
-        case "agent_settings_discovery_unsupported":
-        case "session_turn_configuration_unsupported":
         case "idempotency_conflict":
         case "session_configuration_conflict":
         case "turn_already_started":
@@ -449,29 +450,14 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
     const agents: AgentDescriptor[] = [];
     const identifiers = new Set<string>();
     for (const candidate of value) {
+        // Fields a newer daemon adds are ignored, so an older Relay can still pair it.
         if (
             !isRecord(candidate) ||
-            Object.keys(candidate).length < 5 ||
-            Object.keys(candidate).length > 7 ||
             !Object.hasOwn(candidate, "agentPath") ||
             !Object.hasOwn(candidate, "agentVersion") ||
             !Object.hasOwn(candidate, "capabilities") ||
             !Object.hasOwn(candidate, "id") ||
-            !Object.hasOwn(candidate, "label") ||
-            Object.keys(candidate).some(
-                (key) =>
-                    key !== "agentPath" &&
-                    key !== "agentVersion" &&
-                    key !== "agentSettingsDiscovery" &&
-                    key !== "capabilities" &&
-                    key !== "id" &&
-                    key !== "label" &&
-                    key !== "sessionTurnConfiguration",
-            ) ||
-            (Object.hasOwn(candidate, "agentSettingsDiscovery") &&
-                typeof candidate["agentSettingsDiscovery"] !== "boolean") ||
-            (Object.hasOwn(candidate, "sessionTurnConfiguration") &&
-                typeof candidate["sessionTurnConfiguration"] !== "boolean")
+            !Object.hasOwn(candidate, "label")
         ) {
             throw new PairingDirectoryError("invalid_agents", "The local agent directory is invalid");
         }
@@ -480,8 +466,6 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
         const label = candidate["label"];
         const agentPath = candidate["agentPath"];
         const agentVersion = candidate["agentVersion"];
-        const agentSettingsDiscovery = candidate["agentSettingsDiscovery"];
-        const sessionTurnConfiguration = candidate["sessionTurnConfiguration"];
         if (
             typeof agentPath !== "string" ||
             agentPath.trim().length === 0 ||
@@ -502,11 +486,9 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
         agents.push({
             agentPath,
             agentVersion: agentVersion.trim(),
-            ...(agentSettingsDiscovery === true ? { agentSettingsDiscovery } : {}),
             capabilities,
             id,
             label: label.trim(),
-            ...(sessionTurnConfiguration === true ? { sessionTurnConfiguration } : {}),
         });
     }
     return agents;

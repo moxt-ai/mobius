@@ -466,14 +466,7 @@ export class RuntimeInstallationStore {
             connection.runtimeCredential,
             connection.runtimeId,
         );
-        if (isRecord(record) && record["version"] === 5) {
-            // A newly installed CLI can still be controlling an older live Worker.
-            // Change only activation in its record, retaining opaque legacy metadata
-            // (including applicationId) without making it part of Engine identity.
-            await writeJsonAtomically(this.connectionPath(connectionId), { ...record, activation }, signal);
-        } else {
-            await this.overwriteConnection(updated, signal);
-        }
+        await this.overwriteConnection(updated, signal);
         return updated;
     };
 

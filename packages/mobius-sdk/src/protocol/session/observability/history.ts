@@ -58,10 +58,7 @@ const wireNativeSessionEventsSchema = z
                 nextCursor: z.string().min(1).max(512).nullable(),
                 sessionGenerationId: identifier,
                 tailCursor: z.string().max(512),
-                throughPosition: z
-                    .string()
-                    .regex(/^(0|[1-9][0-9]*)$/u)
-                    .optional(),
+                throughPosition: z.string().regex(/^(0|[1-9][0-9]*)$/u),
                 truncated: z.boolean(),
                 version: z.literal(2),
             })

@@ -98,7 +98,7 @@ export function credentialStatus(credential: MobiusPlatformAppCredentialMetadata
     if (credential.revokedAt.length > 0) {
         return "revoked";
     }
-    return credential.active === false ? "inactive" : "active";
+    return credential.active ? "active" : "inactive";
 }
 
 export function createPlatformStore() {

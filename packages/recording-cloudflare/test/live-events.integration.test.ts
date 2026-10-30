@@ -1,7 +1,7 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
-    decodeSessionRecordingDirectory,
+    decodeSessionRecordingDirectoryV2,
     decodeSessionRecordingHistory,
     decodeSessionRecordingHistoryPage,
 } from "@moxt-ai/mobius-sdk/protocol";
@@ -50,7 +50,7 @@ describe("Recording live V2 events", () => {
     it("wakes a caught-up reader after a new durable event is written", async () => {
         expect((await worker.fetch(write(), env)).status).toBe(201);
         const path = `https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions/live-session/events`;
-        const first = await worker.fetch(new Request(`${path}?after=0&limit=100`), env);
+        const first = await worker.fetch(new Request(`${path}?limit=100`), env);
         const cursor = decodeSessionRecordingHistoryPage(await first.text()).tailCursor;
         const waiting = worker.fetch(new Request(`${path}?after=${cursor}&limit=100&waitMs=5000`), env);
         const barrier = await worker.fetch(new Request(`${path}?after=${cursor}&limit=100`), env);
@@ -64,14 +64,13 @@ describe("Recording live V2 events", () => {
         expect(response.headers.get("Server-Timing")).toMatch(/recording-wait;dur=[0-9.]+/u);
         expect(response.status).toBe(200);
         expect(decodeSessionRecordingHistoryPage(await response.text()).events).toEqual([next]);
-        expect(response.headers.get("Mobius-Recording-Wait-Supported")).toBe("1");
     });
 
     // @no-uc: Technical regression; abandoning a held read must cancel its wait without failing the Worker.
     it("cancels an abandoned live read and still accepts the following reader", async () => {
         expect((await worker.fetch(write(), env)).status).toBe(201);
         const path = `https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions/live-session/events`;
-        const initial = await worker.fetch(new Request(`${path}?after=0&limit=100`), env);
+        const initial = await worker.fetch(new Request(`${path}?limit=100`), env);
         const cursor = decodeSessionRecordingHistoryPage(await initial.text()).tailCursor;
         const abort = new AbortController();
         const waiting = worker.fetch(
@@ -91,14 +90,13 @@ describe("Recording live V2 events", () => {
         expect(decodeSessionRecordingHistoryPage(await (await nextRead).text()).events).toEqual([next]);
     });
 
-    // @no-uc: Compatibility; a finite empty wait must retain the last durable cursor and legacy reads stay immediate.
+    // @no-uc: Technical regression; a finite empty wait must retain the last durable cursor.
     it("finishes an empty wait without moving its durable cursor", async () => {
         expect((await worker.fetch(write(), env)).status).toBe(201);
         const path = `https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions/live-session/events`;
-        const initial = await worker.fetch(new Request(`${path}?after=0&limit=100`), env);
+        const initial = await worker.fetch(new Request(`${path}?limit=100`), env);
         const cursor = decodeSessionRecordingHistoryPage(await initial.text()).tailCursor;
         const response = await worker.fetch(new Request(`${path}?after=${cursor}&limit=100&waitMs=1`), env);
-        expect(response.headers.get("Mobius-Recording-Wait-Supported")).toBe("1");
         expect(decodeSessionRecordingHistoryPage(await response.text())).toMatchObject({
             events: [],
             nextCursor: null,
@@ -110,9 +108,7 @@ describe("Recording live V2 events", () => {
     it("rejects an invalid wait budget before reading a session", async () => {
         const path = `https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions/live-session/events`;
         for (const waitMs of ["-1", "10001", "1.5", "never"]) {
-            expect((await worker.fetch(new Request(`${path}?after=0&limit=100&waitMs=${waitMs}`), env)).status).toBe(
-                400,
-            );
+            expect((await worker.fetch(new Request(`${path}?limit=100&waitMs=${waitMs}`), env)).status).toBe(400);
         }
     });
 
@@ -133,17 +129,6 @@ describe("Recording live V2 events", () => {
     it("Given a historical event without a live position, When it is submitted to Recording, Then Recording rejects it", async () => {
         const response = await worker.fetch(
             write("runtime-live", { kind: "session.event.v2", events: [historicalEvent] }),
-            env,
-        );
-        expect(response.status).toBe(400);
-    });
-    it("Given a legacy event envelope, When a caller submits it, Then Recording rejects the retired contract", async () => {
-        const response = await worker.fetch(
-            write("runtime-live", {
-                kind: "session.event",
-                sessionId: event.sessionId,
-                payload: JSON.stringify({ kind: "session.started" }),
-            }),
             env,
         );
         expect(response.status).toBe(400);
@@ -220,79 +205,19 @@ it("Given prompt context and a later Agent title, When the Runtime loads its rec
     ).toBe(201);
     expect((await worker.fetch(write(), env)).status).toBe(201);
     const response = await worker.fetch(
-        new Request(`https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions`),
+        new Request(`https://recording.internal/v2/projects/${projectId}/runtimes/runtime-live/sessions`),
         env,
     );
-    expect(decodeSessionRecordingDirectory(await response.text())).toEqual({
+    expect(decodeSessionRecordingDirectoryV2(await response.text())).toEqual({
         sessions: [
             {
                 ...context,
                 runtimeId: "runtime-live",
                 sessionId: event.sessionId,
-                status: "running",
                 title: agentTitle,
                 updatedAt: titled.recordedAt,
             },
         ],
-    });
-});
-it("Given a prompt that later completes, When the Runtime loads its recorded directory, Then the Session status reflects the latest lifecycle outcome", async () => {
-    const context = { agentId: "codex", directoryId: "default", additionalDirectoryIds: [] };
-    const lifecycle = (kind: string, recordedAt: string, payload: Record<string, unknown>) => ({
-        ...event,
-        eventId: kind,
-        recordedAt,
-        type: "lifecycle-metadata",
-        payload: { commandId: "command", kind, ...payload },
-    });
-    const requested = lifecycle("prompt.requested", "2026-10-09T00:00:00.000Z", {
-        content: [{ type: "text", text: "Run" }],
-        context,
-    });
-    expect(
-        (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: [requested] }), env)).status,
-    ).toBe(201);
-    expect(
-        (
-            await worker.fetch(
-                write("runtime-live", {
-                    kind: "session.event.v2",
-                    events: [
-                        lifecycle("prompt.failed", "2026-10-09T00:30:00.000Z", {
-                            attemptId: "attempt-1",
-                            code: "agent_crashed",
-                            message: "The Agent exited unexpectedly",
-                        }),
-                    ],
-                }),
-                env,
-            )
-        ).status,
-    ).toBe(201);
-    const directory = await worker.fetch(
-        new Request(`https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions`),
-        env,
-    );
-    expect(decodeSessionRecordingDirectory(await directory.text())).toMatchObject({
-        sessions: [{ sessionId: event.sessionId, status: "failed" }],
-    });
-    expect(
-        (
-            await worker.fetch(
-                write("runtime-live", {
-                    kind: "session.event.v2",
-                    events: [lifecycle("prompt.completed", "2026-10-09T01:00:00.000Z", { stopReason: "end_turn" })],
-                }),
-                env,
-            )
-        ).status,
-    ).toBe(201);
-    const recovered = await worker.fetch(
-        new Request(`https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions`),
-        env,
-    );
-    expect(decodeSessionRecordingDirectory(await recovered.text())).toMatchObject({
-        sessions: [{ sessionId: event.sessionId, status: "idle" }],
     });
 });
 it("Given a recording with no completion event, When a caller reads V2 summaries, Then metadata is available without claiming a current execution status", async () => {
@@ -327,13 +252,6 @@ it("Given a recording with no completion event, When a caller reads V2 summaries
     const single = await worker.fetch(new Request(`${path}/${event.sessionId}`), env);
     expect(single.status).toBe(200);
     expect(await single.json()).toEqual(summary);
-
-    // Old callers can still decode the historical observation, without a second stored status.
-    const legacy = await worker.fetch(new Request(path.replace("/v2/", "/v1/")), env);
-    expect(legacy.status).toBe(200);
-    expect(decodeSessionRecordingDirectory(await legacy.text())).toEqual({
-        sessions: [{ ...summary, status: "running" }],
-    });
 });
 it("Given a directory with a stale persisted status, When it upgrades, Then V2 preserves its metadata without inventing a missing lifecycle outcome", async () => {
     const stub = env.RECORDING_DIRECTORY.getByName(JSON.stringify([projectId, "runtime-live"]));
@@ -378,91 +296,15 @@ it("Given a directory with a stale persisted status, When it upgrades, Then V2 p
     const summaries = await worker.fetch(new Request(path), env);
     expect(summaries.status).toBe(200);
     expect(await summaries.json()).toEqual(expected);
-    const legacy = await worker.fetch(new Request(path.replace("/v2/", "/v1/")), env);
-    expect(legacy.status).toBe(503);
-    expect(await legacy.json()).toMatchObject({ error: { code: "recording_status_unavailable" } });
-});
-it("Given recorded prompt lifecycles, When a caller reads selected Session status, Then one and many status reads return summaries without loading the full Runtime directory", async () => {
-    const context = { agentId: "codex", directoryId: "default", additionalDirectoryIds: [] };
-    const lifecycle = (sessionId: string, eventId: string, kind: string, recordedAt: string) => ({
-        ...event,
-        eventId,
-        recordedAt,
-        sessionId,
-        type: "lifecycle-metadata",
-        payload:
-            kind === "prompt.requested"
-                ? {
-                      commandId: "command",
-                      content: [{ type: "text", text: "Run" }],
-                      context,
-                      kind,
-                  }
-                : { commandId: "command", kind, stopReason: "end_turn" },
-    });
-    const sessions = ["status-session-1", "status-session-2"];
-    for (const [index, sessionId] of sessions.entries()) {
-        expect(
-            (
-                await worker.fetch(
-                    write("runtime-live", {
-                        kind: "session.event.v2",
-                        events: [
-                            lifecycle(
-                                sessionId,
-                                `${sessionId}-requested`,
-                                "prompt.requested",
-                                `2026-10-09T0${index}:00:00.000Z`,
-                            ),
-                            lifecycle(
-                                sessionId,
-                                `${sessionId}-completed`,
-                                "prompt.completed",
-                                `2026-10-09T0${index}:30:00.000Z`,
-                            ),
-                        ],
-                    }),
-                    env,
-                )
-            ).status,
-        ).toBe(201);
-    }
-
-    const single = await worker.fetch(
-        new Request(
-            `https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions/${sessions[0]}`,
-        ),
-        env,
-    );
-    expect(single.status).toBe(200);
-    expect(await single.json()).toMatchObject({
-        runtimeId: "runtime-live",
-        sessionId: sessions[0],
-        status: "idle",
-    });
-
-    const batchUrl = new URL(`https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions`);
-    for (const sessionId of sessions) {
-        batchUrl.searchParams.append("sessionId", sessionId);
-    }
-    const batch = await worker.fetch(new Request(batchUrl), env);
-    expect(batch.status).toBe(200);
-    expect(decodeSessionRecordingDirectory(await batch.text()).sessions).toEqual(
-        expect.arrayContaining(
-            sessions.map((sessionId) =>
-                expect.objectContaining({ sessionId, runtimeId: "runtime-live", status: "idle" }),
-            ),
-        ),
-    );
 });
 it("Given a session that never requested a prompt, When the Runtime loads its recorded directory, Then the session is not listed", async () => {
     expect((await worker.fetch(write(), env)).status).toBe(201);
     const response = await worker.fetch(
-        new Request(`https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions`),
+        new Request(`https://recording.internal/v2/projects/${projectId}/runtimes/runtime-live/sessions`),
         env,
     );
     expect(response.status).toBe(200);
-    expect(decodeSessionRecordingDirectory(await response.text())).toEqual({ sessions: [] });
+    expect(decodeSessionRecordingDirectoryV2(await response.text())).toEqual({ sessions: [] });
 });
 it("Given a duplicate live frame, When Recording receives both broadcasts, Then it keeps both without inventing delivery guarantees", async () => {
     expect((await worker.fetch(write(), env)).status).toBe(201);
@@ -497,13 +339,17 @@ describe("Recording incremental reads", () => {
             `https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions/live-session/events${query}`,
         );
     }
-    it("Given recorded batches, When a caller reads after a mid-history position, Then only later events are returned with page cursors", async () => {
+    /** A page query from the start of the Recording, or after a page cursor. */
+    function pageQuery(cursor: string | null, limit: number): string {
+        return cursor === null ? `?limit=${limit}` : `?after=${encodeURIComponent(cursor)}&limit=${limit}`;
+    }
+    it("Given recorded batches, When a caller reads after a mid-history cursor, Then only later events are returned with page cursors", async () => {
         for (const batch of [numberedEvents(3, 0), numberedEvents(3, 3)]) {
             expect(
                 (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: batch }), env)).status,
             ).toBe(201);
         }
-        const response = await worker.fetch(read("?after=3"), env);
+        const response = await worker.fetch(read("?after=v2:2:3"), env);
         expect(response.status).toBe(200);
         const livePage: unknown = await response.clone().json();
         expect(livePage).toMatchObject({ events: [{ position: "4" }, { position: "5" }] });
@@ -522,7 +368,7 @@ describe("Recording incremental reads", () => {
                 (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: batch }), env)).status,
             ).toBe(201);
         }
-        const response = await worker.fetch(read("?after=1&limit=2"), env);
+        const response = await worker.fetch(read("?after=v2:1:1&limit=2"), env);
         expect(response.status).toBe(200);
         const page = decodeSessionRecordingHistoryPage(await response.text());
         expect(page.events.map((candidate) => candidate.eventId)).toEqual(["event-2", "event-3"]);
@@ -535,7 +381,7 @@ describe("Recording incremental reads", () => {
             (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: numberedEvents(2, 0) }), env))
                 .status,
         ).toBe(201);
-        const response = await worker.fetch(read("?after=1"), env);
+        const response = await worker.fetch(read("?after=v2:1:1"), env);
         expect(response.status).toBe(200);
         const page = decodeSessionRecordingHistoryPage(await response.text());
         expect(page.events).toEqual([]);
@@ -543,33 +389,19 @@ describe("Recording incremental reads", () => {
         expect(page.tailCursor).toBe("v2:1:1");
         expect(page.truncated).toBe(false);
     });
-    it("Given a cursor beyond the recorded tail, When the Runtime later records more events, Then the poll resumes from the held cursor", async () => {
-        expect(
-            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: numberedEvents(2, 0) }), env))
-                .status,
-        ).toBe(201);
-        expect((await worker.fetch(read("?after=9"), env)).status).toBe(200);
-        expect(
-            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: numberedEvents(2, 2) }), env))
-                .status,
-        ).toBe(201);
-        const page = decodeSessionRecordingHistoryPage(await (await worker.fetch(read("?after=9"), env)).text());
-        expect(page.events).toEqual([]);
-        expect(page.tailCursor).toBe("v2:2:3");
-    });
     it("Given a boundary batch that starts before the cursor, When only its later half is new, Then decoding drops the delivered prefix", async () => {
         const spanning = numberedEvents(4, 0);
         expect(
             (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: spanning }), env)).status,
         ).toBe(201);
-        const page = decodeSessionRecordingHistoryPage(await (await worker.fetch(read("?after=1"), env)).text());
+        const page = decodeSessionRecordingHistoryPage(await (await worker.fetch(read("?after=v2:1:1"), env)).text());
         expect(page.events.map((candidate) => candidate.eventId)).toEqual(["event-2", "event-3"]);
     });
     it("Given duplicate broadcasts of one batch, When a caller reads incrementally, Then the repeated position is skipped without hiding new events", async () => {
         const batch = { kind: "session.event.v2", events: numberedEvents(2, 0) };
         expect((await worker.fetch(write("runtime-live", batch), env)).status).toBe(201);
         expect((await worker.fetch(write("runtime-live", batch), env)).status).toBe(201);
-        const page = decodeSessionRecordingHistoryPage(await (await worker.fetch(read("?after=0"), env)).text());
+        const page = decodeSessionRecordingHistoryPage(await (await worker.fetch(read("?limit=10"), env)).text());
         expect(page.events.map((candidate) => candidate.eventId)).toEqual(["event-0", "event-1", "event-0", "event-1"]);
     });
     it("Given a daemon reload creates a new Session generation, When a caller continues from an append cursor, Then restarted events are retained", async () => {
@@ -577,9 +409,7 @@ describe("Recording incremental reads", () => {
         expect(
             (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: first }), env)).status,
         ).toBe(201);
-        const initial = decodeSessionRecordingHistoryPage(
-            await (await worker.fetch(read("?after=0&limit=2"), env)).text(),
-        );
+        const initial = decodeSessionRecordingHistoryPage(await (await worker.fetch(read("?limit=2"), env)).text());
 
         expect(initial.nextCursor).not.toBeNull();
         const restarted = numberedEvents(2, 1).map((candidate) => ({
@@ -605,31 +435,6 @@ describe("Recording incremental reads", () => {
         expect(page.generationReset).toBe(true);
         expect(page.nextCursor).toBe("v2:2:2");
     });
-    it("Given a legacy position cursor and a generation reset, When a caller polls incrementally, Then it receives a full replay reset", async () => {
-        expect(
-            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: numberedEvents(2, 1) }), env))
-                .status,
-        ).toBe(201);
-        const restarted = numberedEvents(2, 1).map((candidate) => ({
-            ...candidate,
-            eventId: `legacy-reloaded-${candidate.eventId}`,
-            sessionGenerationId: "session-generation-legacy-reloaded",
-        }));
-        expect(
-            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: restarted }), env)).status,
-        ).toBe(201);
-        const page = decodeSessionRecordingHistoryPage(
-            await (await worker.fetch(read("?after=1&limit=3"), env)).text(),
-        );
-        expect(page.events.map((candidate) => candidate.eventId)).toEqual([
-            "event-1",
-            "event-2",
-            "legacy-reloaded-event-1",
-        ]);
-        expect(page.generationReset).toBe(true);
-        expect(page.truncated).toBe(true);
-        expect(page.nextCursor).toBe("v2:2:1");
-    });
     it("Given a long Session with many recorded batches, When a caller follows page cursors from the start, Then every event is returned once in order", async () => {
         const batchCount = 70;
         for (let batchIndex = 0; batchIndex < batchCount; batchIndex += 1) {
@@ -646,11 +451,11 @@ describe("Recording incremental reads", () => {
             ).toBe(201);
         }
         const received: string[] = [];
-        let cursor = "0";
+        let cursor: string | null = null;
         let tailCursor = "";
         for (;;) {
             const page = decodeSessionRecordingHistoryPage(
-                await (await worker.fetch(read(`?after=${encodeURIComponent(cursor)}&limit=50`), env)).text(),
+                await (await worker.fetch(read(pageQuery(cursor, 50)), env)).text(),
             );
             received.push(...page.events.map((candidate) => candidate.position));
             tailCursor = page.tailCursor;
@@ -662,7 +467,7 @@ describe("Recording incremental reads", () => {
         expect(received).toEqual(Array.from({ length: batchCount * 3 }, (_, index) => String(index + 1)));
         expect(tailCursor).toBe(`v2:${batchCount}:${batchCount * 3}`);
         const resumed = decodeSessionRecordingHistoryPage(
-            await (await worker.fetch(read("?after=100&limit=4"), env)).text(),
+            await (await worker.fetch(read("?after=v2:34:100&limit=4"), env)).text(),
         );
         expect(resumed.events.map((candidate) => candidate.position)).toEqual(["101", "102", "103", "104"]);
         expect(resumed.nextCursor).toBe("v2:35:104");
@@ -679,8 +484,9 @@ describe("Recording incremental reads", () => {
     });
     it("Given a malformed cursor or limit, When a caller reads incrementally, Then the request is rejected", async () => {
         expect((await worker.fetch(read("?after=not-a-position"), env)).status).toBe(400);
-        expect((await worker.fetch(read("?after=0&limit=0"), env)).status).toBe(400);
-        expect((await worker.fetch(read("?after=0&limit=99999"), env)).status).toBe(400);
+        expect((await worker.fetch(read("?after=0&limit=10"), env)).status).toBe(400);
+        expect((await worker.fetch(read("?limit=0"), env)).status).toBe(400);
+        expect((await worker.fetch(read("?limit=99999"), env)).status).toBe(400);
     });
     it("Given a well-formed cursor that no longer resolves, When a caller reads incrementally, Then the read reports the cursor as expired so the caller can start over", async () => {
         expect(
@@ -712,9 +518,7 @@ describe("Recording incremental reads", () => {
                 )
             ).status,
         ).toBe(201);
-        const page = decodeSessionRecordingHistoryPage(
-            await (await worker.fetch(read("?after=0&limit=10"), env)).text(),
-        );
+        const page = decodeSessionRecordingHistoryPage(await (await worker.fetch(read("?limit=10"), env)).text());
         expect(page.events.map((candidate) => candidate.eventId)).toEqual(["event-1", "event-2", "event-2"]);
 
         const next = await worker.fetch(read(`?after=${page.nextCursor}&limit=10`), env);
@@ -828,9 +632,7 @@ describe("Recording incremental reads", () => {
             (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: numberedEvents(2, 1) }), env))
                 .status,
         ).toBe(201);
-        const first = decodeSessionRecordingHistoryPage(
-            await (await worker.fetch(read("?after=0&limit=1"), env)).text(),
-        );
+        const first = decodeSessionRecordingHistoryPage(await (await worker.fetch(read("?limit=1"), env)).text());
         expect(first).toMatchObject({ generationReset: false, truncated: true });
 
         const restarted = numberedEvents(2, 1).map((candidate) => ({
@@ -879,9 +681,7 @@ describe("Recording incremental reads", () => {
         expect(await response.json()).toEqual({
             results: [{ sessionId: event.sessionId, kind: "failed", code: "write_failed" }],
         });
-        const page = decodeSessionRecordingHistoryPage(
-            await (await worker.fetch(read("?after=0&limit=10"), env)).text(),
-        );
+        const page = decodeSessionRecordingHistoryPage(await (await worker.fetch(read("?limit=10"), env)).text());
         expect(page.events.map((candidate) => candidate.eventId)).toEqual(["event-1"]);
     });
 
@@ -895,10 +695,10 @@ describe("Recording incremental reads", () => {
         ).toBe(201);
 
         const received: string[] = [];
-        let cursor = "0";
+        let cursor: string | null = null;
         for (;;) {
             const page = decodeSessionRecordingHistoryPage(
-                await (await worker.fetch(read(`?after=${cursor}&limit=1`), env)).text(),
+                await (await worker.fetch(read(pageQuery(cursor, 1)), env)).text(),
             );
             received.push(...page.events.map((candidate) => candidate.eventId));
             if (page.nextCursor === null) {

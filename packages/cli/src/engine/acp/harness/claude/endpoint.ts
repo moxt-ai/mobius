@@ -30,6 +30,9 @@ export class ClaudeAcpEndpoint implements InProcessAcpEndpoint {
                 ...process.env,
                 ...options.environment,
                 CLAUDE_CODE_EXECUTABLE: options.command,
+                // Claude Code otherwise sends a prompt to the model while its transcript entry is still
+                // buffered (flushed every 100ms), so a crash in that window leaves no session to resume.
+                CLAUDE_CODE_EAGER_FLUSH: "1",
             }),
             onSessionUpdate: options.onSessionUpdate,
             onBackgroundActivity: (activity) => options.onBackgroundActivity?.(activity),

@@ -123,10 +123,7 @@ export function decodeSessionPromptCommand(encoded: string): SessionPromptComman
     assertKind(value, SESSION_PROMPT_KIND);
 
     const prompt = readText(value, "prompt", MAX_PROMPT_LENGTH);
-    const attachments =
-        !Object.hasOwn(value, "attachments") && Array.isArray(value["images"]) && Array.isArray(value["resources"])
-            ? []
-            : decodePromptAttachmentsValue(value["attachments"]);
+    const attachments = decodePromptAttachmentsValue(value["attachments"]);
     const attachmentBytes = attachments.reduce((total, attachment) => total + attachment.byteLength, 0);
     if (attachmentBytes > MAX_PROMPT_ATTACHMENT_BYTES) {
         throw new ProtocolMessageError("Prompt attachments are too large");
@@ -207,15 +204,7 @@ export function decodeSessionPromptDispositionCommand(encoded: string): SessionP
 }
 
 export function encodeSessionPromptCommand(message: SessionPromptCommand): string {
-    const command = decodeSessionPromptCommand(JSON.stringify(message));
-    return JSON.stringify({
-        ...command,
-        // Keep text prompts compatible with the previous Runtime release while
-        // attachments move to the content-key protocol. Older Runtimes ignore
-        // `attachments` and require both legacy arrays to be present.
-        images: [],
-        resources: [],
-    });
+    return JSON.stringify(decodeSessionPromptCommand(JSON.stringify(message)));
 }
 
 export function encodeSessionCancelCommand(message: SessionCancelCommand): string {
