@@ -271,7 +271,7 @@ describe("Recording Turn history", () => {
         expect(turn?.items).toMatchObject([{ kind: "answer", sequence: 1_001, text: "Still readable" }]);
     });
 
-    it("Given duplicate event frames, When Turns are updated and rebuilt, Then each logical event contributes once while raw frames remain intact", async () => {
+    it("Given repeated event frames, When Turns are updated and rebuilt, Then each logical event is stored and contributes once", async () => {
         const begin = [requested("command-1", "Say hello"), started("command-1")];
         const output = answer("Hello");
         await record([...begin, output, output]);
@@ -290,21 +290,28 @@ describe("Recording Turn history", () => {
             attempt: { kind: "succeeded" },
             items: [{ kind: "answer", text: "HelloHello" }],
         });
-        const frames = [...begin, output, output, output, ...rest, output];
         const raw = await worker.fetch(new Request(sessionPath("events")), env);
-        expect(await raw.json()).toMatchObject({ events: frames });
+        expect(await raw.json()).toMatchObject({ events: [...begin, output, ...rest] });
 
         const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, runtimeId, sessionId]));
         await runInDurableObject(stub, (_instance, state) => {
-            // A deployed projection predates duplicate suppression and may already contain repeated text.
+            // An earlier deployment stored repeated frames, and its projection may already contain repeated text.
+            state.storage.sql.exec(
+                "INSERT INTO recorded_session_events_v2 (envelope_json, first_position, last_position, recorded_at, session_generation_id) VALUES (?, ?, ?, 0, ?)",
+                JSON.stringify({ kind: "session.event.v2", events: [output] }),
+                Number(output.position),
+                Number(output.position),
+                output.sessionGenerationId,
+            );
             state.storage.sql.exec("UPDATE recording_projection SET state_json = json_remove(state_json, '$.version')");
             state.storage.sql.exec("UPDATE recorded_turn_items SET text = text || 'Hello'");
             state.storage.sql.exec("UPDATE recorded_turns SET turn_json = json_set(turn_json, '$.answerLength', 15)");
         });
-        // The read rebuilds through the same bounded backfill step as an existing Recording.
-        expect(await turnPage()).toEqual(projected);
+        // The read rebuilds through the same bounded backfill step as an existing Recording. The stored copy is
+        // now the newest batch, so only the tail cursor moves.
+        expect(await turnPage()).toEqual({ ...projected, tailCursor: `v2:3:${output.position}` });
         const rebuiltRaw = await worker.fetch(new Request(sessionPath("events")), env);
-        expect(await rebuiltRaw.json()).toMatchObject({ events: frames });
+        expect(await rebuiltRaw.json()).toMatchObject({ events: [...begin, output, ...rest, output] });
     });
     it("Given terminal events without message identities, When Recording persists and reads them, Then their outcomes round-trip unchanged", async () => {
         const events = [

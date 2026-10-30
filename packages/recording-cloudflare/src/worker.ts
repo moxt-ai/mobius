@@ -128,7 +128,7 @@ function sessionRecordingRoutes(
             try {
                 // Folding never throws out of `project`, so an error here is the envelope itself.
                 // The directory changes commit with the batch, so the index can always catch up with the history.
-                appended = storage.append(write, projectDirectoryChange(write), (ordinal, events, receivedAt) => {
+                appended = storage.append(write, projectDirectoryChange, (ordinal, events, receivedAt) => {
                     // Every stored batch is folded in order; one left for backfill leaves the rest to it too.
                     const folded = history.project(ordinal, events, receivedAt);
                     projected = projected && folded;
@@ -148,7 +148,10 @@ function sessionRecordingRoutes(
                 case "recorded":
                     break;
             }
-            waiters.changed();
+            // A write of copies alone stores nothing, so a waiting reader would only read an empty page.
+            if (appended.copies < write.envelope.events.length) {
+                waiters.changed();
+            }
             if (!projected) {
                 await scheduleBackfill();
             } else {
@@ -163,6 +166,7 @@ function sessionRecordingRoutes(
                 JSON.stringify({
                     event: "recording_session_write",
                     events: write.envelope.events.length,
+                    copies: appended.copies,
                     sqlReads: after.reads - before.reads,
                     sqlWrites: after.writes - before.writes,
                 }),

@@ -64,9 +64,20 @@ const decodedBatchLimit = 16;
 const decodedBatchCharacters = 1_000_000;
 /** UTF-8 bytes one stored batch may take. Durable Object SQLite rejects a string or row larger than 2 MB. */
 const storedBatchBytes = 1_900_000;
+/**
+ * Stored batches searched for copies of one write's events, nearest positions first. Copies come from frames a
+ * daemon or Relay sends again shortly after the first copy, so they sit in the batches just recorded.
+ */
+const copySearchBatches = 1024;
+
+/** A Session generation gives each of its events its own increasing position, so the pair names one event. */
+function eventIdentity(event: SessionWireEvent): string {
+    return JSON.stringify([event.sessionGenerationId, Number(event.position)]);
+}
 
 export type AppendOutcome =
-    | { readonly kind: "recorded" }
+    // `copies` counts the write's events that were already recorded, so they were not stored again.
+    | { readonly kind: "recorded"; readonly copies: number }
     // Another Project, Runtime, or Session already owns this Recording, or the write names several Sessions.
     | { readonly kind: "identity_conflict" }
     // One event alone is larger than a stored batch, so nothing of the write was recorded.
@@ -300,16 +311,57 @@ export class SessionRecordingStorage {
         `v2:${batch.ordinal}:${batch.events[index]?.position ?? "0"}`;
 
     /**
-     * Appends one write as one or more stored batches. `project` runs inside the same transaction with each
-     * new batch ordinal in order, so a projection derived from a batch commits or rolls back together with it.
+     * The events of a write that this Recording does not hold yet, in write order. An event whose generation and
+     * position are already recorded is a copy, such as a frame sent twice or output a reconnected daemon sends
+     * again. An event that arrives after later ones is still new and is kept.
+     */
+    readonly #unrecorded = (events: readonly SessionWireEvent[]): readonly SessionWireEvent[] => {
+        const positions = events.map((candidate) => Number(candidate.position));
+        const latest = Math.max(...positions);
+        const generations = new Set(events.map((candidate) => candidate.sessionGenerationId));
+        const recorded = new Set<string>();
+        const candidates = this.#database
+            .select({
+                firstPosition: recordedSessionEvent.firstPosition,
+                ordinal: recordedSessionEvent.ordinal,
+                sessionGenerationId: recordedSessionEvent.sessionGenerationId,
+            })
+            .from(recordedSessionEvent)
+            .where(gte(recordedSessionEvent.lastPosition, Math.min(...positions)))
+            .orderBy(asc(recordedSessionEvent.lastPosition))
+            .limit(copySearchBatches)
+            .all();
+        for (const candidate of candidates) {
+            if (
+                (candidate.firstPosition !== null && candidate.firstPosition > latest) ||
+                (candidate.sessionGenerationId !== null && !generations.has(candidate.sessionGenerationId))
+            ) {
+                continue;
+            }
+            for (const stored of this.#batchAt(candidate.ordinal)?.events ?? []) {
+                recorded.add(eventIdentity(stored));
+            }
+        }
+        return events.filter((candidate) => {
+            const identity = eventIdentity(candidate);
+            if (recorded.has(identity)) {
+                return false;
+            }
+            recorded.add(identity);
+            return true;
+        });
+    };
+
+    /**
+     * Appends one write as one or more stored batches, leaving out events it already holds. `project` runs inside
+     * the same transaction with each new batch ordinal in order, so a projection derived from a batch commits or
+     * rolls back together with it. `directory` derives the Session's directory change from the events stored.
      */
     readonly append = (
         write: SessionRecordingWireWrite,
-        directory: DirectoryChange,
+        directory: (events: readonly SessionWireEvent[]) => DirectoryChange,
         project: (ordinal: number, events: readonly SessionWireEvent[], receivedAt: number) => void = () => undefined,
     ): AppendOutcome => {
-        // Validated before the first write, so every committed directory change decodes when the outbox reads it.
-        const directoryOperationsJson = JSON.stringify(directoryOperationSchema.array().parse(directory.operations));
         const appended: { readonly batch: RecordedBatch; readonly characters: number }[] = [];
         const outcome = this.#storage.transactionSync((): AppendOutcome => {
             const [event, ...remainingEvents] = write.envelope.events;
@@ -329,8 +381,16 @@ export class SessionRecordingStorage {
             ) {
                 return { kind: "identity_conflict" };
             }
+            const events = this.#unrecorded(write.envelope.events);
+            const copies = write.envelope.events.length - events.length;
+            if (events.length === 0) {
+                return { kind: "recorded", copies };
+            }
+            // Validated before the first write, so every committed directory change decodes when the outbox reads it.
+            const change = directory(events);
+            const directoryOperationsJson = JSON.stringify(directoryOperationSchema.array().parse(change.operations));
             const batches: StoredBatch[] = [];
-            for (const run of addressableRuns(write.envelope.events)) {
+            for (const run of addressableRuns(events)) {
                 const stored = storedBatches(write.envelope, run);
                 if (stored === null) {
                     return { kind: "event_too_large" };
@@ -384,9 +444,9 @@ export class SessionRecordingStorage {
             }
             this.#database
                 .insert(pendingDirectoryUpdate)
-                .values({ operationsJson: directoryOperationsJson, events: directory.events })
+                .values({ operationsJson: directoryOperationsJson, events: change.events })
                 .run();
-            return { kind: "recorded" };
+            return { kind: "recorded", copies };
         });
         // Only a committed batch is kept: readers waiting on this append read it next.
         if (outcome.kind === "recorded") {

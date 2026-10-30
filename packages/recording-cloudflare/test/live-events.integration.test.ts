@@ -66,6 +66,22 @@ describe("Recording live V2 events", () => {
         expect(decodeSessionRecordingHistoryPage(await response.text()).events).toEqual([next]);
     });
 
+    it("Given a caught-up reader waiting for output, When a write only repeats recorded events, Then the reader keeps waiting and receives the next new event", async () => {
+        expect((await worker.fetch(write(), env)).status).toBe(201);
+        const path = `https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions/live-session/events`;
+        const first = await worker.fetch(new Request(`${path}?limit=100`), env);
+        const cursor = decodeSessionRecordingHistoryPage(await first.text()).tailCursor;
+        const waiting = worker.fetch(new Request(`${path}?after=${cursor}&limit=100&waitMs=5000`), env);
+        const barrier = await worker.fetch(new Request(`${path}?after=${cursor}&limit=100`), env);
+        expect(decodeSessionRecordingHistoryPage(await barrier.text()).events).toEqual([]);
+        expect((await worker.fetch(write(), env)).status).toBe(201);
+        const next = { ...event, eventId: "next-live-event", position: "1" };
+        expect(
+            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: [next] }), env)).status,
+        ).toBe(201);
+        expect(decodeSessionRecordingHistoryPage(await (await waiting).text()).events).toEqual([next]);
+    });
+
     // @no-uc: Technical regression; abandoning a held read must cancel its wait without failing the Worker.
     it("cancels an abandoned live read and still accepts the following reader", async () => {
         expect((await worker.fetch(write(), env)).status).toBe(201);
@@ -189,13 +205,21 @@ it("Given prompt context and a later Agent title, When the Runtime loads its rec
     const titled = {
         ...event,
         eventId: "title",
+        position: "2",
         recordedAt: "2026-10-09T01:00:00.000Z",
         payload: { sessionUpdate: "session_info_update", title: agentTitle },
     };
     expect(
         (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: [titled] }), env)).status,
     ).toBe(201);
-    expect((await worker.fetch(write(), env)).status).toBe(201);
+    expect(
+        (
+            await worker.fetch(
+                write("runtime-live", { kind: "session.event.v2", events: [{ ...event, position: "3" }] }),
+                env,
+            )
+        ).status,
+    ).toBe(201);
     const response = await worker.fetch(
         new Request(`https://recording.internal/v2/projects/${projectId}/runtimes/runtime-live/sessions`),
         env,
@@ -298,7 +322,7 @@ it("Given a session that never requested a prompt, When the Runtime loads its re
     expect(response.status).toBe(200);
     expect(decodeSessionRecordingDirectoryV2(await response.text())).toEqual({ sessions: [] });
 });
-it("Given a duplicate live frame, When Recording receives both broadcasts, Then it keeps both without inventing delivery guarantees", async () => {
+it("Given a recorded live frame, When Recording receives the same frame again, Then it stores the event once", async () => {
     expect((await worker.fetch(write(), env)).status).toBe(201);
     expect((await worker.fetch(write(), env)).status).toBe(201);
     const response = await worker.fetch(
@@ -307,7 +331,20 @@ it("Given a duplicate live frame, When Recording receives both broadcasts, Then 
         ),
         env,
     );
-    expect(decodeSessionRecordingHistory(await response.text()).events).toEqual([event, event]);
+    expect(decodeSessionRecordingHistory(await response.text()).events).toEqual([event]);
+});
+it("Given a Session event that arrives after a later one, When Recording receives it, Then it is stored", async () => {
+    const [first, second, third] = numberedEvents(3, 0);
+    for (const events of [[first, third], [second]]) {
+        expect((await worker.fetch(write("runtime-live", { kind: "session.event.v2", events }), env)).status).toBe(201);
+    }
+    const response = await worker.fetch(
+        new Request(
+            `https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions/live-session/events`,
+        ),
+        env,
+    );
+    expect(decodeSessionRecordingHistory(await response.text()).events).toEqual([first, third, second]);
 });
 it("Given an invalid execution context, When submitted at the Recording boundary, Then it is rejected", async () => {
     const invalid = {
@@ -389,12 +426,29 @@ describe("Recording incremental reads", () => {
         const page = decodeSessionRecordingHistoryPage(await (await worker.fetch(read("?after=v2:1:1"), env)).text());
         expect(page.events.map((candidate) => candidate.eventId)).toEqual(["event-2", "event-3"]);
     });
-    it("Given duplicate broadcasts of one batch, When a caller reads incrementally, Then the repeated position is skipped without hiding new events", async () => {
-        const batch = { kind: "session.event.v2", events: numberedEvents(2, 0) };
-        expect((await worker.fetch(write("runtime-live", batch), env)).status).toBe(201);
-        expect((await worker.fetch(write("runtime-live", batch), env)).status).toBe(201);
+    it("Given recorded events, When a reconnected daemon sends some of them again followed by new ones, Then a caller reads each event once in order", async () => {
+        expect(
+            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: numberedEvents(3, 0) }), env))
+                .status,
+        ).toBe(201);
+        const caughtUp = decodeSessionRecordingHistoryPage(await (await worker.fetch(read("?limit=10"), env)).text());
+        expect(
+            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: numberedEvents(4, 1) }), env))
+                .status,
+        ).toBe(201);
+
+        const following = decodeSessionRecordingHistoryPage(
+            await (await worker.fetch(read(`?after=${caughtUp.tailCursor}&limit=10`), env)).text(),
+        );
+        expect(following.events.map((candidate) => candidate.eventId)).toEqual(["event-3", "event-4"]);
         const page = decodeSessionRecordingHistoryPage(await (await worker.fetch(read("?limit=10"), env)).text());
-        expect(page.events.map((candidate) => candidate.eventId)).toEqual(["event-0", "event-1", "event-0", "event-1"]);
+        expect(page.events.map((candidate) => candidate.eventId)).toEqual([
+            "event-0",
+            "event-1",
+            "event-2",
+            "event-3",
+            "event-4",
+        ]);
     });
     it("Given a daemon reload creates a new Session generation, When a caller continues from an append cursor, Then restarted events are retained", async () => {
         const first = numberedEvents(3, 1);
@@ -500,7 +554,7 @@ describe("Recording incremental reads", () => {
         }
     });
 
-    it("Given a batch that repeats its last event, When a caller follows page cursors to the tail, Then it reaches an empty page", async () => {
+    it("Given a batch that repeats its last event, When a caller follows page cursors to the tail, Then it reads the event once and reaches an empty page", async () => {
         const [first, second] = numberedEvents(2, 1);
         expect(
             (
@@ -511,7 +565,7 @@ describe("Recording incremental reads", () => {
             ).status,
         ).toBe(201);
         const page = decodeSessionRecordingHistoryPage(await (await worker.fetch(read("?limit=10"), env)).text());
-        expect(page.events.map((candidate) => candidate.eventId)).toEqual(["event-1", "event-2", "event-2"]);
+        expect(page.events.map((candidate) => candidate.eventId)).toEqual(["event-1", "event-2"]);
 
         const next = await worker.fetch(read(`?after=${page.nextCursor}&limit=10`), env);
         expect(decodeSessionRecordingHistoryPage(await next.text()).events).toEqual([]);
