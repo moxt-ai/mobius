@@ -67,6 +67,60 @@ function processExists(pid: number): boolean {
 }
 
 describe("ACP conversation sessions", () => {
+    it("Given a prompt that already finished, When its cancellation arrives late, Then the next prompt in the conversation still runs", async () => {
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-late-cancel-"));
+        const agent = new AcpAgentDefinition(
+            "codex",
+            "Codex",
+            process.execPath,
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "codex",
+                        adapterPath: process.execPath,
+                        arguments: [fakeAgentPath, "--agent-name", "Codex"],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
+            { MOBIUS_FAKE_ACP_STATE_DIRECTORY: temporaryDirectory },
+        );
+        const manager = new SessionManager({
+            observer: new NullSessionObserver(),
+            store: new MemorySessionStore(),
+            adapters: acpAdapters,
+            sessionIdentity: "assigned",
+            onSessionStatusChanged: () => undefined,
+            contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+                new UnretainedExternalContentStore().put({ ...content, sessionId, signal }),
+            ),
+            timer: systemTimer,
+            maxProcesses: null,
+        });
+        const prompt = (commandId: string) =>
+            manager.runPrompt({
+                additionalDirectories: [],
+                agent,
+                commandId,
+                cwd: temporaryDirectory,
+                images: [],
+                prompt: commandId,
+                resources: [],
+                sessionId: "late-cancel-conversation",
+                signal: new AbortController().signal,
+            });
+
+        try {
+            await expect(prompt("finished-command")).resolves.toMatchObject({ stopReason: "end_turn" });
+            await manager.cancelPrompt("late-cancel-conversation", "finished-command");
+
+            await expect(prompt("next-command")).resolves.toMatchObject({ stopReason: "end_turn" });
+        } finally {
+            await manager.close();
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
+    });
+
     it("Given an inactive existing conversation, When it is reopened, Then its directory activity time stays unchanged", async () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         const store = new MemorySessionStore();
@@ -817,7 +871,7 @@ child.once("exit", (code) => process.exit(code ?? 84));
                 expect(settled).toBe(false);
                 expect(processExists(piPid)).toBe(true);
 
-                await manager.cancelPrompt("pi-hanging-conversation");
+                await manager.cancelPrompt("pi-hanging-conversation", "pi-hanging-command");
 
                 await expect(hangingTurn).resolves.toEqual({ stopReason: "cancelled" });
                 expect(processExists(piPid)).toBe(true);
@@ -1181,10 +1235,10 @@ child.once("exit", (code) => process.exit(code ?? 84));
             expect(activeWriters).toHaveLength(10);
             expect(activeWriters).toContain(activeWriter);
             expect(activeWriters).not.toContain(oldestIdleWriter);
-            await manager.cancelPrompt("conversation-1");
+            await manager.cancelPrompt("conversation-1", "conversation-1-active");
             await expect(activeTurn).resolves.toEqual({ stopReason: "cancelled" });
         } finally {
-            await manager.cancelPrompt("conversation-1");
+            await manager.cancelPrompt("conversation-1", "conversation-1-active");
             await activeTurn.catch(() => undefined);
             await manager.close();
             await rm(temporaryDirectory, { force: true, recursive: true });
@@ -1501,7 +1555,7 @@ agent.once("exit", (code) => process.exit(code ?? 84));
             childPid = Number.parseInt(await readFile(childPidPath, "utf8"), 10);
             expect(Number.isSafeInteger(childPid)).toBe(true);
 
-            await manager.cancelPrompt("cancelled-tree-conversation");
+            await manager.cancelPrompt("cancelled-tree-conversation", "command-cancelled-tree");
 
             await expect(cancelledTurn).resolves.toEqual({
                 stopReason: "cancelled",
