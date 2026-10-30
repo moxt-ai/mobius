@@ -14,6 +14,19 @@ function runtimeIdentityField(row: Readonly<Record<string, unknown>>, name: stri
     return validateIdentifier(value, name);
 }
 
+/** A credential that matches nothing, including one stored for a Project that is no longer served. */
+function unmatchedCredential(credential: PairingIdentityCredential): PairingDirectoryError {
+    const code =
+        credential.kind === "pairing"
+            ? "pairing_not_found"
+            : credential.kind === "pairing-code"
+              ? "invalid_pairing_code"
+              : credential.kind === "grant"
+                ? "access_grant_invalid"
+                : "unauthorized";
+    return new PairingDirectoryError(code, "A valid pairing or channel credential is required");
+}
+
 export class PairingIdentityService {
     readonly #storage: PairingIdentityStorage;
     readonly #projects: ProjectStorageDirectory;
@@ -29,6 +42,9 @@ export class PairingIdentityService {
         const identity = await this.authenticate(credential, signal);
         const project = await this.#projects.resolve(identity.projectId, signal);
         signal.throwIfAborted();
+        if (project === null) {
+            throw unmatchedCredential(credential);
+        }
         if (!this.#storage.matchesPlacement(identity.sourceId, project)) {
             throw new PairingDirectoryError("directory_unavailable", "Workspace storage is unavailable");
         }
@@ -48,6 +64,9 @@ export class PairingIdentityService {
             const channelId = runtimeIdentityField(match.row, "channel_id");
             const project = await this.#projects.resolve(projectId, signal);
             signal.throwIfAborted();
+            if (project === null) {
+                throw new PairingDirectoryError("unauthorized", "A valid Runtime credential is required");
+            }
             if (!this.#storage.matchesPlacement(match.sourceId, project)) {
                 throw new PairingDirectoryError("directory_unavailable", "Runtime storage is unavailable");
             }
@@ -96,15 +115,7 @@ export class PairingIdentityService {
             }
             const match = matches[0];
             if (matches.length !== 1 || match === undefined) {
-                const code =
-                    credential.kind === "pairing"
-                        ? "pairing_not_found"
-                        : credential.kind === "pairing-code"
-                          ? "invalid_pairing_code"
-                          : credential.kind === "grant"
-                            ? "access_grant_invalid"
-                            : "unauthorized";
-                throw new PairingDirectoryError(code, "A valid pairing or channel credential is required");
+                throw unmatchedCredential(credential);
             }
             return match;
         } catch (cause) {
