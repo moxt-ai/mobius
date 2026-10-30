@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { refreshAgentCatalog } from "../../engine/runtime/catalog/refresh-agent-catalog.ts";
 import type { RuntimeConfig } from "../../engine/runtime/config.ts";
 import { RuntimeInstallationStore } from "../../engine/runtime/connection/runtime-installation-store.ts";
@@ -9,7 +10,7 @@ import type { InstallationDirectory } from "../../engine/storage/installation/in
 import { BoundedLineLog } from "../../engine/storage/logs/bounded-log.ts";
 import { logDirectory, WORKER_LIFECYCLE_LOG_FILENAME } from "../../engine/storage/logs/log-files.ts";
 import { isNodeError } from "../../engine/util/node-error.ts";
-import { acquireDaemonLock } from "../../storage/daemon/daemon-lock.ts";
+import { acquireDaemonLock, daemonLockExists } from "../../storage/daemon/daemon-lock.ts";
 import { prepareMobiusEngineDataDir, resolveMaxAcpProcesses } from "../config.ts";
 import { sendLocalRequest } from "../control/local-client.ts";
 import { serveLocalControl } from "../control/local-server.ts";
@@ -137,6 +138,15 @@ async function runDaemonRuntime(
         JSON.stringify({ kind: "daemon_started", pid: process.pid, version, timestamp: new Date().toISOString() }),
     );
     try {
+        if (owner === "standalone") {
+            // A dead manager's worker may still be draining control requests. Its
+            // lock outlives socket cleanup, so wait before touching either data or sockets.
+            const deadline = AbortSignal.any([combined, AbortSignal.timeout(30_000)]);
+            while (await daemonLockExists(control.stateDirectory, "worker.lock")) {
+                await delay(50, undefined, { signal: deadline });
+            }
+            deadline.throwIfAborted();
+        }
         await prepareVersionData(version, combined);
         const engineDataDir = await prepareMobiusEngineDataDir(version, combined, process.env);
         const installation = await RuntimeInstallationStore.open(engineDataDir, combined);

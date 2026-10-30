@@ -39,9 +39,12 @@ export async function acquireDaemonLock(
 }
 
 /** Keep the released lock filename; a dead owner does not keep the daemon alive. */
-export async function daemonLockExists(stateDirectory: InstallationDirectory): Promise<boolean> {
+export async function daemonLockExists(
+    stateDirectory: InstallationDirectory,
+    filename: "manager.lock" | "worker.lock" = "manager.lock",
+): Promise<boolean> {
     try {
-        const pid = Number((await readFile(join(stateDirectory, "manager.lock"), "utf8")).trim());
+        const pid = Number((await readFile(join(stateDirectory, filename), "utf8")).trim());
         // The exclusive file can be observed before its owner finishes writing the PID.
         if (!Number.isSafeInteger(pid) || pid <= 1) {
             return true;
