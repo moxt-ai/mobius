@@ -75,6 +75,10 @@ async function withRuntimeRelay(scenario: (connect: (path: string) => Promise<Ru
         const inbox = new Inbox(socket);
         sockets.push(socket);
         socket.accept();
+        if (path === "daemon") {
+            // The Relay attaches every daemon connection with liveness and announces when it is ready.
+            expect(await inbox.next()).toEqual({ kind: "runtime.liveness.ready" });
+        }
         return { inbox, socket };
     };
     try {

@@ -129,13 +129,9 @@ export class MobiusSessionAccess {
 export interface CreateMobiusSessionRequest {
     readonly additionalDirectoryIds: readonly string[];
     readonly agentId: string;
-    /** @deprecated Legacy field ignored by Relay; the Runtime owns its workspace binding. */
-    readonly bindingId?: string;
     readonly directoryId: string;
     readonly runtimeId: string;
     readonly sessionId: string;
-    /** @deprecated Legacy field ignored by Relay; use sessions.rename to change the Runtime-owned title. */
-    readonly title?: string;
 }
 
 export interface SubmitMobiusTurnRequest {
@@ -284,32 +280,16 @@ export function decodeMobiusRedeemedChannelCredential(value: unknown): MobiusRed
 export class MobiusAgentDescriptor {
     readonly agentPath: string;
     readonly agentVersion: string;
-    readonly agentSettingsDiscovery?: boolean;
     readonly capabilities: SessionCapabilities;
     readonly id: string;
     readonly label: string;
-    readonly sessionTurnConfiguration?: boolean;
 
-    constructor(
-        agentPath: string,
-        agentVersion: string,
-        capabilities: SessionCapabilities,
-        id: string,
-        label: string,
-        agentSettingsDiscovery?: boolean,
-        sessionTurnConfiguration?: boolean,
-    ) {
+    constructor(agentPath: string, agentVersion: string, capabilities: SessionCapabilities, id: string, label: string) {
         this.agentPath = agentPath;
         this.agentVersion = agentVersion;
-        if (agentSettingsDiscovery === true) {
-            this.agentSettingsDiscovery = true;
-        }
         this.capabilities = Object.freeze({ ...capabilities });
         this.id = id;
         this.label = label;
-        if (sessionTurnConfiguration === true) {
-            this.sessionTurnConfiguration = true;
-        }
     }
 }
 
@@ -341,9 +321,7 @@ function decodeAgentDescriptor(value: unknown): MobiusAgentDescriptor {
         !Object.hasOwn(agent, "agentVersion") ||
         !Object.hasOwn(agent, "capabilities") ||
         !Object.hasOwn(agent, "id") ||
-        !Object.hasOwn(agent, "label") ||
-        (Object.hasOwn(agent, "agentSettingsDiscovery") && typeof agent["agentSettingsDiscovery"] !== "boolean") ||
-        (Object.hasOwn(agent, "sessionTurnConfiguration") && typeof agent["sessionTurnConfiguration"] !== "boolean")
+        !Object.hasOwn(agent, "label")
     ) {
         throw invalidResponse("The service returned an invalid Agent descriptor");
     }
@@ -359,8 +337,6 @@ function decodeAgentDescriptor(value: unknown): MobiusAgentDescriptor {
         decodeMobiusAgentCapabilities(agent["capabilities"]),
         identifierField(agent, "id"),
         label.trim(),
-        agent["agentSettingsDiscovery"] === true,
-        agent["sessionTurnConfiguration"] === true,
     );
 }
 

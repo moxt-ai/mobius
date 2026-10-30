@@ -323,6 +323,7 @@ export class NativeSessionService {
             capabilities: opened.prepared.capabilities,
             commands: opened.prepared.commands,
             configOptions: opened.prepared.configOptions,
+            configurationRevision: opened.prepared.configurationRevision,
             directoryId: target.directoryId,
             directoryLabel: target.directoryLabel,
             kind: "session.ready",

@@ -509,8 +509,8 @@ export const sessionEventLogPageSchema = z
         sessionGenerationId: identifier,
         tailCursor: z.string().max(512),
         // The generation-scoped live position covered by this snapshot, including
-        // coalesced and omitted events. Absent only on older Runtime versions.
-        throughPosition: positionSchema.optional(),
+        // coalesced and omitted events.
+        throughPosition: positionSchema,
         truncated: z.boolean(),
         version: z.literal(2),
     })

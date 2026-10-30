@@ -36,11 +36,9 @@ const KNOWN_SESSION_CAPABILITY_FIELDS: readonly (keyof SessionCapabilities)[] = 
 export interface AgentDescriptor {
     readonly agentPath: string;
     readonly agentVersion: string;
-    readonly agentSettingsDiscovery?: boolean;
     readonly capabilities: SessionCapabilities;
     readonly id: string;
     readonly label: string;
-    readonly sessionTurnConfiguration?: boolean;
 }
 
 export class CreatedRuntimePairing {
@@ -263,8 +261,6 @@ function pairingDirectoryErrorStatus(code: string): number {
             return 410;
         case "access_grant_redeemed":
         case "runtime_unavailable":
-        case "agent_settings_discovery_unsupported":
-        case "session_turn_configuration_unsupported":
         case "idempotency_conflict":
         case "session_configuration_conflict":
         case "turn_already_started":
@@ -457,11 +453,7 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
             !Object.hasOwn(candidate, "agentVersion") ||
             !Object.hasOwn(candidate, "capabilities") ||
             !Object.hasOwn(candidate, "id") ||
-            !Object.hasOwn(candidate, "label") ||
-            (Object.hasOwn(candidate, "agentSettingsDiscovery") &&
-                typeof candidate["agentSettingsDiscovery"] !== "boolean") ||
-            (Object.hasOwn(candidate, "sessionTurnConfiguration") &&
-                typeof candidate["sessionTurnConfiguration"] !== "boolean")
+            !Object.hasOwn(candidate, "label")
         ) {
             throw new PairingDirectoryError("invalid_agents", "The local agent directory is invalid");
         }
@@ -470,8 +462,6 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
         const label = candidate["label"];
         const agentPath = candidate["agentPath"];
         const agentVersion = candidate["agentVersion"];
-        const agentSettingsDiscovery = candidate["agentSettingsDiscovery"];
-        const sessionTurnConfiguration = candidate["sessionTurnConfiguration"];
         if (
             typeof agentPath !== "string" ||
             agentPath.trim().length === 0 ||
@@ -492,11 +482,9 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
         agents.push({
             agentPath,
             agentVersion: agentVersion.trim(),
-            ...(agentSettingsDiscovery === true ? { agentSettingsDiscovery } : {}),
             capabilities,
             id,
             label: label.trim(),
-            ...(sessionTurnConfiguration === true ? { sessionTurnConfiguration } : {}),
         });
     }
     return agents;

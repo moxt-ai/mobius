@@ -15,25 +15,6 @@ const origin = `https://platform.test${MOBIUS_API_PREFIX}`;
 const clerk = new FakeClerk();
 const credentialResource = v.object({ credential: v.string(), credentialId: v.string() });
 
-// Independent App reader contract retained from d337a61 (SDK 0.0.128).
-// That reader requires defaultCredentialId and ignores unknown response fields.
-const legacyIdentifier = v.pipe(v.string(), v.regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/));
-const legacyTimestamp = v.pipe(
-    v.string(),
-    v.maxLength(128),
-    v.check((value) => value.length === 0 || !Number.isNaN(Date.parse(value))),
-);
-const legacyAppResource = v.object({
-    appId: legacyIdentifier,
-    createdAt: legacyTimestamp,
-    defaultCredentialId: legacyIdentifier,
-    deletedAt: legacyTimestamp,
-    displayName: v.pipe(v.string(), v.maxLength(120)),
-    lifecycle: v.pipe(v.string(), v.maxLength(32)),
-    tenantId: legacyIdentifier,
-    updatedAt: legacyTimestamp,
-});
-
 async function responseJson(response: Response, status: number): Promise<unknown> {
     const body: unknown = await response.json();
     expect(response.status).toBe(status);
@@ -213,13 +194,13 @@ function expectedScope(credentialId: string, projectIds: readonly string[]) {
     return expect.objectContaining({ allProjects: false, credentialId, projectIds });
 }
 
-it("Given an App's initial credential, When it is rotated, revoked and the App is deleted, Then App resources retain its historical ID and the legacy alias", async () => {
+it("Given an App's initial credential, When it is rotated, revoked and the App is deleted, Then App resources retain its historical ID", async () => {
     const app = await application();
     const signal = new AbortController().signal;
     const initialCredentialId = app.defaultCredential.credentialId;
-    const expected = { initialCredentialId, defaultCredentialId: initialCredentialId };
+    const expected = { initialCredentialId };
     expect(app.createdApp).toMatchObject(expected);
-    expect(v.parse(legacyAppResource, app.createdApp).defaultCredentialId).toBe(initialCredentialId);
+    expect(app.createdApp).not.toHaveProperty("defaultCredentialId");
     expect(await app.readApp()).toMatchObject(expected);
 
     const replacement = await app.rotate();
@@ -228,60 +209,10 @@ it("Given an App's initial credential, When it is rotated, revoked and the App i
 
     const resource = await app.readApp();
     expect(resource).toMatchObject(expected);
-    expect(v.parse(legacyAppResource, resource).defaultCredentialId).toBe(initialCredentialId);
     const listed = await app.developer.listApps(app.tenantId, signal);
     expect(listed.find((item) => item.appId === app.appId)).toMatchObject(expected);
     expect(await app.developer.updateApp(app.appId, "Renamed credential authority", signal)).toMatchObject(expected);
     expect(await app.developer.deleteApp(app.appId, signal)).toMatchObject({ ...expected, lifecycle: "deleted" });
-});
-
-it("Given a v1 Worker that only returns defaultCredentialId, When the new SDK reads and updates an App, Then both names expose the initial ID", async () => {
-    // A stateful old peer at the SDK's HTTP port, independent of the current Worker serializer.
-    let storedApp = {
-        appId: "app_legacy",
-        createdAt: "2026-10-27T00:00:00.000Z",
-        defaultCredentialId: "pac_initial",
-        deletedAt: "",
-        displayName: "Legacy App",
-        lifecycle: "active",
-        suspendedAt: "",
-        tenantId: "tenant_legacy",
-        updatedAt: "2026-10-27T00:00:00.000Z",
-    };
-    const legacyPeer = {
-        fetch: async (request: Request): Promise<Response> => {
-            if (request.headers.get("authorization") !== "Bearer legacy-developer") {
-                return new Response(null, { status: 401 });
-            }
-            if (request.url !== `${origin}/dashboard/v1/apps/${storedApp.appId}`) {
-                return new Response(null, { status: 404 });
-            }
-            if (request.method === "PUT") {
-                const { displayName } = v.parse(
-                    v.object({ displayName: v.pipe(v.string(), v.minLength(1), v.maxLength(120)) }),
-                    await request.json(),
-                );
-                storedApp = { ...storedApp, displayName };
-            } else if (request.method !== "GET") {
-                return new Response(null, { status: 405 });
-            }
-            return Response.json(v.parse(legacyAppResource, storedApp));
-        },
-    };
-    const developer = new MobiusPlatformDeveloperClient({
-        endpoint: origin,
-        authenticationProviderId: "clerk",
-        credentialProvider: new StaticMobiusCredentialProvider("legacy-developer"),
-        transport: legacyPeer,
-    });
-    const signal = new AbortController().signal;
-    const expected = { initialCredentialId: "pac_initial", defaultCredentialId: "pac_initial" };
-    expect(await developer.readApp("app_legacy", signal)).toMatchObject(expected);
-    expect(await developer.updateApp("app_legacy", "Updated legacy App", signal)).toMatchObject(expected);
-    const app = await developer.readApp("app_legacy", signal);
-    expect(app).toMatchObject({ ...expected, displayName: "Updated legacy App" });
-    // Preserve the old own property for callers that serialize SDK resources.
-    expect(JSON.parse(JSON.stringify(app))).toMatchObject({ defaultCredentialId: "pac_initial" });
 });
 
 async function expectRejected(response: Response, code: string, status = 401): Promise<void> {
@@ -600,7 +531,7 @@ it("Given an App with two active Projects, When its owner deletes it, Then delet
     const deletedAt = "2026-10-27T00:01:00.000Z";
     vi.setSystemTime(new Date(deletedAt));
     const deleted = await responseJson(await app.deleteApp(), 200);
-    expect(v.parse(legacyAppResource, deleted)).toMatchObject({
+    expect(deleted).toMatchObject({
         appId: app.appId,
         lifecycle: "deleted",
         deletedAt,

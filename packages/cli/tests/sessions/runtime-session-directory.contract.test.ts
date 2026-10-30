@@ -1,7 +1,6 @@
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RUNTIME_WORKSPACE_BINDING_ID } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, it } from "vitest";
 import { startTestPlatform } from "../support/platform.ts";
 
@@ -155,10 +154,8 @@ it("Given a deeply nested multibyte project path, When the SDK browses it and ru
         await runtime.client.sessions.create(
             {
                 ...identity,
-                bindingId: RUNTIME_WORKSPACE_BINDING_ID,
                 runtimeId: runtime.runtimeId,
                 sessionId,
-                title: "Long workspace conversation",
             },
             signal,
         );

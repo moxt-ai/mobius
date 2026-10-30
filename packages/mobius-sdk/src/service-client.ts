@@ -27,7 +27,6 @@ import {
     type NativeSessionRequest,
     type NativeSessionResult,
     type PromptAttachment,
-    RUNTIME_WORKSPACE_BINDING_ID,
     type RuntimeDiagnosticsResult,
     type SessionConfigureCommand,
     type SessionEventLogPage,
@@ -1121,12 +1120,7 @@ export class MobiusSessionResources {
             JSON.stringify(
                 await this.#executor.post(
                     projectPath(this.#projectId, `runtimes/${encodeURIComponent(request.runtimeId)}/sessions`),
-                    {
-                        ...request,
-                        // Older Relays require these legacy fields even though they do not use them.
-                        bindingId: request.bindingId === undefined ? RUNTIME_WORKSPACE_BINDING_ID : request.bindingId,
-                        title: request.title === undefined ? "" : request.title,
-                    },
+                    request,
                     signal,
                 ),
             ),
@@ -1440,7 +1434,7 @@ export class MobiusSessionResources {
             queued: result.queued,
             ...(result.command === undefined ? {} : { command: result.command }),
             ...(result.lastTurn === undefined ? {} : { lastTurn: result.lastTurn }),
-            ...(result.queuedCancellation === undefined ? {} : { queuedCancellation: result.queuedCancellation }),
+            queuedCancellation: result.queuedCancellation,
         };
     };
 
@@ -1536,51 +1530,14 @@ export class MobiusTurnResources {
         );
 
     /** Withdraws a queued prompt only when the Runtime confirms it did not execute. */
-    readonly cancelQueued = async (
-        sessionId: string,
-        turnId: string,
-        identity: {
-            readonly additionalDirectoryIds: readonly string[];
-            readonly agentId: string;
-            readonly directoryId: string;
-        },
-        signal: AbortSignal,
-    ): Promise<void> => {
-        const sessions = new MobiusSessionResources(this.#executor, this.#projectId);
-        const before = await sessions.readSessionExecution(sessionId, identity, signal, turnId);
-        if (before.queuedCancellation === "before-start") {
-            const result = await this.#executor.post(
-                sessionPath(this.#projectId, sessionId, `turns/${encodeURIComponent(turnId)}/cancel-before-start`),
-                {},
-                signal,
-            );
-            if (typeof result !== "object" || result === null || Reflect.get(result, "turnId") !== turnId) {
-                throw new MobiusProtocolError("The service returned an invalid queued cancellation");
-            }
-            return;
-        }
-        // Older peers retain their existing cancellation path. The same FIFO head before and
-        // after cancellation proves the queued prompt never acquired the execution slot.
-        const head = before.turn;
-        if (head === null || head.commandId === turnId || !before.queued.some((item) => item.commandId === turnId)) {
-            throw new MobiusError(
-                "turn_already_started",
-                "The message is no longer queued and could not be withdrawn.",
-            );
-        }
-        const cancelled = await this.cancel(sessionId, turnId, signal);
-        const after = await sessions.readSessionExecution(sessionId, identity, signal, turnId);
-        if (
-            cancelled.stopReason !== "cancelled" ||
-            after.turn?.commandId !== head.commandId ||
-            after.queued.some((item) => item.commandId === turnId) ||
-            (after.command !== undefined &&
-                (after.command.state !== "completed" || after.command.stopReason !== "cancelled"))
-        ) {
-            throw new MobiusError(
-                "queued_cancellation_unconfirmed",
-                "The message may have started. Its withdrawal could not be confirmed, so it was not restored for editing.",
-            );
+    readonly cancelQueued = async (sessionId: string, turnId: string, signal: AbortSignal): Promise<void> => {
+        const result = await this.#executor.post(
+            sessionPath(this.#projectId, sessionId, `turns/${encodeURIComponent(turnId)}/cancel-before-start`),
+            {},
+            signal,
+        );
+        if (typeof result !== "object" || result === null || Reflect.get(result, "turnId") !== turnId) {
+            throw new MobiusProtocolError("The service returned an invalid queued cancellation");
         }
     };
 

@@ -46,12 +46,7 @@ export function createRuntimeRoutes(runtime: RuntimeService) {
             return new Response("WebSocket upgrade required", { status: 426 });
         }
         if (url.pathname.endsWith("/daemon")) {
-            const result = await runtime.acceptDaemon(
-                runtimeId,
-                scope,
-                url.searchParams.get("liveness") === "1",
-                request.signal,
-            );
+            const result = await runtime.acceptDaemon(runtimeId, scope, request.signal);
             switch (result.kind) {
                 case "accepted":
                     return result.response;

@@ -273,8 +273,8 @@ export class MobiusPlatformAppCredential {
 }
 
 export class MobiusPlatformAppCredentialMetadata {
-    /** Whether the Platform authenticates this credential now. Undefined from a Platform that predates it. */
-    readonly active: boolean | undefined;
+    /** Whether the Platform authenticates this credential now. */
+    readonly active: boolean;
     readonly allProjects: boolean;
     readonly appId: string;
     readonly credentialId: string;
@@ -284,10 +284,6 @@ export class MobiusPlatformAppCredentialMetadata {
     readonly projectIds: readonly string[];
     readonly publicCredentialId: string;
     readonly replacedByCredentialId: string;
-    /**
-     * @deprecated Legacy compatibility value; not unique or an App-wide sequence.
-     * Use credentialId for identity and replacedByCredentialId for the replacement.
-     */
     readonly revokedAt: string;
 
     constructor(value: Readonly<Record<string, unknown>>) {
@@ -295,7 +291,7 @@ export class MobiusPlatformAppCredentialMetadata {
             throw new MobiusProtocolError("The Platform returned an invalid AppCredential scope");
         }
         const active = value["active"];
-        if (active !== undefined && typeof active !== "boolean") {
+        if (typeof active !== "boolean") {
             throw new MobiusProtocolError("The Platform returned an invalid AppCredential state");
         }
         this.active = active;
@@ -326,26 +322,20 @@ export class MobiusRotatedPlatformAppCredential extends MobiusPlatformAppCredent
 export class MobiusPlatformApp {
     readonly appId: string;
     readonly createdAt: string;
-    /** @deprecated Use initialCredentialId. This is the creation-time credential, which may no longer be valid. */
-    readonly defaultCredentialId: string;
     readonly deletedAt: string;
     readonly displayName: string;
+    /** The credential issued at App creation; rotation and revocation do not change this historical ID. */
+    readonly initialCredentialId: string;
     readonly lifecycle: string;
     readonly tenantId: string;
     readonly updatedAt: string;
 
-    /** The credential issued at App creation; rotation and revocation do not change this historical ID. */
-    get initialCredentialId(): string {
-        // The v1 field remains an own property for existing consumers and works with older Workers.
-        return this.defaultCredentialId;
-    }
-
     constructor(value: Readonly<Record<string, unknown>>) {
         this.appId = identifier(value, "appId");
         this.createdAt = timestamp(value, "createdAt");
-        this.defaultCredentialId = identifier(value, "defaultCredentialId");
         this.deletedAt = timestamp(value, "deletedAt");
         this.displayName = string(value, "displayName", 120);
+        this.initialCredentialId = identifier(value, "initialCredentialId");
         this.lifecycle = string(value, "lifecycle", 32);
         this.tenantId = identifier(value, "tenantId");
         this.updatedAt = timestamp(value, "updatedAt");
