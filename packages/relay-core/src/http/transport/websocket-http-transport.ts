@@ -98,6 +98,80 @@ export class WebSocketUploadBudget {
     };
 }
 
+class PendingBinaryUpload {
+    readonly chunks: Uint8Array[] = [];
+    receivedBytes = 0;
+    sequence = 0;
+    readonly #ready = Promise.withResolvers<boolean>();
+    readonly authorization = this.#ready.promise;
+    readonly #controller = new AbortController();
+    readonly #timeout: ReturnType<typeof setTimeout>;
+    #state: "pending" | "authorized" | "closed" = "pending";
+
+    readonly byteLength: number;
+    readonly message: Readonly<Record<string, unknown>>;
+    readonly #connectionBudget: WebSocketUploadBudget;
+    readonly #runtimeBudget: WebSocketUploadBudget;
+    readonly #onFailure: (cause: unknown) => Promise<void>;
+
+    constructor(
+        byteLength: number,
+        message: Readonly<Record<string, unknown>>,
+        connectionBudget: WebSocketUploadBudget,
+        runtimeBudget: WebSocketUploadBudget,
+        onFailure: (cause: unknown) => Promise<void>,
+    ) {
+        connectionBudget.reserve(byteLength);
+        this.byteLength = byteLength;
+        this.message = message;
+        this.#connectionBudget = connectionBudget;
+        this.#runtimeBudget = runtimeBudget;
+        this.#onFailure = onFailure;
+        this.#timeout = setTimeout(() => {
+            void this.fail(transportError("request_timeout"));
+        }, BINARY_REQUEST_TIMEOUT_MILLISECONDS);
+    }
+
+    readonly authorize = async (request: Request, authorize: DispatchRequest | undefined): Promise<void> => {
+        try {
+            const response = await authorize?.(new Request(request, { signal: this.#controller.signal }));
+            if (this.#controller.signal.aborted) {
+                return;
+            }
+            if (response !== undefined && !response.ok) {
+                await this.fail(response);
+                return;
+            }
+            this.#runtimeBudget.reserve(this.byteLength);
+            this.#state = "authorized";
+            this.#ready.resolve(true);
+        } catch (cause) {
+            if (!this.#controller.signal.aborted) {
+                await this.fail(cause);
+            }
+        }
+    };
+
+    readonly close = (): void => {
+        if (this.#state === "closed") {
+            return;
+        }
+        if (this.#state === "authorized") {
+            this.#runtimeBudget.release(this.byteLength);
+        }
+        this.#state = "closed";
+        clearTimeout(this.#timeout);
+        this.#connectionBudget.release(this.byteLength);
+        this.#controller.abort();
+        this.#ready.resolve(false);
+    };
+
+    private readonly fail = async (cause: unknown): Promise<void> => {
+        this.close();
+        await this.#onFailure(cause);
+    };
+}
+
 function record(value: unknown): Readonly<Record<string, unknown>> {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
         throw transportError("invalid_message");
@@ -240,19 +314,7 @@ export function acceptWebSocketHttpTransport(
     // Buffer in-flight chunks within this connection while admission is authorized.
     // Only verified uploads may consume the Runtime-wide budget.
     const connectionUploads = new WebSocketUploadBudget();
-    const binaryRequests = new Map<
-        string,
-        {
-            readonly byteLength: number;
-            readonly chunks: Uint8Array[];
-            readonly message: Readonly<Record<string, unknown>>;
-            readonly timeout: ReturnType<typeof setTimeout>;
-            readonly authorization: Promise<boolean>;
-            admission: { readonly kind: "pending" } | { readonly kind: "authorized" };
-            receivedBytes: number;
-            sequence: number;
-        }
-    >();
+    const binaryRequests = new Map<string, PendingBinaryUpload>();
     const browserOrigin = request.headers.get("origin");
     let subscriptionDiagnosticCount = 0;
     let lastActivityAt = Date.now();
@@ -282,11 +344,7 @@ export function acceptWebSocketHttpTransport(
             return undefined;
         }
         binaryRequests.delete(requestId);
-        clearTimeout(upload.timeout);
-        connectionUploads.release(upload.byteLength);
-        if (upload.admission.kind === "authorized") {
-            options.uploads.release(upload.byteLength);
-        }
+        upload.close();
         return upload;
     };
     const releaseAllBinaryRequests = (): void => {
@@ -545,76 +603,45 @@ export function acceptWebSocketHttpTransport(
                     if (declaration.request.method === "GET") {
                         throw transportError("invalid_message");
                     }
-                    connectionUploads.reserve(bodyByteLength);
-                    const timeout = setTimeout(() => {
-                        if (releaseBinaryRequest(requestId) === undefined || server.readyState !== WebSocket.OPEN) {
-                            return;
-                        }
-                        const error = transportError("request_timeout").toHttpJson();
-                        server.send(
-                            JSON.stringify({
-                                code: error.body.error.code,
-                                kind: ERROR_KIND,
-                                message: error.body.error.message,
-                                requestId,
-                                status: error.status,
-                            }),
-                        );
-                    }, BINARY_REQUEST_TIMEOUT_MILLISECONDS);
-                    const authorization = Promise.resolve().then(async () => {
-                        const upload = binaryRequests.get(requestId);
-                        if (upload === undefined || upload.timeout !== timeout) {
-                            return false;
-                        }
-                        try {
-                            const response = await options.authorizeUpload?.(declaration.request);
+                    const upload = new PendingBinaryUpload(
+                        bodyByteLength,
+                        message,
+                        connectionUploads,
+                        options.uploads,
+                        async (cause) => {
                             if (binaryRequests.get(requestId) !== upload) {
-                                return false;
-                            }
-                            if (response !== undefined && !response.ok) {
-                                releaseBinaryRequest(requestId);
-                                server.send(
-                                    JSON.stringify({
-                                        body: await response.text(),
-                                        headers: responseHeaders(response),
-                                        kind: RESPONSE_KIND,
-                                        requestId,
-                                        status: response.status,
-                                    }),
-                                );
-                                return false;
-                            }
-                            options.uploads.reserve(bodyByteLength);
-                            upload.admission = { kind: "authorized" };
-                            return true;
-                        } catch (cause) {
-                            if (binaryRequests.get(requestId) !== upload) {
-                                return false;
+                                return;
                             }
                             releaseBinaryRequest(requestId);
-                            const error = toHttpError(cause);
-                            server.send(
-                                JSON.stringify({
-                                    code: error.body.error.code,
-                                    kind: ERROR_KIND,
-                                    message: error.body.error.message,
-                                    requestId,
-                                    status: error.status,
-                                }),
-                            );
-                            return false;
-                        }
-                    });
-                    binaryRequests.set(requestId, {
-                        authorization,
-                        admission: { kind: "pending" },
-                        byteLength: bodyByteLength,
-                        chunks: [],
-                        message,
-                        receivedBytes: 0,
-                        sequence: 0,
-                        timeout,
-                    });
+                            if (cause instanceof Response) {
+                                const body = await cause.text();
+                                if (server.readyState === WebSocket.OPEN) {
+                                    server.send(
+                                        JSON.stringify({
+                                            body,
+                                            headers: responseHeaders(cause),
+                                            kind: RESPONSE_KIND,
+                                            requestId,
+                                            status: cause.status,
+                                        }),
+                                    );
+                                }
+                            } else if (server.readyState === WebSocket.OPEN) {
+                                const error = toHttpError(cause);
+                                server.send(
+                                    JSON.stringify({
+                                        code: error.body.error.code,
+                                        kind: ERROR_KIND,
+                                        message: error.body.error.message,
+                                        requestId,
+                                        status: error.status,
+                                    }),
+                                );
+                            }
+                        },
+                    );
+                    binaryRequests.set(requestId, upload);
+                    void upload.authorize(declaration.request, options.authorizeUpload);
                     return;
                 }
                 requestId = requestIdFromMessage(message);
