@@ -73,14 +73,25 @@ export async function releaseIdleAgentProcesses(
     }
 }
 
-export async function runDaemon(version: string, signal: AbortSignal): Promise<void> {
+export async function runDaemon(
+    version: string,
+    signal: AbortSignal,
+    owner: "standalone" | "legacy-manager" = "standalone",
+): Promise<void> {
+    if (owner === "legacy-manager" && !process.connected) {
+        throw new Error("The legacy worker entrypoint requires a manager IPC connection");
+    }
     // Install before any await: an unhandled rejection during startup itself
     // must not kill the daemon before the guard exists.
     const rejectionGuard = surviveUnhandledRejections();
     const shutdown = new AbortController();
     const combined = AbortSignal.any([signal, shutdown.signal]);
+    const disconnect = (): void => shutdown.abort();
+    if (owner === "legacy-manager") {
+        process.once("disconnect", disconnect);
+    }
     try {
-        await runDaemonRuntime(version, combined, shutdown, rejectionGuard);
+        await runDaemonRuntime(version, combined, shutdown, rejectionGuard, owner);
     } catch (cause) {
         const control = await openMobiusControlInstallation(AbortSignal.timeout(5_000), process.env);
         new BoundedLineLog(logDirectory(control.stateDirectory), WORKER_LIFECYCLE_LOG_FILENAME, 512 * 1024).record(
@@ -93,6 +104,12 @@ export async function runDaemon(version: string, signal: AbortSignal): Promise<v
     } finally {
         shutdown.abort();
         rejectionGuard.release();
+        if (owner === "legacy-manager") {
+            process.off("disconnect", disconnect);
+            if (process.connected) {
+                process.disconnect();
+            }
+        }
     }
 }
 
@@ -101,9 +118,13 @@ async function runDaemonRuntime(
     combined: AbortSignal,
     shutdown: AbortController,
     rejectionGuard: UnhandledRejectionGuard,
+    owner: "standalone" | "legacy-manager",
 ): Promise<void> {
     const control = await openMobiusControlInstallation(combined, process.env);
-    const releaseDaemon = await acquireDaemonLock(control.stateDirectory);
+    const releaseDaemon = await acquireDaemonLock(
+        control.stateDirectory,
+        owner === "legacy-manager" ? "worker.lock" : "manager.lock",
+    );
     if (releaseDaemon === null) {
         return;
     }
@@ -251,8 +272,9 @@ async function runDaemonRuntime(
                     timestamp: new Date().toISOString(),
                 }),
             );
-            // Both released endpoints use the same authenticated handler in one process.
-            const servers = ["manager", "worker"] as const;
+            // A legacy manager still owns its endpoint; only standalone daemons serve both.
+            const servers: readonly ("manager" | "worker")[] =
+                owner === "legacy-manager" ? ["worker"] : ["manager", "worker"];
             const results = await Promise.allSettled(
                 servers.map(async (endpoint) => {
                     try {
@@ -261,7 +283,12 @@ async function runDaemonRuntime(
                             endpoint,
                             combined,
                             handle,
-                            undefined,
+                            () => {
+                                if (owner === "legacy-manager") {
+                                    combined.throwIfAborted();
+                                    process.send?.({ kind: "worker-ready", version }, () => undefined);
+                                }
+                            },
                             (response) => {
                                 if (
                                     typeof response === "object" &&

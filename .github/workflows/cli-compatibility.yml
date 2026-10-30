@@ -55,7 +55,10 @@ jobs:
           MOBIUS_RELEASE_ARCHIVE: ${{ runner.temp }}/release/mobius-cli.tgz
           npm_config_cache: ${{ runner.temp }}/npx-cache
           npm_config_engine_strict: 'true'
-        run: npx --yes --prefer-online --package "$MOBIUS_RELEASE_ARCHIVE" -- node --test packages/cli/tests/release/installed-release.test.mjs
+        run: >-
+          npx --yes --prefer-online --package "$MOBIUS_RELEASE_ARCHIVE" -- node --test
+          packages/cli/tests/release/installed-release.test.mjs
+          packages/cli/tests/release/legacy-manager.test.mjs
 
   unsupported-node:
     name: Unsupported Node diagnostic

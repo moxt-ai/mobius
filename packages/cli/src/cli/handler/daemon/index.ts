@@ -10,6 +10,11 @@ export function registerInternalRuntimeHandlers(program: Command, context: CliCo
     program.command("__daemon", { hidden: true }).action(async () => {
         await runDaemon(context.version, context.shutdownSignal);
     });
+    // Released managers launch this entrypoint when their worker installs a newer release.
+    // Keep their ownership contract until a public restart replaces the old manager.
+    program.command("__worker", { hidden: true }).action(async () => {
+        await runDaemon(context.version, context.shutdownSignal, "legacy-manager");
+    });
 }
 
 export function registerDaemonProcessLifecycleHandlers(program: Command, context: CliContext): void {

@@ -7,8 +7,11 @@ import { isNodeError } from "../../engine/util/node-error.ts";
  * Takes the lock file that makes this process the only daemon. A lock left by a
  * process that is gone is replaced. Returns the release function, or null when a live process holds it.
  */
-export async function acquireDaemonLock(stateDirectory: InstallationDirectory): Promise<(() => Promise<void>) | null> {
-    const path = join(stateDirectory, "manager.lock");
+export async function acquireDaemonLock(
+    stateDirectory: InstallationDirectory,
+    filename: "manager.lock" | "worker.lock" = "manager.lock",
+): Promise<(() => Promise<void>) | null> {
+    const path = join(stateDirectory, filename);
     for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
             await writeFile(path, `${process.pid.toString()}\n`, { flag: "wx", mode: 0o600 });
