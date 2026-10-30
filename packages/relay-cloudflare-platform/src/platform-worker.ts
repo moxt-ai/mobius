@@ -12,6 +12,7 @@ import {
     type RelayContext,
     RequestAccessMetrics,
     requestTimeoutMiddleware,
+    SessionControl,
     standardWebSocketHost,
     type WebSocketHost,
     type WorkerRuntimeGateways,
@@ -21,28 +22,13 @@ import {
     decodeContentWriteCommand,
     decodeFileReadCommand,
     decodeMessageKind,
-    decodeNativeSessionRequest,
     decodeRuntimeStatusEvent,
-    decodeSessionCancelBeforeStartCommand,
-    decodeSessionCancelCommand,
-    decodeSessionConfigReadCommand,
-    decodeSessionConfigureCommand,
-    decodeSessionElicitationRespondCommand,
-    decodeSessionHistoryPageLoad,
-    decodeSessionPermissionRespondCommand,
-    decodeSessionPreviewHistoryPageLoad,
-    decodeSessionPromptCommand,
-    decodeSessionPromptDispositionCommand,
     decodeSessionQueryCommand,
-    decodeSessionRenameCommand,
     decodeSessionWireEnvelope,
     type Identifier,
     isDirectoryIdentifier,
     isIdentifier,
     MOBIUS_API_PREFIX,
-    ProtocolMessageError,
-    promptCompletion,
-    type SessionPromptCommand,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { type Context, type Handler, Hono } from "hono";
 import * as v from "valibot";
@@ -116,6 +102,29 @@ function sessionOperations(context: {
     return "MOBIUS_RUNTIME_EXECUTION" in context.env
         ? context.env.MOBIUS_RUNTIME_EXECUTION.operations
         : context.var.relay.services.runtimePairings;
+}
+
+/** Session operations on the Runtime a Session credential authorized. */
+function authorizedSessionControl(
+    context: {
+        readonly env: PlatformApplicationBindings;
+        readonly var: { readonly relay: RelayContext };
+        readonly req: { readonly raw: Request };
+    },
+    access: { readonly projectId: string; readonly runtimeId: string },
+    sessionId: string,
+): SessionControl {
+    const scope = new ProjectScope(access.projectId);
+    return new SessionControl(
+        async (command) =>
+            await sessionOperations(context).requestProjectScopeControl(
+                scope,
+                access.runtimeId,
+                command,
+                context.req.raw.signal,
+            ),
+        sessionId,
+    );
 }
 
 const projectApplication = createMobiusApplication();
@@ -341,32 +350,20 @@ export function createPlatformApplication(
                 v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(10_000)),
                 Number(context.req.query("eventLimit") ?? "50"),
             );
-            const result = await sessionOperations(context).requestProjectScopeControl(
-                new ProjectScope(access.projectId),
-                access.runtimeId,
-                decodeSessionPreviewHistoryPageLoad(
-                    JSON.stringify({
-                        additionalDirectoryIds: v.parse(
-                            v.pipe(v.array(v.custom<string>(isDirectoryIdentifier)), v.maxLength(16)),
-                            context.req.queries("additionalDirectoryId") ?? [],
-                        ),
-                        agentId: v.parse(sessionIdentifier, context.req.query("agentId")),
-                        bindingId: "workspace",
-                        cursor: context.req.query("cursor") ?? null,
-                        directoryId: v.parse(v.custom<string>(isDirectoryIdentifier), context.req.query("directoryId")),
-                        kind: "session.preview-history.page.load",
-                        eventLimit,
-                        requestId: crypto.randomUUID(),
-                        sessionId,
-                    }),
-                ),
-                context.req.raw.signal,
+            const control = authorizedSessionControl(context, access, sessionId);
+            const events = await control.previewEvents(
+                {
+                    additionalDirectoryIds: v.parse(
+                        v.pipe(v.array(v.custom<string>(isDirectoryIdentifier)), v.maxLength(16)),
+                        context.req.queries("additionalDirectoryId") ?? [],
+                    ),
+                    agentId: v.parse(sessionIdentifier, context.req.query("agentId")),
+                    directoryId: v.parse(v.custom<string>(isDirectoryIdentifier), context.req.query("directoryId")),
+                },
+                { cursor: context.req.query("cursor") ?? null, eventLimit },
             );
-            if (result.kind !== "session.preview-history.page.loaded") {
-                throw new PairingDirectoryError("invalid_request", "The Runtime returned invalid V2 Session events");
-            }
             context.header("Cache-Control", "no-store");
-            return context.json(result.events);
+            return context.json(events);
         })
         .get("/:sessionId/configuration", sessionAccessTargetMiddleware, async (context) => {
             const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];
@@ -383,21 +380,8 @@ export function createPlatformApplication(
                 context.req.raw.signal,
             );
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
-            const result = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
-                new ProjectScope(access.projectId),
-                access.runtimeId,
-                decodeSessionConfigReadCommand(
-                    JSON.stringify({
-                        kind: "session.config.read",
-                        requestId: crypto.randomUUID(),
-                        sessionId,
-                    }),
-                ),
-                context.req.raw.signal,
-            );
-            if (result.kind !== "session.config.read.result") {
-                throw new PairingDirectoryError("invalid_request", "The Runtime returned invalid Session settings");
-            }
+            const control = authorizedSessionControl(context, access, sessionId);
+            const result = await control.readConfiguration();
             context.header("Cache-Control", "no-store");
             return context.json(result);
         })
@@ -422,30 +406,11 @@ export function createPlatformApplication(
             const agentId = v.parse(sessionIdentifier, context.req.query("agentId"));
             const directoryId = v.parse(v.custom<string>(isDirectoryIdentifier), context.req.query("directoryId"));
             const commandId = context.req.query("commandId");
-            const result = await sessionOperations(context).requestProjectScopeControl(
-                new ProjectScope(access.projectId),
-                access.runtimeId,
-                decodeNativeSessionRequest(
-                    JSON.stringify({
-                        action: "active-turn",
-                        additionalDirectoryIds,
-                        agentId,
-                        bindingId: "workspace",
-                        ...(commandId === undefined
-                            ? {}
-                            : { deliveryCommandId: v.parse(sessionIdentifier, commandId) }),
-                        directoryId,
-                        kind: "native.session.request",
-                        requestId: crypto.randomUUID(),
-                        sessionId,
-                        targetSessionId: sessionId,
-                    }),
-                ),
-                context.req.raw.signal,
+            const control = authorizedSessionControl(context, access, sessionId);
+            const result = await control.activeTurn(
+                { additionalDirectoryIds, agentId, directoryId },
+                commandId === undefined ? undefined : v.parse(sessionIdentifier, commandId),
             );
-            if (result.kind !== "native.session.result" || result.action !== "active-turn") {
-                throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid active Turn");
-            }
             context.header("Cache-Control", "no-store");
             return context.json(result);
         })
@@ -479,40 +444,13 @@ export function createPlatformApplication(
                           context.req.raw.signal,
                       )
                     : { agentId: body.agentId, directoryId: body.directoryId };
-            let command: SessionPromptCommand;
-            try {
-                command = decodeSessionPromptCommand(
-                    JSON.stringify({
-                        additionalDirectoryIds: body.additionalDirectoryIds,
-                        agentId: identity.agentId,
-                        bindingId: "workspace",
-                        commandId: body.idempotencyKey,
-                        directoryId: identity.directoryId,
-                        disposition: body.disposition,
-                        attachments: body.attachments,
-                        kind: "session.prompt",
-                        prompt: body.content,
-                        sessionConfigurations: body.sessionConfigurations,
-                        sessionId,
-                        targetCommandId: body.targetCommandId,
-                    }),
-                );
-            } catch (error) {
-                // The caller supplied this prompt, so protocol rejection is a client error, not a retryable outage.
-                if (error instanceof ProtocolMessageError) {
-                    throw new PairingDirectoryError("invalid_request", "The Turn request is invalid", { cause: error });
-                }
-                throw error;
-            }
-            const accepted = await sessionOperations(context).requestProjectScopeControl(
-                new ProjectScope(access.projectId),
-                access.runtimeId,
-                command,
-                context.req.raw.signal,
-            );
-            if (accepted.kind !== "turn.started" && accepted.kind !== "turn.queued") {
-                throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid Turn");
-            }
+            const control = authorizedSessionControl(context, access, sessionId);
+            const accepted = await control.submitTurn({
+                ...body,
+                agentId: identity.agentId,
+                commandId: body.idempotencyKey,
+                directoryId: identity.directoryId,
+            });
             const acceptedAt = new Date().toISOString();
             context.header("Cache-Control", "no-store");
             return context.json({
@@ -526,7 +464,7 @@ export function createPlatformApplication(
                 },
                 sessionId,
                 state:
-                    accepted.kind === "turn.queued"
+                    accepted.state === "queued"
                         ? { kind: "queued" as const }
                         : { kind: "running" as const, startedAt: acceptedAt },
                 turnId: accepted.commandId,
@@ -548,23 +486,9 @@ export function createPlatformApplication(
             );
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
             const turnId = v.parse(sessionIdentifier, context.req.param("turnId"));
-            const body = v.parse(sessionPromptDispositionBody, await context.req.json());
-            const started = await sessionOperations(context).requestProjectScopeControl(
-                new ProjectScope(access.projectId),
-                access.runtimeId,
-                decodeSessionPromptDispositionCommand(
-                    JSON.stringify({
-                        commandId: turnId,
-                        disposition: body.disposition,
-                        kind: "session.prompt.disposition",
-                        sessionId,
-                    }),
-                ),
-                context.req.raw.signal,
-            );
-            if (started.kind !== "turn.started" || started.commandId !== turnId) {
-                throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid steered Turn");
-            }
+            v.parse(sessionPromptDispositionBody, await context.req.json());
+            const control = authorizedSessionControl(context, access, sessionId);
+            await control.steerTurn(turnId);
             context.header("Cache-Control", "no-store");
             return context.json({ turnId });
         })
@@ -681,23 +605,8 @@ export function createPlatformApplication(
             );
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
             const body = v.parse(sessionConfigurationBody, await context.req.json());
-            const result = await sessionOperations(context).requestProjectScopeControl(
-                new ProjectScope(access.projectId),
-                access.runtimeId,
-                decodeSessionConfigureCommand(
-                    JSON.stringify({
-                        ...body,
-                        additionalDirectoryIds: body.additionalDirectoryIds,
-                        agentId: body.agentId,
-                        bindingId: "workspace",
-                        directoryId: body.directoryId,
-                        kind: "session.configure",
-                        requestId: crypto.randomUUID(),
-                        sessionId,
-                    }),
-                ),
-                context.req.raw.signal,
-            );
+            const control = authorizedSessionControl(context, access, sessionId);
+            const result = await control.configure(body);
             context.header("Cache-Control", "no-store");
             return context.json(result);
         })
@@ -717,19 +626,8 @@ export function createPlatformApplication(
             );
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
             const body = v.parse(sessionRenameBody, await context.req.json());
-            const result = await sessionOperations(context).requestProjectScopeControl(
-                new ProjectScope(access.projectId),
-                access.runtimeId,
-                decodeSessionRenameCommand(
-                    JSON.stringify({
-                        kind: "session.rename",
-                        requestId: crypto.randomUUID(),
-                        sessionId,
-                        title: body.title,
-                    }),
-                ),
-                context.req.raw.signal,
-            );
+            const control = authorizedSessionControl(context, access, sessionId);
+            const result = await control.rename(body.title);
             context.header("Cache-Control", "no-store");
             return context.json(result);
         })
@@ -749,23 +647,8 @@ export function createPlatformApplication(
             );
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
             const turnId = v.parse(sessionIdentifier, context.req.param("turnId"));
-            const completed = await sessionOperations(context).requestProjectScopeControl(
-                new ProjectScope(access.projectId),
-                access.runtimeId,
-                decodeSessionCancelBeforeStartCommand(
-                    JSON.stringify({ commandId: turnId, kind: "session.cancel-before-start", sessionId }),
-                ),
-                context.req.raw.signal,
-            );
-            if (completed.kind !== "turn.completed" || completed.commandId !== turnId) {
-                throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid cancellation");
-            }
-            if (promptCompletion(completed).kind !== "cancelled") {
-                throw new PairingDirectoryError(
-                    "turn_already_started",
-                    "The message already executed and could not be withdrawn",
-                );
-            }
+            const control = authorizedSessionControl(context, access, sessionId);
+            await control.withdrawTurn(turnId);
             context.header("Cache-Control", "no-store");
             return context.json({ turnId });
         })
@@ -784,17 +667,10 @@ export function createPlatformApplication(
             );
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
             const turnId = v.parse(sessionIdentifier, context.req.param("turnId"));
-            const completed = await sessionOperations(context).requestProjectScopeControl(
-                new ProjectScope(access.projectId),
-                access.runtimeId,
-                decodeSessionCancelCommand(JSON.stringify({ commandId: turnId, kind: "session.cancel", sessionId })),
-                context.req.raw.signal,
-            );
-            if (completed.kind !== "turn.completed") {
-                throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid cancellation");
-            }
+            const control = authorizedSessionControl(context, access, sessionId);
+            const { stopReason } = await control.cancelTurn(turnId);
             context.header("Cache-Control", "no-store");
-            return context.json({ turnId, stopReason: completed.stopReason });
+            return context.json({ turnId, stopReason });
         })
         .post("/:sessionId/interactions/:interactionId/responses", sessionAccessTargetMiddleware, async (context) => {
             const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];
@@ -813,32 +689,8 @@ export function createPlatformApplication(
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
             const interactionId = v.parse(sessionIdentifier, context.req.param("interactionId"));
             const body = v.parse(sessionInteractionResponseBody, await context.req.json());
-            const command =
-                body.kind === "permission"
-                    ? decodeSessionPermissionRespondCommand(
-                          JSON.stringify({
-                              interactionId,
-                              kind: "session.permission.respond",
-                              optionId: body.optionId,
-                              outcome: body.outcome,
-                              sessionId,
-                          }),
-                      )
-                    : decodeSessionElicitationRespondCommand(
-                          JSON.stringify({
-                              action: body.action,
-                              content: body.content,
-                              interactionId,
-                              kind: "session.elicitation.respond",
-                              sessionId,
-                          }),
-                      );
-            await sessionOperations(context).requestProjectScopeControl(
-                new ProjectScope(access.projectId),
-                access.runtimeId,
-                command,
-                context.req.raw.signal,
-            );
+            const control = authorizedSessionControl(context, access, sessionId);
+            await control.respond(interactionId, body);
             context.header("Cache-Control", "no-store");
             return context.json({ accepted: true });
         })
@@ -856,31 +708,19 @@ export function createPlatformApplication(
                 context.req.raw.signal,
             );
             if (context.req.header("upgrade")?.toLowerCase() !== "websocket") {
-                const result = await sessionOperations(context).requestProjectScopeControl(
-                    new ProjectScope(target.projectId),
-                    target.runtimeId,
-                    decodeSessionHistoryPageLoad(
-                        JSON.stringify({
-                            cursor: context.req.query("cursor") ?? null,
-                            eventLimit: v.parse(
-                                v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(10_000)),
-                                Number(context.req.query("limit") ?? "50"),
-                            ),
-                            kind: "session.live-history.v2.page.load",
-                            requestId: crypto.randomUUID(),
-                            sessionId: context.req.param("sessionId"),
-                        }),
+                const events = await authorizedSessionControl(
+                    context,
+                    target,
+                    v.parse(sessionIdentifier, context.req.param("sessionId")),
+                ).liveEvents({
+                    cursor: context.req.query("cursor") ?? null,
+                    eventLimit: v.parse(
+                        v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(10_000)),
+                        Number(context.req.query("limit") ?? "50"),
                     ),
-                    context.req.raw.signal,
-                );
-                if (result.kind !== "session.live-history.v2.page.loaded") {
-                    throw new PairingDirectoryError(
-                        "invalid_request",
-                        "The Runtime returned invalid V2 Session events",
-                    );
-                }
+                });
                 context.header("Cache-Control", "no-store");
-                return context.json(result.events.events);
+                return context.json(events);
             }
             if ("MOBIUS_RUNTIME_EXECUTION" in context.env) {
                 return await context.env.MOBIUS_RUNTIME_EXECUTION.operations.openPublicSessionEvents(

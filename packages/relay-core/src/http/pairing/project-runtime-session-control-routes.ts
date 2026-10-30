@@ -1,19 +1,9 @@
-import {
-    decodeSessionCancelBeforeStartCommand,
-    decodeSessionCancelCommand,
-    decodeSessionElicitationRespondCommand,
-    decodeSessionHistoryPageLoad,
-    decodeSessionPermissionRespondCommand,
-    decodeSessionPromptDispositionCommand,
-    type Identifier,
-    isIdentifier,
-    promptCompletion,
-} from "@moxt-ai/mobius-sdk/protocol";
+import { type Identifier, isIdentifier } from "@moxt-ai/mobius-sdk/protocol";
 import { type Context, Hono } from "hono";
 import * as v from "valibot";
 import { PairingDirectoryError, validateIdentifier } from "../../entity/pairing/pairing.ts";
 import { bearerToken } from "../../infra/relay-http.ts";
-import type { RuntimeControlCommand } from "../../service/pairing/runtime-control-request.ts";
+import { SessionControl } from "../../service/pairing/session-control.ts";
 import { bodyParser } from "../middleware/body-parser.ts";
 import { errorMiddleware, rethrowHonoError } from "../middleware/error-middleware.ts";
 import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
@@ -45,13 +35,21 @@ function validated<TSchema extends v.GenericSchema>(schema: TSchema, value: unkn
     return result.output;
 }
 
-async function requestControl(context: Context<RelayHttpEnvironment>, command: RuntimeControlCommand) {
-    return await context.env.services.runtimePairings.requestControl(
-        validated(identifier, context.req.param("projectId")),
-        validated(identifier, context.req.param("runtimeId")),
-        bearerToken(context.req.raw),
-        command,
-        context.req.raw.signal,
+/** Session operations on the Runtime this request names, authorized by its project credential for each command. */
+export function sessionControl(context: Context<RelayHttpEnvironment>): SessionControl {
+    const projectId = validated(identifier, context.req.param("projectId"));
+    const runtimeId = validated(identifier, context.req.param("runtimeId"));
+    const token = bearerToken(context.req.raw);
+    return new SessionControl(
+        async (command) =>
+            await context.env.services.runtimePairings.requestControl(
+                projectId,
+                runtimeId,
+                token,
+                command,
+                context.req.raw.signal,
+            ),
+        validateIdentifier(context.req.param("sessionId") ?? "", "session_id"),
     );
 }
 
@@ -60,38 +58,16 @@ export function createProjectRuntimeSessionControlRoutes() {
         .onError(rethrowHonoError)
         .use("*", errorMiddleware)
         .post("/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/turns/:turnId/cancel", async (context) => {
-            const sessionId = validateIdentifier(context.req.param("sessionId"), "session_id");
             const turnId = validateIdentifier(context.req.param("turnId"), "turn_id");
-            const completed = await requestControl(
-                context,
-                decodeSessionCancelCommand(JSON.stringify({ commandId: turnId, kind: "session.cancel", sessionId })),
-            );
-            if (completed.kind !== "turn.completed" || completed.commandId !== turnId) {
-                throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid cancellation");
-            }
+            const { stopReason } = await sessionControl(context).cancelTurn(turnId);
             context.header("Cache-Control", "no-store");
-            return context.json({ turnId, stopReason: completed.stopReason });
+            return context.json({ turnId, stopReason });
         })
         .post(
             "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/turns/:turnId/cancel-before-start",
             async (context) => {
-                const sessionId = validateIdentifier(context.req.param("sessionId"), "session_id");
                 const turnId = validateIdentifier(context.req.param("turnId"), "turn_id");
-                const completed = await requestControl(
-                    context,
-                    decodeSessionCancelBeforeStartCommand(
-                        JSON.stringify({ commandId: turnId, kind: "session.cancel-before-start", sessionId }),
-                    ),
-                );
-                if (completed.kind !== "turn.completed" || completed.commandId !== turnId) {
-                    throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid cancellation");
-                }
-                if (promptCompletion(completed).kind !== "cancelled") {
-                    throw new PairingDirectoryError(
-                        "turn_already_started",
-                        "The message already executed and could not be withdrawn",
-                    );
-                }
+                await sessionControl(context).withdrawTurn(turnId);
                 context.header("Cache-Control", "no-store");
                 return context.json({ turnId });
             },
@@ -100,23 +76,9 @@ export function createProjectRuntimeSessionControlRoutes() {
             "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/turns/:turnId/disposition",
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {
-                const body = validated(disposition, context.req.valid("json"));
-                const sessionId = validateIdentifier(context.req.param("sessionId"), "session_id");
+                validated(disposition, context.req.valid("json"));
                 const turnId = validateIdentifier(context.req.param("turnId"), "turn_id");
-                const started = await requestControl(
-                    context,
-                    decodeSessionPromptDispositionCommand(
-                        JSON.stringify({
-                            commandId: turnId,
-                            disposition: body.disposition,
-                            kind: "session.prompt.disposition",
-                            sessionId,
-                        }),
-                    ),
-                );
-                if (started.kind !== "turn.started" || started.commandId !== turnId) {
-                    throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid steered Turn");
-                }
+                await sessionControl(context).steerTurn(turnId);
                 context.header("Cache-Control", "no-store");
                 return context.json({ turnId });
             },
@@ -126,58 +88,25 @@ export function createProjectRuntimeSessionControlRoutes() {
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {
                 const body = validated(interactionResponse, context.req.valid("json"));
-                const sessionId = validateIdentifier(context.req.param("sessionId"), "session_id");
                 const interactionId = validateIdentifier(context.req.param("interactionId"), "interaction_id");
-                const command =
-                    body.kind === "permission"
-                        ? decodeSessionPermissionRespondCommand(
-                              JSON.stringify({
-                                  interactionId,
-                                  kind: "session.permission.respond",
-                                  optionId: body.optionId,
-                                  outcome: body.outcome,
-                                  sessionId,
-                              }),
-                          )
-                        : decodeSessionElicitationRespondCommand(
-                              JSON.stringify({
-                                  action: body.action,
-                                  content: body.content,
-                                  interactionId,
-                                  kind: "session.elicitation.respond",
-                                  sessionId,
-                              }),
-                          );
-                await requestControl(context, command);
+                await sessionControl(context).respond(interactionId, body);
                 context.header("Cache-Control", "no-store");
                 return context.json({ accepted: true });
             },
         )
         .get("/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/events-v2", async (context) => {
-            const sessionId = validateIdentifier(context.req.param("sessionId"), "session_id");
             const cursor = context.req.query("cursor");
-            const result = await requestControl(
-                context,
-                decodeSessionHistoryPageLoad(
-                    JSON.stringify({
-                        cursor:
-                            cursor === undefined
-                                ? null
-                                : validated(v.pipe(v.string(), v.minLength(1), v.maxLength(512)), cursor),
-                        eventLimit: validated(
-                            v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(10_000)),
-                            Number(context.req.query("limit") ?? "50"),
-                        ),
-                        kind: "session.live-history.v2.page.load",
-                        requestId: crypto.randomUUID(),
-                        sessionId,
-                    }),
+            const events = await sessionControl(context).liveEvents({
+                cursor:
+                    cursor === undefined
+                        ? null
+                        : validated(v.pipe(v.string(), v.minLength(1), v.maxLength(512)), cursor),
+                eventLimit: validated(
+                    v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(10_000)),
+                    Number(context.req.query("limit") ?? "50"),
                 ),
-            );
-            if (result.kind !== "session.live-history.v2.page.loaded") {
-                throw new PairingDirectoryError("invalid_request", "The Runtime returned invalid V2 Session events");
-            }
+            });
             context.header("Cache-Control", "no-store");
-            return context.json(result.events.events);
+            return context.json(events);
         });
 }
