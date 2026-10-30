@@ -58,6 +58,11 @@ const platform = join(root, "packages/relay-cloudflare-platform");
 const recording = join(root, "packages/recording-cloudflare");
 
 await writeMigrationModule(
+    join(cli, "src/engine/generated/command-cancellation-migrations.ts"),
+    "commandCancellationMigrations",
+    await sqlFiles(join(cli, "migrations/command-cancellation")),
+);
+await writeMigrationModule(
     join(cli, "src/engine/generated/acp-session-store-migrations.ts"),
     "acpSessionStoreMigrations",
     await sqlFiles(join(cli, "migrations/acp-session-store")),

@@ -176,13 +176,12 @@ async function applySessionConfigurationSelection(
         return options;
     }
     return (
-        await sessions.configureSession({
+        await sessions.applySessionConfiguration({
             adapter,
             additionalDirectories,
             agent,
             booleanValue: selection.booleanValue,
             configId: selection.configId,
-            expectedConfigurationRevision: null,
             cwd,
             requestId: `cfg_${randomUUID()}`,
             sessionId,

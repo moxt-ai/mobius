@@ -1716,12 +1716,11 @@ agent.once("exit", (code) => process.exit(code ?? 84));
             signal,
         });
         await expect(
-            manager.configureSession({
+            manager.applySessionConfiguration({
                 additionalDirectories: [],
                 agent,
                 booleanValue: false,
                 configId: "model",
-                expectedConfigurationRevision: null,
                 cwd: process.cwd(),
                 requestId: "configure-exited-session",
                 sessionId: "exited-conversation",

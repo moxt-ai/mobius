@@ -6,11 +6,15 @@ import { join } from "node:path";
 import {
     decodeMessageKind,
     decodeNativeSessionResult,
+    decodeSessionConfigReadResult,
+    decodeSessionConfigUpdatedEvent,
     decodeSessionLiveEvent,
     decodeSessionReadyEvent,
     decodeSessionsQueriedEvent,
     encodeNativeSessionCommand,
     encodeSessionCloseCommand,
+    encodeSessionConfigReadCommand,
+    encodeSessionConfigureCommand,
     encodeSessionHistoryPageLoad,
     encodeSessionPrepareCommand,
     encodeSessionPromptCommand,
@@ -261,6 +265,52 @@ test.each(["resume", "load"] as const)(
         });
     },
 );
+
+test("Given a client read a conversation's settings before its idle process exited, When it changes a setting with the revision it read, Then the change applies", async () => {
+    await withIdleDaemon("resume", async (peer, native, timer) => {
+        const sessionId = await prepareNewRealSession(peer, "claude");
+        expect(await prompt(peer, sessionId, "Remember the first turn")).toContain("turn 1:");
+        const readId = crypto.randomUUID();
+        peer.send(encodeSessionConfigReadCommand({ kind: "session.config.read", requestId: readId, sessionId }));
+        const read = decodeSessionConfigReadResult(await nextResponse(peer, "session.config.read.result"));
+        expect(read.requestId).toBe(readId);
+        const model = read.configOptions.find((option) => option.id === "model");
+        const other = model?.values.find((value) => value.value !== model.currentValue)?.value;
+        if (other === undefined) {
+            throw new Error("The controlled Agent must offer a second model");
+        }
+        const original = await processId(native);
+        timer.advance(twoHours - 1);
+        await expire(native, original, timer);
+
+        const configureId = crypto.randomUUID();
+        peer.send(
+            encodeSessionConfigureCommand({
+                additionalDirectoryIds: [],
+                agentId: "claude",
+                bindingId: peer.bindingId,
+                booleanValue: false,
+                configId: "model",
+                directoryId: "default",
+                expectedConfigurationRevision: read.configurationRevision,
+                kind: "session.configure",
+                requestId: configureId,
+                sessionId,
+                value: other,
+                valueType: "select",
+            }),
+        );
+        for (;;) {
+            const updated = decodeSessionConfigUpdatedEvent(await nextResponse(peer, "session.config.updated"));
+            if (updated.requestId !== configureId) {
+                continue;
+            }
+            expect(updated.configOptions.find((option) => option.id === "model")?.currentValue).toBe(other);
+            expect(updated.configurationRevision).not.toBe(read.configurationRevision);
+            break;
+        }
+    });
+});
 
 test("Given a retained conversation is used again, When its original idle deadline passes, Then it stays alive until two hours after the latest turn", async () => {
     await withIdleDaemon("resume", async (peer, native, timer) => {

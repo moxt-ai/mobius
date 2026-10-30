@@ -1,12 +1,14 @@
 import type { SessionInfoUpdatedEvent, SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
 import type { BackgroundActivity } from "../../acp/agent/in-process-endpoint.ts";
 import { AcpSessionTable } from "../../storage/session/acp-session-table.ts";
+import { CommandCancellationTable } from "../../storage/session/command-cancellation-table.ts";
 import { ExecutionReceiptTable } from "../../storage/session/execution-receipt-table.ts";
 import { LiveEventPositionTable } from "../../storage/session/live-event-position-table.ts";
 import { SessionEventCacheTable } from "../../storage/session/session-event-cache-table.ts";
 import {
     channelSessionDatabasePaths,
     openAcpSessionDatabase,
+    openCommandCancellationDatabase,
     openSessionEventCacheDatabase,
 } from "../../storage/sqlite/local-databases.ts";
 import type { Timer } from "../../util/timer.ts";
@@ -77,13 +79,20 @@ export function buildSessionLayer(options: SessionLayerOptions) {
     const sessionDatabase = openAcpSessionDatabase(databases.sessions);
     let events: CachedSessionEventStore;
     let operations: ExecutionReceipts;
+    let cancellations: CommandCancellationTable | undefined;
     try {
-        operations = new ExecutionReceipts(new ExecutionReceiptTable(sessionDatabase), options.onExecutionCountChange);
+        cancellations = new CommandCancellationTable(openCommandCancellationDatabase(databases.cancellations));
+        operations = new ExecutionReceipts(
+            new ExecutionReceiptTable(sessionDatabase),
+            cancellations,
+            options.onExecutionCountChange,
+        );
         events = new CachedSessionEventStore(
             new SessionEventCacheTable(openSessionEventCacheDatabase(databases.events)),
             new SqliteSessionLiveEventPosition(new LiveEventPositionTable(sessionDatabase)),
         );
     } catch (error) {
+        cancellations?.close();
         sessionDatabase.close();
         throw error;
     }

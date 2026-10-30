@@ -187,12 +187,11 @@ describe("Session settings reads after a daemon restart", () => {
                 signal: AbortSignal.timeout(10_000),
             });
             // Configure a model so a later read has a non-default value to find.
-            await first.configureSession({
+            await first.applySessionConfiguration({
                 additionalDirectories: [],
                 agent,
                 booleanValue: false,
                 configId: "model",
-                expectedConfigurationRevision: null,
                 cwd: process.cwd(),
                 requestId: "config-read-retired-configure",
                 sessionId,
