@@ -117,6 +117,19 @@ jobs:
             });
           };
           const signature = (targets) => targets.map(({ number, sha }) => `${number}:${sha}`).sort().join(',');
+          const requireLiveReviewProtection = async () => {
+            const rules = await api(`repos/${repository}/rules/branches/main`);
+            // Native review protection continues enforcing negative reviews after this
+            // snapshot finishes. Manual dismissal must not make a stale green reusable.
+            const protectedReviews = rules.some((rule) => rule.type === 'pull_request' &&
+              rule.parameters.required_approving_review_count >= 1 &&
+              rule.parameters.dismiss_stale_reviews_on_push === true &&
+              rule.parameters.dismissal_restriction?.enabled === true &&
+              rule.parameters.dismissal_restriction.allowed_actors.length === 0
+            );
+            if (!protectedReviews) throw new Error('Required live review protection is not active.');
+          };
+          await requireLiveReviewProtection();
           const targets = await resolveTargets();
           if (targets.length === 0) throw new Error('No pull request found for this change.');
           while (Date.now() < deadline) {
@@ -132,7 +145,7 @@ jobs:
               const latest = reviews.filter((review) =>
                 review.user?.id === 265534778 && review.user?.login === 'moxt-ai[bot]' &&
                 review.user?.type === 'Bot' && review.commit_id === target.sha &&
-                review.submitted_at
+                review.submitted_at && ['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(review.state)
               ).sort((a, b) => b.id - a.id)[0];
               if (!latest) {
                 pending.push(target.number);
@@ -143,6 +156,7 @@ jobs:
               }
             }
             if (pending.length === 0) {
+              await requireLiveReviewProtection();
               if (signature(await resolveTargets()) !== signature(targets)) {
                 throw new Error('The merge queue changed during review verification.');
               }
