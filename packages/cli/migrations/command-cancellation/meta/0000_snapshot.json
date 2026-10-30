@@ -1,0 +1,42 @@
+{
+    "version": "6",
+    "dialect": "sqlite",
+    "id": "ce9a6f90-9905-4366-a75b-78ae0f06e6d2",
+    "prevId": "00000000-0000-0000-0000-000000000000",
+    "tables": {
+        "cancelled_command": {
+            "name": "cancelled_command",
+            "columns": {
+                "command_id": {
+                    "name": "command_id",
+                    "type": "text",
+                    "primaryKey": true,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {},
+            "foreignKeys": {},
+            "compositePrimaryKeys": {},
+            "uniqueConstraints": {},
+            "checkConstraints": {}
+        }
+    },
+    "views": {},
+    "enums": {},
+    "_meta": {
+        "schemas": {},
+        "tables": {},
+        "columns": {}
+    },
+    "internal": {
+        "indexes": {}
+    }
+}

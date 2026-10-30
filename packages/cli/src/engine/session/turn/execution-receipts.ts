@@ -9,6 +9,10 @@ import {
     type SessionLiveEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { z } from "zod";
+import type {
+    CommandCancellationTable,
+    PersistedCommandCancellation,
+} from "../../storage/session/command-cancellation-table.ts";
 import type { ExecutionReceiptTable } from "../../storage/session/execution-receipt-table.ts";
 
 const MAX_TERMINAL_RECEIPTS = 1_024;
@@ -50,6 +54,18 @@ function executionStarted(state: ExecutionState): boolean {
     }
 }
 
+function cancelledBeforeStart(state: ExecutionState): boolean {
+    if (state.kind !== "settled-before-start") {
+        return false;
+    }
+    const outcome = decodeKnownSessionEventPayload(JSON.parse(state.outcome));
+    return (
+        outcome?.type === "lifecycle-metadata" &&
+        outcome.payload.kind === "prompt.completed" &&
+        outcome.payload.stopReason === "cancelled"
+    );
+}
+
 function executionOutcome(state: ExecutionState): string | null {
     switch (state.kind) {
         case "pending":
@@ -82,38 +98,33 @@ export class ExecutionReceipts {
     readonly #recoveredCommands = new Set<string>();
 
     readonly #table: ExecutionReceiptTable;
+    readonly #cancellations: CommandCancellationTable;
     #closing = false;
     readonly #onCount: (count: number) => void;
-    constructor(table: ExecutionReceiptTable, onCount: (count: number) => void = () => undefined) {
+    constructor(
+        table: ExecutionReceiptTable,
+        cancellations: CommandCancellationTable,
+        onCount: (count: number) => void = () => undefined,
+    ) {
         this.#onCount = onCount;
         this.#table = table;
+        this.#cancellations = cancellations;
+        const retained: PersistedCommandCancellation[] = [];
         for (const { commandId, started, outcome, updatedAt: _updatedAt, ...identity } of table.list()) {
-            const state: ExecutionState = { kind: started ? "started" : "pending" };
+            const pending: ExecutionState = { kind: started ? "started" : "pending" };
+            const state = outcome === null ? pending : settledExecution(pending, outcome);
             this.#executions.set(commandId, {
                 ...identity,
-                state: outcome === null ? state : settledExecution(state, outcome),
+                state,
             });
+            if (cancelledBeforeStart(state)) {
+                retained.push({ commandId, sessionId: identity.sessionId });
+            }
             this.#recoveredCommands.add(commandId);
         }
+        cancellations.retain(retained);
     }
-    readonly #save = (
-        commandId: string,
-        receipt: ExecutionReceipt,
-        durableOutcome: string | null = executionOutcome(receipt.state),
-    ): void => {
-        const { state, ...identity } = receipt;
-        const evicted = this.#closing
-            ? []
-            : this.#table.save(
-                  {
-                      ...identity,
-                      commandId,
-                      started: executionStarted(state),
-                      outcome: durableOutcome,
-                      updatedAt: new Date().toISOString(),
-                  },
-                  MAX_TERMINAL_RECEIPTS,
-              );
+    readonly #remember = (commandId: string, receipt: ExecutionReceipt, evicted: readonly string[]): void => {
         // Live failure detail may quote user input; only the durable receipt goes to the table.
         this.#executions.set(commandId, receipt);
         for (const evictedCommandId of evicted) {
@@ -127,6 +138,32 @@ export class ExecutionReceipts {
             }
         }
         this.#onCount(activeCount);
+    };
+    readonly #save = (
+        commandId: string,
+        receipt: ExecutionReceipt,
+        durableOutcome: string | null = executionOutcome(receipt.state),
+    ): void => {
+        const { state, ...identity } = receipt;
+        if (!this.#closing && cancelledBeforeStart(state)) {
+            // Commit the non-replayable fact first. A crash before saving/pruning the receipt must not reopen work.
+            this.#cancellations.retain([{ commandId, sessionId: receipt.sessionId }]);
+            // Cancellation is already authoritative even if the detailed receipt write fails.
+            this.#remember(commandId, receipt, []);
+        }
+        const evicted = this.#closing
+            ? []
+            : this.#table.save(
+                  {
+                      ...identity,
+                      commandId,
+                      started: executionStarted(state),
+                      outcome: durableOutcome,
+                      updatedAt: new Date().toISOString(),
+                  },
+                  MAX_TERMINAL_RECEIPTS,
+              );
+        this.#remember(commandId, receipt, evicted);
     };
     readonly #nextAdmissionOrder = (): number => {
         let latest = 0;
@@ -147,7 +184,8 @@ export class ExecutionReceipts {
     readonly delivery = (commandId: string, sessionId: string): CommandDelivery => {
         const receipt = this.#executions.get(commandId);
         if (receipt === undefined) {
-            return this.#table.identity(commandId)?.sessionId === sessionId
+            return this.#table.identity(commandId)?.sessionId === sessionId ||
+                this.#cancellations.read(commandId)?.sessionId === sessionId
                 ? { state: "expired" }
                 : { state: "unknown" };
         }
@@ -235,6 +273,20 @@ export class ExecutionReceipts {
                   }
                 : undefined;
         }
+        const cancellation = this.#cancellations.read(commandId);
+        if (cancellation !== undefined) {
+            return cancellation.sessionId === sessionId
+                ? {
+                      type: "lifecycle-metadata",
+                      payload: {
+                          kind: "prompt.completed",
+                          commandId,
+                          stopReason: "cancelled",
+                          execution: "not-started",
+                      },
+                  }
+                : undefined;
+        }
         const outcome: SessionEventPayload = {
             type: "lifecycle-metadata",
             payload: { kind: "prompt.completed", commandId, stopReason: "cancelled", execution: "not-started" },
@@ -305,35 +357,48 @@ export class ExecutionReceipts {
         const recovered: { sessionId: string; event: SessionEventPayload; recordedAt: string }[] = [];
         for (const [commandId, receipt] of [...this.#executions]) {
             const outcome = executionOutcome(receipt.state);
-            const event: SessionEventPayload | null =
-                outcome === null
-                    ? {
-                          type: "lifecycle-metadata",
-                          payload: executionStarted(receipt.state)
-                              ? {
-                                    kind: "prompt.failed",
-                                    commandId,
-                                    attemptId: receipt.attemptId,
-                                    code: "runtime_restarted",
-                                    message: "The local runtime restarted while this request was running",
-                                }
-                              : {
-                                    kind: "prompt.failed-before-start",
-                                    commandId,
-                                    code: "runtime_restarted",
-                                    message: "The local runtime restarted before this request started",
-                                },
-                      }
-                    : decodeKnownSessionEventPayload(JSON.parse(outcome));
+            const restoreCancellation =
+                !this.hasStarted(commandId, receipt.sessionId) &&
+                !cancelledBeforeStart(receipt.state) &&
+                this.#cancellations.read(commandId)?.sessionId === receipt.sessionId;
+            const event: SessionEventPayload | null = restoreCancellation
+                ? {
+                      type: "lifecycle-metadata",
+                      payload: {
+                          kind: "prompt.completed",
+                          commandId,
+                          stopReason: "cancelled",
+                          execution: "not-started",
+                      },
+                  }
+                : outcome === null
+                  ? {
+                        type: "lifecycle-metadata",
+                        payload: executionStarted(receipt.state)
+                            ? {
+                                  kind: "prompt.failed",
+                                  commandId,
+                                  attemptId: receipt.attemptId,
+                                  code: "runtime_restarted",
+                                  message: "The local runtime restarted while this request was running",
+                              }
+                            : {
+                                  kind: "prompt.failed-before-start",
+                                  commandId,
+                                  code: "runtime_restarted",
+                                  message: "The local runtime restarted before this request started",
+                              },
+                    }
+                  : decodeKnownSessionEventPayload(JSON.parse(outcome));
             if (event === null) {
                 continue;
             }
             const recordedAt =
-                outcome === null
+                restoreCancellation || outcome === null
                     ? new Date().toISOString()
                     : z.object({ recordedAt: z.string() }).parse(JSON.parse(outcome)).recordedAt;
             recovered.push({ sessionId: receipt.sessionId, event, recordedAt });
-            if (outcome === null) {
+            if (restoreCancellation || outcome === null) {
                 this.#save(commandId, {
                     ...receipt,
                     state: settledExecution(receipt.state, JSON.stringify({ ...event, recordedAt })),
@@ -376,6 +441,9 @@ export class ExecutionReceipts {
                 ? { kind: "expired" }
                 : { kind: "conflict" };
         }
+        if (this.#cancellations.read(commandId) !== undefined) {
+            return { kind: "conflict" };
+        }
         const attemptId = randomUUID();
         this.#save(commandId, {
             admissionOrder: this.#nextAdmissionOrder(),
@@ -401,5 +469,6 @@ export class ExecutionReceipts {
     readonly close = (): void => {
         this.#executions.clear();
         this.#recoveredCommands.clear();
+        this.#cancellations.close();
     };
 }
