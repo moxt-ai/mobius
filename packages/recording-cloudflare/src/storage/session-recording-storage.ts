@@ -324,17 +324,18 @@ export class SessionRecordingStorage {
      * position are already recorded is a copy, such as a frame sent twice or output a reconnected daemon sends
      * again. An event that arrives after later ones is still new and is kept.
      *
-     * Each stored batch holds one generation in increasing positions, so a batch can hold a position only when its
-     * first and last positions enclose it. Every such batch is read; a write of new events encloses none and reads
-     * no batch. Batches stored before positions were kept in order may hold them out of order, but their events are
-     * too old to be sent again.
+     * Each batch this version stores holds one generation in increasing positions, so it can hold a position only
+     * when its first and last positions enclose it. Every such batch is read; a write of new events encloses none
+     * and reads no batch. A batch stored by a version that kept events in arrival order can hold a position outside
+     * those bounds, and a copy of that event is stored again. Events are sent again only within about a minute of
+     * first being sent, so such a batch is reached only if Recording ran that version within that minute.
      */
     readonly #unrecorded = (events: readonly SessionWireEvent[]): readonly SessionWireEvent[] => {
         const positions = [...new Set(events.map((candidate) => Number(candidate.position)))].sort(
             (left, right) => left - right,
         );
         const recorded = new Set<string>();
-        // The generation column follows each row's envelope, so it is checked on the decoded events instead.
+        // Generations are compared on the decoded events, which also covers a stored batch that mixes them.
         const candidates = this.#database
             .select({
                 firstPosition: recordedSessionEvent.firstPosition,
