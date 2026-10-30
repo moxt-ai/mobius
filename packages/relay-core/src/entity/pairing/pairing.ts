@@ -139,7 +139,11 @@ export class ChannelDescriptor {
         projectId: string,
         runtimeId: string,
     ) {
-        this.agents = agents;
+        this.agents = agents.map((agent) => ({
+            ...agent,
+            agentSettingsDiscovery: true,
+            sessionTurnConfiguration: true,
+        }));
         this.channelId = channelId;
         this.machineName = machineName;
         this.projectId = projectId;
