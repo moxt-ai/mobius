@@ -58,7 +58,11 @@ test("Given a daemon, When a bug report is read through the Runtime, Then it car
                     const releasedReport = z
                         .strictObject({
                             kind: z.literal("runtime.diagnostics.result"),
-                            requestId: z.string(),
+                            requestId: z
+                                .string()
+                                .min(1)
+                                .max(128)
+                                .regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/u),
                             truncated: z.boolean(),
                             version: z.string().max(32),
                             entries: z.array(z.record(z.string(), z.string().max(256))).max(200),
