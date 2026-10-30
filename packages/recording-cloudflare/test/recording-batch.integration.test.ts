@@ -1,9 +1,4 @@
-import {
-    createExecutionContext,
-    runDurableObjectAlarm,
-    runInDurableObject,
-    waitOnExecutionContext,
-} from "cloudflare:test";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
     decodeSessionRecordingDirectoryV2,
@@ -11,7 +6,8 @@ import {
     type SessionLiveEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { describe, expect, it } from "vitest";
-import { createRecordingWorker } from "../src/worker.ts";
+import type { SendDirectoryUpdate } from "../src/service/recording-directory-outbox.ts";
+import { createRecordingWorker, runtimeDirectorySender, SessionRecordingDurableObject } from "../src/worker.ts";
 
 const worker = createRecordingWorker();
 const context = { agentId: "pressure", directoryId: "default", additionalDirectoryIds: [] };
@@ -66,6 +62,52 @@ async function directory(projectId: string, runtimeId: string) {
     );
     expect(response.status).toBe(200);
     return decodeSessionRecordingDirectoryV2(await response.text());
+}
+
+/** Runs a Session's alarm, which delivers every directory change the Session has committed and not yet indexed. */
+async function indexCommitted(projectId: string, runtimeId: string, sessionId: string): Promise<void> {
+    await runInDurableObject(
+        env.SESSION_RECORDING.getByName(JSON.stringify([projectId, runtimeId, sessionId])),
+        async (instance) => await instance.alarm(),
+    );
+}
+
+/** The Runtime's directory, except that a scenario can hold the next update the way a slow directory would. */
+class HeldDirectory {
+    readonly #send: SendDirectoryUpdate;
+    #held:
+        | {
+              readonly reached: PromiseWithResolvers<void>;
+              readonly release: Promise<void>;
+              readonly answered: PromiseWithResolvers<boolean>;
+          }
+        | undefined;
+
+    constructor(send: SendDirectoryUpdate) {
+        this.#send = send;
+    }
+
+    /** Holds the next update until `release` settles; `answered` settles once the directory has answered it. */
+    readonly holdNext = (
+        release: Promise<void>,
+    ): { readonly reached: Promise<void>; readonly answered: Promise<boolean> } => {
+        const held = { reached: Promise.withResolvers<void>(), release, answered: Promise.withResolvers<boolean>() };
+        this.#held = held;
+        return { reached: held.reached.promise, answered: held.answered.promise };
+    };
+
+    readonly send: SendDirectoryUpdate = async (update) => {
+        const held = this.#held;
+        this.#held = undefined;
+        if (held === undefined) {
+            return await this.#send(update);
+        }
+        held.reached.resolve();
+        await held.release;
+        const confirmed = await this.#send(update);
+        held.answered.resolve(confirmed);
+        return confirmed;
+    };
 }
 
 // @no-uc: Performance; bounded multi-Session ingestion must preserve each history and directory lifecycle.
@@ -192,30 +234,57 @@ describe("Recording multi-Session batches", () => {
         });
     });
 
-    it("Given a recorded Session, When later output is recorded with an execution context, Then its activity is indexed once that context settles", async () => {
-        const projectId = "deferred-project";
-        const runtimeId = "deferred-runtime";
-        expect((await write(projectId, runtimeId, [requested("deferred-session")])).status).toBe(201);
-        const later = { ...chunk("deferred-session", 2), recordedAt: "2026-10-21T00:00:05.000Z" };
+    it("Given a listed Session and a directory that has not answered, When later output is recorded, Then the Session acknowledges it at once and the directory shows the latest activity once it answers", async () => {
+        const projectId = "slow-directory-project";
+        const runtimeId = "slow-directory-runtime";
+        const sessionId = "slow-directory-session";
+        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, runtimeId, sessionId]));
+        await runInDurableObject(stub, async (_instance, state) => {
+            const slowDirectory = new HeldDirectory(runtimeDirectorySender(env.RECORDING_DIRECTORY));
+            const session = new SessionRecordingDurableObject(state, env, slowDirectory.send);
+            const record = (event: SessionLiveEvent) =>
+                session.fetch(
+                    new Request(
+                        `https://recording.internal/events?${new URLSearchParams({ projectId, runtimeId, sessionId })}`,
+                        {
+                            method: "POST",
+                            body: encodeSessionRecordingWrite({
+                                projectId,
+                                runtimeId,
+                                envelope: { kind: "session.event.v2", events: [event] },
+                            }),
+                        },
+                    ),
+                );
+            expect((await record(requested(sessionId))).status).toBe(201);
+            const listed = {
+                ...context,
+                sessionId,
+                runtimeId,
+                title: "Batch title",
+                updatedAt: "2026-10-21T00:00:00.000Z",
+            };
+            expect(await directory(projectId, runtimeId)).toEqual({ sessions: [listed] });
 
-        const execution = createExecutionContext();
-        const response = await worker.fetch(
-            new Request("https://recording.test/v1/session-event-batches", {
-                method: "POST",
-                body: encodeSessionRecordingWrite({
-                    projectId,
-                    runtimeId,
-                    envelope: { kind: "session.event.v2", events: [later] },
-                }),
-            }),
-            env,
-            execution,
-        );
-        expect(await response.json()).toEqual({ results: [{ sessionId: "deferred-session", kind: "recorded" }] });
-        await waitOnExecutionContext(execution);
+            const release = Promise.withResolvers<void>();
+            const held = slowDirectory.holdNext(release.promise);
+            const later = { ...chunk(sessionId, 2), recordedAt: "2026-10-21T00:00:05.000Z" };
+            const latest = { ...chunk(sessionId, 3), recordedAt: "2026-10-21T00:00:07.000Z" };
+            for (const output of [later, latest]) {
+                const response = await record(output);
 
-        expect(await directory(projectId, runtimeId)).toMatchObject({
-            sessions: [{ sessionId: "deferred-session", updatedAt: "2026-10-21T00:00:05.000Z" }],
+                expect(response.status).toBe(201);
+                expect(await response.json()).toEqual({ recorded: true });
+            }
+            await held.reached;
+            expect(await directory(projectId, runtimeId)).toEqual({ sessions: [listed] });
+            release.resolve();
+            expect(await held.answered).toBe(true);
+            // The alarm shares the delivery queued behind the held one, so it settles once every change is indexed.
+            await session.alarm();
+            expect(await directory(projectId, runtimeId)).toEqual({
+                sessions: [{ ...listed, updatedAt: latest.recordedAt }],
+            });
         });
     });
 
@@ -250,6 +319,8 @@ describe("Recording multi-Session batches", () => {
                 results: [{ sessionId: "unread-activity-session", kind: "recorded" }],
             });
         }
+        // Activity is indexed after its batch is answered.
+        await indexCommitted(projectId, runtimeId, "unread-activity-session");
 
         expect(await directory(projectId, runtimeId)).toMatchObject({
             sessions: [
