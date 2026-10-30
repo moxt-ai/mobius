@@ -9,6 +9,11 @@ import { registerUpgradeCommand } from "./upgrade.ts";
 import { registerWorkerCommand } from "./worker.ts";
 
 export function registerInternalRuntimeHandlers(program: Command, context: CliContext): void {
+    program.command("__launch", { hidden: true }).action(() => {
+        process.stdout.write(
+            `${JSON.stringify({ executable: process.execPath, entry: process.argv[1], version: context.version })}\n`,
+        );
+    });
     registerManagerCommand(program, context);
     registerWorkerCommand(program, context);
 }

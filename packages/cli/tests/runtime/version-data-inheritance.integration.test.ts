@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import packageMetadata from "../../package.json" with { type: "json" };
-import { installWorkspaceDaemonRelease } from "../support/installed-daemon-release.ts";
+import { installWorkspaceDaemonRelease, workspaceDaemonEnvironment } from "../support/installed-daemon-release.ts";
 
 const temporaryDirectories: string[] = [];
 const runningRoots: Readonly<NodeJS.ProcessEnv>[] = [];
@@ -25,7 +25,7 @@ async function runCli(
     environment: Readonly<NodeJS.ProcessEnv>,
 ): Promise<{ readonly code: number | null; readonly stderr: string; readonly stdout: string }> {
     const child = spawn(process.execPath, [resolve(import.meta.dirname, "../../dist/cli.js"), ...arguments_], {
-        env: environment,
+        env: workspaceDaemonEnvironment(environment),
         signal: AbortSignal.timeout(60_000),
         stdio: ["ignore", "pipe", "pipe"],
     });

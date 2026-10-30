@@ -26,7 +26,7 @@ import { ClaudeFixture } from "../support/agents/claude.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
 import { writeCodexFaultLauncher } from "../support/agents/codex-process-fault.ts";
 import { PiFixture } from "../support/agents/pi.ts";
-import { installWorkspaceDaemonRelease } from "../support/installed-daemon-release.ts";
+import { installWorkspaceDaemonRelease, workspaceDaemonEnvironment } from "../support/installed-daemon-release.ts";
 import { FakeAnthropicProvider } from "../support/llm/anthropic.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 import { fakeProviderPrompts } from "../support/llm/scenarios.ts";
@@ -192,7 +192,7 @@ export function registerManagedUpgradeScenarios(
             const cli = async (args: readonly string[], deadline = signal): Promise<void> => {
                 const child = spawn(process.execPath, [resolve(import.meta.dirname, "../../dist/cli.js"), ...args], {
                     cwd: directory,
-                    env: environment,
+                    env: workspaceDaemonEnvironment(environment),
                     signal: deadline,
                     stdio: ["ignore", "pipe", "pipe"],
                 });

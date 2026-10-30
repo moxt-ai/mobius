@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { openMobiusCliInstallation } from "../../src/daemon/pairing/pair-local-machine.ts";
-import { installWorkspaceDaemonRelease } from "../support/installed-daemon-release.ts";
+import { installWorkspaceDaemonRelease, workspaceDaemonEnvironment } from "../support/installed-daemon-release.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -22,7 +22,7 @@ async function runCli(
     signal: AbortSignal,
 ): Promise<{ readonly code: number | null; readonly stderr: string }> {
     const child = spawn(process.execPath, [resolve(import.meta.dirname, "../../dist/cli.js"), ...arguments_], {
-        env: environment,
+        env: workspaceDaemonEnvironment(environment),
         signal,
         stdio: ["ignore", "ignore", "pipe"],
     });

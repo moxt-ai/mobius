@@ -23,12 +23,6 @@ export async function prepareVersionData(version: string, signal: AbortSignal): 
     await copyVersionData(root, current, targetVersion, signal);
 }
 
-// A version whose switch rolled back never had the current data; once the previous version runs again, its copy is
-// stale, and its next attempt must inherit the current data rather than reuse that copy.
-export async function discardRolledBackData(version: string, signal: AbortSignal): Promise<void> {
-    await discardVersionData(readStateDirectory(), decodeRuntimeUpgradeVersion(version), signal);
-}
-
 export async function recordCurrentData(version: string, signal: AbortSignal): Promise<void> {
     await writeCurrentDataVersion(readStateDirectory(), decodeRuntimeUpgradeVersion(version), signal);
 }

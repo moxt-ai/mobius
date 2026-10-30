@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import cliPackage from "../../package.json" with { type: "json" };
-import { installWorkspaceDaemonRelease } from "../support/installed-daemon-release.ts";
+import { openMobiusControlInstallation } from "../../src/daemon/pairing/pair-local-machine.ts";
+import { installWorkspaceDaemonRelease, workspaceDaemonEnvironment } from "../support/installed-daemon-release.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -21,7 +22,7 @@ async function runCli(
     signal: AbortSignal,
 ): Promise<{ readonly code: number | null; readonly stderr: string; readonly stdout: string }> {
     const child = spawn(process.execPath, [resolve(import.meta.dirname, "../../dist/cli.js"), ...arguments_], {
-        env: environment,
+        env: workspaceDaemonEnvironment(environment),
         signal,
         stdio: ["ignore", "pipe", "pipe"],
     });
@@ -59,9 +60,16 @@ describe("Mobius version command", () => {
         const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: join(directory, "state") };
         const signal = AbortSignal.timeout(60_000);
         await installWorkspaceDaemonRelease(environment.MOBIUS_STATE_DIRECTORY);
+        await rm(join(environment.MOBIUS_STATE_DIRECTORY, "npm"), { recursive: true, force: true });
         try {
             const started = await runCli(["start"], environment, signal);
             expect(started.code).toBe(0);
+            const control = await openMobiusControlInstallation(signal, environment);
+            const daemonPid = await readFile(join(control.stateDirectory, "manager.lock"), "utf8");
+            expect(await readFile(join(control.stateDirectory, "worker.lock"), "utf8")).toBe(daemonPid);
+            await expect(access(join(environment.MOBIUS_STATE_DIRECTORY, "npm"))).rejects.toMatchObject({
+                code: "ENOENT",
+            });
 
             const reported = await runCli(["--version"], environment, signal);
             expect(reported.code).toBe(0);

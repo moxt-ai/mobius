@@ -1,13 +1,11 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { gt } from "semver";
+import { once } from "node:events";
 import type { InstallationDirectory } from "../../engine/storage/installation/installation-files.ts";
 import { isNodeError } from "../../engine/util/node-error.ts";
 import { managerLockExists } from "../../storage/daemon/manager-lock.ts";
-import { readCurrentDataVersion } from "../../storage/daemon/version-data.ts";
-import { readStateDirectory } from "../../storage/state-directory.ts";
 import { CONTROL_TIMEOUT_MILLISECONDS, sendLocalRequest } from "../control/local-client.ts";
 import { decodeKnownLifecycleResponse, type LifecycleResponse, type WorkerLaunch } from "../control/protocol.ts";
-import { prepareDaemonReleaseVersion } from "../upgrades/package.ts";
+import { resolveLatestDaemonLaunch } from "../upgrades/package.ts";
 
 async function spawnManager(launch: WorkerLaunch): Promise<ChildProcess> {
     const child = spawn(launch.executable, [launch.entry, "__manager"], {
@@ -16,13 +14,14 @@ async function spawnManager(launch: WorkerLaunch): Promise<ChildProcess> {
         env: process.env,
         stdio: "ignore",
     });
+    await once(child, "spawn");
     child.unref();
     return child;
 }
 
-async function launchManager(launch: WorkerLaunch): Promise<void> {
+async function launchManager(launch: WorkerLaunch): Promise<ChildProcess> {
     process.stdout.write(`Starting mobius daemon ${launch.version}\n`);
-    await spawnManager(launch);
+    return await spawnManager(launch);
 }
 
 async function waitForManagerExit(stateDirectory: InstallationDirectory, signal: AbortSignal): Promise<void> {
@@ -45,16 +44,18 @@ async function waitForManagerExit(stateDirectory: InstallationDirectory, signal:
     throw deadline.reason;
 }
 
-// The daemon never runs behind the current data: an older version would reopen its own stale copy. A CLI older
-// than the current data therefore keeps or starts the version that recorded it. Returns the running version.
+// npx selects the release; the worker inherits the current version's data at startup.
 export async function ensureWorkingProcess(
     stateDirectory: InstallationDirectory,
-    cliVersion: string,
+    _cliVersion: string,
     signal: AbortSignal,
 ): Promise<string> {
-    const current = await readCurrentDataVersion(readStateDirectory(), signal);
-    const version = current !== null && gt(current, cliVersion) ? current : cliVersion;
-    const launch = await prepareDaemonReleaseVersion(version, signal);
+    const launch = await resolveLatestDaemonLaunch(signal);
+    const version = launch.version;
+    const running = await readWorkingProcessVersion(stateDirectory, signal);
+    if (running !== null && running !== version) {
+        await stopManager(stateDirectory, signal);
+    }
     const deadline = AbortSignal.any([signal, AbortSignal.timeout(CONTROL_TIMEOUT_MILLISECONDS)]);
     await ensureManager(stateDirectory, launch, deadline);
     const response = decodeKnownLifecycleResponse(
@@ -96,7 +97,11 @@ async function ensureManager(
     signal: AbortSignal,
 ): Promise<void> {
     let managerStarted = false;
+    let child: ChildProcess | undefined;
     while (!signal.aborted) {
+        if (child !== undefined && (child.exitCode !== null || child.signalCode !== null)) {
+            throw new Error("The daemon exited before becoming ready");
+        }
         try {
             const response = decodeKnownLifecycleResponse(
                 await sendLocalRequest(stateDirectory, "manager", { kind: "status" }, signal),
@@ -113,7 +118,7 @@ async function ensureManager(
                 throw cause;
             }
             if (!managerStarted) {
-                await launchManager(launch);
+                child = await launchManager(launch);
                 managerStarted = true;
             }
             await new Promise<void>((resolve, reject) => {
