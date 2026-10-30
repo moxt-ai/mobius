@@ -1,4 +1,4 @@
-name: Installed CLI compatibility
+name: npx CLI compatibility
 
 on:
   workflow_call:
@@ -29,7 +29,7 @@ jobs:
           retention-days: 7
 
   installed-release:
-    name: Installed CLI (${{ matrix.os }}, Node ${{ matrix.node }})
+    name: npx CLI (${{ matrix.os }}, Node ${{ matrix.node }})
     needs: pack
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
@@ -49,13 +49,13 @@ jobs:
         with:
           name: mobius-cli-release
           path: ${{ runner.temp }}/release
-      - name: Install the exact archive with engine checks
+      - name: Exercise the exact archive through npx
         shell: bash
-        run: npm install --prefix "$RUNNER_TEMP/installed-cli" --engine-strict --ignore-scripts --no-audit --no-fund "$RUNNER_TEMP/release/mobius-cli.tgz"
-      - name: Exercise public APIs and the daemon lifecycle
         env:
-          MOBIUS_INSTALL_DIRECTORY: ${{ runner.temp }}/installed-cli
-        run: node --test packages/cli/tests/release/installed-release.test.mjs
+          MOBIUS_RELEASE_ARCHIVE: ${{ runner.temp }}/release/mobius-cli.tgz
+          npm_config_cache: ${{ runner.temp }}/npx-cache
+          npm_config_engine_strict: 'true'
+        run: npx --yes --prefer-online --package "$MOBIUS_RELEASE_ARCHIVE" -- node --test packages/cli/tests/release/installed-release.test.mjs
 
   unsupported-node:
     name: Unsupported Node diagnostic
@@ -73,10 +73,9 @@ jobs:
         with:
           name: mobius-cli-release
           path: ${{ runner.temp }}/release
-      - name: Reproduce npm's default advisory engine check
-        run: npm install --prefix "$RUNNER_TEMP/installed-cli" --engine-strict=false --ignore-scripts --no-audit --no-fund "$RUNNER_TEMP/release/mobius-cli.tgz"
-      - name: Verify actionable startup rejection
+      - name: Verify actionable startup rejection through npx
         env:
-          MOBIUS_INSTALL_DIRECTORY: ${{ runner.temp }}/installed-cli
+          MOBIUS_RELEASE_ARCHIVE: ${{ runner.temp }}/release/mobius-cli.tgz
           MOBIUS_EXPECT_UNSUPPORTED: 'true'
-        run: node --test packages/cli/tests/release/installed-release.test.mjs
+          npm_config_engine_strict: 'false'
+        run: npx --yes --prefer-online --package "$MOBIUS_RELEASE_ARCHIVE" -- node --test packages/cli/tests/release/installed-release.test.mjs
