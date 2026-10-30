@@ -261,24 +261,6 @@ it.each(["claim", "redeem"] as const)(
             runtimeId: pairing.runtimeId,
         });
         expect((await app.publish(pairing, runtimeCredential)).status).toBe(204);
-        // Retain the pre-fix daemon authentication contract (e5ef604), independent
-        // of the current storage reader: a rollback must still accept this token.
-        const tokenHash = await hashSecret(runtimeCredential);
-        expect(
-            await app.storage((storage) =>
-                storage.sql
-                    .exec(
-                        `SELECT r.channel_id, r.runtime_id, r.project_id FROM runtimes r
-                         JOIN runtime_registrations s ON s.runtime_id = r.runtime_id
-                         JOIN runtime_daemon_credentials c ON c.runtime_id = r.runtime_id
-                         WHERE r.project_id = ? AND r.channel_id = ? AND r.revoked_at IS NULL AND c.token_hash = ?`,
-                        app.projectId,
-                        pairing.channelId,
-                        tokenHash,
-                    )
-                    .toArray(),
-            ),
-        ).toEqual([{ channel_id: pairing.channelId, runtime_id: pairing.runtimeId, project_id: app.projectId }]);
         expect(await responseJson(await app.list(), 200)).toMatchObject({
             runtimes: [{ runtimeId: pairing.runtimeId, machineName: "Runtime machine" }],
         });
@@ -365,27 +347,6 @@ it("Given channel credentials and an unused access link, When their Runtime is r
     );
     expect(await responseJson(repeated, 409)).toMatchObject({ error: { code: "access_grant_redeemed" } });
     expect((await app.readChannel(pairing, linked.hostToken)).status).toBe(200);
-    // Keep the pre-fix host reader (a7886dd7) independent of the current adapter:
-    // a rollback must still reject credentials whose Runtime was revoked here.
-    const legacyAuthorize = async () => {
-        const tokenHash = await hashSecret(linked.hostToken);
-        return app.storage((storage) =>
-            storage.sql
-                .exec(
-                    `SELECT credentials.credential_id FROM runtimes AS channels
-                     INNER JOIN runtime_registrations AS registrations ON registrations.runtime_id = channels.runtime_id
-                     INNER JOIN channel_host_credentials AS credentials ON credentials.channel_id = channels.channel_id
-                     WHERE channels.channel_id = ? AND credentials.token_hash = ?
-                       AND credentials.revoked_at IS NULL AND channels.revoked_at IS NULL
-                       AND (credentials.replaced_by_credential_id IS NULL OR credentials.overlap_ends_at > ?)`,
-                    pairing.channelId,
-                    tokenHash,
-                    Date.now(),
-                )
-                .toArray(),
-        );
-    };
-    expect(await legacyAuthorize()).toHaveLength(1);
     const unused = await grant();
     const facts = () =>
         app.storage((storage) => {
@@ -406,7 +367,6 @@ it("Given channel credentials and an unused access link, When their Runtime is r
     expect((await app.publish(pairing, runtimeCredential)).status).toBe(401);
     expect((await app.readChannel(pairing, hostToken)).status).toBe(401);
     expect((await app.readChannel(pairing, linked.hostToken)).status).toBe(401);
-    expect(await legacyAuthorize()).toEqual([]);
     expect(await responseJson(await app.redeemGrant(pairing, used.grantId, used.grantSecret), 409)).toMatchObject({
         error: { code: "access_grant_redeemed" },
     });

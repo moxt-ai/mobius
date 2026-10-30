@@ -28,8 +28,10 @@ export class RuntimeConnectionStorage {
         );
     };
 
-    readonly read = (): (RuntimeConnectionIdentity & { readonly state: "online" | "offline" }) | null => {
-        const row = this.#database.query(`SELECT runtime_id, connection_epoch, connection_id, state
+    readonly read = ():
+        | (RuntimeConnectionIdentity & { readonly connectedAt: number; readonly state: "online" | "offline" })
+        | null => {
+        const row = this.#database.query(`SELECT runtime_id, connection_epoch, connection_id, state, connected_at
             FROM runtime_connection_state WHERE singleton = 1`)[0];
         if (row === undefined) {
             return null;
@@ -38,17 +40,19 @@ export class RuntimeConnectionStorage {
         const connectionEpoch = row["connection_epoch"];
         const connectionId = row["connection_id"];
         const state = row["state"];
+        const connectedAt = row["connected_at"];
         if (
             typeof runtimeId !== "string" ||
             typeof connectionEpoch !== "number" ||
             !Number.isSafeInteger(connectionEpoch) ||
             connectionEpoch < 1 ||
             typeof connectionId !== "string" ||
-            (state !== "online" && state !== "offline")
+            (state !== "online" && state !== "offline") ||
+            typeof connectedAt !== "number"
         ) {
             throw new DatabaseError("database_unavailable", "The Runtime connection state is invalid");
         }
-        return { runtimeId, connectionEpoch, connectionId, state };
+        return { runtimeId, connectionEpoch, connectionId, connectedAt, state };
     };
 
     readonly connect = (identity: RuntimeConnectionIdentity, now: number): void => {

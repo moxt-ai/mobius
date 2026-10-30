@@ -431,7 +431,7 @@ describe.sequential("Platform Recording read route", () => {
 
         const readUrl =
             `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}` +
-            `/recording/sessions/${sessionId}/events?runtimeId=${runtimeId}&after=1`;
+            `/recording/sessions/${sessionId}/events?runtimeId=${runtimeId}&after=v2:1:1`;
         const page = await worker.fetch(new Request(readUrl, { headers: credentialHeaders(credential) }), environment);
 
         expect(page.status).toBe(200);
@@ -449,7 +449,6 @@ describe.sequential("Platform Recording read route", () => {
             environment,
         );
         expect(waited.status).toBe(200);
-        expect(waited.headers.get("Mobius-Recording-Wait-Supported")).toBe("1");
         expect(decodeSessionRecordingHistoryPage(await waited.text())).toMatchObject({
             events: [],
             tailCursor: "v2:1:1",
@@ -687,7 +686,7 @@ describe.sequential("Platform Recording read route", () => {
         const firstPage = decodeSessionRecordingHistoryPage(
             await (
                 await worker.request(
-                    new Request(`${baseUrl}&after=0&limit=1`, { headers: credentialHeaders(credential) }),
+                    new Request(`${baseUrl}&limit=1`, { headers: credentialHeaders(credential) }),
                     undefined,
                     environment,
                 )

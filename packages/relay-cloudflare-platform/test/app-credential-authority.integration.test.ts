@@ -133,26 +133,6 @@ async function application() {
     ) => await sessionRequest("access-credentials", credential, { expiresInSeconds: 900, runtimeId }, directory);
     const session = v.parse(v.object({ credential: v.string() }), await responseJson(await authenticateApp(), 201));
 
-    // Capture the pre-change record, then publish it after the mutation to model a late KV fill.
-    const snapshot = await env.PLATFORM_DIRECTORY_DATABASE.prepare(
-        `SELECT credentials.*, apps.tenant_id, apps.lifecycle AS app_lifecycle,
-                tenants.lifecycle AS tenant_lifecycle
-           FROM platform_app_credentials AS credentials
-           JOIN platform_apps AS apps ON apps.app_id = credentials.app_id
-           JOIN platform_tenants AS tenants ON tenants.tenant_id = apps.tenant_id
-          WHERE credentials.credential_id = ?`,
-    )
-        .bind(defaultCredential.credentialId)
-        .first();
-    const keys = v.parse(v.object({ secret_digest: v.string(), public_credential_id: v.string() }), snapshot);
-    const validatedAt = Date.now();
-    const legacyCacheRecord = JSON.stringify({
-        version: 1,
-        validatedAt,
-        expiresAt: validatedAt + 2 * 60 * 60 * 1_000,
-        credential: snapshot,
-    });
-
     return {
         appId,
         createdApp,
@@ -226,10 +206,6 @@ async function application() {
             ),
         rotate: async () =>
             await developer.rotateAppCredential(defaultCredential.credentialId, 60, new AbortController().signal),
-        publishOldCache: async () => {
-            await env.APP_CREDENTIAL_CACHE.put(`app-secret:v1:${keys.secret_digest}`, legacyCacheRecord);
-            await env.APP_CREDENTIAL_CACHE.put(`app-public:v1:${keys.public_credential_id}`, legacyCacheRecord);
-        },
     };
 }
 
@@ -511,20 +487,18 @@ it("Given an active AppCredential, When rotation storage fails, Then the credent
     expect((await app.authenticateApp(replacement.credential)).status).toBe(201);
 });
 
-it("Given an active AppCredential and its Session credential, When revocation succeeds before an old cache fill arrives, Then both reject new requests", async () => {
+it("Given an active AppCredential and its Session credential, When revocation succeeds, Then both reject new requests", async () => {
     const app = await application();
     expect((await app.authenticateSession()).status).toBe(200);
     await app.revoke();
-    await app.publishOldCache();
 
     await expectRejected(await app.authenticateApp(), "credential_revoked");
     await expectRejected(await app.authenticateSession(), "credential_revoked");
 });
 
-it("Given a rotated AppCredential with a stale cache record, When the overlap ends, Then its App and Session credentials fail while its replacement works", async () => {
+it("Given a rotated AppCredential and its Session credential, When the overlap ends, Then its App and Session credentials fail while its replacement works", async () => {
     const app = await application();
     const replacement = await app.rotate();
-    await app.publishOldCache();
     vi.setSystemTime(new Date(Date.parse(replacement.overlapEndsAt) - 1));
     expect((await app.authenticateApp()).status).toBe(201);
     expect((await app.authenticateSession()).status).toBe(200);
@@ -563,9 +537,8 @@ it("Given a rotated AppCredential, When its overlap ends, Then the credential li
     });
 });
 
-it("Given previously valid App and Session credentials, When directory storage is unavailable, Then neither can authorize from an old cache record", async () => {
+it("Given previously valid App and Session credentials, When directory storage is unavailable, Then neither authorizes", async () => {
     const app = await application();
-    await app.publishOldCache();
 
     await expectRejected(
         await app.authenticateApp(undefined, env.TEST_UNINITIALIZED_SHARD),

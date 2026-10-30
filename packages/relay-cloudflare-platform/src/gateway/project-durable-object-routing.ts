@@ -20,17 +20,15 @@ function failure(code: string, status: number): Response {
 }
 
 function projectIdFromPath(pathname: string): string | null {
-    for (const prefix of [`${MOBIUS_API_PREFIX}/v1/projects/`, `${MOBIUS_API_PREFIX}/projects/`]) {
-        if (!pathname.startsWith(prefix)) {
-            continue;
-        }
-        try {
-            return decodeURIComponent(pathname.slice(prefix.length).split("/")[0] ?? "");
-        } catch {
-            return "";
-        }
+    const prefix = `${MOBIUS_API_PREFIX}/v1/projects/`;
+    if (!pathname.startsWith(prefix)) {
+        return null;
     }
-    return null;
+    try {
+        return decodeURIComponent(pathname.slice(prefix.length).split("/")[0] ?? "");
+    } catch {
+        return "";
+    }
 }
 
 async function projectIdFromUnscopedRequest(request: Request): Promise<string | null> {
@@ -70,24 +68,6 @@ async function projectIdFromUnscopedRequest(request: Request): Promise<string | 
     return null;
 }
 
-function isRecordingSessionStatusRead(request: Request): boolean {
-    if (request.method !== "GET") {
-        return false;
-    }
-    const url = new URL(request.url);
-    const prefix = `${MOBIUS_API_PREFIX}/v1/projects/`;
-    if (!url.pathname.startsWith(prefix)) {
-        return false;
-    }
-    const parts = url.pathname.slice(prefix.length).split("/");
-    const isSessionPath =
-        (parts.length === 4 || parts.length === 5) && parts[1] === "runtimes" && parts[3] === "sessions";
-    if (!isSessionPath) {
-        return false;
-    }
-    return parts.length === 5 || url.searchParams.getAll("sessionId").length > 0;
-}
-
 export async function routeProjectDurableObject(
     request: Request,
     bindings: ProjectDurableObjectRoutingBindings,
@@ -100,7 +80,7 @@ export async function routeProjectDurableObject(
     if (pathname === `${MOBIUS_API_PREFIX}/dashboard` || pathname.startsWith(`${MOBIUS_API_PREFIX}/dashboard/`)) {
         return null;
     }
-    if (pathname.includes("/recording/sessions") || isRecordingSessionStatusRead(request)) {
+    if (pathname.includes("/recording/sessions")) {
         return null;
     }
     const projectId = projectIdFromPath(pathname) ?? (await projectIdFromUnscopedRequest(request));

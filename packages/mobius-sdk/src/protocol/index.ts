@@ -463,27 +463,22 @@ export { decodeAgentPromptResponse } from "./session/prompt/usage.ts";
 export { lastRecordedLifecycleStatus } from "./session/recording/recorded-lifecycle-status.ts";
 
 export type {
-    SessionRecordingDirectory,
     SessionRecordingDirectoryV2,
     SessionRecordingHistory,
     SessionRecordingHistoryPage,
     SessionRecordingStatus,
-    SessionRecordingSummary,
     SessionRecordingSummaryV2,
     SessionRecordingWireWrite,
     SessionRecordingWrite,
 } from "./session/recording/recording.ts";
 
 export {
-    decodeSessionRecordingDirectory,
     decodeSessionRecordingDirectoryV2,
     decodeSessionRecordingHistory,
     decodeSessionRecordingHistoryPage,
-    decodeSessionRecordingStatus,
     decodeSessionRecordingSummaryV2,
     decodeSessionRecordingWireWrite,
     decodeSessionRecordingWrite,
-    encodeSessionRecordingDirectory,
     encodeSessionRecordingDirectoryV2,
     encodeSessionRecordingHistory,
     encodeSessionRecordingHistoryPage,
