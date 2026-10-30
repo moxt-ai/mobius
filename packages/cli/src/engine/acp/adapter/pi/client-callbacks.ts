@@ -53,12 +53,15 @@ export function piPreviewCallbacks(
     };
 }
 
-/** Adapt Pi's host callback port; no runtime ownership or client lookup. */
+/**
+ * Adapt Pi's host callback port; no runtime ownership or client lookup. `drained` settles once
+ * every received notification has been delivered, and rejects with the first delivery failure.
+ */
 export function piClientCallbacks(
     params: PiCallbackParams,
     externalizer: Pick<AcpContentExternalizer, "update">,
     lifetime: PiCallbackLifetime,
-): PiAcpClient {
+): PiAcpClient & { readonly drained: () => Promise<void> } {
     let message:
         | { readonly kind: "none" }
         | {
@@ -107,6 +110,7 @@ export function piClientCallbacks(
                     await receive({ ...notification, update });
             }
         },
+        drained: () => updates.drained(),
         startUserMessage: () => {
             message = { kind: "none" };
         },

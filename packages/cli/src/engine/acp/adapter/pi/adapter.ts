@@ -213,8 +213,11 @@ export class PiAdapter implements Adapter {
     readonly cancel: Adapter["cancel"] = async (params) => {
         params.signal.throwIfAborted();
         const session = this.#session(params);
-        await session.agent.cancel({ sessionId: session.nativeSessionId });
-        return "retained";
+        const outcome = await session.cancel(params.signal);
+        if (outcome === "closed") {
+            await this.#release(session.nativeSessionId);
+        }
+        return outcome;
     };
 
     readonly releaseSession: Adapter["releaseSession"] = async (params) => {
