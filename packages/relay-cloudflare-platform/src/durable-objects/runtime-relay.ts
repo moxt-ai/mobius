@@ -14,7 +14,11 @@ import {
     RUNTIME_HEARTBEAT_MESSAGE,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { runtimeRequestTarget } from "../gateway/runtime-session-routing.ts";
-import { type ConfiguredPlatformRelayBindings, createPlatformSocketWorker } from "../platform-worker.ts";
+import {
+    type ConfiguredPlatformRelayBindings,
+    createPlatformSocketWorker,
+    type RuntimeExecutionBindings,
+} from "../platform-worker.ts";
 import { createPlatformDurableObjectContext } from "./platform-durable-object-context.ts";
 
 export class RuntimeRelay extends DurableObject<ConfiguredPlatformRelayBindings> {
@@ -50,9 +54,10 @@ export class RuntimeRelay extends DurableObject<ConfiguredPlatformRelayBindings>
     override async fetch(request: Request): Promise<Response> {
         const current = runtimeRequestTarget(request);
         if (current !== null) {
-            const environment = {
+            const environment: RuntimeExecutionBindings & ConfiguredPlatformRelayBindings = {
                 ...this.#environment,
                 MOBIUS_RUNTIME_EXECUTION: {
+                    mode: "execute",
                     projectId: current.projectId,
                     runtimeId: current.runtimeId,
                     operations: createLocalSessionOperations(this.#context, current.projectId, current.runtimeId),
@@ -74,6 +79,32 @@ export class RuntimeRelay extends DurableObject<ConfiguredPlatformRelayBindings>
                     standardWebSocketHost,
                     {
                         uploads: this.#uploads,
+                        authorizeUpload: async (operation) => {
+                            if (
+                                operation.method !== "PUT" ||
+                                !/^\/mobius\/api\/v1\/projects\/[^/]+\/sessions\/[^/]+\/content\/[a-f0-9]{64}$/u.test(
+                                    new URL(operation.url).pathname,
+                                )
+                            ) {
+                                return Response.json(
+                                    {
+                                        error: {
+                                            code: "invalid_target",
+                                            message: "A Session content upload is required",
+                                        },
+                                    },
+                                    { status: 400 },
+                                );
+                            }
+                            const admissionEnvironment: RuntimeExecutionBindings & ConfiguredPlatformRelayBindings = {
+                                ...environment,
+                                MOBIUS_RUNTIME_EXECUTION: {
+                                    ...environment.MOBIUS_RUNTIME_EXECUTION,
+                                    mode: "authorize-upload",
+                                },
+                            };
+                            return await this.#application.fetch(operation, admissionEnvironment);
+                        },
                         validateTarget: (operation) => {
                             const target = runtimeRequestTarget(operation);
                             return (

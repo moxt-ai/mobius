@@ -213,6 +213,7 @@ export function acceptWebSocketHttpTransport(
     host: WebSocketHost,
     options: {
         readonly uploads: WebSocketUploadBudget;
+        readonly authorizeUpload?: DispatchRequest;
         readonly validateTarget: (request: Request) => boolean;
     } = { uploads: new WebSocketUploadBudget(), validateTarget: () => true },
 ): Response {
@@ -236,6 +237,9 @@ export function acceptWebSocketHttpTransport(
         | { readonly kind: "pending"; readonly controller: AbortController }
         | { readonly kind: "open"; readonly socket: WebSocket }
     >();
+    // Buffer in-flight chunks within this connection while admission is authorized.
+    // Only verified uploads may consume the Runtime-wide budget.
+    const connectionUploads = new WebSocketUploadBudget();
     const binaryRequests = new Map<
         string,
         {
@@ -243,6 +247,8 @@ export function acceptWebSocketHttpTransport(
             readonly chunks: Uint8Array[];
             readonly message: Readonly<Record<string, unknown>>;
             readonly timeout: ReturnType<typeof setTimeout>;
+            readonly authorization: Promise<boolean>;
+            admission: { readonly kind: "pending" } | { readonly kind: "authorized" };
             receivedBytes: number;
             sequence: number;
         }
@@ -277,7 +283,10 @@ export function acceptWebSocketHttpTransport(
         }
         binaryRequests.delete(requestId);
         clearTimeout(upload.timeout);
-        options.uploads.release(upload.byteLength);
+        connectionUploads.release(upload.byteLength);
+        if (upload.admission.kind === "authorized") {
+            options.uploads.release(upload.byteLength);
+        }
         return upload;
     };
     const releaseAllBinaryRequests = (): void => {
@@ -335,6 +344,9 @@ export function acceptWebSocketHttpTransport(
                     }
                     upload.chunks.push(chunk.bytes);
                     if (upload.receivedBytes < upload.byteLength) {
+                        return;
+                    }
+                    if (!(await upload.authorization) || binaryRequests.get(chunk.requestId) !== upload) {
                         return;
                     }
                     const completed = releaseBinaryRequest(chunk.requestId);
@@ -533,7 +545,7 @@ export function acceptWebSocketHttpTransport(
                     if (declaration.request.method === "GET") {
                         throw transportError("invalid_message");
                     }
-                    options.uploads.reserve(bodyByteLength);
+                    connectionUploads.reserve(bodyByteLength);
                     const timeout = setTimeout(() => {
                         if (releaseBinaryRequest(requestId) === undefined || server.readyState !== WebSocket.OPEN) {
                             return;
@@ -549,7 +561,53 @@ export function acceptWebSocketHttpTransport(
                             }),
                         );
                     }, BINARY_REQUEST_TIMEOUT_MILLISECONDS);
+                    const authorization = Promise.resolve().then(async () => {
+                        const upload = binaryRequests.get(requestId);
+                        if (upload === undefined || upload.timeout !== timeout) {
+                            return false;
+                        }
+                        try {
+                            const response = await options.authorizeUpload?.(declaration.request);
+                            if (binaryRequests.get(requestId) !== upload) {
+                                return false;
+                            }
+                            if (response !== undefined && !response.ok) {
+                                releaseBinaryRequest(requestId);
+                                server.send(
+                                    JSON.stringify({
+                                        body: await response.text(),
+                                        headers: responseHeaders(response),
+                                        kind: RESPONSE_KIND,
+                                        requestId,
+                                        status: response.status,
+                                    }),
+                                );
+                                return false;
+                            }
+                            options.uploads.reserve(bodyByteLength);
+                            upload.admission = { kind: "authorized" };
+                            return true;
+                        } catch (cause) {
+                            if (binaryRequests.get(requestId) !== upload) {
+                                return false;
+                            }
+                            releaseBinaryRequest(requestId);
+                            const error = toHttpError(cause);
+                            server.send(
+                                JSON.stringify({
+                                    code: error.body.error.code,
+                                    kind: ERROR_KIND,
+                                    message: error.body.error.message,
+                                    requestId,
+                                    status: error.status,
+                                }),
+                            );
+                            return false;
+                        }
+                    });
                     binaryRequests.set(requestId, {
+                        authorization,
+                        admission: { kind: "pending" },
                         byteLength: bodyByteLength,
                         chunks: [],
                         message,

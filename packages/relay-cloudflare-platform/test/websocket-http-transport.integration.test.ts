@@ -1,5 +1,10 @@
 import { SELF } from "cloudflare:test";
-import { acceptWebSocketHttpTransport, SessionRuntimeError, standardWebSocketHost } from "@moxt-ai/mobius-relay-core";
+import {
+    acceptWebSocketHttpTransport,
+    SessionRuntimeError,
+    standardWebSocketHost,
+    WebSocketUploadBudget,
+} from "@moxt-ai/mobius-relay-core";
 import { encodeContentChunkFrame } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, it, vi } from "vitest";
 
@@ -108,9 +113,17 @@ it("Given a Runtime-bound browser, When it addresses another Runtime, Then the r
 });
 
 it("Given two browser connections to one Runtime, When their pending uploads exceed its shared budget, Then the second upload is refused and capacity is released after a failed transfer", async () => {
-    const endpoint = "https://platform.test/mobius/api/v1/projects/upload-project/runtimes/upload-runtime/transport";
-    const first = (await SELF.fetch(endpoint, { headers: { Upgrade: "websocket" } })).webSocket;
-    const second = (await SELF.fetch(endpoint, { headers: { Upgrade: "websocket" } })).webSocket;
+    const uploads = new WebSocketUploadBudget();
+    const daemon = new TextDaemonBoundary("uploaded");
+    const connect = () =>
+        acceptWebSocketHttpTransport(
+            new Request("https://platform.test/mobius/api/v1/transport", { headers: { Upgrade: "websocket" } }),
+            daemon.fetch,
+            standardWebSocketHost,
+            { uploads, validateTarget: () => true },
+        ).webSocket;
+    const first = connect();
+    const second = connect();
     if (first === null || second === null) {
         throw new Error("Expected browser transports");
     }

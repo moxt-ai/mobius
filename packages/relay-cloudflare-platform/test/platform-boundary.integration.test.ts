@@ -2271,6 +2271,21 @@ async function connectRuntimeDaemon(slug: string, options: { readonly anchorCloc
         201,
     );
     return {
+        credential: text(sessionAccess, "credential"),
+        transport: () =>
+            worker.fetch(
+                new Request(
+                    relayOrigin +
+                        MOBIUS_API_PREFIX +
+                        "/v1/projects/" +
+                        projectId +
+                        "/runtimes/" +
+                        runtimeId +
+                        "/transport",
+                    { headers: { Upgrade: "websocket" } },
+                ),
+                environment,
+            ),
         projectId,
         sessionId,
         deleteApp: () =>
@@ -4364,4 +4379,104 @@ it("Given a recovery frame spans 164 Sessions, When Recording has a bounded per-
         },
     );
     expect(recorded).toEqual(events.map((event) => event.eventId));
+});
+
+it("Given an anonymous browser knows a Runtime, When it declares a full-budget upload, Then it is rejected and an authorized browser can still upload", async () => {
+    const runtime = await connectRuntimeDaemon("upload-admission");
+    const anonymous = (await runtime.transport()).webSocket;
+    const browser = (await runtime.transport()).webSocket;
+    if (anonymous === null || browser === null) {
+        throw new Error("Expected browser transports");
+    }
+    const anonymousMessages = new SocketMessages(anonymous);
+    const browserMessages = new SocketMessages(browser);
+    anonymous.accept();
+    browser.accept();
+    const path =
+        MOBIUS_API_PREFIX +
+        "/v1/projects/" +
+        runtime.projectId +
+        "/sessions/" +
+        runtime.sessionId +
+        "/content/" +
+        "a".repeat(64);
+    const declaration = {
+        kind: "http.request",
+        requestId: "unauthorized",
+        method: "PUT",
+        path,
+        body: "",
+        bodyByteLength: 12_582_912,
+        headers: [
+            [
+                "authorization",
+                `Bearer ${runtime.credential.slice(0, -1)}${runtime.credential.endsWith("A") ? "B" : "A"}`,
+            ],
+        ],
+    };
+    try {
+        anonymous.send(JSON.stringify({ ...declaration, headers: [], requestId: "missing-credential" }));
+        expect(JSON.parse(await anonymousMessages.next())).toMatchObject({
+            kind: "http.error",
+            code: "invalid_target",
+            requestId: "missing-credential",
+            status: 400,
+        });
+        anonymous.send(JSON.stringify(declaration));
+        expect(JSON.parse(await anonymousMessages.next())).toMatchObject({
+            kind: "http.response",
+            requestId: "unauthorized",
+            status: 401,
+        });
+        browser.send(
+            JSON.stringify({
+                ...declaration,
+                requestId: "authorized",
+                bodyByteLength: 1,
+                headers: [
+                    ["authorization", `Bearer ${runtime.credential}`],
+                    ["x-mobius-byte-length", "1"],
+                    ["x-mobius-content-kind", "resource"],
+                    ["content-type", "text/plain"],
+                    ["x-mobius-file-name", "test.txt"],
+                ],
+                path: `${path}?uri=file%3A%2F%2F%2Ftmp%2Ftest.txt`,
+            }),
+        );
+        browser.send(encodeContentChunkFrame({ requestId: "authorized", sequence: 0, bytes: new Uint8Array([120]) }));
+        const command = decodeServiceToDaemonMessage(await runtime.daemonMessages.next());
+        expect(command.kind).toBe("content.write");
+        if (command.kind !== "content.write") {
+            throw new Error("Expected authorized upload");
+        }
+        runtime.daemon.send(
+            encodeContentReadyEvent({
+                kind: "content.ready",
+                requestId: command.requestId,
+                sessionId: runtime.sessionId,
+            }),
+        );
+        const frame = await runtime.daemonMessages.nextFrame();
+        const arrayBuffer = typeof frame === "object" && frame !== null ? Reflect.get(frame, "arrayBuffer") : undefined;
+        const binary = typeof arrayBuffer === "function" ? await Reflect.apply(arrayBuffer, frame, []) : frame;
+        expect(decodeContentChunkFrame(binary).bytes).toEqual(new Uint8Array([120]));
+        expect(decodeServiceToDaemonMessage(await runtime.daemonMessages.next())).toMatchObject({
+            kind: "content.commit",
+            requestId: command.requestId,
+        });
+        runtime.daemon.send(
+            encodeContentAvailableEvent({
+                kind: "content.available",
+                requestId: command.requestId,
+                sessionId: runtime.sessionId,
+                contentKey: "a".repeat(64),
+                byteLength: 1,
+            }),
+        );
+        expect(JSON.parse(await browserMessages.next())).toMatchObject({ kind: "http.response", status: 200 });
+    } finally {
+        anonymous.close();
+        browser.close();
+        runtime.daemon.close();
+    }
 });

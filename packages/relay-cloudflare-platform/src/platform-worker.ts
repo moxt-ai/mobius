@@ -97,6 +97,7 @@ export interface ProjectPlatformRelayBindings extends PlatformRelayBindings, Pro
 
 export interface RuntimeExecutionBindings extends PlatformRelayBindings {
     readonly MOBIUS_RUNTIME_EXECUTION: {
+        readonly mode: "execute" | "authorize-upload";
         readonly projectId: string;
         readonly runtimeId: string;
         readonly operations: LocalSessionOperations;
@@ -607,6 +608,12 @@ export function createPlatformApplication(
                 ProjectPermission.SessionWrite,
                 context.req.raw.signal,
             );
+            if (
+                "MOBIUS_RUNTIME_EXECUTION" in context.env &&
+                context.env.MOBIUS_RUNTIME_EXECUTION.mode === "authorize-upload"
+            ) {
+                return new Response(null, { status: 204 });
+            }
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
             const contentKey = v.parse(v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/u)), context.req.param("contentKey"));
             const byteLength = v.parse(
