@@ -120,6 +120,10 @@ test("Given a released manager, When it upgrades its worker, Then the new releas
             await rm(directory, { recursive: true, force: true });
         }
     });
+    // Resolve the released CLI before timing its startup. That old CLI performs
+    // its own private install during start; cold npm downloads must not consume
+    // the startup command's entire deadline before the manager can be launched.
+    await run(oldVersion, ["--help"]);
     await run(oldVersion, ["start"]);
     const control = join(environment.MOBIUS_STATE_DIRECTORY, "installations", "dev.mobius.cli");
     const pointer = JSON.parse(await readFile(join(control, "current.json"), "utf8"));
