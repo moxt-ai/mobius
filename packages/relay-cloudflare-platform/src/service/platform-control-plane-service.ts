@@ -8,11 +8,12 @@ import {
     type ProjectAccessContext,
     type ProjectApplicationResolver,
     ProjectAuthenticationError,
-    type ProjectPermission,
+    ProjectPermission,
+    RecordedProjectPermissions,
     type VerifiedExternalIdentity,
     validateIdentifier,
 } from "@moxt-ai/mobius-relay-core";
-import type { ProjectLocationHint } from "@moxt-ai/mobius-sdk/protocol";
+import { PLATFORM_APP_PROJECT_PERMISSIONS, type ProjectLocationHint } from "@moxt-ai/mobius-sdk/protocol";
 import {
     hasControlCharacters,
     PlatformAppCredentialAccess,
@@ -40,8 +41,9 @@ import type { PlatformControlPlaneStorage } from "../storage/platform-control-pl
 import {
     type AppCredentialAuthenticationService,
     appCredentialActive,
+    credentialPermissions,
 } from "./app-credential-authentication-service.ts";
-import { AppCredentialProjectAccess, credentialPermissions } from "./app-credential-project-access.ts";
+import { AppCredentialProjectAccess } from "./app-credential-project-access.ts";
 import type { OrganizationAdministrators } from "./organization-administrators.ts";
 
 const MAXIMUM_CREDENTIAL_OVERLAP_MILLISECONDS = 60 * 60 * 1_000;
@@ -60,21 +62,9 @@ type ProjectProvisioningActor =
           readonly credentialId: string;
       };
 
-const PLATFORM_SERVER_PROJECT_PERMISSIONS: readonly ProjectPermission[] = Object.freeze([
-    ...decodeProjectPermissions([
-        "artifact:read",
-        "artifact:write",
-        "interaction:respond",
-        "project:event:read",
-        "project:read",
-        "runtime:pair",
-        "runtime:read",
-        "runtime:revoke",
-        "session:delete",
-        "session:read",
-        "session:write",
-    ]),
-]);
+const PLATFORM_SERVER_PROJECT_PERMISSIONS: readonly ProjectPermission[] = Object.freeze(
+    PLATFORM_APP_PROJECT_PERMISSIONS.map(ProjectPermission.named),
+);
 
 class TenantQuotas {
     readonly activeApps: number;
@@ -102,7 +92,7 @@ class CreatedAppCredential {
     readonly credentialId: string;
     readonly digest: string;
     readonly issuedAt: number;
-    readonly permissions: ReadonlySet<ProjectPermission>;
+    readonly permissions: RecordedProjectPermissions;
     readonly publicCredentialId: string;
 
     constructor(
@@ -111,7 +101,7 @@ class CreatedAppCredential {
         credentialId: string,
         publicCredentialId: string,
         digest: string,
-        permissions: ReadonlySet<ProjectPermission>,
+        permissions: RecordedProjectPermissions,
         issuedAt: number,
     ) {
         this.appId = appId;
@@ -119,7 +109,7 @@ class CreatedAppCredential {
         this.credentialId = credentialId;
         this.publicCredentialId = publicCredentialId;
         this.digest = digest;
-        this.permissions = new Set(permissions);
+        this.permissions = permissions;
         this.issuedAt = issuedAt;
     }
 
@@ -128,7 +118,7 @@ class CreatedAppCredential {
         credential: this.credential,
         credentialId: this.credentialId,
         issuedAt: iso(this.issuedAt),
-        permissions: permissionValues(this.permissions),
+        permissions: permissionValues(this.permissions.granted),
         publicCredentialId: this.publicCredentialId,
     });
 
@@ -137,7 +127,8 @@ class CreatedAppCredential {
         appId: this.appId,
         credentialId: this.credentialId,
         issuedAt: this.issuedAt,
-        permissionsJson: JSON.stringify(permissionValues(this.permissions)),
+        // Keeps permissions a newer Worker recorded, so rotating through this Worker does not drop them.
+        permissionsJson: JSON.stringify(this.permissions.names()),
         publicCredentialId: this.publicCredentialId,
         secretDigest: this.digest,
     });
@@ -167,7 +158,7 @@ function permissionValues(permissions: ReadonlySet<ProjectPermission>): readonly
     return Object.freeze([...permissions].map((permission) => permission.value).sort());
 }
 
-function appPermissions(value: unknown): ReadonlySet<ProjectPermission> {
+function appPermissions(value: unknown): RecordedProjectPermissions {
     const decoded = decodeProjectPermissions(value);
     const allowed = new Set(PLATFORM_SERVER_PROJECT_PERMISSIONS);
     for (const permission of decoded) {
@@ -179,7 +170,7 @@ function appPermissions(value: unknown): ReadonlySet<ProjectPermission> {
             );
         }
     }
-    return decoded;
+    return new RecordedProjectPermissions(decoded);
 }
 
 function overlapMilliseconds(overlapSeconds: number): number {
@@ -481,7 +472,11 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         }
         const appId = `app_${createRandomToken(18)}`;
         const normalizedDisplayName = displayName(requestedDisplayName);
-        const created = await this.createCredential(appId, new Set(PLATFORM_SERVER_PROJECT_PERMISSIONS), now);
+        const created = await this.createCredential(
+            appId,
+            new RecordedProjectPermissions(new Set(PLATFORM_SERVER_PROJECT_PERMISSIONS)),
+            now,
+        );
         const appRow: AppRow = {
             app_id: appId,
             created_at: now,
@@ -956,7 +951,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
                 credentialId: row.credential_id,
                 issuedAt: iso(row.issued_at),
                 overlapEndsAt: typeof row.overlap_ends_at === "number" ? iso(row.overlap_ends_at) : "",
-                permissions: permissionValues(credentialPermissions(row.permissions_json)),
+                permissions: permissionValues(credentialPermissions(row).granted),
                 projectIds: await this.#storage.credentialProjectIds(row, signal),
                 publicCredentialId: row.public_credential_id,
                 replacedByCredentialId: row.replaced_by_credential_id ?? "",
@@ -978,7 +973,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         const app = await this.readApp(source.app_id, signal);
         const access = await this.requireTenantDeveloper(identity, app.tenant_id, signal);
         const now = Date.now();
-        const created = await this.createCredential(source.app_id, credentialPermissions(source.permissions_json), now);
+        const created = await this.createCredential(source.app_id, credentialPermissions(source), now);
         const overlapEndsAt = now + overlapMilliseconds(overlapSeconds);
         const rotated = await this.#storage.rotateAppCredential(
             created.storageRecord(source.all_projects === 1),
@@ -1158,7 +1153,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
 
     private readonly createCredential = async (
         appId: string,
-        grantedPermissions: ReadonlySet<ProjectPermission>,
+        grantedPermissions: RecordedProjectPermissions,
         now: number,
     ): Promise<CreatedAppCredential> => {
         const publicCredentialId = createRandomToken(16);

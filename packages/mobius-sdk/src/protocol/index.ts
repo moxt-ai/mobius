@@ -14,6 +14,13 @@ export {
     PROJECT_LOCATION_HINTS,
 } from "./platform/project-location.ts";
 
+export type { ProjectPermissionName } from "./platform/project-permission.ts";
+
+export {
+    PLATFORM_APP_PROJECT_PERMISSIONS,
+    PROJECT_PERMISSION_NAMES,
+} from "./platform/project-permission.ts";
+
 export type {
     RuntimeDiagnosticsRequest,
     RuntimeDiagnosticsResult,

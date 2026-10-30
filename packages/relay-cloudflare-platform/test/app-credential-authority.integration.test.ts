@@ -369,6 +369,39 @@ it("Given a scoped AppCredential whose scope only Project storage holds, When it
     });
 });
 
+it("Given an AppCredential a newer Worker recorded with a permission this Worker does not know, When it is used and rotated, Then its known permissions authorize and the replacement keeps the unknown one", async () => {
+    const app = await application();
+    const issued = await app.issueScopedCredential();
+    const directory = env.PLATFORM_DIRECTORY_DATABASE;
+    const recordedPermissions = async (credentialId: string) =>
+        await directory
+            .prepare("SELECT permissions_json FROM platform_app_credentials WHERE credential_id = ?")
+            .bind(credentialId)
+            .first<string>("permissions_json");
+    // The record a newer Worker writes; this Worker reads it during a gradual deployment or after a rollback.
+    const recorded = JSON.stringify(["future:permission", "session:read", "session:write"]);
+    await directory
+        .prepare("UPDATE platform_app_credentials SET permissions_json = ? WHERE credential_id = ?")
+        .bind(recorded, issued.credentialId)
+        .run();
+
+    expect((await app.authenticateApp(issued.credential)).status).toBe(201);
+    expect(await app.listCredentials()).toMatchObject({
+        credentials: expect.arrayContaining([
+            expect.objectContaining({
+                credentialId: issued.credentialId,
+                permissions: ["session:read", "session:write"],
+            }),
+        ]),
+    });
+    const replacement = v.parse(
+        credentialResource,
+        await responseJson(await app.requestRotation(issued.credentialId), 201),
+    );
+    expect((await app.authenticateApp(replacement.credential)).status).toBe(201);
+    expect(await recordedPermissions(replacement.credentialId)).toBe(recorded);
+});
+
 it("Given a scoped AppCredential whose scope only Project storage holds, When an unrelated Project's storage fails, Then it is still authorized for its own Project", async () => {
     const app = await application();
     const other = await app.createProject("credential-authority-failing-project");
