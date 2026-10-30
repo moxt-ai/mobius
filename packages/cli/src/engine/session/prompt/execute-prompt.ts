@@ -31,7 +31,6 @@ export interface ExecutePromptOptions {
         | { readonly kind: "queue-target-unavailable" }
     >;
     readonly signal: AbortSignal;
-    readonly steerTargetStarted: () => boolean;
     readonly cancellationRequested: () => boolean;
 }
 
@@ -52,7 +51,6 @@ export async function executePrompt({
     epoch,
     waitForSessionAvailability,
     signal,
-    steerTargetStarted,
     cancellationRequested,
 }: ExecutePromptOptions): Promise<void> {
     try {
@@ -78,6 +76,14 @@ export async function executePrompt({
                 {},
                 "prompt_queue_target_unavailable",
             );
+        }
+        // A steering prompt joins an execution the Agent already holds. Check before preparing, so a steer can never
+        // replace or reconfigure the process an admitted prompt is still preparing.
+        if (
+            availability.disposition === SessionPromptDisposition.Steer &&
+            !sessions.acceptsSteering(command.sessionId, command.targetCommandId)
+        ) {
+            throw new AcpExecutionError("The steering target is unavailable", {}, "prompt_queue_target_unavailable");
         }
         const appliedSettings =
             command.sessionConfigurations === undefined
@@ -123,9 +129,6 @@ export async function executePrompt({
             prepared = await sessions.prepareExecutionSession(preparation);
         }
         signal.throwIfAborted();
-        if (availability.disposition === SessionPromptDisposition.Steer && !steerTargetStarted()) {
-            throw new AcpExecutionError("The steering target is unavailable", {}, "prompt_queue_target_unavailable");
-        }
         const lifecycle = eventProjection.lifecycle(
             command.sessionId,
             command.commandId,

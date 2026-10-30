@@ -87,10 +87,6 @@ export class SessionExecutionState {
         return event;
     };
 
-    /** A steering prompt can join only a target whose execution already started. */
-    readonly steerTargetStarted = (command: SessionPromptCommand): boolean =>
-        this.#turnsByCommandId.get(command.targetCommandId)?.hasStarted() ?? false;
-
     readonly turns = (): readonly ActiveRuntimeTurn[] => [...this.#turnsByCommandId.values()];
 
     readonly close = async (): Promise<void> => {
