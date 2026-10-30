@@ -6,7 +6,16 @@ import { validateAgentRuntime } from "../agent-initialization.ts";
 
 export type PiClientRuntime = Pick<AcpAgentDefinition, "command" | "environment" | "runtimeExecutables">;
 
-/** Revalidate the local launch target immediately before constructing the concrete client. */
+export function piRuntime(agent: PiClientRuntime): PiClientRuntime {
+    return { command: agent.command, environment: agent.environment, runtimeExecutables: agent.runtimeExecutables };
+}
+
+/** Constructs a Pi agent for operations that never launch Pi, such as capabilities and session listing. */
+export function createPiCatalogClient(runtime: PiClientRuntime, callbacks: PiAcpClient): PiAcpAgent {
+    return new PiAcpAgent(callbacks, { environment: piEnvironment(runtime) });
+}
+
+/** Revalidate the local launch target immediately before constructing a client that may launch Pi. */
 export async function createPiClient(
     runtime: PiClientRuntime,
     callbacks: PiAcpClient,
@@ -17,7 +26,9 @@ export async function createPiClient(
     if (!runtime.runtimeExecutables.some((identity) => identity.realPath === runtime.command)) {
         throw new AcpExecutionError("The Pi command is not a verified runtime executable", {}, "agent_runtime_changed");
     }
-    return new PiAcpAgent(callbacks, {
-        environment: Object.freeze({ ...process.env, ...runtime.environment, PI_ACP_PI_COMMAND: runtime.command }),
-    });
+    return new PiAcpAgent(callbacks, { environment: piEnvironment(runtime) });
+}
+
+function piEnvironment(runtime: PiClientRuntime): Readonly<NodeJS.ProcessEnv> {
+    return Object.freeze({ ...process.env, ...runtime.environment, PI_ACP_PI_COMMAND: runtime.command });
 }

@@ -12,6 +12,6 @@ export interface PiAcpClient {
         signal: AbortSignal,
     ) => Promise<CreateElicitationResponse>;
     readonly requestPermission: (request: RequestPermissionRequest) => Promise<RequestPermissionResponse>;
-    readonly sessionUpdate: (notification: PiSessionNotification, signal?: AbortSignal) => Promise<void>;
+    readonly sessionUpdate: (notification: PiSessionNotification) => Promise<void>;
     readonly startUserMessage: () => void;
 }

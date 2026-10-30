@@ -106,23 +106,17 @@ export class RetainedAgentProcesses<P, Key extends string = string> {
         void run().then(completion.resolve, completion.reject);
         return completion.promise;
     };
-    readonly borrow = (id: Key): void => {
+    readonly use = async <T>(id: Key, operation: () => Promise<T>): Promise<T> => {
         const entry = this.#entry(id);
         this.#write(id, { ...entry, users: entry.users + 1 });
         this.touch(id);
-    };
-    readonly release = (id: Key): void => {
-        const current = this.#entry(id);
-        this.#write(id, { ...current, users: current.users - 1 });
-        this.touch(id);
-        this.#events.changed();
-    };
-    readonly use = async <T>(id: Key, operation: () => Promise<T>): Promise<T> => {
-        this.borrow(id);
         try {
             return await operation();
         } finally {
-            this.release(id);
+            const current = this.#entry(id);
+            this.#write(id, { ...current, users: current.users - 1 });
+            this.touch(id);
+            this.#events.changed();
         }
     };
 }

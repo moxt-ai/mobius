@@ -69,3 +69,8 @@ export async function raceAgentOperation<T>(
         removeAbortListener();
     }
 }
+
+/** Direct harness calls have no transport termination; only cancellation competes with the result. */
+export async function waitForAgentOperation<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+    return await raceAgentOperation(operation, new Promise<never>(() => undefined), "", signal);
+}

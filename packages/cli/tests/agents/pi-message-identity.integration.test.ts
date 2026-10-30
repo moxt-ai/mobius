@@ -22,6 +22,7 @@ function identityCallbacks(onUpdate: (update: AcpSessionUpdate) => void) {
             interactions: { onPermission: rejectInteraction, onElicitation: rejectInteraction },
         },
         new AcpContentExternalizer(rejectInteraction),
+        { signal: new AbortController().signal, fail: () => undefined },
     );
 }
 
@@ -42,11 +43,8 @@ test("Given real Pi is waiting for model output, When two multi-block steers are
     const client = fixture.createClient(identityCallbacks((update) => updates.push(update)));
     try {
         await client.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} });
-        const { sessionId } = await client.newSession({ cwd, mcpServers: [] }, signal);
-        const pending = client.prompt(
-            { sessionId, prompt: [{ type: "text", text: "Wait for updated instructions" }] },
-            signal,
-        );
+        const { sessionId } = await client.newSession({ cwd, mcpServers: [] });
+        const pending = client.prompt({ sessionId, prompt: [{ type: "text", text: "Wait for updated instructions" }] });
         // Always settle the in-flight prompt, including on assertion failure.
         const finished = pending.then(
             (result) => ({ kind: "completed" as const, result }),
@@ -131,15 +129,14 @@ test("Given real Pi transforms input, When a user submits a prompt, Then raw use
             throw new Error("Unexpected input request");
         },
     });
-    const signal = AbortSignal.timeout(60_000);
     let cancelledSessionId = "";
     try {
         await client.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} });
-        const session = await client.newSession({ cwd, mcpServers: [] }, signal);
-        const response = await client.prompt(
-            { sessionId: session.sessionId, prompt: [{ type: "text", text: "Reply without tools" }, image] },
-            signal,
-        );
+        const session = await client.newSession({ cwd, mcpServers: [] });
+        const response = await client.prompt({
+            sessionId: session.sessionId,
+            prompt: [{ type: "text", text: "Reply without tools" }, image],
+        });
         const chunks = updates.filter(
             (update) => update.sessionUpdate === "user_message_chunk" || update.sessionUpdate === "agent_message_chunk",
         );
@@ -154,22 +151,19 @@ test("Given real Pi transforms input, When a user submits a prompt, Then raw use
         expect(response._meta ?? {}).not.toHaveProperty("messageId");
         cancelledSessionId = session.sessionId;
         expect(
-            await client.prompt(
-                {
-                    sessionId: session.sessionId,
-                    prompt: [
-                        { type: "text", text: "Cancel during echo" },
-                        { type: "text", text: "Do not submit this turn" },
-                    ],
-                },
-                signal,
-            ),
+            await client.prompt({
+                sessionId: session.sessionId,
+                prompt: [
+                    { type: "text", text: "Cancel during echo" },
+                    { type: "text", text: "Do not submit this turn" },
+                ],
+            }),
         ).toMatchObject({ stopReason: "cancelled" });
         expect(
-            await client.prompt(
-                { sessionId: session.sessionId, prompt: [{ type: "text", text: "Continue after cancellation" }] },
-                signal,
-            ),
+            await client.prompt({
+                sessionId: session.sessionId,
+                prompt: [{ type: "text", text: "Continue after cancellation" }],
+            }),
         ).toMatchObject({ stopReason: "end_turn" });
     } finally {
         await client.dispose();
@@ -190,10 +184,9 @@ test("Given real Pi streams multiple messages, When the harness emits chunks, re
             observed.push(update);
         }),
     );
-    const signal = AbortSignal.timeout(60_000);
     try {
         await client.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} });
-        const { sessionId, _meta } = await client.newSession({ cwd, mcpServers: [] }, signal);
+        const { sessionId, _meta } = await client.newSession({ cwd, mcpServers: [] });
         const startupInfo = z.object({ piAcp: z.object({ startupInfo: z.string().nullable() }) }).parse(_meta)
             .piAcp.startupInfo;
         const ids = new Set<string>();
@@ -202,7 +195,7 @@ test("Given real Pi streams multiple messages, When the harness emits chunks, re
             "Stream another short greeting, without tools",
         ]) {
             updates.length = 0;
-            const result = await client.prompt({ sessionId, prompt: [{ type: "text", text: prompt }] }, signal);
+            const result = await client.prompt({ sessionId, prompt: [{ type: "text", text: prompt }] });
             const messages = updates.filter((update) => update.sessionUpdate === "agent_message_chunk");
             const userMessages = updates.filter((update) => update.sessionUpdate === "user_message_chunk");
             expect(userMessages).toHaveLength(1);
@@ -246,12 +239,12 @@ test("Given real Pi streams multiple messages, When the harness emits chunks, re
             expect(Object.hasOwn(update, "nativeMessageId")).toBe(false);
         }
         updates.length = 0;
-        await client.prompt({ sessionId, prompt: [{ type: "text", text: "/export" }] }, signal);
+        await client.prompt({ sessionId, prompt: [{ type: "text", text: "/export" }] });
         const exported = updates.filter((update) => update.sessionUpdate === "agent_message_chunk");
         expect(exported.map((update) => update.content.type)).toEqual(["text", "resource_link"]);
         expect(new Set(exported.map((update) => update.messageId)).size).toBe(1);
         updates.length = 0;
-        await client.loadSession({ sessionId, cwd, mcpServers: [] }, signal);
+        await client.loadSession({ sessionId, cwd, mcpServers: [] });
         const replay = updates.filter(
             (update) =>
                 update.sessionUpdate === "agent_message_chunk" ||

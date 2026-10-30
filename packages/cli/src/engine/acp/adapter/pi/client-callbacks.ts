@@ -2,37 +2,43 @@ import { AcpExecutionError } from "../../acp-error.ts";
 import { AgentUpdateStream } from "../../connection/agent-update-stream.ts";
 import type { AcpContentExternalizer, ExternalizeSessionUpdate } from "../../content/content-externalizer.ts";
 import type { PiAcpClient } from "../../harness/pi/upstream/dist/acp/client.js";
-import type { AdapterSessionCreateParams, NativeSessionQuery } from "../../native-history/preview-contract.ts";
-import { type NativeSessionId, nativeSessionIdSchema } from "../../protocol/native-session.ts";
+import type { NativeSessionQuery } from "../../native-history/preview-contract.ts";
+import { nativeSessionIdSchema } from "../../protocol/native-session.ts";
 import {
     type NativeSessionEvent,
     type NativeSessionInteractions,
+    type NativeSessionSubscriber,
     nativeSessionEvent,
 } from "../native-session-event.ts";
 
-export function piSessionClientParams(params: AdapterSessionCreateParams, externalizer: AcpContentExternalizer) {
+/** The callback side of one Pi client; `fail` makes the owning session unavailable. */
+export interface PiCallbackLifetime {
+    readonly signal: AbortSignal;
+    readonly fail: (cause: unknown) => void;
+}
+
+export interface PiCallbackParams {
+    readonly externalizeUpdate?: ExternalizeSessionUpdate;
+    readonly onSessionEvent: (nativeSessionId: string, event: NativeSessionEvent) => Promise<void>;
+    readonly interactions: Pick<NativeSessionInteractions, "onPermission" | "onElicitation">;
+}
+
+export function piSessionCallbacks(
+    subscriber: NativeSessionSubscriber,
+    externalizeUpdate: ExternalizeSessionUpdate | undefined,
+): PiCallbackParams {
     return {
-        scope: { cwd: params.scope.cwd, additionalDirectories: params.scope.additionalDirectories },
-        signal: params.signal,
-        callbacks: piClientCallbacks(
-            {
-                onSessionEvent: params.onSessionEvent,
-                interactions: params.interactions,
-                ...(params.scope.externalizeUpdate === undefined
-                    ? {}
-                    : { externalizeUpdate: params.scope.externalizeUpdate }),
-            },
-            externalizer,
-        ),
+        onSessionEvent: subscriber.onSessionEvent,
+        interactions: subscriber.interactions,
+        ...(externalizeUpdate === undefined ? {} : { externalizeUpdate }),
     };
 }
 
-export function piQueryClientParams(
+/** Read-only previews replay history and must never prompt the user. */
+export function piPreviewCallbacks(
     query: NativeSessionQuery,
-    externalizer: AcpContentExternalizer,
-    onSessionEvent: (nativeSessionId: NativeSessionId, event: NativeSessionEvent) => Promise<void> = async () =>
-        undefined,
-) {
+    onSessionEvent: (nativeSessionId: string, event: NativeSessionEvent) => Promise<void>,
+): PiCallbackParams {
     const rejectInteraction = async (): Promise<never> => {
         throw new AcpExecutionError(
             "Read-only history previews cannot request user interaction",
@@ -41,29 +47,18 @@ export function piQueryClientParams(
         );
     };
     return {
-        scope: { cwd: query.cwd, additionalDirectories: query.additionalDirectories },
-        signal: query.signal,
-        callbacks: piClientCallbacks(
-            {
-                onSessionEvent,
-                ...(query.externalizeUpdate === undefined ? {} : { externalizeUpdate: query.externalizeUpdate }),
-                interactions: { onPermission: rejectInteraction, onElicitation: rejectInteraction },
-            },
-            externalizer,
-        ),
+        onSessionEvent,
+        interactions: { onPermission: rejectInteraction, onElicitation: rejectInteraction },
+        ...(query.externalizeUpdate === undefined ? {} : { externalizeUpdate: query.externalizeUpdate }),
     };
 }
 
-/** Adapt Pi's existing host callback port; no runtime ownership or client lookup. */
+/** Adapt Pi's host callback port; no runtime ownership or client lookup. */
 export function piClientCallbacks(
-    params: {
-        readonly externalizeUpdate?: ExternalizeSessionUpdate;
-        readonly onSessionEvent: (nativeSessionId: NativeSessionId, event: NativeSessionEvent) => Promise<void>;
-        readonly interactions: Pick<NativeSessionInteractions, "onPermission" | "onElicitation">;
-    },
+    params: PiCallbackParams,
     externalizer: Pick<AcpContentExternalizer, "update">,
+    lifetime: PiCallbackLifetime,
 ): PiAcpClient {
-    let lifetime: AbortSignal = new AbortController().signal;
     let message:
         | { readonly kind: "none" }
         | {
@@ -71,9 +66,9 @@ export function piClientCallbacks(
               readonly messageId: string;
           } = { kind: "none" };
     const updates = new AgentUpdateStream(async (notification) => {
-        lifetime.throwIfAborted();
+        lifetime.signal.throwIfAborted();
         const nativeSessionId = nativeSessionIdSchema.parse(notification.sessionId);
-        const signal = AbortSignal.any([lifetime, AbortSignal.timeout(30_000)]);
+        const signal = AbortSignal.any([lifetime.signal, AbortSignal.timeout(30_000)]);
         const externalized =
             params.externalizeUpdate === undefined
                 ? await externalizer.update(nativeSessionId, notification.update, signal)
@@ -83,14 +78,18 @@ export function piClientCallbacks(
             await params.onSessionEvent(nativeSessionId, nativeSessionEvent(externalized.agent, event));
         }
     }, "identified");
+    const receive = async (notification: Parameters<AgentUpdateStream["receive"]>[0]): Promise<void> => {
+        try {
+            await updates.receive(notification);
+        } catch (cause) {
+            lifetime.fail(cause);
+            throw cause;
+        }
+    };
 
     return {
-        sessionUpdate: async (notification, signal) => {
-            if (signal === undefined) {
-                throw new AcpExecutionError("Pi did not supply its callback lifetime", {}, "invalid_agent_session");
-            }
-            lifetime = signal;
-            if (lifetime.aborted) {
+        sessionUpdate: async (notification) => {
+            if (lifetime.signal.aborted) {
                 return;
             }
             const update = notification.update;
@@ -101,11 +100,11 @@ export function piClientCallbacks(
                     if (message.kind !== update.sessionUpdate) {
                         message = { kind: update.sessionUpdate, messageId: crypto.randomUUID() };
                     }
-                    await updates.receive({ ...notification, update: { ...update, messageId: message.messageId } });
+                    await receive({ ...notification, update: { ...update, messageId: message.messageId } });
                     return;
                 default:
                     message = { kind: "none" };
-                    await updates.receive({ ...notification, update });
+                    await receive({ ...notification, update });
             }
         },
         startUserMessage: () => {
@@ -113,11 +112,11 @@ export function piClientCallbacks(
         },
         requestPermission: async (request) => {
             await updates.drained();
-            return await params.interactions.onPermission(request, lifetime);
+            return await params.interactions.onPermission(request, lifetime.signal);
         },
         requestElicitation: async (request, signal) => {
             await updates.drained();
-            return await params.interactions.onElicitation(request, AbortSignal.any([signal, lifetime]));
+            return await params.interactions.onElicitation(request, AbortSignal.any([signal, lifetime.signal]));
         },
     };
 }

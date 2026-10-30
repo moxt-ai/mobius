@@ -2,9 +2,8 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import { AcpExecutionError } from "../../../acp/acp-error.ts";
-import { clientScope } from "../../../acp/adapter/client-params.ts";
 import { createPiClient } from "../../../acp/adapter/pi/create-client.ts";
-import { agentOperationError } from "../../../acp/connection/agent-operation.ts";
+import { agentOperationError, waitForAgentOperation } from "../../../acp/connection/agent-operation.ts";
 import { normalizeAcpCapabilities } from "../../../acp/protocol/session-capabilities.ts";
 import type { ResolvedExecutable } from "../../../util/process/executable.ts";
 import {
@@ -37,7 +36,6 @@ export class PiAgentSpecification extends InProcessAcpAgentSpecification {
             throw new AgentProbeError("acp_incompatible", "The Pi readiness probe does not accept interactions");
         };
         try {
-            clientScope({ cwd: params.defaultWorkspace, additionalDirectories: [] });
             const client = await createPiClient(
                 runtime,
                 {
@@ -62,12 +60,15 @@ export class PiAgentSpecification extends InProcessAcpAgentSpecification {
                         "Pi does not support the required native session contract",
                     );
                 }
-                const session = await client.newSession({ cwd: params.defaultWorkspace, mcpServers: [] }, signal);
+                const session = await waitForAgentOperation(
+                    client.newSession({ cwd: params.defaultWorkspace, mcpServers: [] }),
+                    signal,
+                );
                 if (session.sessionId.length === 0) {
                     throw new AgentProbeError("acp_incompatible", "Pi returned an invalid native session");
                 }
-                const result = await client.prompt(
-                    { sessionId: session.sessionId, prompt: [{ type: "text", text: "/session" }] },
+                const result = await waitForAgentOperation(
+                    client.prompt({ sessionId: session.sessionId, prompt: [{ type: "text", text: "/session" }] }),
                     signal,
                 );
                 if (result.stopReason !== "end_turn") {

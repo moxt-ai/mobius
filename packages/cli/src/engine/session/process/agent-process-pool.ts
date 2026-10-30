@@ -4,8 +4,9 @@ import { AcpProcessCapacityLock, waitForAcpProcessCapacity } from "./process-cap
 const DEFAULT_MAX_ACP_PROCESSES = 1000;
 const MAX_CONCURRENT_STARTS = 8;
 const ACP_PROCESS_IDLE_TIMEOUT_MILLISECONDS = 2 * 60 * 60 * 1_000;
-/** Identity of a reserved runtime; its owner supplies the actual teardown operation. */
-export type AgentProcess = object;
+export interface AgentProcess {
+    readonly closeProcess: () => Promise<void>;
+}
 
 export interface AgentProcessRetention<P extends AgentProcess> {
     readonly isBusy: () => boolean;

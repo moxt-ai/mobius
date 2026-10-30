@@ -64,27 +64,20 @@ for (const operation of ["prompt", "compact"] as const) {
                     updates.push(update);
                 },
             });
-            const signal = AbortSignal.timeout(30_000);
             try {
                 await client.initialize({
                     clientCapabilities: { elicitation: { form: {} } },
                     protocolVersion: PROTOCOL_VERSION,
                 });
-                const session = await client.newSession(
-                    {
-                        cwd: workspace,
-                        mcpServers: [],
-                    },
-                    signal,
-                );
+                const session = await client.newSession({
+                    cwd: workspace,
+                    mcpServers: [],
+                });
                 const send = (text: string) =>
-                    client.prompt(
-                        {
-                            sessionId: session.sessionId,
-                            prompt: [{ type: "text", text }],
-                        },
-                        signal,
-                    );
+                    client.prompt({
+                        sessionId: session.sessionId,
+                        prompt: [{ type: "text", text }],
+                    });
                 if (operation === "compact") {
                     for (const topic of ["archaeology", "bicycles", "coffee"]) {
                         await send(`Talk about ${topic}`);

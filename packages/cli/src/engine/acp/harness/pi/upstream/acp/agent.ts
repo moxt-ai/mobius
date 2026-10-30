@@ -174,54 +174,15 @@ export class PiAcpAgent {
         return this.closing;
     }
 
-    private async runOperation<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
-        signal.throwIfAborted();
-        this.signal.throwIfAborted();
-        const cancelled = Promise.withResolvers<never>();
-        const abort = (): void => {
-            void this.dispose().then(
-                () => cancelled.reject(signal.reason),
-                (cause: unknown) => cancelled.reject(cause),
-            );
-        };
-        signal.addEventListener("abort", abort, { once: true });
-        try {
-            const result = await Promise.race([operation(), cancelled.promise]);
-            signal.throwIfAborted();
-            return result;
-        } catch (cause) {
-            if (signal.aborted) {
-                await this.dispose();
-                signal.throwIfAborted();
-            }
-            throw cause;
-        } finally {
-            signal.removeEventListener("abort", abort);
-        }
-    }
-
-    async sessionConfiguration(nativeSessionId: string, signal: AbortSignal) {
-        return await this.runOperation(
-            signal,
-            async () => await getSessionConfiguration(this.sessions.get(nativeSessionId).proc),
-        );
+    async sessionConfiguration(nativeSessionId: string) {
+        return await getSessionConfiguration(this.sessions.get(nativeSessionId).proc);
     }
 
     // Remember recent session cwd and use it as the default filter.
     private lastSessionCwd: string | null = null;
 
     constructor(conn: PiAcpClient, config: { readonly environment: Readonly<NodeJS.ProcessEnv> }) {
-        this.conn = {
-            ...conn,
-            sessionUpdate: async (notification) => {
-                try {
-                    await conn.sessionUpdate(notification, this.signal);
-                } catch (cause) {
-                    this.lifetime.abort(cause);
-                    throw cause;
-                }
-            },
-        };
+        this.conn = conn;
         this.environment = config.environment;
         this.store = new SessionStore(getPiAcpSessionMapPath(this.environment));
     }
@@ -374,11 +335,7 @@ export class PiAcpAgent {
         };
     }
 
-    async newSession(params: NewSessionRequest, signal: AbortSignal = this.signal) {
-        return await this.runOperation(signal, () => this.createNativeSession(params));
-    }
-
-    private async createNativeSession(params: NewSessionRequest) {
+    async newSession(params: NewSessionRequest) {
         if (!isAbsolute(params.cwd)) {
             throw RequestError.invalidParams(`cwd must be an absolute path: ${params.cwd}`);
         }
@@ -563,25 +520,7 @@ export class PiAcpAgent {
         return;
     }
 
-    async prompt(params: PromptRequest, signal: AbortSignal = this.signal): Promise<PromptResponse> {
-        signal.throwIfAborted();
-        let cancellation: Promise<void> = Promise.resolve();
-        const abort = (): void => {
-            cancellation = this.cancel({ sessionId: params.sessionId });
-            void cancellation.catch(() => undefined);
-        };
-        signal.addEventListener("abort", abort, { once: true });
-        try {
-            const result = await this.promptNative(params);
-            signal.throwIfAborted();
-            return result;
-        } finally {
-            signal.removeEventListener("abort", abort);
-            await cancellation;
-        }
-    }
-
-    private async promptNative(params: PromptRequest): Promise<PromptResponse> {
+    async prompt(params: PromptRequest): Promise<PromptResponse> {
         const controller = new AbortController();
         const pending = this.pendingSubmissions.get(params.sessionId) ?? new Set<AbortController>();
         pending.add(controller);
@@ -1190,11 +1129,7 @@ export class PiAcpAgent {
         return { sessions, nextCursor, _meta: {} };
     }
 
-    async forkSession(params: ForkSessionRequest, signal: AbortSignal = this.signal): Promise<ForkSessionResponse> {
-        return await this.runOperation(signal, () => this.forkNativeSession(params));
-    }
-
-    private async forkNativeSession(params: ForkSessionRequest): Promise<ForkSessionResponse> {
+    async forkSession(params: ForkSessionRequest): Promise<ForkSessionResponse> {
         if (!isAbsolute(params.cwd)) {
             throw RequestError.invalidParams(`cwd must be an absolute path: ${params.cwd}`);
         }
@@ -1268,14 +1203,7 @@ export class PiAcpAgent {
         return { sessionId: session.sessionId, configOptions, modes };
     }
 
-    async resumeSession(
-        params: ResumeSessionRequest,
-        signal: AbortSignal = this.signal,
-    ): Promise<ResumeSessionResponse> {
-        return await this.runOperation(signal, () => this.resumeNativeSession(params));
-    }
-
-    private async resumeNativeSession(params: ResumeSessionRequest): Promise<ResumeSessionResponse> {
+    async resumeSession(params: ResumeSessionRequest): Promise<ResumeSessionResponse> {
         if (!isAbsolute(params.cwd)) {
             throw RequestError.invalidParams(`cwd must be an absolute path: ${params.cwd}`);
         }
@@ -1354,11 +1282,7 @@ export class PiAcpAgent {
         return response;
     }
 
-    async loadSession(params: LoadSessionRequest, signal: AbortSignal = this.signal): Promise<LoadSessionResponse> {
-        return await this.runOperation(signal, () => this.loadNativeSession(params));
-    }
-
-    private async loadNativeSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
+    async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
         if (!isAbsolute(params.cwd)) {
             throw RequestError.invalidParams(`cwd must be an absolute path: ${params.cwd}`);
         }
@@ -1605,14 +1529,7 @@ export class PiAcpAgent {
         await session.publishContextUsage();
     }
 
-    async setSessionMode(
-        params: SetSessionModeRequest,
-        signal: AbortSignal = this.signal,
-    ): Promise<SetSessionModeResponse> {
-        return await this.runOperation(signal, () => this.setNativeSessionMode(params));
-    }
-
-    private async setNativeSessionMode(params: SetSessionModeRequest): Promise<SetSessionModeResponse> {
+    async setSessionMode(params: SetSessionModeRequest): Promise<SetSessionModeResponse> {
         const session = await this.restoreSession(params.sessionId);
 
         const mode = params.modeId;
@@ -1627,16 +1544,7 @@ export class PiAcpAgent {
         return {};
     }
 
-    async setSessionConfigOption(
-        params: SetSessionConfigOptionRequest,
-        signal: AbortSignal = this.signal,
-    ): Promise<SetSessionConfigOptionResponse> {
-        return await this.runOperation(signal, () => this.setNativeSessionConfigOption(params));
-    }
-
-    private async setNativeSessionConfigOption(
-        params: SetSessionConfigOptionRequest,
-    ): Promise<SetSessionConfigOptionResponse> {
+    async setSessionConfigOption(params: SetSessionConfigOptionRequest): Promise<SetSessionConfigOptionResponse> {
         const session = await this.restoreSession(params.sessionId);
         const configId = String(params.configId);
         let modelChanged = false;
