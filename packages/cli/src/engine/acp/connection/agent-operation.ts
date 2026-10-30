@@ -6,6 +6,19 @@ import { type AcpEndpointTermination, acpEndpointTerminationError } from "../age
 
 const promptFailureIdentitySchema = z.object({ messageId: z.string().min(1).max(2_048) });
 
+/** Preserve the public error contract for both direct calls and ACP transport. */
+export function agentOperationError(error: unknown): unknown {
+    if (!(error instanceof RequestError)) {
+        return error;
+    }
+    const code = error.code === -32_000 ? "authentication_required" : "acp_agent_error";
+    const message = error.code === -32_000 ? "Agent authentication is required" : requestErrorMessage(error);
+    const identity = promptFailureIdentitySchema.safeParse(error.data);
+    return identity.success
+        ? new AcpPromptExecutionError(identity.data.messageId, message, { cause: error }, code)
+        : new AcpExecutionError(message, { cause: error }, code);
+}
+
 function requestErrorMessage(error: RequestError): string {
     const fallback = truncate(error.message, 500);
     if (error.message !== "Internal error" || !isRecord(error.data)) {
@@ -51,17 +64,13 @@ export async function raceAgentOperation<T>(
         ]);
     } catch (error) {
         signal.throwIfAborted();
-        if (error instanceof RequestError) {
-            const code = error.code === -32_000 ? "authentication_required" : "acp_agent_error";
-            const message = error.code === -32_000 ? "Agent authentication is required" : requestErrorMessage(error);
-            const identity = promptFailureIdentitySchema.safeParse(error.data);
-            if (identity.success) {
-                throw new AcpPromptExecutionError(identity.data.messageId, message, { cause: error }, code);
-            }
-            throw new AcpExecutionError(message, { cause: error }, code);
-        }
-        throw error;
+        throw agentOperationError(error);
     } finally {
         removeAbortListener();
     }
+}
+
+/** Direct harness calls have no transport termination; only cancellation competes with the result. */
+export async function waitForAgentOperation<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+    return await raceAgentOperation(operation, new Promise<never>(() => undefined), "", signal);
 }

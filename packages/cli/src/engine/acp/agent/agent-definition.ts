@@ -1,6 +1,7 @@
 import type { SessionCapabilities } from "@moxt-ai/mobius-sdk/protocol";
 import type { ExecutableIdentity } from "../../util/process/executable.ts";
 import { readExecutableIdentity } from "../../util/process/local-executable.ts";
+import { AcpExecutionError } from "../acp-error.ts";
 import type {
     AgentConnection,
     AgentConnectionFactory,
@@ -19,13 +20,13 @@ export class AcpAgentDefinition {
     readonly id: string;
     readonly label: string;
     readonly runtimeExecutables: readonly ExecutableIdentity[];
-    readonly #connectionFactory: AgentConnectionFactory;
+    readonly #connectionFactory: AgentConnectionFactory | null;
 
     constructor(
         id: string,
         label: string,
         command: string,
-        createConnection: AgentConnectionFactory,
+        createConnection: AgentConnectionFactory | null,
         environment: Readonly<Record<string, string>> = {},
         agentVersion = "",
         agentIdentity: ExecutableIdentity = readExecutableIdentity(command),
@@ -45,8 +46,12 @@ export class AcpAgentDefinition {
         this.#connectionFactory = createConnection;
     }
 
-    readonly createConnection = (options: AgentConnectionOptions): AgentConnection =>
-        this.#connectionFactory({ ...options, command: this.command, environment: this.environment });
+    readonly createConnection = (options: AgentConnectionOptions): AgentConnection => {
+        if (this.#connectionFactory === null) {
+            throw new AcpExecutionError("This Agent uses its native harness", {}, "acp_connection_unsupported");
+        }
+        return this.#connectionFactory({ ...options, command: this.command, environment: this.environment });
+    };
 
     readonly withEnvironment = (environment: Readonly<Record<string, string>>): AcpAgentDefinition =>
         new AcpAgentDefinition(

@@ -2,6 +2,7 @@ import type { ClientConnection, InitializeResponse } from "@agentclientprotocol/
 
 import type { AgentConnectionFactory } from "../../acp/connection/agent-connection.ts";
 import type { ResolvedExecutable } from "../../util/process/executable.ts";
+import { type AgentReadinessProbeParams, probeAcpReadiness } from "../discovery/acp-readiness-probe.ts";
 import type { LocalAgentDiscoveryContext } from "../discovery/agent-discovery-context.ts";
 import { normalizeVersionOutput } from "../discovery/version-output.ts";
 
@@ -14,7 +15,9 @@ const VERSION_PROBE_TIMEOUT_MILLISECONDS = 30_000;
 const ACP_PROBE_TIMEOUT_MILLISECONDS = 60_000;
 
 export abstract class LocalAgentSpecification {
-    abstract readonly createConnection: AgentConnectionFactory;
+    readonly probeReadiness = (params: AgentReadinessProbeParams) =>
+        probeAcpReadiness(this, params.agent, params.environment, params.defaultWorkspace, params.signal);
+    abstract readonly createConnection: AgentConnectionFactory | null;
     abstract readonly adapterOverrideVariable: string;
     abstract readonly adapterVersion: string;
     abstract readonly agentExecutable: string;
@@ -57,9 +60,8 @@ export abstract class LocalAgentSpecification {
  * executable is both the Agent and the thing Mobius spawns, so it shares the Agent's override
  * variable.
  *
- * `createConnection` is the whole vendor contract. Discovery, the readiness probe, and the session
- * manager use it without naming an Agent, so adding an in-process Agent stays a registration rather
- * than an edit to generic code.
+ * The ACP factory remains available for protocol compatibility. Native integrations can override
+ * readiness with direct harness operations, independently of their session adapter implementation.
  */
 export abstract class InProcessAcpAgentSpecification extends LocalAgentSpecification {
     readonly launchArguments: readonly string[] = Object.freeze([]);

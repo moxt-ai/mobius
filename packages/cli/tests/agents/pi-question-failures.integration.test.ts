@@ -1,16 +1,14 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { methods, PROTOCOL_VERSION, RequestError, type SessionNotification } from "@agentclientprotocol/sdk";
+import { PROTOCOL_VERSION, RequestError, type SessionNotification } from "@agentclientprotocol/sdk";
 import { expect, test } from "vitest";
-import { createAcpClient } from "../../src/engine/acp/connection/create-client.ts";
-import { PiAcpEndpoint } from "../../src/engine/acp/harness/pi/endpoint.ts";
 import { PiFixture } from "../support/agents/pi.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 
 for (const operation of ["prompt", "compact"] as const) {
     for (const failure of operation === "prompt" ? ["request", "response", "cancel"] : ["request", "response"]) {
-        test(`Given real Pi asks during ${operation}, When its ACP client returns ${failure}, Then the operation distinguishes cancellation from failure without leaking client details and a follow-up succeeds`, async () => {
+        test(`Given real Pi asks during ${operation}, When its host callback returns ${failure}, Then the operation distinguishes cancellation from failure without leaking client details and a follow-up succeeds`, async () => {
             const prompt = "Ask a native question";
             await using provider = await FakeOpenAiProvider.start("gpt-4.1", "PI_AFTER_FAILURE", {
                 toolPrompt: prompt,
@@ -40,18 +38,9 @@ for (const operation of ["prompt", "compact"] as const) {
             );
             const workspace = await mkdtemp(join(tmpdir(), "mobius-pi-question-failure-"));
             const updates: SessionNotification[] = [];
-            const endpoint = new PiAcpEndpoint({
-                command: agent.executable,
-                cwd: workspace,
-                environment: agent.environment,
-                onSessionUpdate: async (update) => {
-                    updates.push(update);
-                },
-            });
             let requests = 0;
-            // This ACP client is the protocol peer: its first form fails, later forms can be answered.
-            const connection = createAcpClient({
-                onElicitation: async () => {
+            const client = agent.createClient({
+                requestElicitation: async () => {
                     requests += 1;
                     if (requests > 1) {
                         return { action: "accept", content: { value: "One" } };
@@ -67,41 +56,28 @@ for (const operation of ["prompt", "compact"] as const) {
                     }
                     return { action: "accept", content: { value: "NOT_AN_OPTION" } };
                 },
-                onElicitationComplete: async () => {},
-                onPermission: async () => {
+                startUserMessage: () => undefined,
+                requestPermission: async () => {
                     throw new Error("A Pi question is not a permission request");
                 },
-                onUpdate: async (update) => {
+                sessionUpdate: async (update) => {
                     updates.push(update);
                 },
-            }).connect(endpoint.app());
-            const signal = AbortSignal.timeout(30_000);
+            });
             try {
-                await connection.agent.request(
-                    methods.agent.initialize,
-                    {
-                        clientCapabilities: { elicitation: { form: {} } },
-                        protocolVersion: PROTOCOL_VERSION,
-                    },
-                    { cancellationSignal: signal },
-                );
-                const session = await connection.agent.request(
-                    methods.agent.session.new,
-                    {
-                        cwd: workspace,
-                        mcpServers: [],
-                    },
-                    { cancellationSignal: signal },
-                );
+                await client.initialize({
+                    clientCapabilities: { elicitation: { form: {} } },
+                    protocolVersion: PROTOCOL_VERSION,
+                });
+                const session = await client.newSession({
+                    cwd: workspace,
+                    mcpServers: [],
+                });
                 const send = (text: string) =>
-                    connection.agent.request(
-                        methods.agent.session.prompt,
-                        {
-                            sessionId: session.sessionId,
-                            prompt: [{ type: "text", text }],
-                        },
-                        { cancellationSignal: signal },
-                    );
+                    client.prompt({
+                        sessionId: session.sessionId,
+                        prompt: [{ type: "text", text }],
+                    });
                 if (operation === "compact") {
                     for (const topic of ["archaeology", "bicycles", "coffee"]) {
                         await send(`Talk about ${topic}`);
@@ -136,8 +112,7 @@ for (const operation of ["prompt", "compact"] as const) {
                 expect(await send("Continue after the failed question")).toEqual({ stopReason: "end_turn" });
                 expect(requests).toBe(1);
             } finally {
-                await endpoint.close();
-                connection.close();
+                await client.dispose();
                 await rm(workspace, { recursive: true, force: true });
             }
         });

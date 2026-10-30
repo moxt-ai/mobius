@@ -1,24 +1,103 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import {
-    type AgentCapabilities,
-    type ClientConnection,
-    type InitializeResponse,
-    methods,
-} from "@agentclientprotocol/sdk";
-import { PiAgentConnection } from "../../../acp/adapter/pi/agent-connection.ts";
-import type { AgentConnectionFactory } from "../../../acp/connection/agent-connection.ts";
+import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
+import { AcpExecutionError } from "../../../acp/acp-error.ts";
+import { createPiClient } from "../../../acp/adapter/pi/create-client.ts";
+import { agentOperationError, waitForAgentOperation } from "../../../acp/connection/agent-operation.ts";
+import { normalizeAcpCapabilities } from "../../../acp/protocol/session-capabilities.ts";
 import type { ResolvedExecutable } from "../../../util/process/executable.ts";
+import {
+    type AgentReadinessProbeParams,
+    filterEnvironment,
+    VerifiedAcpReadiness,
+} from "../../discovery/acp-readiness-probe.ts";
 import type { LocalAgentDiscoveryContext } from "../../discovery/agent-discovery-context.ts";
 import { AgentProbeError } from "../../discovery/agent-probe-error.ts";
+import { normalizeVersionOutput } from "../../discovery/version-output.ts";
 import { InProcessAcpAgentSpecification } from "../agent-specification.ts";
 
 const ACP_PROBE_TIMEOUT_MILLISECONDS = 30_000;
 
 export class PiAgentSpecification extends InProcessAcpAgentSpecification {
+    readonly createConnection = null;
     override readonly acpProbeTimeoutMilliseconds = ACP_PROBE_TIMEOUT_MILLISECONDS;
     readonly agentExecutable = "pi";
-    readonly createConnection: AgentConnectionFactory = (options) => new PiAgentConnection(options);
+
+    /** Discovery exercises the same concrete Pi client as live operations, without local ACP dispatch. */
+    override readonly probeReadiness = async (params: AgentReadinessProbeParams): Promise<VerifiedAcpReadiness> => {
+        const timeout = AbortSignal.timeout(this.acpProbeTimeoutMilliseconds);
+        const signal = AbortSignal.any([params.signal, timeout]);
+        const runtime = {
+            command: params.agent.command,
+            environment: Object.freeze({ ...filterEnvironment(params.environment), ...params.agent.environment }),
+            runtimeExecutables: params.agent.runtimeExecutables,
+        };
+        const rejectInteraction = async (): Promise<never> => {
+            throw new AgentProbeError("acp_incompatible", "The Pi readiness probe does not accept interactions");
+        };
+        try {
+            const client = await createPiClient(
+                runtime,
+                {
+                    sessionUpdate: async () => undefined,
+                    startUserMessage: () => undefined,
+                    requestPermission: rejectInteraction,
+                    requestElicitation: rejectInteraction,
+                },
+                signal,
+            );
+            try {
+                const initialized = await client.initialize({
+                    protocolVersion: PROTOCOL_VERSION,
+                    clientCapabilities: {},
+                });
+                if (
+                    initialized.protocolVersion !== PROTOCOL_VERSION ||
+                    initialized.agentCapabilities?.loadSession !== true
+                ) {
+                    throw new AgentProbeError(
+                        "acp_incompatible",
+                        "Pi does not support the required native session contract",
+                    );
+                }
+                const session = await waitForAgentOperation(
+                    client.newSession({ cwd: params.defaultWorkspace, mcpServers: [] }),
+                    signal,
+                );
+                if (session.sessionId.length === 0) {
+                    throw new AgentProbeError("acp_incompatible", "Pi returned an invalid native session");
+                }
+                const result = await waitForAgentOperation(
+                    client.prompt({ sessionId: session.sessionId, prompt: [{ type: "text", text: "/session" }] }),
+                    signal,
+                );
+                if (result.stopReason !== "end_turn") {
+                    throw new AgentProbeError("acp_incompatible", "Pi did not complete its readiness turn");
+                }
+                return new VerifiedAcpReadiness(
+                    normalizeVersionOutput(initialized.agentInfo?.version ?? ""),
+                    normalizeAcpCapabilities(initialized),
+                );
+            } finally {
+                await client.dispose();
+            }
+        } catch (cause) {
+            params.signal.throwIfAborted();
+            if (timeout.aborted) {
+                throw new AgentProbeError("adapter_probe_timeout", "Pi readiness probe timed out", { cause });
+            }
+            const failure = agentOperationError(cause);
+            if (failure instanceof AgentProbeError) {
+                throw failure;
+            }
+            if (failure instanceof AcpExecutionError && failure.code === "authentication_required") {
+                throw new AgentProbeError("authentication_required", "Agent authentication is required", {
+                    cause: failure,
+                });
+            }
+            throw new AgentProbeError("acp_incompatible", "Pi initialization failed", { cause: failure });
+        }
+    };
     // The Pi ACP fork inlines embedded prompt resources into the turn message, so Mobius
     // keeps the adapter's opt-in capability flag enabled for every launch it owns.
     override readonly createLaunchEnvironment = async (
@@ -43,39 +122,4 @@ export class PiAgentSpecification extends InProcessAcpAgentSpecification {
     constructor() {
         super("MOBIUS_PI_PATH");
     }
-
-    override readonly verifyAcp = async (
-        connection: ClientConnection,
-        initialized: InitializeResponse,
-        defaultWorkspace: string,
-        signal: AbortSignal,
-    ): Promise<void> => {
-        const capabilities: AgentCapabilities = initialized.agentCapabilities ?? {};
-        if (capabilities.loadSession !== true) {
-            throw new AgentProbeError("acp_incompatible", "Pi ACP adapter does not support session recovery");
-        }
-        const session = await connection.agent.request(
-            methods.agent.session.new,
-            {
-                additionalDirectories: [],
-                cwd: defaultWorkspace,
-                mcpServers: [],
-            },
-            { cancellationSignal: signal },
-        );
-        if (session.sessionId.length === 0) {
-            throw new AgentProbeError("acp_incompatible", "Pi ACP adapter returned an invalid session");
-        }
-        const prompt = await connection.agent.request(
-            methods.agent.session.prompt,
-            {
-                prompt: [{ text: "/session", type: "text" }],
-                sessionId: session.sessionId,
-            },
-            { cancellationSignal: signal },
-        );
-        if (prompt.stopReason !== "end_turn") {
-            throw new AgentProbeError("acp_incompatible", "Pi ACP adapter did not complete its conformance prompt");
-        }
-    };
 }

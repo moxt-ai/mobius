@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
@@ -123,6 +124,131 @@ test("Given a real pi native Session, When the active prompt is cancelled with a
         });
     } finally {
         release.resolve();
+    }
+});
+
+/** Native Pi processes owned by the embedded runtime in this test process. */
+function piChildProcesses(): readonly number[] {
+    return execFileSync("ps", ["-eo", "pid=,ppid=,comm="], { encoding: "utf8" })
+        .split("\n")
+        .map((line) => line.trim().split(/\s+/u))
+        .filter(([, parent, command]) => Number(parent) === process.pid && command === "pi")
+        .map(([pid]) => Number(pid));
+}
+
+test("Given a real Pi turn whose native process stops responding, When the user cancels it, Then the stop settles and a queued prompt completes in a restored Session", async () => {
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let holdResponse = true;
+    await using provider = await FakeOpenAiProvider.start("gpt-4.1", "PI_STALLED_CANCEL_REPLY", {
+        beforeFirstText: async () => {
+            if (holdResponse) {
+                entered.resolve();
+                await release.promise;
+            }
+        },
+    });
+    await using agent = await PiFixture.create(provider);
+    const stopped: number[] = [];
+    try {
+        await withRealDaemon(new PiAgentSpecification(), agent.environment, async (peer) => {
+            const nativeId = await prepareNewRealSession(peer, "pi");
+            const sendPrompt = (commandId: string, targetCommandId = ""): void =>
+                peer.send(
+                    encodeSessionPromptCommand({
+                        kind: "session.prompt",
+                        commandId,
+                        sessionId: nativeId,
+                        agentId: "pi",
+                        bindingId: peer.bindingId,
+                        directoryId: "default",
+                        additionalDirectoryIds: [],
+                        attachments: [],
+                        prompt: "Reply with a short greeting, without using tools",
+                        disposition:
+                            targetCommandId.length > 0
+                                ? SessionPromptDisposition.Queue
+                                : SessionPromptDisposition.Reject,
+                        targetCommandId,
+                    }),
+                );
+            const settled = async (commandId: string): Promise<{ readonly outcome: string; readonly text: string }> => {
+                let text = "";
+                for (;;) {
+                    const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
+                    if (
+                        event.type === "acp" &&
+                        event.payload.sessionUpdate === "agent_message_chunk" &&
+                        event.payload.content.type === "text"
+                    ) {
+                        text += event.payload.content.text;
+                    }
+                    if (
+                        event.type === "lifecycle-metadata" &&
+                        (event.payload.kind === "prompt.completed" ||
+                            event.payload.kind === "prompt.failed" ||
+                            event.payload.kind === "prompt.failed-before-start") &&
+                        event.payload.commandId === commandId
+                    ) {
+                        return {
+                            outcome:
+                                event.payload.kind === "prompt.completed"
+                                    ? event.payload.stopReason
+                                    : event.payload.kind,
+                            text,
+                        };
+                    }
+                }
+            };
+            const active = randomUUID();
+            sendPrompt(active);
+            await new Promise<void>((resolve, reject) => {
+                const abort = (): void => reject(peer.signal.reason);
+                peer.signal.addEventListener("abort", abort, { once: true });
+                void entered.promise.then(() => {
+                    peer.signal.removeEventListener("abort", abort);
+                    resolve();
+                });
+            });
+            // The native process can no longer answer RPCs, including the turn's abort request.
+            stopped.push(...piChildProcesses());
+            expect(stopped).toHaveLength(1);
+            for (const pid of stopped) {
+                process.kill(pid, "SIGSTOP");
+            }
+            const queued = randomUUID();
+            sendPrompt(queued, active);
+            for (;;) {
+                const message = await peer.nextMessage();
+                if (
+                    decodeMessageKind(message) === SESSION_EVENT_KIND &&
+                    decodeSessionEventEnvelope(message).events.some(
+                        (event) =>
+                            event.type === "lifecycle-metadata" && event.payload.kind === "session.queue.changed",
+                    )
+                ) {
+                    break;
+                }
+            }
+            holdResponse = false;
+            peer.send(encodeSessionCancelCommand({ kind: "session.cancel", commandId: active, sessionId: nativeId }));
+            expect((await settled(active)).outcome).toBe("cancelled");
+            const continuation = await settled(queued);
+            expect(continuation).toEqual({
+                outcome: "end_turn",
+                text: expect.stringContaining("PI_STALLED_CANCEL_REPLY"),
+            });
+            expect(piChildProcesses().filter((pid) => stopped.includes(pid))).toEqual([]);
+        });
+    } finally {
+        release.resolve();
+        for (const pid of stopped) {
+            try {
+                process.kill(pid, "SIGKILL");
+            } catch {
+                // Already retired by the daemon.
+            }
+        }
     }
 });
 

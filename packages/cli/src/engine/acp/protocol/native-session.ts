@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { BrandedType } from "../../util/branded-type.ts";
 
 const path = z
     .string()
@@ -6,10 +7,12 @@ const path = z
     .max(2_048)
     .refine((value) => !value.includes("\0"));
 const title = z.string().transform((value) => value.slice(0, 500));
-export const nativeSessionIdSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,255}$/);
+export type NativeSessionId = BrandedType<string, "NativeSessionId">;
+const nativeSessionIdValueSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,255}$/);
+export const nativeSessionIdSchema = nativeSessionIdValueSchema.brand<"NativeSessionId">();
 const nativeSessionInfoSchema = z
     .object({
-        sessionId: nativeSessionIdSchema,
+        sessionId: nativeSessionIdValueSchema,
         cwd: path,
         additionalDirectories: z.array(path).max(16).default([]).readonly(),
         title: title.nullish(),

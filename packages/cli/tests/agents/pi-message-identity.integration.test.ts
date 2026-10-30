@@ -2,16 +2,29 @@ import { addAbortListener } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type ContentBlock, methods, PROTOCOL_VERSION, type SessionUpdate } from "@agentclientprotocol/sdk";
+import { type ContentBlock, PROTOCOL_VERSION, type SessionUpdate } from "@agentclientprotocol/sdk";
+import type { AcpSessionUpdate } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
 import { z } from "zod";
-import { PiAgentConnection } from "../../src/engine/acp/adapter/pi/agent-connection.ts";
-import { createAcpClient } from "../../src/engine/acp/connection/create-client.ts";
-import type { IdentifiedSessionUpdate } from "../../src/engine/acp/connection/session-notification.ts";
-import { PiAcpEndpoint } from "../../src/engine/acp/harness/pi/endpoint.ts";
+import { piClientCallbacks } from "../../src/engine/acp/adapter/pi/client-callbacks.ts";
+import { AcpContentExternalizer } from "../../src/engine/acp/content/content-externalizer.ts";
 import { imageFixture } from "../support/agents/image-fixture.ts";
 import { PiFixture } from "../support/agents/pi.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
+
+function identityCallbacks(onUpdate: (update: AcpSessionUpdate) => void) {
+    const rejectInteraction = async (): Promise<never> => {
+        throw new Error("Unexpected interaction or embedded media");
+    };
+    return piClientCallbacks(
+        {
+            onSessionEvent: async (_nativeSessionId, event) => onUpdate(event.payload),
+            interactions: { onPermission: rejectInteraction, onElicitation: rejectInteraction },
+        },
+        new AcpContentExternalizer(rejectInteraction),
+        { signal: new AbortController().signal, fail: () => undefined },
+    );
+}
 
 test("Given real Pi is waiting for model output, When two multi-block steers are accepted, Then user chunks arrive only when Pi consumes them with distinct message identities", async () => {
     const entered = Promise.withResolvers<void>();
@@ -26,42 +39,12 @@ test("Given real Pi is waiting for model output, When two multi-block steers are
     });
     await using fixture = await PiFixture.create(provider);
     const cwd = await mkdtemp(join(tmpdir(), "mobius-pi-steering-identity-"));
-    const updates: IdentifiedSessionUpdate[] = [];
-    const endpoint = new PiAgentConnection({
-        command: fixture.executable,
-        environment: fixture.environment,
-        cwd,
-        client: {
-            onUpdate: async ({ update }) => {
-                updates.push(update);
-            },
-            onPermission: async () => {
-                throw new Error("Unexpected permission request");
-            },
-            onElicitation: async () => {
-                throw new Error("Unexpected input request");
-            },
-            onElicitationComplete: async () => undefined,
-        },
-    });
-    const connection = endpoint.connection;
+    const updates: AcpSessionUpdate[] = [];
+    const client = fixture.createClient(identityCallbacks((update) => updates.push(update)));
     try {
-        await endpoint.initialize(signal);
-        await connection.agent.request(
-            methods.agent.initialize,
-            { protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} },
-            { cancellationSignal: signal },
-        );
-        const { sessionId } = await connection.agent.request(
-            methods.agent.session.new,
-            { cwd, mcpServers: [] },
-            { cancellationSignal: signal },
-        );
-        const pending = connection.agent.request(
-            methods.agent.session.prompt,
-            { sessionId, prompt: [{ type: "text", text: "Wait for updated instructions" }] },
-            { cancellationSignal: signal },
-        );
+        await client.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} });
+        const { sessionId } = await client.newSession({ cwd, mcpServers: [] });
+        const pending = client.prompt({ sessionId, prompt: [{ type: "text", text: "Wait for updated instructions" }] });
         // Always settle the in-flight prompt, including on assertion failure.
         const finished = pending.then(
             (result) => ({ kind: "completed" as const, result }),
@@ -76,8 +59,7 @@ test("Given real Pi is waiting for model output, When two multi-block steers are
             ]);
             updates.length = 0;
             for (const text of ["First steering", "Second steering"]) {
-                const response = await connection.agent.request(
-                    "_session/steering",
+                const response = await client.steer(
                     {
                         sessionId,
                         prompt: [
@@ -85,7 +67,7 @@ test("Given real Pi is waiting for model output, When two multi-block steers are
                             { type: "text", text: `${text} detail` },
                         ],
                     },
-                    { cancellationSignal: signal },
+                    signal,
                 );
                 expect(response).toMatchObject({ outcome: "injected" });
             }
@@ -108,7 +90,7 @@ test("Given real Pi is waiting for model output, When two multi-block steers are
         expect(chunks[0]?.messageId).not.toBe(chunks[1]?.messageId);
     } finally {
         release.resolve();
-        await endpoint.closeProcess();
+        await client.dispose();
         await rm(cwd, { recursive: true, force: true });
     }
 });
@@ -127,50 +109,34 @@ test("Given real Pi transforms input, When a user submits a prompt, Then raw use
     const cwd = await mkdtemp(join(tmpdir(), "mobius-pi-raw-identity-"));
     const updates: SessionUpdate[] = [];
     const image: ContentBlock = { type: "image", data: imageFixture(128).toString("base64"), mimeType: "image/png" };
-    const endpoint = new PiAcpEndpoint({
-        command: fixture.executable,
-        environment: fixture.environment,
-        cwd,
-        onSessionUpdate: async ({ update }) => {
+    const client = fixture.createClient({
+        sessionUpdate: async ({ update }) => {
             updates.push(update);
             if (
                 update.sessionUpdate === "user_message_chunk" &&
                 update.content.type === "text" &&
                 update.content.text.startsWith("Cancel during echo")
             ) {
-                await connection.agent.notify(methods.agent.session.cancel, { sessionId: cancelledSessionId });
-                await connection.agent.request(methods.agent.session.list, {}, { cancellationSignal: signal });
+                await client.cancel({ sessionId: cancelledSessionId });
+                await client.listSessions({});
             }
         },
+        startUserMessage: () => undefined,
+        requestPermission: async () => {
+            throw new Error("Unexpected permission request");
+        },
+        requestElicitation: async () => {
+            throw new Error("Unexpected input request");
+        },
     });
-    const rejectInteraction = async (): Promise<never> => {
-        throw new Error("Unexpected interaction");
-    };
-    const connection = createAcpClient({
-        onUpdate: async () => undefined,
-        onPermission: rejectInteraction,
-        onElicitation: rejectInteraction,
-        onElicitationComplete: async () => undefined,
-    }).connect(endpoint.app());
-    const signal = AbortSignal.timeout(60_000);
     let cancelledSessionId = "";
     try {
-        await endpoint.initialize(signal);
-        await connection.agent.request(
-            methods.agent.initialize,
-            { protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} },
-            { cancellationSignal: signal },
-        );
-        const session = await connection.agent.request(
-            methods.agent.session.new,
-            { cwd, mcpServers: [] },
-            { cancellationSignal: signal },
-        );
-        const response = await connection.agent.request(
-            methods.agent.session.prompt,
-            { sessionId: session.sessionId, prompt: [{ type: "text", text: "Reply without tools" }, image] },
-            { cancellationSignal: signal },
-        );
+        await client.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} });
+        const session = await client.newSession({ cwd, mcpServers: [] });
+        const response = await client.prompt({
+            sessionId: session.sessionId,
+            prompt: [{ type: "text", text: "Reply without tools" }, image],
+        });
         const chunks = updates.filter(
             (update) => update.sessionUpdate === "user_message_chunk" || update.sessionUpdate === "agent_message_chunk",
         );
@@ -185,28 +151,22 @@ test("Given real Pi transforms input, When a user submits a prompt, Then raw use
         expect(response._meta ?? {}).not.toHaveProperty("messageId");
         cancelledSessionId = session.sessionId;
         expect(
-            await connection.agent.request(
-                methods.agent.session.prompt,
-                {
-                    sessionId: session.sessionId,
-                    prompt: [
-                        { type: "text", text: "Cancel during echo" },
-                        { type: "text", text: "Do not submit this turn" },
-                    ],
-                },
-                { cancellationSignal: signal },
-            ),
+            await client.prompt({
+                sessionId: session.sessionId,
+                prompt: [
+                    { type: "text", text: "Cancel during echo" },
+                    { type: "text", text: "Do not submit this turn" },
+                ],
+            }),
         ).toMatchObject({ stopReason: "cancelled" });
         expect(
-            await connection.agent.request(
-                methods.agent.session.prompt,
-                { sessionId: session.sessionId, prompt: [{ type: "text", text: "Continue after cancellation" }] },
-                { cancellationSignal: signal },
-            ),
+            await client.prompt({
+                sessionId: session.sessionId,
+                prompt: [{ type: "text", text: "Continue after cancellation" }],
+            }),
         ).toMatchObject({ stopReason: "end_turn" });
     } finally {
-        await endpoint.close();
-        connection.close();
+        await client.dispose();
         await rm(cwd, { recursive: true, force: true });
     }
 });
@@ -216,40 +176,17 @@ test("Given real Pi streams multiple messages, When the harness emits chunks, re
     await using fixture = await PiFixture.create(provider);
     await fixture.overrideSettings({ quietStartup: false });
     const cwd = await mkdtemp(join(tmpdir(), "mobius-pi-message-identity-"));
-    const updates: IdentifiedSessionUpdate[] = [];
-    const observed: IdentifiedSessionUpdate[] = [];
-    const endpoint = new PiAgentConnection({
-        command: fixture.executable,
-        environment: fixture.environment,
-        cwd,
-        client: {
-            onUpdate: async ({ update }) => {
-                updates.push(update);
-                observed.push(update);
-            },
-            onPermission: async () => {
-                throw new Error("The identity scenario must not request permission");
-            },
-            onElicitation: async () => {
-                throw new Error("The identity scenario must not request input");
-            },
-            onElicitationComplete: async () => undefined,
-        },
-    });
-    const connection = endpoint.connection;
-    const signal = AbortSignal.timeout(60_000);
+    const updates: AcpSessionUpdate[] = [];
+    const observed: AcpSessionUpdate[] = [];
+    const client = fixture.createClient(
+        identityCallbacks((update) => {
+            updates.push(update);
+            observed.push(update);
+        }),
+    );
     try {
-        await endpoint.initialize(signal);
-        await connection.agent.request(
-            methods.agent.initialize,
-            { protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} },
-            { cancellationSignal: signal },
-        );
-        const { sessionId, _meta } = await connection.agent.request(
-            methods.agent.session.new,
-            { cwd, mcpServers: [] },
-            { cancellationSignal: signal },
-        );
+        await client.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} });
+        const { sessionId, _meta } = await client.newSession({ cwd, mcpServers: [] });
         const startupInfo = z.object({ piAcp: z.object({ startupInfo: z.string().nullable() }) }).parse(_meta)
             .piAcp.startupInfo;
         const ids = new Set<string>();
@@ -258,11 +195,7 @@ test("Given real Pi streams multiple messages, When the harness emits chunks, re
             "Stream another short greeting, without tools",
         ]) {
             updates.length = 0;
-            const result = await connection.agent.request(
-                methods.agent.session.prompt,
-                { sessionId, prompt: [{ type: "text", text: prompt }] },
-                { cancellationSignal: signal },
-            );
+            const result = await client.prompt({ sessionId, prompt: [{ type: "text", text: prompt }] });
             const messages = updates.filter((update) => update.sessionUpdate === "agent_message_chunk");
             const userMessages = updates.filter((update) => update.sessionUpdate === "user_message_chunk");
             expect(userMessages).toHaveLength(1);
@@ -299,25 +232,19 @@ test("Given real Pi streams multiple messages, When the harness emits chunks, re
             .filter((update) => update.content.type === "text" && update.content.text === startupInfo);
         expect(startupMessages).toHaveLength(1);
         for (const update of startupMessages) {
-            expect(update.messageId).toEqual(expect.any(String));
+            if (typeof update.messageId !== "string" || update.messageId.length === 0) {
+                throw new Error("Pi did not identify its startup message");
+            }
             expect(ids.has(update.messageId)).toBe(false);
             expect(Object.hasOwn(update, "nativeMessageId")).toBe(false);
         }
         updates.length = 0;
-        await connection.agent.request(
-            methods.agent.session.prompt,
-            { sessionId, prompt: [{ type: "text", text: "/export" }] },
-            { cancellationSignal: signal },
-        );
+        await client.prompt({ sessionId, prompt: [{ type: "text", text: "/export" }] });
         const exported = updates.filter((update) => update.sessionUpdate === "agent_message_chunk");
         expect(exported.map((update) => update.content.type)).toEqual(["text", "resource_link"]);
         expect(new Set(exported.map((update) => update.messageId)).size).toBe(1);
         updates.length = 0;
-        await connection.agent.request(
-            methods.agent.session.load,
-            { sessionId, cwd, mcpServers: [] },
-            { cancellationSignal: signal },
-        );
+        await client.loadSession({ sessionId, cwd, mcpServers: [] });
         const replay = updates.filter(
             (update) =>
                 update.sessionUpdate === "agent_message_chunk" ||
@@ -345,7 +272,7 @@ test("Given real Pi streams multiple messages, When the harness emits chunks, re
             }
         }
     } finally {
-        await endpoint.closeProcess();
+        await client.dispose();
         await rm(cwd, { recursive: true, force: true });
     }
 });

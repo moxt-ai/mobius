@@ -9,7 +9,7 @@ import type {
     SessionLiveEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { AgentProcessPool } from "../../session/process/agent-process-pool.ts";
-import type { AdapterSessionSubscriber } from "../adapter/session-events.ts";
+import type { NativeSessionSubscriber } from "../adapter/native-session-event.ts";
 import type { AcpAgentDefinition } from "../agent/agent-definition.ts";
 import type { PromptContent } from "../client/prompt-content.ts";
 import type { AcpContentExternalizer, ExternalizeSessionUpdate } from "../content/content-externalizer.ts";
@@ -107,7 +107,7 @@ export interface AdapterSessionScope {
     readonly externalizeUpdate?: ExternalizeSessionUpdate;
 }
 
-export interface AdapterSessionCreateParams extends AdapterSessionSubscriber {
+export interface AdapterSessionCreateParams extends NativeSessionSubscriber {
     readonly scope: AdapterSessionScope;
     readonly signal: AbortSignal;
 }

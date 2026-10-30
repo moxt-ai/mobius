@@ -190,11 +190,24 @@ function toToolCallLocations(args: unknown, cwd: string, line?: number): ToolCal
 export class SessionManager {
     private sessions = new Map<string, PiAcpSession>();
     private readonly store = new SessionStore();
+    private readonly teardowns = new Set<Promise<void>>();
+    private readonly creating = new Set<Promise<PiAcpSession>>();
+
+    constructor(private readonly signal: AbortSignal = new AbortController().signal) {}
 
     /** Dispose all sessions and their underlying pi subprocesses. */
-    disposeAll(): void {
+    async disposeAll(): Promise<void> {
+        await Promise.allSettled([...this.creating]);
         for (const [id] of this.sessions) {
             this.close(id);
+        }
+        const results = await Promise.allSettled([...this.teardowns]);
+        const failures = results.filter((result) => result.status === "rejected");
+        if (failures.length > 0) {
+            throw new AggregateError(
+                failures.map((failure) => failure.reason),
+                "Pi processes could not be released",
+            );
         }
     }
 
@@ -213,7 +226,14 @@ export class SessionManager {
             return;
         }
         try {
-            s.dispose();
+            const teardown = s.dispose();
+            this.teardowns.add(teardown);
+            void teardown.then(
+                () => this.teardowns.delete(teardown),
+                () => {
+                    /* Retain failed cleanup so disposal reports it. */
+                },
+            );
         } catch {
             // ignore
         }
@@ -231,6 +251,17 @@ export class SessionManager {
     }
 
     async create(params: SessionCreateParams): Promise<PiAcpSession> {
+        const acquisition = this.createNativeSession(params);
+        this.creating.add(acquisition);
+        try {
+            return await acquisition;
+        } finally {
+            this.creating.delete(acquisition);
+        }
+    }
+
+    private async createNativeSession(params: SessionCreateParams): Promise<PiAcpSession> {
+        this.signal.throwIfAborted();
         // Let pi manage session persistence in its default location (~/.pi/agent/sessions/...)
         // so sessions are visible to the regular `pi` CLI.
         let proc: PiRpcProcess;
@@ -239,6 +270,7 @@ export class SessionManager {
                 cwd: params.cwd,
                 environment: params.environment,
                 origin: params.origin,
+                signal: this.signal,
                 piCommand: params.piCommand,
             });
         } catch (e) {
@@ -248,11 +280,21 @@ export class SessionManager {
             throw e;
         }
 
+        if (this.signal.aborted) {
+            await proc.dispose();
+            this.signal.throwIfAborted();
+        }
+
         let state: any = null;
         try {
             state = (await proc.getState()) as any;
         } catch {
             state = null;
+        }
+
+        if (this.signal.aborted) {
+            await proc.dispose();
+            this.signal.throwIfAborted();
         }
 
         const sessionId = typeof state?.sessionId === "string" ? state.sessionId : crypto.randomUUID();
@@ -431,9 +473,9 @@ export class PiAcpSession {
         this.proc.onEvent((ev) => this.handlePiEvent(ev));
     }
 
-    dispose(): void {
+    dispose(): Promise<void> {
         this.extensionQuestions.endTurn();
-        this.proc.dispose();
+        return this.proc.dispose();
     }
 
     setStartupInfo(text: string) {

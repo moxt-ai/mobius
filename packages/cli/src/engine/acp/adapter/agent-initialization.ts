@@ -13,7 +13,10 @@ export class RetryableAcpInitializationError extends AcpExecutionError {
     }
 }
 
-export async function validateAgentRuntime(agent: AcpAgentDefinition, signal: AbortSignal): Promise<void> {
+export async function validateAgentRuntime(
+    agent: Pick<AcpAgentDefinition, "runtimeExecutables">,
+    signal: AbortSignal,
+): Promise<void> {
     signal.throwIfAborted();
     const unchanged = await Promise.all(agent.runtimeExecutables.map((identity) => revalidateExecutable(identity)));
     signal.throwIfAborted();

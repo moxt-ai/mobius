@@ -13,6 +13,7 @@ let runtimeQueuedBytes = 0;
 let updatesSinceYield = 0;
 
 type Selection =
+    | { readonly kind: "identified" }
     | {
           readonly kind: "awaiting-session";
           readonly notifications: readonly SessionNotification[];
@@ -29,8 +30,14 @@ export class AgentUpdateStream {
     #state: "open" | "failed" = "open";
     readonly #consume: (notification: SessionNotification) => Promise<void>;
 
-    constructor(consume: (notification: SessionNotification) => Promise<void>) {
+    constructor(
+        consume: (notification: SessionNotification) => Promise<void>,
+        mode: "select" | "identified" = "select",
+    ) {
         this.#consume = consume;
+        if (mode === "identified") {
+            this.#selection = { kind: "identified" };
+        }
     }
 
     readonly sessionId = (): string => (this.#selection.kind === "selected" ? this.#selection.sessionId : "");
@@ -79,6 +86,9 @@ export class AgentUpdateStream {
     readonly receive = (notification: SessionNotification): Promise<void> => {
         const selection = this.#selection;
         switch (selection.kind) {
+            case "identified":
+                nativeSessionIdSchema.parse(notification.sessionId);
+                return this.#enqueue(notification);
             case "selected":
                 return this.#enqueue(notification);
             case "awaiting-session": {
@@ -106,6 +116,12 @@ export class AgentUpdateStream {
         const selected = nativeSessionIdSchema.parse(sessionId);
         const selection = this.#selection;
         switch (selection.kind) {
+            case "identified":
+                throw new AcpExecutionError(
+                    "Native notifications already identify their session",
+                    {},
+                    "invalid_agent_session",
+                );
             case "selected":
                 if (selection.sessionId !== selected) {
                     throw new AcpExecutionError(

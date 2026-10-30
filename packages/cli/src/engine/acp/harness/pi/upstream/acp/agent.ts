@@ -154,15 +154,29 @@ const PI_ACP_NAME = "pi-acp";
 const PI_ACP_VERSION = "0.0.34";
 
 export class PiAcpAgent {
+    private readonly lifetime = new AbortController();
+    readonly signal: AbortSignal = this.lifetime.signal;
+    private closing: Promise<void> | null = null;
     private readonly pendingSubmissions = new Map<string, Set<AbortController>>();
     private readonly conn: PiAcpClient;
-    private readonly sessions = new SessionManager();
+    private readonly sessions = new SessionManager(this.signal);
     private readonly store: SessionStore;
     private readonly restoringSessions = new Map<string, Promise<PiAcpSession>>();
     private readonly environment: Readonly<NodeJS.ProcessEnv>;
 
-    dispose(): void {
-        this.sessions.disposeAll();
+    dispose(): Promise<void> {
+        if (this.closing === null) {
+            this.closing = Promise.resolve().then(async () => {
+                await Promise.allSettled([...this.restoringSessions.values()]);
+                await this.sessions.disposeAll();
+            });
+            this.lifetime.abort(new DOMException("The Pi client closed", "AbortError"));
+        }
+        return this.closing;
+    }
+
+    async sessionConfiguration(nativeSessionId: string) {
+        return await getSessionConfiguration(this.sessions.get(nativeSessionId).proc);
     }
 
     // Remember recent session cwd and use it as the default filter.
@@ -247,6 +261,7 @@ export class PiAcpAgent {
                     origin: { kind: "load", sessionPath: stored.sessionFile },
                     piCommand: this.environment.PI_ACP_PI_COMMAND,
                     environment: this.environment,
+                    signal: this.signal,
                 });
             } catch (e: any) {
                 if (e?.name === "PiRpcSpawnError") {
@@ -256,6 +271,10 @@ export class PiAcpAgent {
             }
 
             const fileCommands = loadSlashCommands(cwd, this.environment);
+            if (this.signal.aborted) {
+                await proc.dispose();
+                this.signal.throwIfAborted();
+            }
             const session = this.sessions.getOrCreate(sessionId, {
                 cwd,
                 mcpServers: opts?.mcpServers ?? [],
