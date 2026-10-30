@@ -1,6 +1,7 @@
 import { CONTENT_CHUNK_MAX_BYTES, encodeContentChunkFrame, MOBIUS_API_PREFIX } from "@moxt-ai/mobius-sdk/protocol";
 import { MobiusApiError, MobiusConnectionError, MobiusProtocolError, MobiusValidationError } from "../errors.ts";
-import type { MobiusHttpTransport, MobiusTransportSessionEvent } from "./http-transport.ts";
+import { HttpTransport, type MobiusHttpTransport, type MobiusTransportSessionEvent } from "./http-transport.ts";
+import { runtimeRequestTarget } from "./runtime-request-target.ts";
 
 const DEFAULT_CONNECTION_TIMEOUT_MILLISECONDS = 15_000;
 const HEARTBEAT_INTERVAL_MILLISECONDS = 20_000;
@@ -156,7 +157,8 @@ export class WsTransport implements MobiusHttpTransport {
     readonly #idleTimeoutMilliseconds: number;
     readonly #pending = new Map<string, PendingWsRequest>();
     readonly #subscriptions = new Map<string, LiveEventSubscription>();
-    #origin: string | null = null;
+    readonly #http = new HttpTransport();
+    #endpoint: string | null = null;
     #state: WsTransportState = { kind: "disconnected" };
     #heartbeat:
         | { readonly kind: "inactive" }
@@ -178,12 +180,14 @@ export class WsTransport implements MobiusHttpTransport {
 
     readonly fetch = async (request: Request): Promise<Response> => {
         request.signal.throwIfAborted();
-        const requestUrl = new URL(request.url);
-        if (this.#origin !== null && this.#origin !== requestUrl.origin) {
-            throw new MobiusValidationError("A WebSocket transport cannot connect to multiple Mobius origins");
+        if (this.#state.kind === "closed") {
+            throw new MobiusConnectionError("The Mobius WebSocket transport is closed");
         }
-        this.#origin = requestUrl.origin;
-        const socket = await this.#socket(requestUrl);
+        if (runtimeRequestTarget(request) === null) {
+            return await this.#http.fetch(request);
+        }
+        const requestUrl = new URL(request.url);
+        const socket = await this.#socket(request);
         request.signal.throwIfAborted();
         request.signal.throwIfAborted();
         const requestId = crypto.randomUUID();
@@ -244,11 +248,7 @@ export class WsTransport implements MobiusHttpTransport {
     readonly openSessionLiveEvents = async (request: Request): Promise<ReadableStream<MobiusTransportSessionEvent>> => {
         request.signal.throwIfAborted();
         const requestUrl = new URL(request.url);
-        if (this.#origin !== null && this.#origin !== requestUrl.origin) {
-            throw new MobiusValidationError("A WebSocket transport cannot connect to multiple Mobius origins");
-        }
-        this.#origin = requestUrl.origin;
-        const socket = await this.#socket(requestUrl);
+        const socket = await this.#socket(request);
         const id = crypto.randomUUID();
         const abort = (): void => {
             const subscription = this.#subscriptions.get(id);
@@ -296,7 +296,20 @@ export class WsTransport implements MobiusHttpTransport {
         this.#failSubscriptions(new MobiusConnectionError("The live Session event transport closed"));
     };
 
-    readonly #socket = async (requestUrl: URL): Promise<WebSocket> => {
+    readonly #socket = async (request: Request): Promise<WebSocket> => {
+        const target = runtimeRequestTarget(request);
+        if (target === null) {
+            throw new MobiusValidationError("A WebSocket subscription requires a Runtime target");
+        }
+        const endpoint = new URL(
+            `${MOBIUS_API_PREFIX}/v1/projects/${target.projectId}/runtimes/${target.runtimeId}/transport`,
+            request.url,
+        );
+        endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:";
+        if (this.#endpoint !== null && this.#endpoint !== endpoint.href) {
+            throw new MobiusValidationError("A WebSocket transport cannot connect to multiple Runtimes");
+        }
+        this.#endpoint = endpoint.href;
         switch (this.#state.kind) {
             case "closed":
                 throw new MobiusConnectionError("The Mobius WebSocket transport is closed");
@@ -305,21 +318,19 @@ export class WsTransport implements MobiusHttpTransport {
             case "connecting":
                 return await this.#state.connection;
             case "disconnected": {
-                const connection = this.#connect(requestUrl);
+                const connection = this.#connect(endpoint);
                 this.#state = { kind: "connecting", connection };
                 return await connection;
             }
         }
     };
 
-    readonly #connect = async (requestUrl: URL): Promise<WebSocket> => {
+    readonly #connect = async (endpoint: URL): Promise<WebSocket> => {
         const controller = new AbortController();
         const timeout = globalThis.setTimeout(
             () => controller.abort(new MobiusConnectionError("The Mobius WebSocket connection timed out")),
             this.#connectionTimeoutMilliseconds,
         );
-        const endpoint = new URL(`${MOBIUS_API_PREFIX}/v1/transport`, requestUrl.origin);
-        endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:";
         try {
             const socket = await this.#connector.connect(endpoint, controller.signal);
             if (this.#state.kind === "closed") {

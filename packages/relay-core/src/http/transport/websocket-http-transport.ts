@@ -79,6 +79,25 @@ function transportError(code: WebSocketTransportErrorCode): WebSocketTransportEr
     return new WebSocketTransportError(code);
 }
 
+/** Shared by browser connections owned by one Runtime, not by unrelated Runtimes. */
+export class WebSocketUploadBudget {
+    #bytes = 0;
+    #requests = 0;
+
+    readonly reserve = (bytes: number): void => {
+        if (this.#bytes + bytes > MAX_PENDING_BINARY_BYTES || this.#requests >= MAX_PENDING_BINARY_REQUESTS) {
+            throw transportError("request_capacity_exceeded");
+        }
+        this.#bytes += bytes;
+        this.#requests += 1;
+    };
+
+    readonly release = (bytes: number): void => {
+        this.#bytes -= bytes;
+        this.#requests -= 1;
+    };
+}
+
 function record(value: unknown): Readonly<Record<string, unknown>> {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
         throw transportError("invalid_message");
@@ -192,6 +211,10 @@ export function acceptWebSocketHttpTransport(
     request: Request,
     dispatch: DispatchRequest,
     host: WebSocketHost,
+    options: {
+        readonly uploads: WebSocketUploadBudget;
+        readonly validateTarget: (request: Request) => boolean;
+    } = { uploads: new WebSocketUploadBudget(), validateTarget: () => true },
 ): Response {
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
         return Response.json(
@@ -199,6 +222,11 @@ export function acceptWebSocketHttpTransport(
             { status: 426 },
         );
     }
+    const validateTarget = (operation: Request): void => {
+        if (!options.validateTarget(operation)) {
+            throw transportError("invalid_target");
+        }
+    };
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
@@ -219,7 +247,6 @@ export function acceptWebSocketHttpTransport(
             sequence: number;
         }
     >();
-    let pendingDeclaredBinaryBytes = 0;
     const browserOrigin = request.headers.get("origin");
     let subscriptionDiagnosticCount = 0;
     let lastActivityAt = Date.now();
@@ -250,7 +277,7 @@ export function acceptWebSocketHttpTransport(
         }
         binaryRequests.delete(requestId);
         clearTimeout(upload.timeout);
-        pendingDeclaredBinaryBytes -= upload.byteLength;
+        options.uploads.release(upload.byteLength);
         return upload;
     };
     const releaseAllBinaryRequests = (): void => {
@@ -259,6 +286,7 @@ export function acceptWebSocketHttpTransport(
         }
     };
     const release = () => {
+        controller.abort(new Error("WebSocket transport closed"));
         clearTimeout(idleTimeout);
         for (const subscription of subscriptions.values()) {
             if (subscription.kind === "pending") {
@@ -363,6 +391,7 @@ export function acceptWebSocketHttpTransport(
                         browserOrigin,
                         subscriptionController.signal,
                     );
+                    validateTarget(converted.request);
                     subscriptions.set(subscriptionId, { controller: subscriptionController, kind: "pending" });
                     const subscriptionHeaders = new Headers(converted.request.headers);
                     subscriptionHeaders.set("Upgrade", "websocket");
@@ -398,6 +427,7 @@ export function acceptWebSocketHttpTransport(
                     const openedAt = Date.now();
                     let lastMessageAt: number | null = null;
                     const finish = (end: SubscriptionEnd): void => {
+                        subscription.close(1000, "Session event subscription closed");
                         const current = subscriptions.get(subscriptionId);
                         if (
                             current?.kind === "open" &&
@@ -499,15 +529,11 @@ export function acceptWebSocketHttpTransport(
                         controller.signal,
                         new Uint8Array(0),
                     );
+                    validateTarget(declaration.request);
                     if (declaration.request.method === "GET") {
                         throw transportError("invalid_message");
                     }
-                    if (
-                        binaryRequests.size >= MAX_PENDING_BINARY_REQUESTS ||
-                        pendingDeclaredBinaryBytes + bodyByteLength > MAX_PENDING_BINARY_BYTES
-                    ) {
-                        throw transportError("request_capacity_exceeded");
-                    }
+                    options.uploads.reserve(bodyByteLength);
                     const timeout = setTimeout(() => {
                         if (releaseBinaryRequest(requestId) === undefined || server.readyState !== WebSocket.OPEN) {
                             return;
@@ -531,7 +557,6 @@ export function acceptWebSocketHttpTransport(
                         sequence: 0,
                         timeout,
                     });
-                    pendingDeclaredBinaryBytes += bodyByteLength;
                     return;
                 }
                 requestId = requestIdFromMessage(message);
@@ -544,6 +569,7 @@ export function acceptWebSocketHttpTransport(
                     binaryBody,
                 );
                 requestId = converted.requestId;
+                validateTarget(converted.request);
                 const response = await dispatch(converted.request);
                 const mediaType = response.headers.get("content-type") ?? "";
                 if (mediaType.startsWith("text/event-stream")) {
@@ -581,7 +607,17 @@ export function acceptWebSocketHttpTransport(
             }
         })();
     };
-    host.accept(server, { message: receive, close: release, error: release });
+    host.accept(server, {
+        message: receive,
+        close: () => {
+            release();
+            server.close(1000, "WebSocket transport closed");
+        },
+        error: () => {
+            release();
+            server.close(1011, "WebSocket transport failed");
+        },
+    });
     touch();
     return new Response(null, {
         status: 101,

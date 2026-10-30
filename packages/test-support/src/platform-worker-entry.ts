@@ -45,5 +45,4 @@ export default {
 export {
     ProjectDO,
     RuntimeRelay,
-    WebSocketTransport,
 } from "../../relay-cloudflare-platform/src/worker.ts";

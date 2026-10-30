@@ -3,6 +3,28 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { MobiusClient, MobiusConnectionError, StaticMobiusCredentialProvider } from "../src/index.ts";
 import { type MobiusWebSocketConnector, WsTransport } from "../src/platform.ts";
+import { issueSessionAccessCredential } from "../src/protocol/index.ts";
+
+const sessionCredential = await issueSessionAccessCredential(`mapp_${"a".repeat(22)}_${"b".repeat(43)}`, {
+    issuedAtEpochMilliseconds: 0,
+    expiresAtEpochMilliseconds: 900000,
+    purpose: "session-access",
+    projectId: "project-1",
+    runtimeId: "runtime-1",
+    sessionId: "session-1",
+});
+
+function runtimeRequest(address: string, init?: RequestInit): Request {
+    const url = new URL(address);
+    if (!url.pathname.startsWith("/mobius/api/v1/projects/")) {
+        url.pathname = `/mobius/api/v1/projects/project-1/runtimes/runtime-1${url.pathname}`;
+    } else {
+        url.pathname = url.pathname.replace("/projects/project/", "/projects/project-1/");
+    }
+    const headers = new Headers(init?.headers);
+    headers.set("authorization", `Bearer ${sessionCredential}`);
+    return new Request(url, { ...init, headers });
+}
 
 class BrowserWebSocket extends EventTarget implements WebSocket {
     readonly CLOSED = WebSocket.CLOSED;
@@ -129,12 +151,38 @@ afterEach(() => {
     vi.useRealTimers();
 });
 
+it("Given a browser bound to one Runtime, When it opens another Session or addresses another Runtime, Then Sessions share the connection and the other Runtime is rejected", async () => {
+    const connector = new BrowserWebSocketConnector();
+    const transport = new WsTransport({ connector });
+    try {
+        await transport.fetch(runtimeRequest("https://relay.example.test/first"));
+        const events = await transport.openSessionLiveEvents(
+            runtimeRequest("https://relay.example.test/mobius/api/v1/projects/project-1/sessions/session-2/events-v2"),
+        );
+        expect(connector.sockets).toHaveLength(1);
+        expect(connector.sockets[0]?.url).toBe(
+            "wss://relay.example.test/mobius/api/v1/projects/project-1/runtimes/runtime-1/transport",
+        );
+        await expect(
+            transport.fetch(
+                runtimeRequest("https://relay.example.test/mobius/api/v1/projects/project-1/runtimes/runtime-2/agents"),
+            ),
+        ).rejects.toThrow("cannot connect to multiple Runtimes");
+        expect((await transport.fetch(runtimeRequest("https://relay.example.test/after-rejection"))).status).toBe(204);
+        await events.cancel();
+    } finally {
+        transport.close();
+    }
+});
+
 it("Given a quiet subscription with connection heartbeats, When multiple idle deadlines pass, Then its original stream still delivers events", async () => {
     vi.useFakeTimers({ toFake: ["Date", "clearTimeout", "setTimeout"] });
     vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));
     const connector = new BrowserWebSocketConnector(0, "", "responsive");
     const transport = new WsTransport({ connector });
-    const stream = await transport.openSessionLiveEvents(new Request("https://relay.example.test/session/events-v2"));
+    const stream = await transport.openSessionLiveEvents(
+        runtimeRequest("https://relay.example.test/session/events-v2"),
+    );
     const reader = stream.getReader();
     try {
         await vi.advanceTimersByTimeAsync(180_000);
@@ -169,14 +217,16 @@ it("Given a transport whose peer stops answering heartbeats, When the ten-second
     vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));
     const connector = new BrowserWebSocketConnector(0, "", "silent");
     const transport = new WsTransport({ connector });
-    const stream = await transport.openSessionLiveEvents(new Request("https://relay.example.test/session/events-v2"));
+    const stream = await transport.openSessionLiveEvents(
+        runtimeRequest("https://relay.example.test/session/events-v2"),
+    );
     const reader = stream.getReader();
     try {
         await vi.advanceTimersByTimeAsync(20_000);
         const failed = expect(reader.read()).rejects.toBeInstanceOf(MobiusConnectionError);
         await vi.advanceTimersByTimeAsync(10_000);
         await failed;
-        expect((await transport.fetch(new Request("https://relay.example.test/after-recovery"))).status).toBe(204);
+        expect((await transport.fetch(runtimeRequest("https://relay.example.test/after-recovery"))).status).toBe(204);
     } finally {
         transport.close();
         reader.releaseLock();
@@ -190,7 +240,7 @@ it("Given a Unicode JSON request and response, When the browser uses the WebSock
     const requestBody = JSON.stringify({ prompt: "show café ☕" });
 
     const response = await transport.fetch(
-        new Request("https://relay.example.test/mobius/api/v1/projects/project/sessions", {
+        runtimeRequest("https://relay.example.test/mobius/api/v1/projects/project/sessions/session-1/turns", {
             body: requestBody,
             headers: { "content-type": "application/json" },
             method: "POST",
@@ -208,14 +258,14 @@ it("Given an idle browser transport, When its connection expires, Then it closes
     const connector = new BrowserWebSocketConnector();
     const transport = new WsTransport({ connector, idleTimeoutMilliseconds: 1_000 });
 
-    expect((await transport.fetch(new Request("https://relay.example.test/first"))).status).toBe(204);
+    expect((await transport.fetch(runtimeRequest("https://relay.example.test/first"))).status).toBe(204);
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(connector.sockets[0]?.closedWith).toEqual({
         code: 4000,
         reason: "Mobius transport idle timeout",
     });
-    expect((await transport.fetch(new Request("https://relay.example.test/second"))).status).toBe(204);
+    expect((await transport.fetch(runtimeRequest("https://relay.example.test/second"))).status).toBe(204);
     expect(connector.sockets).toHaveLength(2);
 
     transport.close();
@@ -225,19 +275,19 @@ it("Given a replacement WebSocket carries a live subscription, When the old sock
     const connector = new BrowserWebSocketConnector();
     const transport = new WsTransport({ connector });
 
-    expect((await transport.fetch(new Request("https://relay.example.test/first"))).status).toBe(204);
+    expect((await transport.fetch(runtimeRequest("https://relay.example.test/first"))).status).toBe(204);
     const first = connector.sockets[0];
     if (first === undefined) {
         throw new Error("Expected the first WebSocket connection");
     }
     first.dispatchEvent(new Event("error"));
-    expect((await transport.fetch(new Request("https://relay.example.test/second"))).status).toBe(204);
+    expect((await transport.fetch(runtimeRequest("https://relay.example.test/second"))).status).toBe(204);
     const second = connector.sockets[1];
     if (second === undefined) {
         throw new Error("Expected the replacement WebSocket connection");
     }
     const events = await transport.openSessionLiveEvents(
-        new Request("https://relay.example.test/mobius/api/v1/projects/project/sessions/session/events-v2"),
+        runtimeRequest("https://relay.example.test/mobius/api/v1/projects/project/sessions/session/events-v2"),
     );
     const subscriptionId = second.subscriptionIds[0];
     if (subscriptionId === undefined) {
@@ -272,7 +322,7 @@ it("Given an idle Session stream and a brief network interruption, When connecti
     const connector = new BrowserWebSocketConnector(6);
     const transport = new WsTransport({ connector });
     const client = new MobiusClient({
-        credentialProvider: new StaticMobiusCredentialProvider("test-credential"),
+        credentialProvider: new StaticMobiusCredentialProvider(sessionCredential),
         endpoint: "https://relay.example.test",
         projectId: "project-1",
         transport,
@@ -310,7 +360,7 @@ it("Given a live Session stream cannot reconnect, When its retry budget expires,
     const connector = new BrowserWebSocketConnector(1);
     const transport = new WsTransport({ connector });
     const client = new MobiusClient({
-        credentialProvider: new StaticMobiusCredentialProvider("test-credential"),
+        credentialProvider: new StaticMobiusCredentialProvider(sessionCredential),
         endpoint: "https://relay.example.test",
         maxStreamReconnectAttempts: 1,
         projectId: "project-1",
@@ -338,7 +388,7 @@ it("Given caller-owned Session recovery, When its live stream disconnects, Then 
     const connector = new BrowserWebSocketConnector();
     const transport = new WsTransport({ connector });
     const client = new MobiusClient({
-        credentialProvider: new StaticMobiusCredentialProvider("test-credential"),
+        credentialProvider: new StaticMobiusCredentialProvider(sessionCredential),
         endpoint: "https://relay.example.test",
         maxStreamReconnectAttempts: 0,
         projectId: "project-1",
@@ -371,7 +421,7 @@ it("Given caller-owned Session recovery, When its live stream receives nothing p
     const connector = new BrowserWebSocketConnector();
     const transport = new WsTransport({ connector, idleTimeoutMilliseconds: 1_000 });
     const client = new MobiusClient({
-        credentialProvider: new StaticMobiusCredentialProvider("test-credential"),
+        credentialProvider: new StaticMobiusCredentialProvider(sessionCredential),
         endpoint: "https://relay.example.test",
         maxStreamReconnectAttempts: 0,
         projectId: "project-1",

@@ -68,6 +68,8 @@ export class RuntimeRelay {
         webSocket: WebSocket,
         close: { readonly code: number; readonly reason: string; readonly wasClean: boolean },
     ): Promise<void> {
+        // Complete the peer's close handshake, including viewers consumed inside this same DO.
+        webSocket.close(1000, "Runtime connection closed");
         const context = socketLogContext(webSocket);
         const details = {
             ...context,

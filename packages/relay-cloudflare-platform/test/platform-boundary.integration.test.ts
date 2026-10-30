@@ -1365,7 +1365,10 @@ describe.sequential("Platform Session-only boundary", () => {
             });
             v2Socket.close(1000, "V2 browser test complete");
             const transportResponse = await worker.fetch(
-                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/transport`, { headers: { Upgrade: "websocket" } }),
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}/transport`,
+                    { headers: { Upgrade: "websocket" } },
+                ),
                 environment,
             );
             expect(transportResponse.status).toBe(101);
@@ -1387,6 +1390,46 @@ describe.sequential("Platform Session-only boundary", () => {
                 kind: "session.events.ready",
                 subscriptionId: "subscription-1",
             });
+            const otherBrowser = (
+                await worker.fetch(
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}/transport`,
+                        { headers: { Upgrade: "websocket" } },
+                    ),
+                    environment,
+                )
+            ).webSocket;
+            if (otherBrowser === null) {
+                throw new Error("Expected a second browser transport");
+            }
+            const otherMessages = new SocketMessages(otherBrowser);
+            otherBrowser.accept();
+            otherBrowser.send(
+                JSON.stringify({
+                    headers: [["authorization", `Bearer ${text(browserAccess, "credential")}`]],
+                    kind: "session.events.subscribe",
+                    path: `${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/events-v2`,
+                    subscriptionId: "subscription-2",
+                }),
+            );
+            expect(JSON.parse(await otherMessages.next())).toMatchObject({ kind: "session.events.ready" });
+            transport.send("invalid-json");
+            expect(JSON.parse(await transportMessages.next())).toMatchObject({ kind: "http.error" });
+            transport.send(
+                JSON.stringify({
+                    kind: "http.request",
+                    requestId: "runtime-agents",
+                    method: "GET",
+                    path: `${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}/agents`,
+                    headers: [["authorization", `Bearer ${appCredential}`]],
+                    body: "",
+                }),
+            );
+            expect(JSON.parse(await transportMessages.next())).toMatchObject({
+                kind: "http.response",
+                requestId: "runtime-agents",
+                status: 200,
+            });
             daemon.send(answer);
             expect(
                 JSON.stringify(
@@ -1400,7 +1443,15 @@ describe.sequential("Platform Session-only boundary", () => {
                 seqId: 1,
                 subscriptionId: "subscription-1",
             });
+            expect(JSON.parse(await otherMessages.next())).toMatchObject({
+                kind: "session.events.event",
+                subscriptionId: "subscription-2",
+                data: expect.stringContaining("local answer"),
+            });
             transport.close(1000, "Browser test complete");
+            otherBrowser.send('{"kind":"ping"}');
+            expect(await otherMessages.next()).toBe('{"kind":"pong"}');
+            otherBrowser.close(1000, "Other browser complete");
             host.send(
                 JSON.stringify({
                     kind: "agent.settings.discover",

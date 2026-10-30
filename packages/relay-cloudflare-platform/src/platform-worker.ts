@@ -1,6 +1,5 @@
 import type { LocalSessionOperations, ProjectStore, SessionRuntimeOperations } from "@moxt-ai/mobius-relay-core";
 import {
-    acceptWebSocketHttpTransport,
     CloudflareChannelRuntime,
     createMobiusApplication,
     createWorkerContext,
@@ -92,7 +91,6 @@ export interface PlatformRelayBindings extends PlatformStorageBindings, ProjectW
     readonly RECORDING?: Fetcher;
     readonly RECORDING_PROVIDER_ID?: string;
     readonly RUNTIME_RELAY: DurableObjectNamespace<RuntimeRelay>;
-    readonly WEBSOCKET_TRANSPORT?: DurableObjectNamespace;
 }
 
 export interface ProjectPlatformRelayBindings extends PlatformRelayBindings, ProjectDurableObjectExecutionBindings {}
@@ -1045,15 +1043,6 @@ export function createPlatformApplication(
         .onError((error) => {
             throw error;
         })
-        .get(`${MOBIUS_API_PREFIX}/v1/transport`, (context): Response => {
-            const executionContext = optionalExecutionContext(context);
-            return acceptWebSocketHttpTransport(
-                context.req.raw,
-                async (request): Promise<Response> =>
-                    await platformApplication.fetch(request, context.env, executionContext),
-                socketHost,
-            );
-        })
         .all("*", async (context) => {
             const metrics = new RequestAccessMetrics();
             return metrics.appendServerTiming(
@@ -1087,30 +1076,7 @@ export function createPlatformGateways(environment: PlatformApplicationBindings)
 }
 
 export function createPlatformWorker() {
-    const application = createPlatformSocketWorker(standardWebSocketHost);
-    return {
-        fetch: async (
-            request: Request,
-            environment: ConfiguredPlatformRelayBindings,
-            executionContext?: ExecutionContext,
-        ): Promise<Response> => {
-            const path = new URL(request.url).pathname;
-            if (
-                request.headers.get("Upgrade")?.toLowerCase() === "websocket" &&
-                (path === `${MOBIUS_API_PREFIX}/v1/transport` || path.endsWith("/events-v2"))
-            ) {
-                const namespace = environment.WEBSOCKET_TRANSPORT;
-                if (namespace === undefined) {
-                    return Response.json(
-                        { error: { code: "service_unavailable", message: "The WebSocket transport is unavailable" } },
-                        { status: 503 },
-                    );
-                }
-                return await namespace.get(namespace.newUniqueId()).fetch(request);
-            }
-            return await application.fetch(request, environment, executionContext);
-        },
-    };
+    return createPlatformSocketWorker(standardWebSocketHost);
 }
 
 export function createPlatformSocketWorker(host: WebSocketHost) {

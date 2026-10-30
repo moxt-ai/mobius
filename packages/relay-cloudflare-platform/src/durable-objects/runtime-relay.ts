@@ -1,17 +1,24 @@
 import { DurableObject } from "cloudflare:workers";
 import {
+    acceptWebSocketHttpTransport,
     createLocalSessionOperations,
     DurableObjectSqlDatabase,
     logger,
     RuntimeRelay as RuntimeRelayImplementation,
     standardWebSocketHost,
+    WebSocketUploadBudget,
 } from "@moxt-ai/mobius-relay-core";
-import { RUNTIME_HEARTBEAT_ACK_MESSAGE, RUNTIME_HEARTBEAT_MESSAGE } from "@moxt-ai/mobius-sdk/protocol";
+import {
+    MOBIUS_API_PREFIX,
+    RUNTIME_HEARTBEAT_ACK_MESSAGE,
+    RUNTIME_HEARTBEAT_MESSAGE,
+} from "@moxt-ai/mobius-sdk/protocol";
 import { runtimeRequestTarget } from "../gateway/runtime-session-routing.ts";
 import { type ConfiguredPlatformRelayBindings, createPlatformSocketWorker } from "../platform-worker.ts";
 import { createPlatformDurableObjectContext } from "./platform-durable-object-context.ts";
 
 export class RuntimeRelay extends DurableObject<ConfiguredPlatformRelayBindings> {
+    readonly #uploads = new WebSocketUploadBudget();
     readonly #runtime: RuntimeRelayImplementation;
     readonly #context: ReturnType<typeof createPlatformDurableObjectContext>;
     readonly #environment: ConfiguredPlatformRelayBindings;
@@ -51,6 +58,34 @@ export class RuntimeRelay extends DurableObject<ConfiguredPlatformRelayBindings>
                     operations: createLocalSessionOperations(this.#context, current.projectId, current.runtimeId),
                 },
             };
+            if (
+                new URL(request.url).pathname ===
+                `${MOBIUS_API_PREFIX}/v1/projects/${current.projectId}/runtimes/${current.runtimeId}/transport`
+            ) {
+                return acceptWebSocketHttpTransport(
+                    request,
+                    async (operation) => {
+                        const response = await this.#application.fetch(operation, environment);
+                        if (response.status === 101) {
+                            await this.scheduleViewerExpiry();
+                        }
+                        return response;
+                    },
+                    standardWebSocketHost,
+                    {
+                        uploads: this.#uploads,
+                        validateTarget: (operation) => {
+                            const target = runtimeRequestTarget(operation);
+                            return (
+                                target !== null &&
+                                target.projectId === current.projectId &&
+                                target.runtimeId === current.runtimeId &&
+                                !new URL(operation.url).pathname.endsWith("/transport")
+                            );
+                        },
+                    },
+                );
+            }
             const response = await this.#application.fetch(request, environment);
             if (response.status === 101) {
                 await this.scheduleViewerExpiry();
