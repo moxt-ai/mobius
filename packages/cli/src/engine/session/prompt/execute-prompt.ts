@@ -24,7 +24,7 @@ export interface ExecutePromptOptions {
     readonly directories: WorkspaceDirectoryService;
     readonly sessions: SessionManager;
     readonly attemptId: string;
-    readonly activateAttempt: () => { readonly epoch: string; readonly sequence: 0 };
+    readonly activateAttempt: (execution: string) => { readonly epoch: string; readonly sequence: 0 };
     readonly waitForSessionAvailability: (
         signal: AbortSignal,
     ) => Promise<
@@ -131,7 +131,10 @@ export async function executePrompt({
                 );
             }
         }
-        const stream = activateAttempt();
+        // A steering prompt joins the execution of the turn it steers, so cancelling it cancels that execution.
+        const stream = activateAttempt(
+            availability.disposition === SessionPromptDisposition.Steer ? command.targetCommandId : command.commandId,
+        );
         const lifecycle = eventProjection.started(
             command.sessionId,
             command.commandId,
@@ -172,6 +175,7 @@ export async function executePrompt({
         } else {
             const result = await sessions.runPrompt({
                 adapter,
+                cancellationRequested,
                 ...(externalizeSessionUpdate === undefined ? {} : { externalizeSessionUpdate }),
                 additionalDirectories: resolved.additionalDirectories,
                 agent: executionAgent,

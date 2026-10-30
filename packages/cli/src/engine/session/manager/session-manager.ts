@@ -634,12 +634,14 @@ export class SessionManager {
             }),
         );
 
+    /** Cancels the named command's Agent execution; a command that is not executing has nothing to stop. */
     readonly cancelPrompt = async (
         sessionId: string,
+        commandId: string,
         signal: AbortSignal = AbortSignal.timeout(30_000),
     ): Promise<void> =>
         this.#operations.run({ signal }, async ({ signal }) => {
-            await this.#executions.cancel(sessionId, async () => {
+            await this.#executions.cancel(sessionId, commandId, async () => {
                 const runtime = this.#executionProcesses.get(sessionId);
                 if (runtime !== undefined) {
                     const outcome = await runtime.cancel(signal);
@@ -715,32 +717,34 @@ export class SessionManager {
                 throw new AcpExecutionError("The native session is being managed", {}, "session_busy");
             }
             this.#executions.begin(options.sessionId, options.commandId);
+            // The command's own turn records a cancellation that arrives before its execution begins.
+            const cancelled = (): boolean =>
+                options.cancellationRequested?.() === true ||
+                this.#executions.cancellation(options.sessionId) !== undefined;
             try {
                 this.#onSessionStatusChanged({
                     kind: "session.status.changed",
                     sessionId: options.sessionId,
                     status: { commandId: options.commandId, kind: "working" },
                 });
-                if (this.#executions.cancellation(options.sessionId) !== undefined) {
+                if (cancelled()) {
                     return { stopReason: "cancelled" };
                 }
                 const runtime = await this.ensureSession(options);
                 if (this.#nativeOperations.has(nativeOperationKey(options.agent.id, runtime.nativeSessionId()))) {
                     throw new AcpExecutionError("The native session is being managed", {}, "session_busy");
                 }
-                if (this.#executions.cancellation(options.sessionId) !== undefined) {
+                if (cancelled()) {
                     return { stopReason: "cancelled" };
                 }
                 try {
                     const result = await runtime.prompt({
                         ...options,
-                        cancellationRequested: () => this.#executions.cancellation(options.sessionId) !== undefined,
+                        cancellationRequested: cancelled,
                     });
-                    return this.#executions.cancellation(options.sessionId) !== undefined
-                        ? { stopReason: "cancelled" }
-                        : result;
+                    return cancelled() ? { stopReason: "cancelled" } : result;
                 } catch (error) {
-                    if (this.#executions.cancellation(options.sessionId) !== undefined) {
+                    if (cancelled()) {
                         await this.#executions.cancellation(options.sessionId);
                         return { stopReason: "cancelled" };
                     }
@@ -755,7 +759,7 @@ export class SessionManager {
                         async () => await failedRuntime.close(),
                     );
                 }
-                if (this.#executions.cancellation(options.sessionId) !== undefined) {
+                if (cancelled()) {
                     return { stopReason: "cancelled" };
                 }
                 if (error instanceof AcpExecutionError) {

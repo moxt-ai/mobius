@@ -30,7 +30,13 @@ type TurnDispatchState =
     | { readonly kind: "queued"; readonly promotion: PromiseWithResolvers<void> }
     | { readonly kind: "promoted" }
     | { readonly kind: "admitted"; readonly disposition: string }
-    | { readonly kind: "running" };
+    /** The Agent execution the turn belongs to: its own command, or the turn it steers. */
+    | { readonly kind: "running"; readonly execution: string };
+
+export type TurnCancellation =
+    | { readonly kind: "already-requested" }
+    | { readonly kind: "pending" }
+    | { readonly kind: "running"; readonly execution: string };
 
 export class ActiveRuntimeTurn {
     readonly attemptId: string;
@@ -73,8 +79,8 @@ export class ActiveRuntimeTurn {
         this.#finished.resolve();
     };
 
-    readonly activate = (): { readonly epoch: string; readonly sequence: 0 } => {
-        this.#dispatch = { kind: "running" };
+    readonly activate = (execution: string): { readonly epoch: string; readonly sequence: 0 } => {
+        this.#dispatch = { kind: "running", execution };
         return { epoch: this.#epoch, sequence: 0 };
     };
 
@@ -169,16 +175,16 @@ export class ActiveRuntimeTurn {
     readonly matchesInteraction = (interactionId: string, sessionId: string): boolean =>
         this.command.sessionId === sessionId && this.#interaction?.interactionId === interactionId;
 
-    readonly requestCancellation = (): "already-requested" | "pending" | "running" => {
+    readonly requestCancellation = (): TurnCancellation => {
         if (this.#cancellationRequested) {
-            return "already-requested";
+            return { kind: "already-requested" };
         }
         this.#cancellationRequested = true;
         if (this.#dispatch.kind !== "running") {
             this.#controller.abort(new Error("The queued Agent turn was cancelled"));
-            return "pending";
+            return { kind: "pending" };
         }
-        return "running";
+        return { kind: "running", execution: this.#dispatch.execution };
     };
 
     readonly cancellationRequested = (): boolean => this.#cancellationRequested;
