@@ -115,11 +115,10 @@ test("execution-only prompt propagation keeps the run path out of eager recovery
     };
 
     await executePrompt({
-        operations: { markExecutionStarted: () => undefined },
         eventProjection: {
             completed: async () => undefined,
             failed: async () => undefined,
-            started: () => ({}),
+            lifecycle: () => ({}),
         },
         command,
         resolveAgent: async () => ({ id: "agent-1", environment: {} }),
@@ -137,10 +136,10 @@ test("execution-only prompt propagation keeps the run path out of eager recovery
             },
         },
         attemptId: "attempt-1",
-        activateAttempt: () => ({ epoch: "epoch-1", sequence: 0 }),
+        epoch: "epoch-1",
         waitForSessionAvailability: async () => ({ kind: "available", disposition: "reject" }),
         signal: new AbortController().signal,
-        recordSteeringPrompt: () => false,
+        steerTargetStarted: () => false,
         cancellationRequested: () => false,
     } as never);
 

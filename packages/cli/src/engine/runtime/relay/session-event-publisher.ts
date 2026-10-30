@@ -1,6 +1,7 @@
 import {
     type DaemonToServiceMessage,
     encodeDaemonToServiceMessage,
+    isPromptTerminal,
     SESSION_EVENT_BATCH_MAX_SIZE,
     SESSION_EVENT_KIND,
     type SessionCloseNoticeEvent,
@@ -189,9 +190,7 @@ export class RuntimeSessionEventPublisher implements SessionEventSink {
                     generationId: event.sessionGenerationId,
                 });
             } else if (
-                (payload.kind === "prompt.completed" ||
-                    payload.kind === "prompt.failed" ||
-                    payload.kind === "prompt.failed-before-start") &&
+                isPromptTerminal(payload) &&
                 this.#awaitingFirstAnswer.get(event.sessionId)?.commandId === payload.commandId &&
                 this.#awaitingFirstAnswer.get(event.sessionId)?.generationId === event.sessionGenerationId
             ) {

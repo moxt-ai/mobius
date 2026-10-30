@@ -69,7 +69,6 @@ export const sessionPromptCommand: RuntimeCommand = {
             });
         };
         void executePrompt({
-            operations: context.operations,
             eventProjection: context.eventProjection,
             command: message,
             resolveAgent: context.resolveAgent,
@@ -88,13 +87,13 @@ export const sessionPromptCommand: RuntimeCommand = {
             directories: context.directories,
             sessions: context.sessions,
             attemptId: receipt.attemptId,
-            activateAttempt: turn.activate,
+            epoch: turn.epoch,
             waitForSessionAvailability: (signal) =>
                 context.sessionTurns.admitAndWait(turn, signal, () => {
                     queueChanged();
                 }),
             signal: turn.signal,
-            recordSteeringPrompt: () => context.sessionTurns.recordSteeringPrompt(message),
+            steerTargetStarted: () => context.sessionTurns.steerTargetStarted(message),
             cancellationRequested: turn.cancellationRequested,
         })
             .catch((error: unknown) => {

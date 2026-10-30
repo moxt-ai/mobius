@@ -59,8 +59,8 @@ export class SessionTurns {
         }
     };
 
-    readonly recordSteeringPrompt = (command: SessionPromptCommand): boolean =>
-        this.#bySessionId.get(command.sessionId)?.recordSteeringPrompt(command) ?? false;
+    readonly steerTargetStarted = (command: SessionPromptCommand): boolean =>
+        this.#bySessionId.get(command.sessionId)?.steerTargetStarted(command) ?? false;
 
     readonly executionSnapshot = async (matches: (command: SessionPromptCommand) => Promise<boolean>) => {
         for (const session of this.#bySessionId.values()) {

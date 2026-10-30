@@ -7,7 +7,7 @@ import type {
     SessionLiveEvent,
     SessionPromptCommand,
 } from "@moxt-ai/mobius-sdk/protocol";
-import { SESSION_CLOSED_ERROR_CODE } from "@moxt-ai/mobius-sdk/protocol";
+import { isPromptTerminal, SESSION_CLOSED_ERROR_CODE } from "@moxt-ai/mobius-sdk/protocol";
 import type { SessionEventSink } from "../api/session-api.ts";
 import type { ExecutionReceipts } from "../turn/execution-receipts.ts";
 import { isTextPromptResourceMediaType } from "./prompt-artifacts.ts";
@@ -57,24 +57,28 @@ function promptContent(command: SessionPromptCommand): readonly ContentBlock[] {
     return content;
 }
 
+/** Whether a command started or settled, as its execution receipt records it. */
+type ExecutionProgress = Pick<ExecutionReceipts, "hasStarted" | "isTerminalExecution">;
+
 export class PromptLifecycle {
     readonly #sink: SessionEventSink;
+    /** Terminal events held until their command's admission and execution state are released. */
     readonly #terminal = new Map<string, SessionLiveEvent>();
     readonly #publications = new Map<string, SessionLiveEvent[]>();
     readonly #queued = new Map<string, QueuedPromptRequest>();
     readonly #recordActiveTurn: (event: SessionLiveEvent) => void;
-    readonly #hasStarted: (commandId: string, sessionId: string) => boolean;
+    readonly #executions: ExecutionProgress;
 
     readonly #recordLifecycle: (sessionId: string, event: SessionEventPayload) => Promise<boolean>;
     constructor(
         sink: SessionEventSink,
         recordLifecycle: (sessionId: string, event: SessionEventPayload) => Promise<boolean>,
         recordActiveTurn: (event: SessionLiveEvent) => void,
-        hasStarted: (commandId: string, sessionId: string) => boolean,
+        executions: ExecutionProgress,
     ) {
         this.#recordLifecycle = recordLifecycle;
         this.#recordActiveTurn = recordActiveTurn;
-        this.#hasStarted = hasStarted;
+        this.#executions = executions;
         this.#sink = sink;
     }
 
@@ -93,8 +97,8 @@ export class PromptLifecycle {
         });
     };
 
-    /** Metadata for an execution already claimed by the receipt owner. */
-    readonly started = (
+    /** The lifecycle metadata the Agent session records when it starts this claimed command. */
+    readonly lifecycle = (
         sessionId: string,
         commandId: string,
         attemptId: string,
@@ -125,12 +129,7 @@ export class PromptLifecycle {
     readonly record = (recorded: SessionLiveEvent): void => {
         this.#recordActiveTurn(recorded);
         const sessionId = recorded.sessionId;
-        if (
-            recorded.type === "lifecycle-metadata" &&
-            (recorded.payload.kind === "prompt.completed" ||
-                recorded.payload.kind === "prompt.failed" ||
-                recorded.payload.kind === "prompt.failed-before-start")
-        ) {
+        if (recorded.type === "lifecycle-metadata" && isPromptTerminal(recorded.payload)) {
             // Publish termination after prompt admission and execution state are settled.
             this.#terminal.set(recorded.payload.commandId, recorded);
             const pending = this.#publications.get(sessionId) ?? [];
@@ -190,7 +189,7 @@ export class PromptLifecycle {
 
     readonly completed = async (sessionId: string, commandId: string, stopReason: string): Promise<void> => {
         const request = this.#queued.get(commandId);
-        if (request?.sessionId !== sessionId || this.#terminal.has(commandId)) {
+        if (request?.sessionId !== sessionId || this.#executions.isTerminalExecution(commandId, sessionId)) {
             return;
         }
         const recorded = await this.#recordLifecycle(sessionId, {
@@ -199,7 +198,7 @@ export class PromptLifecycle {
                 kind: "prompt.completed",
                 commandId,
                 stopReason,
-                ...(this.#hasStarted(commandId, sessionId) ? {} : { execution: "not-started" as const }),
+                ...(this.#executions.hasStarted(commandId, sessionId) ? {} : { execution: "not-started" as const }),
             },
         });
         if (!recorded) {
@@ -212,14 +211,23 @@ export class PromptLifecycle {
         }
     };
 
-    readonly failed = async (sessionId: string, commandId: string, code: string, message: string): Promise<void> => {
+    /** Settles a failed command; whether it failed before or after starting is its receipt's fact. */
+    readonly failed = async (
+        sessionId: string,
+        commandId: string,
+        attemptId: string,
+        code: string,
+        message: string,
+    ): Promise<void> => {
         const request = this.#queued.get(commandId);
-        if (request?.sessionId !== sessionId || this.#terminal.has(commandId)) {
+        if (request?.sessionId !== sessionId || this.#executions.isTerminalExecution(commandId, sessionId)) {
             return;
         }
         const recorded = await this.#recordLifecycle(sessionId, {
             type: "lifecycle-metadata",
-            payload: { kind: "prompt.failed-before-start", commandId, code, message },
+            payload: this.#executions.hasStarted(commandId, sessionId)
+                ? { kind: "prompt.failed", attemptId, commandId, code, message }
+                : { kind: "prompt.failed-before-start", commandId, code, message },
         });
         if (!recorded || code === SESSION_CLOSED_ERROR_CODE) {
             this.#sink.publishOperationFailure(sessionId, commandId, code, message);
@@ -228,7 +236,10 @@ export class PromptLifecycle {
 
     readonly promptRequestRecovery = (sessionId: string): PromptRequestRecovery => ({
         queuedPromptRequests: [...this.#queued.values()]
-            .filter((request) => request.sessionId === sessionId && !this.#hasStarted(request.commandId, sessionId))
+            .filter(
+                (request) =>
+                    request.sessionId === sessionId && !this.#executions.hasStarted(request.commandId, sessionId),
+            )
             .map(({ commandId, content, disposition, targetCommandId }) => ({
                 commandId,
                 content,
@@ -256,6 +267,7 @@ export async function settleAbandonedTurn(
     await projection.failed(
         cancellation.sessionId,
         cancellation.commandId,
+        attemptId,
         "agent_execution_abandoned",
         "The local Agent execution was abandoned before it completed",
     );

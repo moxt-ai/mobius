@@ -8,6 +8,7 @@ import { setTimeout } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { MobiusAppCredentialProvider, MobiusPlatformAppClient } from "@moxt-ai/mobius-sdk/platform";
 import {
+    isPromptTerminal,
     type NativeSessionEvents,
     RUNTIME_WORKSPACE_BINDING_ID,
     type SessionCommand,
@@ -677,9 +678,7 @@ async function getCommand(directory: string, flags: ReadonlyMap<string, string>)
         const terminal = Promise.withResolvers<void>();
         const isFollowedTerminal = (event: SessionLiveEvent): boolean =>
             event.type === "lifecycle-metadata" &&
-            (event.payload.kind === "prompt.completed" ||
-                event.payload.kind === "prompt.failed" ||
-                event.payload.kind === "prompt.failed-before-start") &&
+            isPromptTerminal(event.payload) &&
             event.payload.commandId === followedCommandId;
         const observer: MobiusSessionEventObserver = {
             reconcile: async (liveConnection) => {

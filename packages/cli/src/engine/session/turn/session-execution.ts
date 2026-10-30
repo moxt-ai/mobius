@@ -39,7 +39,10 @@ const waitForTurnCompletion = (turn: ActiveRuntimeTurn, waitSignal: AbortSignal)
     });
 };
 
-/** One session's in-flight turns: FIFO admission, steering, and interaction recording. */
+/**
+ * One session's in-flight turns: FIFO admission, steering, and interaction recording. Admission is the only place
+ * that decides whether the Session is busy; whether a turn started is read from its execution receipt.
+ */
 export class SessionExecutionState {
     readonly #sessionId: string;
     readonly #turnsByCommandId = new Map<string, ActiveRuntimeTurn>();
@@ -53,7 +56,9 @@ export class SessionExecutionState {
     readonly isEmpty = (): boolean => this.#turnsByCommandId.size === 0;
 
     readonly start = (command: SessionPromptCommand, attemptId: string): ActiveRuntimeTurn => {
-        const turn = new ActiveRuntimeTurn(command, attemptId);
+        const turn = new ActiveRuntimeTurn(command, attemptId, () =>
+            this.#operations.hasStarted(command.commandId, this.#sessionId),
+        );
         this.#turnsByCommandId.set(command.commandId, turn);
         return turn;
     };
@@ -82,10 +87,9 @@ export class SessionExecutionState {
         return event;
     };
 
-    readonly recordSteeringPrompt = (command: SessionPromptCommand): boolean => {
-        const target = this.#turnsByCommandId.get(command.targetCommandId);
-        return target?.recordSteeringPrompt(command) ?? false;
-    };
+    /** A steering prompt can join only a target whose execution already started. */
+    readonly steerTargetStarted = (command: SessionPromptCommand): boolean =>
+        this.#turnsByCommandId.get(command.targetCommandId)?.hasStarted() ?? false;
 
     readonly turns = (): readonly ActiveRuntimeTurn[] => [...this.#turnsByCommandId.values()];
 
@@ -104,9 +108,11 @@ export class SessionExecutionState {
     ): Promise<SessionAdmission> => {
         const command = turn.command;
         waitSignal.throwIfAborted();
+        // The Session is busy while an earlier turn owns an execution. A promoted prompt steers
+        // instead, so its effective disposition, not the submitted one, decides.
         const head = (): ActiveRuntimeTurn | undefined =>
             [...this.#turnsByCommandId.values()].find(
-                (turn) => turn.command.disposition !== SessionPromptDisposition.Steer,
+                (turn) => turn.effectiveDisposition() !== SessionPromptDisposition.Steer,
             );
         // The target guards admission only. Accepted work belongs to the Session
         // FIFO and must survive the original target finishing or being cancelled.

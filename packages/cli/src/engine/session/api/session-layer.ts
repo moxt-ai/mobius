@@ -93,7 +93,7 @@ export function buildSessionLayer(options: SessionLayerOptions) {
     const manager = new SessionManager({
         observer: new SessionLayerObserver(
             (event) => {
-                operations.recordOutcome(event);
+                operations.record(event);
                 eventProjection.record(event);
             },
             sink.publishInfo,
@@ -116,12 +116,12 @@ export function buildSessionLayer(options: SessionLayerOptions) {
                 return true;
             }
             const recorded = events.append(sessionId, event);
-            operations.recordOutcome(recorded);
+            operations.record(recorded);
             eventProjection.record(recorded);
             return true;
         },
         activeSessions.recordSessionEvent,
-        operations.hasStarted,
+        operations,
     );
     const nativeSessions = new NativeSessionService(
         bindingId,

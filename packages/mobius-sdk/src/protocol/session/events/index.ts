@@ -398,6 +398,33 @@ export const lifecycleMetadataSchema = z.discriminatedUnion("kind", [
         .readonly(),
 ]);
 export type LifecycleMetadata = z.infer<typeof lifecycleMetadataSchema>;
+/** A lifecycle event that settles its prompt command: no later lifecycle event of that command follows it. */
+export type PromptTerminalLifecycle = Extract<
+    LifecycleMetadata,
+    { readonly kind: "prompt.completed" | "prompt.failed" | "prompt.failed-before-start" }
+>;
+export const isPromptTerminal = (payload: LifecycleMetadata): payload is PromptTerminalLifecycle => {
+    switch (payload.kind) {
+        case "prompt.completed":
+        case "prompt.failed":
+        case "prompt.failed-before-start":
+            return true;
+        case "prompt.requested":
+        case "prompt.started":
+        case "session.queue.changed":
+        case "session.permission.requested":
+        case "session.permission.resolved":
+        case "session.elicitation.requested":
+        case "session.elicitation.resolved":
+            return false;
+        default: {
+            // Every lifecycle kind must decide whether it settles its command.
+            const unknownKind: never = payload;
+            void unknownKind;
+            return false;
+        }
+    }
+};
 export const sessionEventPayloadSchema = z.discriminatedUnion("type", [
     z.object({ payload: acpSessionUpdateSchema, type: z.literal("acp") }).readonly(),
     z.object({ payload: lifecycleMetadataSchema, type: z.literal("lifecycle-metadata") }).readonly(),
