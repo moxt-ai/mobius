@@ -172,15 +172,12 @@ export function buildSessionLayer(options: SessionLayerOptions) {
             };
         },
     );
-    const recoveredEvents = operations
-        .recover()
-        .map(({ sessionId, event, recordedAt }) => events.append(sessionId, event, recordedAt));
+    // Outcomes retained across a restart are published once. The sink keeps them until the Relay connects,
+    // and a later reconnect does not replay events it already sent.
+    for (const { sessionId, event, recordedAt } of operations.recover()) {
+        sink.publish(events.append(sessionId, event, recordedAt));
+    }
     return {
-        publishRecoveredOutcomes: () => {
-            for (const event of recoveredEvents) {
-                sink.publish(event);
-            }
-        },
         activeSessions,
         directories,
         eventProjection,
