@@ -6,7 +6,6 @@ import {
     type MobiusPlatformAppCredentialMetadata,
     type MobiusPlatformAppSessionStatusWebhook,
     type MobiusPlatformDeveloperClient,
-    type MobiusPlatformProject,
     type MobiusPlatformRecordingPolicy,
 } from "@moxt-ai/mobius-sdk/platform";
 import { createStore } from "zustand/vanilla";
@@ -21,21 +20,10 @@ export type RevealedSecret =
     | { readonly kind: "webhook-created"; readonly appId: string; readonly secret: string }
     | { readonly kind: "webhook-rotated"; readonly appId: string; readonly secret: string };
 
-/** A Project together with the Recording policy that currently applies to it. */
-export interface ProjectRecording {
-    readonly policy: MobiusPlatformRecordingPolicy;
-    readonly project: MobiusPlatformProject;
-}
-
 export type RecordingState =
     | { readonly kind: "loading" }
     | { readonly kind: "failed" }
     | { readonly kind: "ready"; readonly policy: MobiusPlatformRecordingPolicy };
-
-export type ProjectsState =
-    | { readonly kind: "loading" }
-    | { readonly kind: "failed" }
-    | { readonly kind: "ready"; readonly items: readonly ProjectRecording[] };
 
 export type WebhookState =
     | { readonly kind: "loading" }
@@ -55,7 +43,6 @@ interface PlatformStore {
         | { readonly kind: "ready"; readonly items: readonly MobiusPlatformAppCredentialMetadata[] };
     readonly error: string;
     readonly notice: { readonly message: string } | null;
-    readonly projects: ProjectsState;
     readonly rename: RenameState;
     readonly secret: RevealedSecret | null;
     readonly secretVisible: boolean;
@@ -70,8 +57,6 @@ interface PlatformStore {
     readonly failCredentials: (appId: string) => void;
     readonly setError: (value: string) => void;
     readonly setNotice: (value: string) => void;
-    readonly setProjects: (appId: string, value: readonly ProjectRecording[]) => void;
-    readonly failProjects: (appId: string) => void;
     readonly setRename: (value: RenameState) => void;
     readonly setSecret: (value: RevealedSecret | null) => void;
     readonly setSecretVisible: (value: boolean) => void;
@@ -180,7 +165,6 @@ export function createPlatformStore() {
         credentials: { kind: "loading" },
         error: "",
         notice: null,
-        projects: { kind: "loading" },
         rename: { kind: "idle" },
         secret: null,
         secretVisible: false,
@@ -199,10 +183,6 @@ export function createPlatformStore() {
             set((state) => (state.selectedAppId === appId ? { credentials: { kind: "failed" } } : state)),
         setError: (error) => set({ error }),
         setNotice: (message) => set({ notice: message.length > 0 ? { message } : null }),
-        setProjects: (appId, items) =>
-            set((state) => (state.selectedAppId === appId ? { projects: { kind: "ready", items } } : state)),
-        failProjects: (appId) =>
-            set((state) => (state.selectedAppId === appId ? { projects: { kind: "failed" } } : state)),
         setRename: (rename) => set({ rename }),
         setSecret: (secret) => set({ secret }),
         setSecretVisible: (secretVisible) => set({ secretVisible }),
@@ -216,7 +196,6 @@ export function createPlatformStore() {
                           appRecording: { kind: "loading" },
                           appTab: "api-keys",
                           credentials: { kind: "loading" },
-                          projects: { kind: "loading" },
                           webhook: { kind: "loading" },
                           rename: { kind: "idle" },
                           error: "",

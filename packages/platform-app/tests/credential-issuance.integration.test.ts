@@ -8,6 +8,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { createTestMobiusPlatformBindings } from "../../test-support/src/cloudflare.ts";
 import { listen, port } from "../../test-support/src/websocket.ts";
 import { PlatformApp } from "../src/application.tsx";
+import { platformDataTestId } from "../src/data-testid.ts";
 
 const observers = new Set<MutationObserver>();
 
@@ -119,6 +120,61 @@ afterEach(() => {
     observers.clear();
     document.body.replaceChildren();
     vi.useRealTimers();
+});
+
+test("Given an App with default recording settings, When its developer opens Recording, Then only application-wide Enabled and Disabled controls are shown and recording defaults off", async () => {
+    vi.useFakeTimers({ now: new Date("2026-10-30T12:00:00Z"), toFake: ["Date"] });
+    await using platform = await createTestMobiusPlatformBindings();
+    await using proxy = await listLossProxy(platform.origin, "/credentials", () => undefined);
+    if (!("happyDOM" in window) || !(window.happyDOM instanceof DetachedWindowAPI)) {
+        throw new Error("Expected the browser test environment");
+    }
+    window.happyDOM.setURL(proxy.endpoint);
+    const token = "local-platform-developer";
+    const developer = new MobiusPlatformDeveloperClient({
+        endpoint: platform.origin,
+        authenticationProviderId: "clerk",
+        credentialProvider: new MobiusOidcCredentialProvider(token),
+        transport: { fetch: platform.request },
+    });
+    const signal = AbortSignal.timeout(10_000);
+    const tenant = (await developer.listTenants(signal))[0];
+    if (tenant === undefined) {
+        throw new Error("No test organization");
+    }
+    await developer.createApp(tenant.tenantId, "Application recording", signal);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    try {
+        await act(async () =>
+            root.render(
+                createElement(PlatformApp, {
+                    endpoint: proxy.endpoint,
+                    getToken: async () => token,
+                    organization: { id: tenant.tenantId, name: tenant.displayName },
+                    organizationControl: null,
+                    userControl: null,
+                }),
+            ),
+        );
+        await visibleElement('button[aria-label="Revoke key 1"]');
+        await act(async () =>
+            button("Recording").dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 })),
+        );
+        const control = await visibleElement(`[data-testid="${platformDataTestId.appRecordingMode}"]`);
+        expect([...control.querySelectorAll("label")].map((label) => label.textContent.trim())).toEqual([
+            "Enabled",
+            "Disabled",
+        ]);
+        const disabled = control.querySelector('input[value="disabled"]');
+        expect(disabled instanceof HTMLInputElement && disabled.checked).toBe(true);
+        expect(document.body.textContent).toContain("Enable or disable it for all projects in this app.");
+        expect(document.body.textContent).not.toContain("Project recording");
+        expect(document.body.textContent).not.toContain("Inherit");
+    } finally {
+        await act(async () => root.unmount());
+    }
 });
 
 test("Given a successful key issuance, when the following list refresh fails, the user can still reveal and copy that one key", async () => {
