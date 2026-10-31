@@ -16,6 +16,7 @@ import {
     mcpElicitationParamsSchema,
     reasoningTextDeltaParamsSchema,
     requestUserInputParamsSchema,
+    threadNotificationSchema,
     threadSettingsUpdatedSchema,
     turnNotificationSchema,
     turnSchema,
@@ -36,6 +37,27 @@ const COMPACT_TIMEOUT_MILLISECONDS = 3_600_000;
 // How long a manual /compact keeps its turn open for the contextCompaction item
 // before ending the turn without a compaction report (older servers).
 const COMPACT_ITEM_WAIT_MILLISECONDS = 600_000;
+
+// The app-server notifications a Session handles. Every one is thread-scoped: the Codex
+// app-server protocol (0.153.0 and 0.154.0) declares a required `threadId` on each, and one
+// connection carries every loaded thread, including the child threads Codex runs subagents in.
+// None of them is thread-agnostic, so each belongs to this Session only when it names this
+// Session's thread. Notifications without a `threadId` (account, MCP server, configuration and
+// deprecation warnings, fs, process and command/exec streams) and `thread/started`, which names
+// its thread inside `thread`, carry nothing for a Session and are not handled.
+const THREAD_NOTIFICATIONS: ReadonlySet<string> = new Set([
+    "item/agentMessage/delta",
+    "item/completed",
+    "item/reasoning/summaryTextDelta",
+    "item/reasoning/textDelta",
+    "item/started",
+    "thread/compacted",
+    "thread/name/updated",
+    "thread/settings/updated",
+    "turn/completed",
+    "turn/plan/updated",
+    "turn/started",
+]);
 
 interface OwnedAgentContext {
     readonly onBackgroundActivity?: (activity: BackgroundActivity) => void;
@@ -373,11 +395,20 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
     };
 
     readonly onNotification = async (method: string, params: unknown): Promise<void> => {
+        if (!THREAD_NOTIFICATIONS.has(method)) {
+            return;
+        }
+        // Thread ownership is decided here, once, before any branch reads or mutates Session state:
+        // a notification for another thread, such as a subagent's child thread, or one without a
+        // valid thread identity never reaches this Session's tracking or output.
+        const thread = threadNotificationSchema.safeParse(params);
+        if (!thread.success || thread.data.threadId !== this.#context.threadId()) {
+            return;
+        }
         if (method === "turn/started") {
             const decoded = turnNotificationSchema.safeParse(params);
             if (
                 decoded.success &&
-                decoded.data.threadId === this.#context.threadId() &&
                 this.#turn !== null &&
                 (this.#turn.turn.id === "" || this.#turn.turn.id === decoded.data.turn.id)
             ) {
@@ -388,7 +419,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
         }
         if (method === "turn/completed") {
             const decoded = turnNotificationSchema.safeParse(params);
-            if (decoded.success && decoded.data.threadId === this.#context.threadId()) {
+            if (decoded.success) {
                 await this.#enqueue(async () => {
                     for (const [id, mode] of this.#runningCommands) {
                         if (mode === "background") {
@@ -427,7 +458,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
         }
         if (method === "thread/settings/updated") {
             const decoded = threadSettingsUpdatedSchema.safeParse(params);
-            if (decoded.success && decoded.data.threadId === this.#context.threadId()) {
+            if (decoded.success) {
                 const mode = decoded.data.threadSettings.collaborationMode?.mode;
                 if (this.#settings.observeCollaborationMode(mode)) {
                     await this.#enqueue(async () => {
@@ -439,7 +470,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
         }
         if (method === "turn/plan/updated") {
             const plan = (params as { plan?: unknown }).plan;
-            if (Array.isArray(plan) && (params as { threadId?: unknown }).threadId === this.#context.threadId()) {
+            if (Array.isArray(plan)) {
                 const entries = plan.map((step) => ({
                     content:
                         typeof step === "object" && step !== null && "step" in step
@@ -458,7 +489,6 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
             const decoded = reasoningTextDeltaParamsSchema.safeParse(params);
             if (
                 decoded.success &&
-                decoded.data.threadId === this.#context.threadId() &&
                 this.#turn !== null &&
                 decoded.data.turnId === this.#turn.turn.id &&
                 decoded.data.delta.length > 0
@@ -483,7 +513,6 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
             const decoded = reasoningTextDeltaParamsSchema.safeParse(params);
             if (
                 decoded.success &&
-                decoded.data.threadId === this.#context.threadId() &&
                 this.#turn !== null &&
                 decoded.data.turnId === this.#turn.turn.id &&
                 decoded.data.delta.length > 0
@@ -509,7 +538,6 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
                     turn === null ||
                     typeof params !== "object" ||
                     params === null ||
-                    Reflect.get(params, "threadId") !== this.#context.threadId() ||
                     Reflect.get(params, "turnId") !== turn.turn.id
                 ) {
                     return;
