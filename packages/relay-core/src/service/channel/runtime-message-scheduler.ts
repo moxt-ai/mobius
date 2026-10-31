@@ -119,14 +119,18 @@ export class RuntimeMessageScheduler {
         this.#pendingLimit = pendingLimit;
     }
 
-    readonly run = async (lane: string, signal: AbortSignal, task: () => Promise<void>): Promise<void> => {
+    /**
+     * Runs `task` after every earlier task that shares one of its lanes, so tasks on a lane run in the order
+     * they were scheduled. A task on several lanes keeps its place in each of them.
+     */
+    readonly run = async (lanes: readonly string[], signal: AbortSignal, task: () => Promise<void>): Promise<void> => {
         signal.throwIfAborted();
         if (this.#pending >= this.#pendingLimit) {
             throw new RuntimeMessageSchedulerCapacityError(this.#pendingLimit);
         }
         this.#pending += 1;
 
-        const previous = this.#lanes.get(lane) ?? Promise.resolve();
+        const previous = Promise.all(lanes.map((lane) => this.#lanes.get(lane))).then(() => undefined);
         const operation = (async (): Promise<void> => {
             await waitForRuntimeMessage(previous, signal);
             const slot = await this.#concurrency.acquire(signal);
@@ -138,7 +142,9 @@ export class RuntimeMessageScheduler {
             }
         })();
         const tail = operation.catch(() => undefined);
-        this.#lanes.set(lane, tail);
+        for (const lane of lanes) {
+            this.#lanes.set(lane, tail);
+        }
         this.#operations.add(tail);
 
         try {
@@ -146,8 +152,10 @@ export class RuntimeMessageScheduler {
         } finally {
             this.#pending -= 1;
             this.#operations.delete(tail);
-            if (this.#lanes.get(lane) === tail) {
-                this.#lanes.delete(lane);
+            for (const lane of lanes) {
+                if (this.#lanes.get(lane) === tail) {
+                    this.#lanes.delete(lane);
+                }
             }
         }
     };
