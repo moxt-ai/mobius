@@ -4572,3 +4572,125 @@ it("Given an anonymous browser knows a Runtime, When it declares a full-budget u
         runtime.daemon.close();
     }
 });
+
+describe("Runtime prompt acknowledgements", () => {
+    const lifecycleFrame = (sessionId: string, eventId: string, position: string, payload: Record<string, unknown>) =>
+        encodeSessionEventEnvelope({
+            kind: "session.event.v2",
+            events: [
+                {
+                    eventId,
+                    position,
+                    recordedAt: new Date().toISOString(),
+                    sessionGenerationId: "session-generation-1",
+                    sessionId,
+                    type: "lifecycle-metadata",
+                    payload: payload as never,
+                },
+            ],
+        });
+
+    it("Given a queued submission, When a queue change names another command, Then only the change naming it acknowledges it", async () => {
+        const runtime = await connectRuntimeDaemon("named-queue-change");
+        try {
+            const credential = await runtime.issueRuntimeCredential(runtime.runtimeId);
+            const queue = (idempotencyKey: string) =>
+                env.RUNTIME_RELAY.getByName(runtime.runtimeId).fetch(
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${runtime.projectId}/sessions/${runtime.sessionId}/turns`,
+                        {
+                            method: "POST",
+                            headers: credentialHeaders(credential),
+                            body: JSON.stringify({
+                                additionalDirectoryIds: [],
+                                agentId: "codex",
+                                attachments: [],
+                                content: `queued ${idempotencyKey}`,
+                                directoryId: "root",
+                                disposition: "queue",
+                                idempotencyKey,
+                                targetCommandId: "running-command",
+                            }),
+                        },
+                    ),
+                );
+
+            const rejected = queue("rejected-command");
+            expect(decodeServiceToDaemonMessage(await runtime.daemonMessages.next())).toMatchObject({
+                commandId: "rejected-command",
+            });
+            // Another command leaving the queue does not answer this submission; its own rejection does.
+            runtime.daemon.send(
+                lifecycleFrame(runtime.sessionId, "other-left-queue", "1", {
+                    changedByCommandId: "other-command",
+                    kind: "session.queue.changed",
+                }),
+            );
+            runtime.daemon.send(
+                lifecycleFrame(runtime.sessionId, "rejected-failed", "2", {
+                    code: "prompt_queue_target_unavailable",
+                    commandId: "rejected-command",
+                    kind: "prompt.failed-before-start",
+                    message: "The queue target is unavailable",
+                }),
+            );
+            const failure = await rejected;
+            expect(failure.status).not.toBe(200);
+            expect(await failure.json()).toMatchObject({ error: { code: "prompt_queue_target_unavailable" } });
+
+            const admitted = queue("admitted-command");
+            expect(decodeServiceToDaemonMessage(await runtime.daemonMessages.next())).toMatchObject({
+                commandId: "admitted-command",
+            });
+            runtime.daemon.send(
+                lifecycleFrame(runtime.sessionId, "admitted-queue", "3", {
+                    changedByCommandId: "admitted-command",
+                    kind: "session.queue.changed",
+                }),
+            );
+            expect(await responseJson(await admitted, 200)).toMatchObject({
+                state: { kind: "queued" },
+                turnId: "admitted-command",
+            });
+        } finally {
+            runtime.daemon.close(1000, "Test complete");
+        }
+    }, 30_000);
+
+    it("Given a completed prompt, When it is retried with the same command identifier, Then the Runtime's acceptance answers the retry", async () => {
+        const runtime = await connectRuntimeDaemon("retried-prompt");
+        try {
+            const first = runtime.submitRuntimeTurn("retried-command");
+            expect(decodeServiceToDaemonMessage(await runtime.daemonMessages.next())).toMatchObject({
+                commandId: "retried-command",
+                kind: "session.prompt",
+            });
+            runtime.startTurn("retried-command", "1");
+            expect((await first).status).toBe(200);
+            runtime.daemon.send(
+                lifecycleFrame(runtime.sessionId, "retried-completed", "2", {
+                    commandId: "retried-command",
+                    kind: "prompt.completed",
+                    stopReason: "end_turn",
+                }),
+            );
+
+            const retry = runtime.submitRuntimeTurn("retried-command");
+            expect(decodeServiceToDaemonMessage(await runtime.daemonMessages.next())).toMatchObject({
+                commandId: "retried-command",
+                kind: "session.prompt",
+            });
+            runtime.daemon.send(
+                JSON.stringify({
+                    kind: "session.prompt.accepted",
+                    requestId: "retried-command",
+                    sessionId: runtime.sessionId,
+                    state: "settled",
+                }),
+            );
+            expect(await responseJson(await retry, 200)).toMatchObject({ turnId: "retried-command" });
+        } finally {
+            runtime.daemon.close(1000, "Test complete");
+        }
+    }, 30_000);
+});

@@ -79,6 +79,7 @@ import {
     SESSION_PREPARE_KIND,
     SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND,
     SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND,
+    SESSION_PROMPT_ACCEPTED_KIND,
     SESSION_PROMPT_DISPOSITION_KIND,
     SESSION_PROMPT_KIND,
     SESSION_QUERIED_KIND,
@@ -294,7 +295,11 @@ export class ChannelActor {
                 );
                 return;
             }
-            if (kind === NATIVE_SESSION_RESULT_KIND || kind === SESSION_OPERATION_FAILED_KIND) {
+            if (
+                kind === NATIVE_SESSION_RESULT_KIND ||
+                kind === SESSION_OPERATION_FAILED_KIND ||
+                kind === SESSION_PROMPT_ACCEPTED_KIND
+            ) {
                 this.broadcast(
                     [
                         ...this.#peers.hosts(),

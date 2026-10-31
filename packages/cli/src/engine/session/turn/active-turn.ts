@@ -69,6 +69,10 @@ export class ActiveRuntimeTurn {
         this.#admission = { kind: "queued", promotion: Promise.withResolvers<void>() };
     };
 
+    /** Whether the prompt was admitted to its Session's queue, whatever happened to it afterwards. */
+    readonly enteredQueue = (): boolean =>
+        this.command.disposition === SessionPromptDisposition.Queue && this.#admission.kind !== "waiting";
+
     readonly isQueued = (): boolean =>
         (this.#admission.kind === "queued" ||
             (this.#admission.kind === "admitted" && this.#admission.disposition === SessionPromptDisposition.Queue)) &&

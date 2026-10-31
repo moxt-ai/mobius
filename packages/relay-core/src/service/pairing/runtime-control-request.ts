@@ -52,6 +52,7 @@ import {
     type SessionPrepareCommand,
     type SessionPreviewHistoryPageLoad,
     type SessionPreviewHistoryWirePageLoaded,
+    type SessionPromptAcceptedEvent,
     type SessionPromptCommand,
     type SessionPromptDispositionCommand,
     type SessionQueryCommand,
@@ -134,6 +135,7 @@ export type RuntimeControlResult =
     | TurnCompleted
     | TurnStarted
     | TurnQueued
+    | SessionPromptAcceptedEvent
     | SessionPreviewHistoryWirePageLoaded
     | SessionHistoryWirePageLoaded
     | SessionElicitationResolvedEvent
@@ -170,15 +172,16 @@ function lifecycleReply(
         return { kind: "reject", error: new SessionRuntimeError(payload.code, payload.message) };
     }
     if (command.kind === "session.prompt" && payload.kind === "session.queue.changed") {
-        // A queue change on the submitted Session acknowledges a queue-disposition
-        // Turn: the daemon records it as the prompt enters its queue. The event is
-        // Session-scoped, so this resolves submissions that asked to be queued;
-        // every other disposition keeps waiting for its own prompt.started. A
-        // queue-disposition Turn completing on the same Session also records a
-        // queue change, so it can acknowledge a newer submission slightly early;
-        // the response state is advisory while the Turn's own lifecycle events
-        // remain authoritative for its outcome.
-        if (command.disposition !== "queue" || sessionId !== command.sessionId) {
+        // The daemon records a queue change naming the prompt as it enters the queue, which acknowledges a
+        // queue-disposition Turn; every other disposition keeps waiting for its own prompt.started. A change naming
+        // another command answers nothing. Runtimes before the change named its command record an unnamed one, which
+        // can only be matched to the Session: it may acknowledge a newer submission early, so the response state is
+        // advisory while the Turn's own lifecycle events remain authoritative for its outcome.
+        if (
+            command.disposition !== "queue" ||
+            sessionId !== command.sessionId ||
+            (payload.changedByCommandId !== undefined && payload.changedByCommandId !== requestId)
+        ) {
             return { kind: "ignore" };
         }
         return {

@@ -107,6 +107,10 @@ export class SessionControl {
             throw error;
         }
         const result = await this.#control(command);
+        if (result.kind === "session.prompt.accepted" && result.requestId === command.commandId) {
+            // A retried command that already settled was accepted and ran; its own lifecycle events carry the outcome.
+            return { commandId: result.requestId, state: result.state === "queued" ? "queued" : "running" };
+        }
         if (
             (result.kind !== "turn.started" && result.kind !== "turn.queued") ||
             result.commandId !== command.commandId
