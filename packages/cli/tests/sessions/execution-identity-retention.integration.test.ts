@@ -22,6 +22,7 @@ async function observe(peer: RealDaemonPeer, commandIds: readonly string[]) {
     const pending = new Set(commandIds);
     const outcomes = new Map<string, Settlement>();
     const completedCommandIds: string[] = [];
+    const restatedCommandIds: string[] = [];
     const unstartedCommandIds: string[] = [];
     let output = "";
     while (pending.size > 0) {
@@ -45,7 +46,9 @@ async function observe(peer: RealDaemonPeer, commandIds: readonly string[]) {
                 }
                 const payload = event.payload;
                 if (payload.kind === "prompt.completed") {
-                    completedCommandIds.push(payload.commandId);
+                    (event.mobiusMetadata?.restated === true ? restatedCommandIds : completedCommandIds).push(
+                        payload.commandId,
+                    );
                     if (payload.execution === "not-started") {
                         unstartedCommandIds.push(payload.commandId);
                     }
@@ -61,7 +64,7 @@ async function observe(peer: RealDaemonPeer, commandIds: readonly string[]) {
             }
         }
     }
-    return { outcomes, output, completedCommandIds, unstartedCommandIds };
+    return { outcomes, output, completedCommandIds, restatedCommandIds, unstartedCommandIds };
 }
 
 test("Given an executed command, When its receipt is evicted and the daemon restarts, Then retries and delayed cancellations preserve its executed identity", async () => {
@@ -98,6 +101,8 @@ test("Given an executed command, When its receipt is evicted and the daemon rest
                 const beforeEviction = await observe(peer, [control.commandId]);
                 expect(beforeEviction.output).toContain("Controlled ACP turn 2: Before eviction");
                 expect(beforeEviction.completedCommandIds).toEqual([control.commandId]);
+                // The retry is answered from the receipt: its outcome is restated, not recorded again.
+                expect(beforeEviction.restatedCommandIds).toEqual([original.commandId]);
 
                 const rejected = Array.from({ length: 1_026 }, () => randomUUID());
                 for (const commandId of rejected) {

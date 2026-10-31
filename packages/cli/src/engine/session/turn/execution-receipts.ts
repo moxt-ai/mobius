@@ -28,10 +28,17 @@ export type RuntimeExecutionReceipt =
           attemptId: string;
           commandId: string;
           kind: "duplicate";
-          outcome: SessionEventPayload | undefined;
+          // Whether the original command has ended, as its receipt records it.
+          state: "settled" | "unsettled";
       }>
     | { readonly kind: "conflict" }
     | { readonly kind: "expired" };
+
+/** What a cancellation before admission found: a cancellation it recorded, or an outcome recorded earlier. */
+export type CancellationBeforeAdmission =
+    | { readonly kind: "recorded"; readonly outcome: SessionEventPayload }
+    | { readonly kind: "restated"; readonly outcome: SessionEventPayload }
+    | { readonly kind: "unavailable" };
 
 type ExecutionState =
     | { readonly kind: "pending" }
@@ -169,7 +176,6 @@ const unexpectedStanding = (standing: never): never => {
 
 export class ExecutionReceipts {
     readonly #executions = new Map<string, ExecutionReceipt>();
-    readonly #recoveredCommands = new Set<string>();
 
     readonly #table: ExecutionReceiptTable;
     readonly #cancellations: CommandCancellationTable;
@@ -194,7 +200,6 @@ export class ExecutionReceipts {
             if (cancelledBeforeStart(state)) {
                 retained.push({ commandId, sessionId: identity.sessionId });
             }
-            this.#recoveredCommands.add(commandId);
         }
         cancellations.retain(retained);
     }
@@ -217,7 +222,6 @@ export class ExecutionReceipts {
         this.#executions.set(commandId, receipt);
         for (const evictedCommandId of evicted) {
             this.#executions.delete(evictedCommandId);
-            this.#recoveredCommands.delete(evictedCommandId);
         }
         let activeCount = 0;
         for (const entry of this.#executions.values()) {
@@ -364,27 +368,35 @@ export class ExecutionReceipts {
         }
     };
 
-    /** Reserves an unseen command for cancellation before a delayed prompt can claim its identity. */
+    /**
+     * Reserves an unseen command for cancellation before a delayed prompt can claim its identity. A command that
+     * already has an outcome keeps it, and the outcome is restated rather than recorded again.
+     */
     readonly recordCancellationBeforeAdmission = (
         commandId: string,
         sessionId: string,
-    ): SessionEventPayload | undefined => {
+    ): CancellationBeforeAdmission => {
         const standing = this.#standing(commandId, sessionId);
         switch (standing.kind) {
             case "foreign":
-                return undefined;
+                return { kind: "unavailable" };
             case "retryable":
-            case "retained":
-                return this.outcome(commandId);
+            case "retained": {
+                const outcome = this.outcome(commandId);
+                return outcome === undefined ? { kind: "unavailable" } : { kind: "restated", outcome };
+            }
             case "expired":
                 // Preserve the legacy cancellation acknowledgement without replacing an executed
                 // identity with a before-admission reservation after its detailed receipt expired.
                 return {
-                    type: "lifecycle-metadata",
-                    payload: { kind: "prompt.completed", commandId, stopReason: "cancelled" },
+                    kind: "restated",
+                    outcome: {
+                        type: "lifecycle-metadata",
+                        payload: { kind: "prompt.completed", commandId, stopReason: "cancelled" },
+                    },
                 };
             case "cancelled":
-                return cancelledBeforeStartOutcome(commandId);
+                return { kind: "restated", outcome: cancelledBeforeStartOutcome(commandId) };
             case "unseen":
                 break;
             default:
@@ -411,7 +423,7 @@ export class ExecutionReceipts {
                 outcome: JSON.stringify({ ...outcome, recordedAt: new Date().toISOString() }),
             },
         });
-        return outcome;
+        return { kind: "recorded", outcome };
     };
     /**
      * Receipts follow their command's recorded lifecycle. `prompt.started` is recorded where the command is handed
@@ -513,7 +525,7 @@ export class ExecutionReceipts {
                     attemptId: standing.receipt.attemptId,
                     commandId,
                     kind: "duplicate",
-                    outcome: this.#recoveredCommands.has(commandId) ? this.outcome(commandId) : undefined,
+                    state: executionOutcome(standing.receipt.state) === null ? "unsettled" : "settled",
                 };
             case "expired":
                 return standing.commandHash === commandHash ? { kind: "expired" } : { kind: "conflict" };
@@ -521,7 +533,6 @@ export class ExecutionReceipts {
                 // Forget the restart failure, then claim as if it had never been received.
                 this.#table.remove(commandId);
                 this.#executions.delete(commandId);
-                this.#recoveredCommands.delete(commandId);
                 return this.claimExecution(commandId, sessionId, commandJson);
             case "unseen":
                 break;
@@ -552,7 +563,6 @@ export class ExecutionReceipts {
 
     readonly close = (): void => {
         this.#executions.clear();
-        this.#recoveredCommands.clear();
         this.#cancellations.close();
     };
 }

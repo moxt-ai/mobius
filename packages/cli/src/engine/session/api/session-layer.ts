@@ -129,6 +129,7 @@ export function buildSessionLayer(options: SessionLayerOptions) {
             eventProjection.record(recorded);
             return true;
         },
+        (sessionId, event) => events.append(sessionId, event),
         activeSessions.recordSessionEvent,
         operations,
     );

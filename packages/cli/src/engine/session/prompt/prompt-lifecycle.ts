@@ -70,13 +70,16 @@ export class PromptLifecycle {
     readonly #executions: ExecutionProgress;
 
     readonly #recordLifecycle: (sessionId: string, event: SessionEventPayload) => Promise<boolean>;
+    readonly #append: (sessionId: string, event: SessionEventPayload) => SessionLiveEvent;
     constructor(
         sink: SessionEventSink,
         recordLifecycle: (sessionId: string, event: SessionEventPayload) => Promise<boolean>,
+        append: (sessionId: string, event: SessionEventPayload) => SessionLiveEvent,
         recordActiveTurn: (event: SessionLiveEvent) => void,
         executions: ExecutionProgress,
     ) {
         this.#recordLifecycle = recordLifecycle;
+        this.#append = append;
         this.#recordActiveTurn = recordActiveTurn;
         this.#executions = executions;
         this.#sink = sink;
@@ -137,11 +140,16 @@ export class PromptLifecycle {
             this.#publications.set(sessionId, pending);
             return;
         }
-        const pending = this.#publications.get(sessionId);
+        this.#publishInOrder(recorded);
+    };
+
+    /** Publishes after the Session's held terminal events, so clients receive its events in order. */
+    readonly #publishInOrder = (event: SessionLiveEvent): void => {
+        const pending = this.#publications.get(event.sessionId);
         if (pending !== undefined) {
-            pending.push(recorded);
+            pending.push(event);
         } else {
-            this.#sink.publish(recorded);
+            this.#sink.publish(event);
         }
     };
 
@@ -172,12 +180,24 @@ export class PromptLifecycle {
         this.#queued.delete(commandId);
     };
 
-    readonly replayOutcome = async (sessionId: string, event: SessionEventPayload): Promise<void> => {
+    readonly recordOutcome = async (sessionId: string, event: SessionEventPayload): Promise<void> => {
         if (event.type !== "lifecycle-metadata" || !("commandId" in event.payload)) {
             return;
         }
         await this.#recordLifecycle(sessionId, event);
         this.publishTerminal(sessionId, event.payload.commandId);
+    };
+
+    /**
+     * Answers a retried request about a command with the outcome its receipt already holds. The restatement is marked,
+     * so Recording and status notifications do not take it for a new outcome, and it does not settle the receipt again.
+     */
+    readonly restateOutcome = (sessionId: string, event: SessionEventPayload): void => {
+        if (event.type !== "lifecycle-metadata" || !("commandId" in event.payload)) {
+            return;
+        }
+        const restated = this.#append(sessionId, event);
+        this.#publishInOrder({ ...restated, mobiusMetadata: { ...restated.mobiusMetadata, restated: true } });
     };
 
     readonly queueChanged = async (sessionId: string, commandId: string): Promise<void> => {
@@ -257,10 +277,16 @@ export async function settleAbandonedTurn(
     operations: ExecutionReceipts,
     cancellation: SessionCancelCommand,
 ): Promise<void> {
-    const outcome = operations.recordCancellationBeforeAdmission(cancellation.commandId, cancellation.sessionId);
-    if (outcome !== undefined) {
-        await projection.replayOutcome(cancellation.sessionId, outcome);
-        return;
+    const cancelled = operations.recordCancellationBeforeAdmission(cancellation.commandId, cancellation.sessionId);
+    switch (cancelled.kind) {
+        case "recorded":
+            await projection.recordOutcome(cancellation.sessionId, cancelled.outcome);
+            return;
+        case "restated":
+            projection.restateOutcome(cancellation.sessionId, cancelled.outcome);
+            return;
+        case "unavailable":
+            break;
     }
     const attemptId = operations.findUnsettledAttemptId(cancellation.commandId, cancellation.sessionId);
     if (attemptId === null) {

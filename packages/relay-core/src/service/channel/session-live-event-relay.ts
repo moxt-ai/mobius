@@ -102,9 +102,15 @@ export class SessionLiveEventRelay {
                 }
             }
         }
-        // Both consumers observe live events, including when no browsers are watching.
+        // Both consumers observe live events, including when no browsers are watching. A restated outcome answers a
+        // retried request and records nothing new, so neither receives it.
+        const recorded = envelope.events.filter((event) => event.mobiusMetadata?.restated !== true);
+        if (recorded.length === 0) {
+            return;
+        }
         const scope = { projectId: this.#projectId, runtimeId: this.#runtimeId };
-        this.#notifications?.publish(scope, envelope);
-        this.#recording.publish(scope, envelope);
+        const facts = recorded.length === envelope.events.length ? envelope : { ...envelope, events: recorded };
+        this.#notifications?.publish(scope, facts);
+        this.#recording.publish(scope, facts);
     };
 }
