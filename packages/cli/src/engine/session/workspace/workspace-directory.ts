@@ -153,6 +153,23 @@ export class WorkspaceDirectoryService {
         };
     };
 
+    /**
+     * Names a directory a Session recorded when it was resolved, without reading the filesystem. A Session
+     * keeps its identity after its directory is moved, deleted or unmounted; using the Session resolves the
+     * directory again and fails there.
+     */
+    readonly identifyRecorded = (
+        bindingId: string,
+        recordedPath: string,
+    ): { readonly directoryId: string; readonly name: string; readonly label: string } => {
+        this.authorizeMachine(bindingId);
+        return {
+            directoryId: encodePath(recordedPath),
+            name: basename(recordedPath) || recordedPath,
+            label: this.label(recordedPath),
+        };
+    };
+
     readonly resolve = async (bindingId: string, id: string, signal: AbortSignal): Promise<string> => {
         this.authorizeMachine(bindingId);
         return await this.resolvePath(this.requestedPath(id), signal);
