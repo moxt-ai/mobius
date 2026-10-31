@@ -687,9 +687,13 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         const locationHint = requestedLocationHint;
         const digest = await requestDigest(normalizedDisplayName, clientReference, locationHint);
         signal.throwIfAborted();
+        // A retry names the same request when it asks for the same Project. The location hint only chooses where a
+        // new Project is placed, and the Project records where it was placed, so a retry from elsewhere still matches.
+        const sameRequest = (project: ProjectRow): boolean =>
+            project.display_name === normalizedDisplayName && project.client_reference === clientReference;
         const existing = await this.#storage.readProjectByIdempotencyKey(app.app_id, normalizedIdempotencyKey, signal);
         if (existing !== null) {
-            if (existing.request_digest !== digest) {
+            if (!sameRequest(existing)) {
                 throw new PlatformControlPlaneError(
                     "idempotency_conflict",
                     "The Project idempotency key was used with another request",
@@ -733,6 +737,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
             lifecycle: "active",
             location_hint: placement.locationHint,
             project_id: projectId,
+            // Kept for released Workers, which still compare it on a retry; this version compares the Project itself.
             request_digest: digest,
             tenant_id: app.tenant_id,
             updated_at: now,
@@ -761,7 +766,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
                 normalizedIdempotencyKey,
                 signal,
             );
-            if (duplicate !== null && duplicate.request_digest === digest) {
+            if (duplicate !== null && sameRequest(duplicate)) {
                 await this.recoverProjectProvisioning(duplicate, access, signal);
                 return projectResource(duplicate);
             }
