@@ -3,7 +3,7 @@ import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
-import { mkdtemp, readdir, readFile, rm, stat, watch, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, watch, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
@@ -148,6 +148,37 @@ test("Given a released manager, When it upgrades its worker, Then the new releas
         (await run(oldVersion, ["--version"])).stdout,
         new RegExp(`Daemon: ${oldVersion.replaceAll(".", "\\.")}`),
     );
+    const dataPointerPath = join(environment.MOBIUS_STATE_DIRECTORY, "current-data.txt");
+    const originalDataPointer = await readFile(dataPointerPath, "utf8");
+    const application = join(
+        environment.MOBIUS_STATE_DIRECTORY,
+        originalDataPointer.trim(),
+        "installations",
+        "dev.mobius.cli",
+    );
+    const { installationId } = JSON.parse(await readFile(join(application, "current.json"), "utf8"));
+    const connectionId = `mcn_${"b".repeat(32)}`;
+    const connections = join(application, installationId, "connections");
+    await mkdir(connections, { recursive: true });
+    await writeFile(
+        join(connections, `${connectionId}.json`),
+        JSON.stringify({
+            activation: "stopped",
+            appId: "app_compat",
+            channelId: "channel_compat",
+            connectionId,
+            defaultWorkspace: directory,
+            installationId,
+            kind: "verified",
+            pairingId: "",
+            relayOrigin: "http://127.0.0.1:1",
+            runtimeCredential: "a".repeat(43),
+            runtimeId: "runtime_compat",
+            version: 6,
+        }),
+        { mode: 0o600 },
+    );
+    assert.ok((await run(oldVersion, ["pair", "list"])).stdout.includes(connectionId));
     // Advance only time; the released worker's own hourly loop downloads the
     // candidate and asks its real manager to switch it.
     const upgraded = (async () => {
@@ -171,6 +202,12 @@ test("Given a released manager, When it upgrades its worker, Then the new releas
     })();
     await writeFile(clock, "3600000");
     await upgraded;
+    assert.equal(await readFile(dataPointerPath, "utf8"), originalDataPointer);
+    assert.ok((await run(next.version, ["pair", "list"])).stdout.includes(connectionId));
+    await run(next.version, ["pair", "stop", "--connection", connectionId]);
+    assert.ok((await run(oldVersion, ["pair", "list"])).stdout.includes(connectionId));
+    await run(oldVersion, ["pair", "remove", "--connection", connectionId]);
+    assert.ok(!(await run(next.version, ["pair", "list"])).stdout.includes(connectionId));
     assert.equal(await readFile(join(state, "manager.lock"), "utf8"), manager);
     assert.match(
         (await run(next.version, ["--version"])).stdout,

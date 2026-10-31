@@ -255,7 +255,7 @@ describe("Mobius manager version compatibility", () => {
         }
     });
 
-    it("Given a stopped daemon with saved data, When a manually installed version starts, Then it inherits the last data directory and retains the pointer after quit", async () => {
+    it("Given a stopped daemon with saved data, When a manually installed version starts, Then it reuses the last data directory and retains the pointer after quit", async () => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-manual-data-upgrade-"));
         temporaryDirectories.push(directory);
         const stateRoot = join(directory, "state");
@@ -295,14 +295,14 @@ describe("Mobius manager version compatibility", () => {
             expect(listed.stdout).toContain(saved.connectionId);
             expect((await readFile(pointer, "utf8")).trim()).toBe(`versions/${cliPackage.version}`);
             expect((await runCli(["start"], environment, deadline, nextCli)).code).toBe(0);
-            expect((await readFile(pointer, "utf8")).trim()).toBe(`versions/${nextVersion}`);
+            expect((await readFile(pointer, "utf8")).trim()).toBe(`versions/${cliPackage.version}`);
             expect((await runCli(["quit"], environment, deadline, nextCli)).code).toBe(0);
-            expect((await readFile(pointer, "utf8")).trim()).toBe(`versions/${nextVersion}`);
-            expect(await readFile(join(stateRoot, "versions", nextVersion, "retained-data"), "utf8")).toBe("original");
-            await writeFile(join(stateRoot, "versions", nextVersion, "retained-data"), "newer");
+            expect((await readFile(pointer, "utf8")).trim()).toBe(`versions/${cliPackage.version}`);
+            expect(await readFile(join(original, "retained-data"), "utf8")).toBe("original");
+            await writeFile(join(original, "retained-data"), "newer");
             // An older CLI uses the newer daemon's data and never brings back its own stale copy.
             expect((await runCli(["start"], environment, deadline)).code).toBe(0);
-            expect((await readFile(pointer, "utf8")).trim()).toBe(`versions/${nextVersion}`);
+            expect((await readFile(pointer, "utf8")).trim()).toBe(`versions/${cliPackage.version}`);
             expect(
                 (await runCli(["pair", "remove", "--connection", saved.connectionId], environment, deadline)).code,
             ).toBe(0);

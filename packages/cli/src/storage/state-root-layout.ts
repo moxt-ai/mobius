@@ -1,9 +1,9 @@
 /** The entries a Mobius state root owns at its top level. */
 export const STATE_ROOT_LAYOUT = Object.freeze({
-    /** Names the version whose data is current. */
+    /** Names the shared data container in the format understood by installed CLIs. */
     currentData: "current-data.txt",
     /** Applications' installations: `installations/<application>/<installation>`. */
     installations: "installations",
-    /** Each CLI version's data: `versions/<version>`. */
+    /** Existing data containers; executable upgrades reuse the current one. */
     versions: "versions",
 });

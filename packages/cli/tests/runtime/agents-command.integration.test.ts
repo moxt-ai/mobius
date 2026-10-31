@@ -3,7 +3,6 @@ import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import packageMetadata from "../../package.json" with { type: "json" };
 
 const temporaryDirectories: string[] = [];
 
@@ -48,6 +47,9 @@ async function machineWithoutAgents(): Promise<{ readonly environment: NodeJS.Pr
         root,
         environment: {
             HOME: root,
+            MOBIUS_CLAUDE_PATH: "",
+            MOBIUS_CODEX_PATH: "",
+            MOBIUS_PI_PATH: "",
             MOBIUS_STATE_DIRECTORY: join(root, "state"),
             PATH: dirname(process.execPath),
             TMPDIR: root,
@@ -57,7 +59,7 @@ async function machineWithoutAgents(): Promise<{ readonly environment: NodeJS.Pr
 }
 
 describe("Mobius agents command", () => {
-    it("Given an obsolete default-workspace environment override, When the user discovers Agents, Then the CLI uses its installation workspace and leaves the override path untouched", async () => {
+    it("Given an obsolete default-workspace environment override, When the user discovers Agents, Then the CLI uses the stable workspace outside its data container and leaves the override path untouched", async () => {
         const { environment, root } = await machineWithoutAgents();
         const obsoleteWorkspace = join(root, "obsolete-workspace");
         const result = await runCli(
@@ -67,12 +69,7 @@ describe("Mobius agents command", () => {
         );
         expect(result.code, result.stderr).toBe(0);
         expect(JSON.parse(result.stdout)).toMatchObject({ available: [] });
-        const application = join(root, "state", "versions", packageMetadata.version, "installations", "dev.mobius.cli");
-        const installationId = (await readdir(application)).find((entry) => entry.startsWith("min_"));
-        if (installationId === undefined) {
-            throw new Error("The CLI did not initialize its installation");
-        }
-        await expect(readdir(join(application, installationId, "workspace"))).resolves.toEqual([]);
+        await expect(readdir(join(root, "state", "workspace"))).resolves.toEqual([]);
         await expect(stat(obsoleteWorkspace)).rejects.toMatchObject({ code: "ENOENT" });
     });
 
