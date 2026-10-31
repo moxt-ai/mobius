@@ -4851,4 +4851,32 @@ describe("Runtime prompt acknowledgements", () => {
             runtime.daemon.close(1000, "Test complete");
         }
     }, 30_000);
+
+    it("Given a prompt that already settled, When it is retried with the same idempotency key, Then the Turn is reported indeterminate instead of running", async () => {
+        const runtime = await connectRuntimeDaemon("settled-retry");
+        try {
+            const retry = runtime.submitRuntimeTurn("settled-command");
+            expect(decodeServiceToDaemonMessage(await runtime.daemonMessages.next())).toMatchObject({
+                commandId: "settled-command",
+                kind: "session.prompt",
+            });
+            runtime.daemon.send(
+                JSON.stringify({
+                    kind: "session.prompt.accepted",
+                    requestId: "settled-command",
+                    sessionId: runtime.sessionId,
+                    state: "settled",
+                }),
+            );
+            expect(await responseJson(await retry, 200)).toMatchObject({
+                state: {
+                    kind: "indeterminate",
+                    reconciliation: { detectedAt: "2026-09-18T00:00:00.000Z", reason: "dispatch_indeterminate" },
+                },
+                turnId: "settled-command",
+            });
+        } finally {
+            runtime.daemon.close(1000, "Test complete");
+        }
+    }, 30_000);
 });

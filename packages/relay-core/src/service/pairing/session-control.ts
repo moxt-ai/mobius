@@ -50,6 +50,16 @@ export interface TurnSubmission extends SessionBindingRequest {
     readonly historyPolicy?: "eager" | "execution-only" | undefined;
 }
 
+/**
+ * Where a submitted Turn's command stands when the Runtime answers its submission. `settled` answers a retried command
+ * that had already ended: the Runtime states neither how nor when it ended, so the command's own lifecycle events
+ * carry its outcome.
+ */
+export interface TurnAdmission {
+    readonly commandId: string;
+    readonly state: "queued" | "running" | "settled";
+}
+
 export type InteractionResponse =
     | { readonly kind: "permission"; readonly optionId: string; readonly outcome: "cancelled" | "selected" }
     | { readonly kind: "elicitation"; readonly action: "accept" | "cancel" | "decline"; readonly content: string };
@@ -76,9 +86,7 @@ export class SessionControl {
         this.#sessionId = sessionId;
     }
 
-    readonly submitTurn = async (
-        turn: TurnSubmission,
-    ): Promise<{ readonly commandId: string; readonly state: "running" | "queued" }> => {
+    readonly submitTurn = async (turn: TurnSubmission): Promise<TurnAdmission> => {
         const binding = await this.#binding(turn);
         let command: SessionPromptCommand;
         try {
@@ -108,8 +116,8 @@ export class SessionControl {
         }
         const result = await this.#control(command);
         if (result.kind === "session.prompt.accepted" && result.requestId === command.commandId) {
-            // A retried command that already settled was accepted and ran; its own lifecycle events carry the outcome.
-            return { commandId: result.requestId, state: result.state === "queued" ? "queued" : "running" };
+            // A retried command is answered with where the original command stands.
+            return { commandId: result.requestId, state: result.state };
         }
         if (
             (result.kind !== "turn.started" && result.kind !== "turn.queued") ||
