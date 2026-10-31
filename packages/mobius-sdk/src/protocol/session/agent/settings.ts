@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { DIRECTORY_IDENTIFIER } from "../../shared/directory.ts";
 import { identifierStringSchema as IDENTIFIER } from "../../shared/identifier.ts";
 import { decodeZodMessage as decode, encodeZodMessage as encode } from "../../shared/message-codec.ts";
 import { configValueSchema, SHORT_TEXT } from "../shared/index.ts";
@@ -50,6 +51,9 @@ export type AgentModelEffort = z.infer<typeof agentModelEffortSchema>;
 const agentSettingsDiscoverCommandSchema = z
     .object({
         agentId: IDENTIFIER,
+        // The directory a Session would start in, whose project settings the Agent reads. Omitted, the Runtime's
+        // default directory. A Runtime that predates this field ignores it; see the discovered event's `directoryId`.
+        directoryId: DIRECTORY_IDENTIFIER.optional(),
         kind: z.literal(AGENT_SETTINGS_DISCOVER_KIND),
         model: z.string().min(1).max(500).optional(),
         requestId: IDENTIFIER,
@@ -63,6 +67,9 @@ const agentSettingsDiscoveredEventSchema = z
         agentId: IDENTIFIER,
         agentName: z.string().max(255),
         agentVersion: z.string().max(128),
+        // The directory the settings were discovered in. Absent from older Runtimes, which always discover in the
+        // Runtime's default directory whatever the command named.
+        directoryId: DIRECTORY_IDENTIFIER.optional(),
         kind: z.literal(AGENT_SETTINGS_DISCOVERED_KIND),
         modelEffort: agentModelEffortSchema,
         requestId: IDENTIFIER,

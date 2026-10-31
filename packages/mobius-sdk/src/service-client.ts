@@ -121,6 +121,11 @@ export interface MobiusCredentialProvider {
 }
 
 export interface DiscoverMobiusAgentSettingsRequest {
+    /**
+     * The directory a new Session would start in; omitted, the Runtime's default directory. The result's `directoryId`
+     * names the directory actually inspected, and is absent when the Runtime predates directory-scoped discovery.
+     */
+    readonly directoryId?: string;
     readonly model?: string;
 }
 

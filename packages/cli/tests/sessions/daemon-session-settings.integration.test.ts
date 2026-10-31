@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -392,6 +392,126 @@ describe("daemon session configuration boundary", () => {
             });
             expect(withoutEffort.settings).not.toEqual(
                 expect.arrayContaining([expect.objectContaining({ id: "reasoning_effort" })]),
+            );
+        } finally {
+            cancellation.abort();
+            for (const socket of relaySockets) {
+                socket.destroy();
+            }
+            relay.close();
+            await runtime;
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("Given a project directory whose Agent settings choose another model, When settings are discovered for that directory, Then the daemon reports that directory's default model", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-directory-settings-"));
+        const workspace = join(stateDirectory, "workspace");
+        const project = join(stateDirectory, "project");
+        const nativeStateDirectory = join(stateDirectory, "native");
+        await Promise.all([
+            mkdir(workspace),
+            mkdir(join(project, ".claude"), { recursive: true }),
+            mkdir(nativeStateDirectory),
+        ]);
+        await writeFile(join(project, ".claude", "settings.json"), JSON.stringify({ model: "test-large" }));
+        const projectDirectoryId = `path-${Buffer.from(await realpath(project)).toString("base64url")}`;
+
+        const socketReady = Promise.withResolvers<Duplex>();
+        const relaySockets = new Set<Duplex>();
+        const relay = createServer((request, response) => {
+            if (request.method === "PUT" && request.url?.includes("/catalog") === true) {
+                request.resume();
+                response.writeHead(204);
+                response.end();
+                return;
+            }
+            response.writeHead(404);
+            response.end();
+        });
+        relay.on("connection", (socket) => {
+            relaySockets.add(socket);
+            socket.once("close", () => relaySockets.delete(socket));
+            socket.on("error", () => undefined);
+        });
+        relay.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            const accept = createHash("sha1")
+                .update(`${key ?? ""}${websocketGuid}`)
+                .digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            sendText(socket, JSON.stringify({ kind: "runtime.liveness.ready" }));
+            socketReady.resolve(socket);
+        });
+        await listen(relay);
+
+        const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
+        relayUrl.searchParams.set("token", "d".repeat(43));
+        const agent = new AcpAgentDefinition(
+            "controlled-acp",
+            "Controlled ACP",
+            process.execPath,
+            (options) =>
+                new ControlledAcpConnection(
+                    {
+                        id: "controlled-acp",
+                        adapterPath: process.execPath,
+                        arguments: [fakeAgentPath, "--agent-name", "Controlled ACP"],
+                        environment: options.environment,
+                    },
+                    options,
+                ),
+            {
+                MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory,
+            },
+        );
+        const config = createRuntimeConfig(
+            {
+                channelId: "channel_alpha",
+                defaultWorkspace: workspace,
+                relayUrl,
+            },
+            [agent],
+            new RuntimeLocalContext(stateDirectory, process.env),
+        );
+        const cancellation = new AbortController();
+        const runtime = runRuntime(config, cancellation.signal);
+
+        try {
+            const socket = await socketReady.promise;
+            const frames = new ClientFrames(socket);
+            sendText(
+                socket,
+                encodeAgentSettingsDiscoverCommand({
+                    agentId: agent.id,
+                    directoryId: projectDirectoryId,
+                    kind: AGENT_SETTINGS_DISCOVER_KIND,
+                    requestId: "controlled-settings-in-project",
+                }),
+            );
+            const inProject = await readAgentSettings(frames, "controlled-settings-in-project");
+            expect(inProject.directoryId).toBe(projectDirectoryId);
+            expect(inProject.settings).toContainEqual(
+                expect.objectContaining({ defaultValue: "test-large", id: "model" }),
+            );
+
+            sendText(
+                socket,
+                encodeAgentSettingsDiscoverCommand({
+                    agentId: agent.id,
+                    kind: AGENT_SETTINGS_DISCOVER_KIND,
+                    requestId: "controlled-settings-in-default",
+                }),
+            );
+            const inDefault = await readAgentSettings(frames, "controlled-settings-in-default");
+            expect(inDefault.directoryId).toBe("default");
+            expect(inDefault.settings).toContainEqual(
+                expect.objectContaining({ defaultValue: "test-small", id: "model" }),
             );
         } finally {
             cancellation.abort();
