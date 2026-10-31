@@ -10,7 +10,6 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
 import { createAcpClient } from "../../src/engine/acp/connection/create-client.ts";
-import { getEnvironmentSessionMessages } from "../../src/engine/acp/harness/claude/upstream/dist/environment-session-messages.js";
 import { type ClaudeSessionUpdate, createClaudeAcpApp } from "../../src/engine/acp/harness/claude/upstream/dist/lib.js";
 import { ClaudeCodeAgentSpecification } from "../../src/engine/agent/specification/vendors/claude-code-agent.ts";
 import { ClaudeFixture } from "../support/agents/claude.ts";
@@ -71,7 +70,11 @@ test("Given real Claude saves text and four resources, When its ACP history is r
         const live = updates.filter((update) => update.sessionUpdate === "user_message_chunk");
         expect(live.map((update) => update.content)).toEqual(prompt);
         const messageId = live[0]?.messageId;
-        expect(messageId).toEqual(expect.any(String));
+        if (messageId === undefined) {
+            throw new Error("Expected the live prompt to carry its message identity");
+        }
+        // Replay reads the native transcript, which Claude Code may still be writing after the turn completes.
+        const saved = await fixture.waitForSavedMessage(sessionId, messageId, signal);
         updates.length = 0;
         await connection.agent.request(
             methods.agent.session.load,
@@ -100,7 +103,6 @@ test("Given real Claude saves text and four resources, When its ACP history is r
                     : [],
             ),
         ]);
-        const saved = await getEnvironmentSessionMessages(fixture.environment, sessionId, signal);
         expect(saved.find((message) => message.uuid === messageId)?.message).toEqual(
             expect.objectContaining({
                 role: "user",
