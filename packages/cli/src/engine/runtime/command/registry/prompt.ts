@@ -48,7 +48,8 @@ export const sessionPromptCommand: RuntimeCommand = {
                           ? "queued"
                           : "running",
             });
-            const outcome = receipt.state === "settled" ? context.operations.outcome(message.commandId) : undefined;
+            const outcome =
+                receipt.state === "settled" ? context.operations.restatedOutcome(message.commandId) : undefined;
             if (outcome !== undefined) {
                 context.eventProjection.restateOutcome(message.sessionId, outcome);
             }

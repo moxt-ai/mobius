@@ -9,6 +9,7 @@ import {
     type SessionEventPayload,
     type SessionLiveEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
+import { z } from "zod";
 import type {
     CommandCancellationTable,
     PersistedCommandCancellation,
@@ -44,12 +45,21 @@ export type RecoveredOutcome =
           readonly event: SessionEventPayload;
           readonly recordedAt: string;
       }
-    | { readonly kind: "restated"; readonly sessionId: string; readonly event: SessionEventPayload };
+    | { readonly kind: "restated"; readonly sessionId: string; readonly outcome: RestatedOutcome };
+
+/**
+ * An outcome a receipt already holds, restated for clients that missed it. It keeps the time it was recorded, which
+ * receivers that predate the restated marker take as when the command ended; undefined when no receipt holds it.
+ */
+export interface RestatedOutcome {
+    readonly event: SessionEventPayload;
+    readonly recordedAt: string | undefined;
+}
 
 /** What a cancellation before admission found: a cancellation it recorded, or an outcome recorded earlier. */
 export type CancellationBeforeAdmission =
     | { readonly kind: "recorded"; readonly outcome: SessionEventPayload }
-    | { readonly kind: "restated"; readonly outcome: SessionEventPayload }
+    | { readonly kind: "restated"; readonly outcome: RestatedOutcome }
     | { readonly kind: "unavailable" };
 
 type ExecutionState =
@@ -182,6 +192,15 @@ const cancelledBeforeStartOutcome = (commandId: string): SessionEventPayload => 
     payload: { kind: "prompt.completed", commandId, stopReason: "cancelled", execution: "not-started" },
 });
 
+/** A receipt's stored outcome: the event as recorded, with its recording time. */
+const storedOutcome = (stored: string): RestatedOutcome | undefined => {
+    const parsed: unknown = JSON.parse(stored);
+    const event = decodeKnownSessionEventPayload(parsed);
+    return event === null
+        ? undefined
+        : { event, recordedAt: z.object({ recordedAt: z.string() }).parse(parsed).recordedAt };
+};
+
 const unexpectedStanding = (standing: never): never => {
     throw new Error("Unexpected command standing", { cause: standing });
 };
@@ -279,10 +298,12 @@ export class ExecutionReceipts {
     readonly beginShutdown = (): void => {
         this.#closing = true;
     };
-    readonly outcome = (commandId: string): SessionEventPayload | undefined => {
+    readonly outcome = (commandId: string): SessionEventPayload | undefined => this.restatedOutcome(commandId)?.event;
+    /** The outcome the command's receipt holds, with the time it was recorded. */
+    readonly restatedOutcome = (commandId: string): RestatedOutcome | undefined => {
         const receipt = this.#executions.get(commandId);
         const outcome = receipt === undefined ? null : executionOutcome(receipt.state);
-        return outcome === null ? undefined : (decodeKnownSessionEventPayload(JSON.parse(outcome)) ?? undefined);
+        return outcome === null ? undefined : storedOutcome(outcome);
     };
     /** The command's delivery as these receipts know it; another Session's command reads as unknown. */
     readonly delivery = (commandId: string, sessionId: string): CommandDelivery => {
@@ -394,7 +415,7 @@ export class ExecutionReceipts {
                 return { kind: "unavailable" };
             case "retryable":
             case "retained": {
-                const outcome = this.outcome(commandId);
+                const outcome = this.restatedOutcome(commandId);
                 return outcome === undefined ? { kind: "unavailable" } : { kind: "restated", outcome };
             }
             case "expired":
@@ -403,12 +424,18 @@ export class ExecutionReceipts {
                 return {
                     kind: "restated",
                     outcome: {
-                        type: "lifecycle-metadata",
-                        payload: { kind: "prompt.completed", commandId, stopReason: "cancelled" },
+                        event: {
+                            type: "lifecycle-metadata",
+                            payload: { kind: "prompt.completed", commandId, stopReason: "cancelled" },
+                        },
+                        recordedAt: undefined,
                     },
                 };
             case "cancelled":
-                return { kind: "restated", outcome: cancelledBeforeStartOutcome(commandId) };
+                return {
+                    kind: "restated",
+                    outcome: { event: cancelledBeforeStartOutcome(commandId), recordedAt: undefined },
+                };
             case "unseen":
                 break;
             default:
@@ -505,7 +532,10 @@ export class ExecutionReceipts {
             }
             if (!restoreCancellation && outcome !== null) {
                 // The previous process recorded this outcome; publishing it again restates that fact.
-                recovered.push({ kind: "restated", sessionId: receipt.sessionId, event });
+                const restated = storedOutcome(outcome);
+                if (restated !== undefined) {
+                    recovered.push({ kind: "restated", sessionId: receipt.sessionId, outcome: restated });
+                }
                 continue;
             }
             const recordedAt = new Date().toISOString();

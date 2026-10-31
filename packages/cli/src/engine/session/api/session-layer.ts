@@ -129,7 +129,7 @@ export function buildSessionLayer(options: SessionLayerOptions) {
             eventProjection.record(recorded);
             return true;
         },
-        (sessionId, event) => events.append(sessionId, event),
+        (sessionId, event, recordedAt) => events.append(sessionId, event, recordedAt),
         activeSessions.recordSessionEvent,
         operations,
     );
@@ -182,7 +182,7 @@ export function buildSessionLayer(options: SessionLayerOptions) {
                 sink.publish(events.append(recovered.sessionId, recovered.event, recovered.recordedAt));
                 break;
             case "restated":
-                eventProjection.restateOutcome(recovered.sessionId, recovered.event);
+                eventProjection.restateOutcome(recovered.sessionId, recovered.outcome);
                 break;
         }
     }
