@@ -16,6 +16,7 @@ import { CodexAgentSpecification } from "../../src/engine/agent/specification/ve
 import { CodexFixture } from "../support/agents/codex.ts";
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
+import { fakeProviderPrompts } from "../support/llm/scenarios.ts";
 
 test("Given real Codex has accepted a steering prompt, When V2 recovery reloads the working Session, Then the steered user message remains visible", async () => {
     const activeEntered = Promise.withResolvers<void>();
@@ -42,7 +43,7 @@ test("Given real Codex has accepted a steering prompt, When V2 recovery reloads 
                     disposition: SessionPromptDisposition.Reject,
                     attachments: [],
                     kind: "session.prompt",
-                    prompt: "Use two shell tools successfully, then reply STEERED_REPLY",
+                    prompt: fakeProviderPrompts.twoTools,
                     sessionId: peer.sessionId,
                     targetCommandId: "",
                 }),
@@ -185,7 +186,7 @@ test("Given real Codex advances between repeated prompts, When V2 recovery pagin
         await withRealDaemon(new CodexAgentSpecification(), codex.environment, async (peer) => {
             const active = randomUUID();
             const queued = randomUUID();
-            const repeatedPrompt = "Use two shell tools successfully, then reply BOUNDARY_REPLY";
+            const repeatedPrompt = fakeProviderPrompts.twoTools;
             const prompt = (
                 commandId: string,
                 disposition: "queue" | "reject",

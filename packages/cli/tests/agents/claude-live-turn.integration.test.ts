@@ -104,7 +104,7 @@ test("Given native Claude is installed outside PATH, When two prompts execute th
                     break;
                 }
             }
-            expect(text).toContain(provider.response);
+            expect(text).toContain(provider.responseFor(prompt));
             if (turn === 0) {
                 expect(toolSucceeded).toBe(true);
             }

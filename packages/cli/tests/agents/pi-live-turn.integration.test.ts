@@ -396,7 +396,7 @@ test("Given real Pi without an external ACP adapter, When Bash executes through 
                     break;
                 }
             }
-            expect(text).toContain(provider.response);
+            expect(text).toContain(provider.responseFor(prompt));
             if (turn === 0) {
                 expect(toolSucceeded).toBe(true);
             }

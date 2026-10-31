@@ -11,6 +11,7 @@ import { getEnvironmentSessionMessages } from "../../src/engine/acp/harness/clau
 import { type ClaudeSessionUpdate, createClaudeAcpApp } from "../../src/engine/acp/harness/claude/upstream/dist/lib.js";
 import { ClaudeFixture } from "../support/agents/claude.ts";
 import { FakeAnthropicProvider } from "../support/llm/anthropic.ts";
+import { fakeProviderPrompts } from "../support/llm/scenarios.ts";
 
 test("Given real Claude streams a message, When its harness emits chunks and replays history, Then each message has a required messageId", async () => {
     await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "CLAUDE_IDENTITY_REPLY");
@@ -65,7 +66,7 @@ test("Given real Claude streams a message, When its harness emits chunks and rep
         );
         const result = await connection.agent.request(
             methods.agent.session.prompt,
-            { sessionId, prompt: [{ type: "text", text: "Stream a short greeting, without tools" }] },
+            { sessionId, prompt: [{ type: "text", text: fakeProviderPrompts.streamedTool }] },
             { cancellationSignal: signal },
         );
         const userMessages = updates.filter((update) => update.sessionUpdate === "user_message_chunk");
