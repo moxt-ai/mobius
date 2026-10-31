@@ -55,6 +55,11 @@ jobs:
           MOBIUS_RELEASE_ARCHIVE: ${{ runner.temp }}/release/mobius-cli.tgz
           npm_config_cache: ${{ runner.temp }}/npx-cache
           npm_config_engine_strict: 'true'
+          # The journeys keep their state in the temporary directory, where the released
+          # CLI installs itself and its candidate (about 300 MB each). Windows' default
+          # temporary directory is on the slow system drive; keep it beside the npm cache.
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: >-
           npx --yes --prefer-online --package "$MOBIUS_RELEASE_ARCHIVE" -- node --test
           packages/cli/tests/release/installed-release.test.mjs
