@@ -67,9 +67,6 @@ export function PlatformAppView({
         issueCredential,
         setCredentials,
         failCredentials,
-        projects,
-        setProjects,
-        failProjects,
         setWebhook,
         failWebhook,
         selectedAppId,
@@ -196,40 +193,6 @@ export function PlatformAppView({
         return () => controller.abort();
     }, [client, selectedAppId, setWebhook, failWebhook, setError]);
 
-    /** Loads this App's Projects together with the Recording policy that resolves for each one. */
-    const refreshProjects = useCallback(
-        async (appId: string, signal: AbortSignal): Promise<void> => {
-            const clientInstance = client();
-            const listed = await clientInstance.listProjects(appId, signal);
-            signal.throwIfAborted();
-            const items = await Promise.all(
-                listed.map(async (project) => ({
-                    policy: await clientInstance.readProjectRecordingPolicy(project.projectId, signal),
-                    project,
-                })),
-            );
-            signal.throwIfAborted();
-            setProjects(appId, items);
-        },
-        [client, setProjects],
-    );
-
-    useEffect(() => {
-        if (selectedAppId.length === 0) {
-            return;
-        }
-        const controller = new AbortController();
-        void refreshProjects(selectedAppId, AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)])).catch(
-            (cause: unknown) => {
-                if (!controller.signal.aborted) {
-                    failProjects(selectedAppId);
-                    setError(cause instanceof Error ? cause.message : "Could not load projects");
-                }
-            },
-        );
-        return () => controller.abort();
-    }, [refreshProjects, selectedAppId, failProjects, setError]);
-
     const selectedApp = apps.find((app) => app.appId === selectedAppId);
 
     const createApp = (name: string): Promise<boolean> => createPlatformApp(client(), selectedTenant.tenantId, name);
@@ -241,25 +204,7 @@ export function PlatformAppView({
         void perform("app-recording", async () => {
             const policy = await client().writeAppRecordingPolicy(selectedApp.appId, mode, AbortSignal.timeout(20_000));
             setAppRecording(selectedApp.appId, policy);
-            // Project rows inherit the App setting, so refresh their resolved policies.
-            await refreshProjects(selectedApp.appId, AbortSignal.timeout(20_000));
-            setNotice(mode === "inherit" ? "Recording inherits the platform default." : `Recording ${mode}.`);
-        });
-    };
-
-    const writeProjectRecording = (projectId: string, mode: MobiusRecordingPolicyMode): void => {
-        if (projects.kind !== "ready") {
-            return;
-        }
-        void perform(`project-recording-${projectId}`, async () => {
-            const policy = await client().writeProjectRecordingPolicy(projectId, mode, AbortSignal.timeout(20_000));
-            setProjects(
-                selectedAppId,
-                projects.items.map((item) =>
-                    item.project.projectId === projectId ? { policy, project: item.project } : item,
-                ),
-            );
-            setNotice(mode === "inherit" ? "Recording inherits the app setting." : `Recording ${mode}.`);
+            setNotice(`Recording ${mode} for all projects.`);
         });
     };
 
@@ -518,8 +463,6 @@ export function PlatformAppView({
                                             appRecording={appRecording}
                                             busy={busy}
                                             onAppModeChange={writeAppRecording}
-                                            onProjectModeChange={writeProjectRecording}
-                                            projects={projects}
                                         />
                                         {webhook.kind === "ready" ? (
                                             <SessionStatusWebhookPanel

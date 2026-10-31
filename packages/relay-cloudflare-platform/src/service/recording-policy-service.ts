@@ -62,31 +62,17 @@ export class RecordingPolicyService {
     readonly writeProject = async (
         identity: VerifiedExternalIdentity,
         projectId: string,
-        mode: RecordingPolicyMode,
+        _mode: RecordingPolicyMode,
         signal: AbortSignal,
     ): Promise<object> => {
-        const { access, appId } = await this.authorizeProject(identity, projectId, signal);
+        const { access } = await this.authorizeProject(identity, projectId, signal);
         await this.#control.requireAdministrator(access, signal);
-        this.requireProvider(mode);
-        const now = Date.now();
-        const written = await this.#storage.writeProject(
-            projectId,
-            mode,
-            now,
-            this.#control.developerAuditRecord(
-                access,
-                appId,
-                projectId,
-                "project.recording-policy.updated",
-                { mode },
-                now,
-            ),
-            signal,
+        // Keep the old endpoint explicit for released clients: never acknowledge an ignored override.
+        throw new PlatformControlPlaneError(
+            "project_recording_override_unsupported",
+            "Recording is configured for the entire App; Project overrides are no longer supported",
+            409,
         );
-        if (!written) {
-            throw recordingTargetUnavailable();
-        }
-        return this.resource(await this.requirePolicy(this.#storage.readProject(projectId, signal)));
     };
 
     private readonly authorizeProject = async (
