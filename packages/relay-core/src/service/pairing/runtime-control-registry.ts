@@ -9,6 +9,7 @@ import {
     decodeSessionHistoryWirePageLoaded,
     decodeSessionPermissionResolvedEvent,
     decodeSessionPreviewHistoryWirePageLoaded,
+    decodeSessionPromptAcceptedEvent,
     decodeSessionReadyEvent,
     decodeSessionRenamedEvent,
     decodeSessionRestoredEvent,
@@ -105,7 +106,12 @@ export const runtimeControlRegistry = {
     },
     "session.prompt": {
         permission: ProjectPermission.SessionWrite,
-        reply: lifecycleReply(["prompt.started"]),
+        // A first submission is answered by its own lifecycle events; a retried command records none, so the
+        // Runtime answers it directly.
+        reply: lifecycleReply(
+            ["prompt.started"],
+            directReply("session.prompt.accepted", decodeSessionPromptAcceptedEvent),
+        ),
     },
     "session.preview-history.page.load": {
         permission: ProjectPermission.RuntimeRead,

@@ -180,10 +180,10 @@ export class PromptLifecycle {
         this.publishTerminal(sessionId, event.payload.commandId);
     };
 
-    readonly queueChanged = async (sessionId: string): Promise<void> => {
+    readonly queueChanged = async (sessionId: string, commandId: string): Promise<void> => {
         await this.#recordLifecycle(sessionId, {
             type: "lifecycle-metadata",
-            payload: { kind: "session.queue.changed" },
+            payload: { changedByCommandId: commandId, kind: "session.queue.changed" },
         });
     };
 

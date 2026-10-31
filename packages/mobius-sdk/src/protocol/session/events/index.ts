@@ -345,7 +345,9 @@ const promptExecutionContextSchema = z
     .readonly() satisfies z.ZodType<PromptExecutionContext>;
 
 export const lifecycleMetadataSchema = z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("session.queue.changed") }).readonly(),
+    // `changedByCommandId` names the command whose admission to or departure from the queue changed it. Runtimes
+    // before it existed omit it, so a reader must treat an unnamed change as possibly any command's.
+    z.object({ changedByCommandId: identifier.optional(), kind: z.literal("session.queue.changed") }).readonly(),
     z
         .object({ event: sessionPermissionRequestedEventSchema, kind: z.literal("session.permission.requested") })
         .readonly(),

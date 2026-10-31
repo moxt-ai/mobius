@@ -1,8 +1,4 @@
-import {
-    encodeSessionPromptCommand,
-    SESSION_PROMPT_KIND,
-    SessionPromptDisposition,
-} from "@moxt-ai/mobius-sdk/protocol";
+import { encodeSessionPromptCommand, SESSION_PROMPT_KIND } from "@moxt-ai/mobius-sdk/protocol";
 import { executePrompt } from "../../../session/prompt/execute-prompt.ts";
 import type { RuntimeCommand } from "../definition.ts";
 import { send } from "../transport.ts";
@@ -39,7 +35,16 @@ export const sessionPromptCommand: RuntimeCommand = {
             return;
         }
         if (receipt.kind === "duplicate") {
+            // A retry records no lifecycle event of its own, so it is answered directly with where the original
+            // command stands. A settled outcome is also replayed for clients that missed it.
             const outcome = receipt.outcome;
+            const original = context.sessionTurns.get(message.commandId, message.sessionId);
+            send(context.socket, {
+                kind: "session.prompt.accepted",
+                requestId: message.commandId,
+                sessionId: message.sessionId,
+                state: outcome !== undefined ? "settled" : original?.isQueued() === true ? "queued" : "running",
+            });
             if (outcome !== undefined) {
                 void context.eventProjection.replayOutcome(message.sessionId, outcome).catch((cause: unknown) => {
                     console.error("Could not replay the persisted execution outcome", cause);
@@ -61,10 +66,10 @@ export const sessionPromptCommand: RuntimeCommand = {
         const turn = context.sessionTurns.start(message, receipt.attemptId);
         context.eventProjection.requested(message);
         // Queue admission is acknowledged by the V2 session.queue.changed lifecycle
-        // event; the relay resolves the pending Turn submission from it, so the
-        // daemon sends no separate acknowledgment frame.
+        // event naming this command; the relay resolves the pending Turn submission
+        // from it, so the daemon sends no separate acknowledgment frame.
         const queueChanged = (): void => {
-            void context.eventProjection.queueChanged(message.sessionId).catch((error: unknown) => {
+            void context.eventProjection.queueChanged(message.sessionId, message.commandId).catch((error: unknown) => {
                 console.error("Could not record queue change", error);
             });
         };
@@ -101,7 +106,8 @@ export const sessionPromptCommand: RuntimeCommand = {
             .finally(() => {
                 context.sessionTurns.finish(turn);
                 context.eventProjection.publishTerminal(message.sessionId, message.commandId);
-                if (message.disposition === SessionPromptDisposition.Queue) {
+                // Only a prompt that entered the queue changes it by leaving.
+                if (turn.enteredQueue()) {
                     queueChanged();
                 }
             });

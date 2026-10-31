@@ -30,6 +30,7 @@ export const SESSION_STATUS_CHANGED_KIND = "session.status.changed";
 export const SESSION_COMMANDS_UPDATED_KIND = "session.commands.updated";
 export const SESSION_INFO_UPDATED_KIND = "session.info.updated";
 export const SESSION_OPERATION_FAILED_KIND = "session.operation.failed";
+export const SESSION_PROMPT_ACCEPTED_KIND = "session.prompt.accepted";
 
 const sessionStatusChangedEventSchema = z
     .object({
@@ -254,6 +255,21 @@ const sessionOperationFailedEventSchema = z
 
 export type SessionOperationFailedEvent = z.infer<typeof sessionOperationFailedEventSchema>;
 
+/**
+ * Answers a prompt whose command the Runtime had already accepted: a retry records no lifecycle event of its own,
+ * so this states where the original command stands. `requestId` is the command's identifier.
+ */
+const sessionPromptAcceptedEventSchema = z
+    .object({
+        kind: z.literal(SESSION_PROMPT_ACCEPTED_KIND),
+        requestId: IDENTIFIER,
+        sessionId: IDENTIFIER,
+        state: z.enum(["queued", "running", "settled"]),
+    })
+    .readonly();
+
+export type SessionPromptAcceptedEvent = z.infer<typeof sessionPromptAcceptedEventSchema>;
+
 export const decodeSessionListCommand = (encoded: string): SessionListCommand =>
     decode(encoded, sessionListCommandSchema);
 export const encodeSessionListCommand = (message: SessionListCommand): string =>
@@ -312,3 +328,7 @@ export const decodeSessionOperationFailedEvent = (encoded: string): SessionOpera
     decode(encoded, sessionOperationFailedEventSchema);
 export const encodeSessionOperationFailedEvent = (message: SessionOperationFailedEvent): string =>
     encode(message, sessionOperationFailedEventSchema);
+export const decodeSessionPromptAcceptedEvent = (encoded: string): SessionPromptAcceptedEvent =>
+    decode(encoded, sessionPromptAcceptedEventSchema);
+export const encodeSessionPromptAcceptedEvent = (message: SessionPromptAcceptedEvent): string =>
+    encode(message, sessionPromptAcceptedEventSchema);
