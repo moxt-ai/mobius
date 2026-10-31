@@ -207,7 +207,6 @@ export async function runRuntime(
                     reportUpgradeAvailability,
                     diagnostics,
                     onConnected: () => {
-                        layer.publishRecoveredOutcomes();
                         if (catalogPublished) {
                             options.onConnectionStatus?.("online");
                         }

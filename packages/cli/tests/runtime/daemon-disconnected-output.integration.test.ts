@@ -298,8 +298,8 @@ async function startRuntime() {
         ],
         new RuntimeLocalContext(directory, {}),
     );
-    const cancellation = new AbortController();
-    const runtime = runRuntime(config, cancellation.signal, timer, { turnActivity: activity });
+    let cancellation = new AbortController();
+    let runtime = runRuntime(config, cancellation.signal, timer, { turnActivity: activity });
     const nextPeer = (): Promise<RelayPeer> => {
         const peer = peers.shift();
         return peer === undefined ? new Promise((resolve) => waiters.push(resolve)) : Promise.resolve(peer);
@@ -309,7 +309,9 @@ async function startRuntime() {
     return {
         activity,
         bindingId: config.bindingId,
-        cancellation,
+        get cancellation() {
+            return cancellation;
+        },
         initial,
         producer,
         timer,
@@ -331,6 +333,16 @@ async function startRuntime() {
                 }),
             );
             return await producer.nextTurn();
+        },
+        /** Stops the daemon and starts it again on the same state, returning its first Relay connection. */
+        restart: async (): Promise<RelayPeer> => {
+            cancellation.abort();
+            await runtime;
+            cancellation = new AbortController();
+            runtime = runRuntime(config, cancellation.signal, timer, { turnActivity: activity });
+            const peer = await nextPeer();
+            await peer.barrier();
+            return peer;
         },
         disconnect: async (peer: RelayPeer): Promise<ManualTask> => {
             const retry = timer.next(500);
@@ -599,6 +611,30 @@ test.each([true, false])(
         ]);
     },
 );
+
+test("Given a daemon restarted with a retained outcome, When the Relay reconnects, Then the outcome is delivered once", async () => {
+    await using runtime = await startRuntime();
+    const turn = await runtime.prompt(runtime.initial, "restarted-session");
+    await turn.write("Finished before the restart.");
+    turn.finish();
+    await runtime.activity.whenIdle(runtime.cancellation.signal);
+
+    const connections = [await runtime.restart()];
+    // Each reconnection first hands over what the previous connection left unsent.
+    for (const _ of [1, 2]) {
+        const retry = await runtime.disconnect(connections.at(-1) ?? runtime.initial);
+        const reconnect = runtime.nextPeer();
+        retry.run();
+        const resumed = await reconnect;
+        await resumed.barrier();
+        connections.push(resumed);
+    }
+
+    const outcomes = connections
+        .flatMap((connection) => connection.events)
+        .filter((event) => event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed");
+    expect(outcomes).toMatchObject([{ payload: { commandId: "command-restarted-session", kind: "prompt.completed" } }]);
+});
 
 test("Given concurrent Sessions produce an offline burst, When the Runtime reconnects, Then every event reaches the Relay in order within protocol frame limits", async () => {
     await using runtime = await startRuntime();
