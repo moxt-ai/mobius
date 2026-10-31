@@ -124,15 +124,16 @@ export class PairingService {
         token: string,
         signal: AbortSignal,
     ) => {
-        const access = await this.#pairings.authorizeProject(projectId, token, ProjectPermission.RuntimeRead, signal);
-        return await this.#operations().requestProjectScopeControl(
-            access.scope,
-            runtimeId,
-            decodeRuntimeDiagnosticsRequest(
-                JSON.stringify({ kind: "runtime.diagnostics.read", requestId: crypto.randomUUID() }),
-            ),
+        const command = decodeRuntimeDiagnosticsRequest(
+            JSON.stringify({ kind: "runtime.diagnostics.read", requestId: crypto.randomUUID() }),
+        );
+        const access = await this.#pairings.authorizeProject(
+            projectId,
+            token,
+            runtimeControlPermission(command),
             signal,
         );
+        return await this.#operations().requestProjectScopeControl(access.scope, runtimeId, command, signal);
     };
 
     readonly measureRuntimeLatency = async (
@@ -141,14 +142,15 @@ export class PairingService {
         token: string,
         signal: AbortSignal,
     ): Promise<number> => {
-        const access = await this.#pairings.authorizeProject(projectId, token, ProjectPermission.RuntimeRead, signal);
-        const started = performance.now();
-        await this.#operations().requestProjectScopeControl(
-            access.scope,
-            runtimeId,
-            { kind: "runtime.ping", requestId: `ping_${crypto.randomUUID()}` },
+        const command: RuntimeControlCommand = { kind: "runtime.ping", requestId: `ping_${crypto.randomUUID()}` };
+        const access = await this.#pairings.authorizeProject(
+            projectId,
+            token,
+            runtimeControlPermission(command),
             signal,
         );
+        const started = performance.now();
+        await this.#operations().requestProjectScopeControl(access.scope, runtimeId, command, signal);
         return Math.max(0, Math.round(performance.now() - started));
     };
 
