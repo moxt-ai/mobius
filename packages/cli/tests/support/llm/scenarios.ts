@@ -19,12 +19,27 @@ export interface SubagentScript {
     readonly innerReport: string;
 }
 
+/** The prompts that script shell tool calls. A request follows one of these
+ *  scenarios only when its latest user message contains the prompt itself; any
+ *  other request is answered with plain text. */
 export const fakeProviderPrompts = {
     failedTool: "Use a shell tool that fails, then explain the result using the configured model",
     streamedTool: "Use a shell tool successfully, then stream a Unicode reply using the configured model",
     successfulTool: "Use a shell tool successfully, then reply using the configured model",
     twoTools: "Use two shell tools successfully, then reply using the configured model",
 } as const;
+
+const promptScenarios: readonly (readonly [string, FakeProviderScenario])[] = [
+    [fakeProviderPrompts.failedTool, { command: "false", streamed: false, toolCalls: 1 }],
+    [fakeProviderPrompts.streamedTool, { command: "pwd", streamed: true, toolCalls: 1 }],
+    [fakeProviderPrompts.successfulTool, { command: "pwd", streamed: false, toolCalls: 1 }],
+    [fakeProviderPrompts.twoTools, { command: "pwd", streamed: false, toolCalls: 2 }],
+];
+
+/** A test's own tool prompt runs the provider's configured tool action once. */
+const toolPromptScenario: FakeProviderScenario = { command: "pwd", streamed: false, toolCalls: 1 };
+
+const textScenario: FakeProviderScenario = { command: "pwd", streamed: false, toolCalls: 0 };
 
 function isObject(value: unknown): value is JsonObject {
     return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -49,6 +64,23 @@ function contentText(value: unknown): string {
     return "";
 }
 
+function isToolResult(part: unknown): boolean {
+    return isObject(part) && (part["type"] === "tool_result" || isObject(part["functionResponse"]));
+}
+
+/** The text a user message carries besides tool results. Claude Code sends the
+ *  next prompt in the same message as the previous turn's last tool result. */
+function userText(message: JsonObject): string {
+    for (const key of ["content", "parts"] as const) {
+        const value = message[key];
+        const text = contentText(Array.isArray(value) ? value.filter((part) => !isToolResult(part)) : value);
+        if (text.length > 0) {
+            return text;
+        }
+    }
+    return "";
+}
+
 export function latestUserPrompt(value: unknown): string {
     if (!isObject(value)) {
         return "";
@@ -65,15 +97,7 @@ export function latestUserPrompt(value: unknown): string {
             if (!isObject(item) || !["user", "USER"].includes(String(item["role"]))) {
                 continue;
             }
-            if (
-                countMatchingObjects(
-                    item,
-                    (object) => object["type"] === "tool_result" || isObject(object["functionResponse"]),
-                ) > 0
-            ) {
-                continue;
-            }
-            const text = contentText(item);
+            const text = userText(item);
             if (text.length > 0) {
                 return text;
             }
@@ -86,17 +110,27 @@ export function latestUserPrompt(value: unknown): string {
     return "";
 }
 
-export function selectFakeProviderScenario(payload: unknown): FakeProviderScenario {
-    const prompt = latestUserPrompt(payload);
-    const asksForTool = /\b(?:bash|command|shell|tool)s?\b/iu.test(prompt);
-    const asksForTwo = /\b(?:two|twice)\b/iu.test(prompt);
-    const asksForFailure = /\b(?:error|fail|failure|failing)\w*\b/iu.test(prompt);
-    const asksForStreaming = /\b(?:chunk|stream|unicode)\w*\b/iu.test(prompt);
-    return {
-        command: asksForFailure ? "false" : "pwd",
-        streamed: asksForStreaming,
-        toolCalls: asksForTool ? (asksForTwo ? 2 : 1) : 0,
-    };
+/** Whether a request's latest user message carries a prompt the test sent. Real
+ *  Agents add their own text to user messages (Claude Code prefixes the user's
+ *  text with system reminders, and attachments append links), so the prompt is
+ *  found within the message rather than compared with all of it. */
+export function carriesPrompt(message: string, prompt: string | undefined): boolean {
+    return prompt !== undefined && message.includes(prompt);
+}
+
+/** Selects the scenario for a request from its latest user message. Only prompts
+ *  a test states select tool calls: the provider's configured tool prompts and
+ *  `fakeProviderPrompts`. Every other message, including user-role text an Agent
+ *  injects itself (system reminders, task notifications, environment context),
+ *  is answered with plain text, so its wording can never script a tool call. */
+export function selectFakeProviderScenario(
+    message: string,
+    toolPrompts: readonly (string | undefined)[] = [],
+): FakeProviderScenario {
+    if (toolPrompts.some((prompt) => carriesPrompt(message, prompt))) {
+        return toolPromptScenario;
+    }
+    return promptScenarios.find(([prompt]) => carriesPrompt(message, prompt))?.[1] ?? textScenario;
 }
 
 export function fakeProviderResponse(base: string, scenario: FakeProviderScenario): string {

@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import { harnessAdapters } from "../../src/engine/acp/adapter/registry.ts";
 import { codexFixture } from "../support/agents/codex-native.ts";
 import { previewCodexHistory } from "../support/codex-history-preview.ts";
+import { fakeProviderPrompts } from "../support/llm/scenarios.ts";
 
 it("Given a saved Codex conversation with an active writer, When it is previewed, Then history keeps the harness message identities and the writer can continue", async () => {
     const f = await codexFixture("native", "PREVIEW_REPLY", {}, harnessAdapters);
@@ -197,7 +198,7 @@ it("Given Codex saved tools and a large reply, When history is previewed, Then t
     const answer = "Large reply ".repeat(30_000);
     const f = await codexFixture("native", answer);
     try {
-        const id = await f.seed("Use two shell tools successfully, then reply");
+        const id = await f.seed(fakeProviderPrompts.twoTools);
         const history = await previewCodexHistory(f.agent, f.workspace, id);
         expect(history.truncated).toBe(false);
         const updates = history.events.flatMap((event) => (event.type === "acp" ? [event.payload] : []));
@@ -217,11 +218,13 @@ it("Given Codex saved tools and a large reply, When history is previewed, Then t
 });
 
 it("Given real Codex applies a patch, When saved history is read, Then the file change precedes the final reply", async () => {
+    const prompt = "Use a tool to create the requested file";
     const f = await codexFixture("native", "PATCH_REPLY", {
         patch: "*** Begin Patch\n*** Add File: result.txt\n+created by Codex\n*** End Patch",
+        toolPrompt: prompt,
     });
     try {
-        const id = await f.seed("Use a tool to create the requested file");
+        const id = await f.seed(prompt);
         expect(await readFile(join(f.workspace, "result.txt"), "utf8")).toBe("created by Codex\n");
         const history = await previewCodexHistory(f.agent, f.workspace, id);
         const updates = history.events.flatMap((event) => (event.type === "acp" ? [event.payload] : []));

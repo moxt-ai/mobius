@@ -12,11 +12,14 @@ import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 
 for (const tool of ["view_image", "mcp"] as const) {
     test(`Given real Codex uses ${tool} on a PNG, When clients watch and reopen the native session, Then the image can be reverse-read without base64 fragments and chatting can continue`, async () => {
-        await using provider = await FakeOpenAiProvider.start(
-            "gpt-4.1",
-            "IMAGE_REPLY",
-            tool === "mcp" ? { mcpImage: true } : { readPath: "picture.png" },
-        );
+        const prompt =
+            tool === "mcp"
+                ? "Use the image_test image MCP tool, then reply"
+                : "Use the view_image tool to inspect picture.png, then reply";
+        await using provider = await FakeOpenAiProvider.start("gpt-4.1", "IMAGE_REPLY", {
+            toolPrompt: prompt,
+            ...(tool === "mcp" ? { mcpImage: true } : { readPath: "picture.png" }),
+        });
         await using agent = await CodexFixture.create(provider);
         await withRealDaemon(new CodexAgentSpecification(), agent.environment, async (peer) => {
             const image = imageFixture(128);
@@ -40,10 +43,7 @@ for (const tool of ["view_image", "mcp"] as const) {
                     tool === "mcp"
                         ? `mobius-content:image:${createHash("sha256").update(image).digest("hex")}`
                         : pathToFileURL(await realpath(path)).href,
-                prompt:
-                    tool === "mcp"
-                        ? "Use the image_test image MCP tool, then reply"
-                        : "Use the view_image tool to inspect picture.png, then reply",
+                prompt,
             });
         });
     });

@@ -152,8 +152,10 @@ test.each(["allow_once", "reject_once"] as const)(
         const file = join(await realpath(directory), "approval-target.txt");
         await writeFile(file, "PERMISSION_FILE_CONTENT");
         try {
+            const prompt = "Use a tool to read the external verification file";
             await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "CLAUDE_PERMISSION_DONE", {
                 readPath: file,
+                toolPrompt: prompt,
             });
             await using agent = await ClaudeFixture.create(provider);
             await withRealDaemon(new ClaudeCodeAgentSpecification(), agent.environment, async (peer) => {
@@ -167,7 +169,7 @@ test.each(["allow_once", "reject_once"] as const)(
                         disposition: SessionPromptDisposition.Reject,
                         attachments: [],
                         kind: "session.prompt",
-                        prompt: "Use a tool to read the external verification file",
+                        prompt,
                         sessionId: peer.sessionId,
                         targetCommandId: "",
                         sessionConfigurations: [

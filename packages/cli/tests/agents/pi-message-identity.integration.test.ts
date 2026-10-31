@@ -12,6 +12,7 @@ import { PiAcpEndpoint } from "../../src/engine/acp/harness/pi/endpoint.ts";
 import { imageFixture } from "../support/agents/image-fixture.ts";
 import { PiFixture } from "../support/agents/pi.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
+import { fakeProviderPrompts } from "../support/llm/scenarios.ts";
 
 test("Given real Pi is waiting for model output, When two multi-block steers are accepted, Then user chunks arrive only when Pi consumes them with distinct message identities", async () => {
     const entered = Promise.withResolvers<void>();
@@ -253,10 +254,7 @@ test("Given real Pi streams multiple messages, When the harness emits chunks, re
         const startupInfo = z.object({ piAcp: z.object({ startupInfo: z.string().nullable() }) }).parse(_meta)
             .piAcp.startupInfo;
         const ids = new Set<string>();
-        for (const prompt of [
-            "Stream a short greeting, without tools",
-            "Stream another short greeting, without tools",
-        ]) {
+        for (const prompt of [fakeProviderPrompts.streamedTool, fakeProviderPrompts.streamedTool]) {
             updates.length = 0;
             const result = await connection.agent.request(
                 methods.agent.session.prompt,

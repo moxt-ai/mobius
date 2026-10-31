@@ -214,21 +214,21 @@ export class FakeAnthropicProvider implements AsyncDisposable {
     readonly #answer: string;
     readonly #close: () => Promise<void>;
     readonly #requests: ProviderRequestDiagnostic[];
+    readonly #toolPrompts: readonly (string | undefined)[];
 
     private constructor(
         origin: string,
         model: string,
         answer: string,
+        toolPrompts: readonly (string | undefined)[],
         requests: ProviderRequestDiagnostic[],
         close: () => Promise<void>,
     ) {
         this.origin = origin;
         this.model = model;
         this.#answer = answer;
-        this.response = fakeProviderResponse(
-            answer,
-            selectFakeProviderScenario({ input: fakeProviderPrompts.successfulTool }),
-        );
+        this.#toolPrompts = toolPrompts;
+        this.response = fakeProviderResponse(answer, selectFakeProviderScenario(fakeProviderPrompts.successfulTool));
         this.#requests = requests;
         this.#close = close;
     }
@@ -238,7 +238,7 @@ export class FakeAnthropicProvider implements AsyncDisposable {
     }
 
     responseFor(prompt: string): string {
-        return fakeProviderResponse(this.#answer, selectFakeProviderScenario({ input: prompt }));
+        return fakeProviderResponse(this.#answer, selectFakeProviderScenario(prompt, this.#toolPrompts));
     }
 
     static async start(
@@ -252,12 +252,16 @@ export class FakeAnthropicProvider implements AsyncDisposable {
             ) => Promise<void>;
             readonly disconnectsBeforeSuccess?: number;
             readonly readPath?: string;
+            /** The test prompt that runs the configured tool action (`readPath`,
+             *  `bash`, or a shell command) once. */
             readonly toolPrompt?: string;
             readonly bash?: { readonly command: string; readonly runInBackground: boolean };
             readonly subagent?: SubagentScript;
         } = {},
     ): Promise<FakeAnthropicProvider> {
         const requests: ProviderRequestDiagnostic[] = [];
+        // A subagent script's inner prompt is the subagent's tool prompt.
+        const toolPrompts = [options.toolPrompt, options.subagent?.innerPrompt];
         let disconnectsRemaining = options.disconnectsBeforeSuccess ?? 0;
         const server = createServer(async (request, response) => {
             const disconnected = new AbortController();
@@ -282,13 +286,7 @@ export class FakeAnthropicProvider implements AsyncDisposable {
             const tools = availableTools(payload);
             const completedToolCalls = toolResultCount(payload);
             const prompt = latestUserPrompt(payload);
-            // A configured fixture request owns its tool actions. Native reminders
-            // and unrelated conversations must not accidentally select that script.
-            const scenario = selectFakeProviderScenario(
-                options.toolPrompt === undefined
-                    ? payload
-                    : { input: tools.length > 0 && prompt.includes(options.toolPrompt) ? options.toolPrompt : "" },
-            );
+            const scenario = selectFakeProviderScenario(prompt, toolPrompts);
             const scripted =
                 options.subagent !== undefined
                     ? subagentStep(options.subagent, tools, prompt, completedToolCalls)
@@ -337,7 +335,14 @@ export class FakeAnthropicProvider implements AsyncDisposable {
                 server.close((error) => (error === undefined ? resolve() : reject(error))),
             );
         };
-        return new FakeAnthropicProvider(`http://127.0.0.1:${address.port.toString()}`, model, answer, requests, close);
+        return new FakeAnthropicProvider(
+            `http://127.0.0.1:${address.port.toString()}`,
+            model,
+            answer,
+            toolPrompts,
+            requests,
+            close,
+        );
     }
 
     async [Symbol.asyncDispose](): Promise<void> {

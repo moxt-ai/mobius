@@ -17,7 +17,11 @@ import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 
 for (const side of [128, 500]) {
     test(`Given real Pi reads a ${side}px image, When its reply streams and native history reopens, Then clients retrieve identical bytes without base64 fragments and can continue chatting`, async () => {
-        await using provider = await FakeOpenAiProvider.start("gpt-4.1", "IMAGE_REPLY", { readPath: "picture.png" });
+        const prompt = "Use the read tool to inspect picture.png, then reply";
+        await using provider = await FakeOpenAiProvider.start("gpt-4.1", "IMAGE_REPLY", {
+            readPath: "picture.png",
+            toolPrompt: prompt,
+        });
         await using agent = await PiFixture.create(provider);
         await withRealDaemon(new PiAgentSpecification(), agent.environment, async (peer) => {
             const image = imageFixture(side);
@@ -26,7 +30,7 @@ for (const side of [128, 500]) {
                 agentId: "pi",
                 image,
                 reference: `mobius-content:image:${createHash("sha256").update(image).digest("hex")}`,
-                prompt: "Use the read tool to inspect picture.png, then reply",
+                prompt,
             });
         });
     });

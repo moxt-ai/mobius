@@ -1,6 +1,7 @@
 import { createServer, type ServerResponse } from "node:http";
 
 import {
+    carriesPrompt,
     countMatchingObjects,
     type FakeProviderScenario,
     fakeProviderPrompts,
@@ -447,21 +448,21 @@ export class FakeOpenAiProvider implements AsyncDisposable {
     readonly #answer: string;
     readonly #close: () => Promise<void>;
     readonly #requests: ProviderRequestDiagnostic[];
+    readonly #toolPrompts: readonly (string | undefined)[];
 
     private constructor(
         origin: string,
         model: string,
         answer: string,
+        toolPrompts: readonly (string | undefined)[],
         requests: ProviderRequestDiagnostic[],
         close: () => Promise<void>,
     ) {
         this.#answer = answer;
+        this.#toolPrompts = toolPrompts;
         this.model = model;
         this.origin = origin;
-        this.response = fakeProviderResponse(
-            answer,
-            selectFakeProviderScenario({ input: fakeProviderPrompts.successfulTool }),
-        );
+        this.response = fakeProviderResponse(answer, selectFakeProviderScenario(fakeProviderPrompts.successfulTool));
         this.#requests = requests;
         this.#close = close;
     }
@@ -471,7 +472,7 @@ export class FakeOpenAiProvider implements AsyncDisposable {
     }
 
     responseFor(prompt: string): string {
-        return fakeProviderResponse(this.#answer, selectFakeProviderScenario({ input: prompt }));
+        return fakeProviderResponse(this.#answer, selectFakeProviderScenario(prompt, this.#toolPrompts));
     }
 
     static async start(
@@ -480,11 +481,12 @@ export class FakeOpenAiProvider implements AsyncDisposable {
         options: {
             /** Receives the conversation the model was asked to continue. */
             readonly beforeFirstText?: (signal: AbortSignal, conversation: string) => Promise<void>;
-            readonly fallbackPrompt?: string;
             readonly commentary?: string;
             readonly patch?: string;
             readonly readPath?: string | ((prompt: string) => string);
             readonly mcpImage?: boolean;
+            /** The test prompt that runs `toolSequence`, or else the configured tool
+             *  action (`patch`, `readPath`, `mcpImage`, or a shell command) once. */
             readonly toolPrompt?: string;
             readonly toolSequence?: readonly RequestedTool[];
             /** Fails every request whose prompt contains this text (HTTP 500), for
@@ -504,11 +506,7 @@ export class FakeOpenAiProvider implements AsyncDisposable {
         } = {},
     ): Promise<FakeOpenAiProvider> {
         const requests: ProviderRequestDiagnostic[] = [];
-        const fallbackScenario =
-            options.fallbackPrompt === undefined
-                ? undefined
-                : selectFakeProviderScenario({ input: options.fallbackPrompt });
-        let activeScenario: FakeProviderScenario | undefined;
+        const toolPrompts = [options.toolPrompt];
         let failedMarkerRequests = 0;
         const server = createServer(async (request, response) => {
             const disconnected = new AbortController();
@@ -541,17 +539,10 @@ export class FakeOpenAiProvider implements AsyncDisposable {
             const completedToolCalls = toolResultCount(payload);
             const userPrompt = latestUserPrompt(payload);
             const conversation = JSON.stringify(payload["input"] ?? payload["messages"] ?? null);
-            const requestedTool =
-                options.toolPrompt === userPrompt ? options.toolSequence?.[completedToolCalls] : undefined;
-            const detectedScenario = selectFakeProviderScenario(payload);
-            const selectedScenario =
-                detectedScenario.toolCalls === 0 && fallbackScenario !== undefined
-                    ? fallbackScenario
-                    : detectedScenario;
-            if (activeScenario === undefined && selectedScenario.toolCalls > 0) {
-                activeScenario = selectedScenario;
-            }
-            const scenario = activeScenario ?? selectedScenario;
+            const requestedTool = carriesPrompt(userPrompt, options.toolPrompt)
+                ? options.toolSequence?.[completedToolCalls]
+                : undefined;
+            const scenario = selectFakeProviderScenario(userPrompt, toolPrompts);
             const tool =
                 requestedTool !== undefined
                     ? selectRequestedTool(tools, requestedTool)
@@ -635,7 +626,14 @@ export class FakeOpenAiProvider implements AsyncDisposable {
                 server.close((error) => (error === undefined ? resolve() : reject(error))),
             );
         };
-        return new FakeOpenAiProvider(`http://127.0.0.1:${address.port.toString()}`, model, answer, requests, close);
+        return new FakeOpenAiProvider(
+            `http://127.0.0.1:${address.port.toString()}`,
+            model,
+            answer,
+            toolPrompts,
+            requests,
+            close,
+        );
     }
 
     async [Symbol.asyncDispose](): Promise<void> {
