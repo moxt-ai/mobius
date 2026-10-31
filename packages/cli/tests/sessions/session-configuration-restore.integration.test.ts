@@ -66,6 +66,30 @@ test("Given effort was chosen before the model it depends on, When the conversat
     }
 });
 
+test("Given a setting was chosen before the first prompt, When the daemon restarts and the Session reopens, Then the setting is kept", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mobius-config-restore-"));
+    try {
+        await withControlledDaemon(
+            new ModelDependentSettingsAgent(),
+            {
+                MOBIUS_TEST_MODEL_DEPENDENT_SETTINGS_PATH: process.execPath,
+                MOBIUS_FAKE_ACP_STATE_DIRECTORY: directory,
+            },
+            async (peer) => {
+                const sessionId = await prepareNewRealSession(peer, "controlled-acp");
+                await configure(peer, sessionId, "model", "test-large", "");
+
+                await peer.restart();
+                expect(await prepare(peer, sessionId)).toEqual(
+                    expect.arrayContaining([expect.objectContaining({ id: "model", currentValue: "test-large" })]),
+                );
+            },
+        );
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
 const identity = (peer: RealDaemonPeer) => ({
     additionalDirectoryIds: [],
     agentId: "controlled-acp",
