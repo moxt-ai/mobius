@@ -612,9 +612,10 @@ export function createPlatformApplication(
                     401,
                 );
             }
-            const access = await context.var.sessionAccess.authorizeLiveEvents(
+            const access = await context.var.sessionAccess.authorizeSession(
                 context.var.sessionAccessTarget,
                 credential,
+                ProjectPermission.SessionWrite,
                 context.req.raw.signal,
             );
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
