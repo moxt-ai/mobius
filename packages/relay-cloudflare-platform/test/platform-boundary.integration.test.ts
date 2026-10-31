@@ -3245,7 +3245,7 @@ describe.sequential("Platform Turn submission", () => {
     });
 
     // @no-uc: Security regression; a Runtime host connection must not exceed the permissions of its AppCredential.
-    it("Given an AppCredential that reads but cannot change Sessions, When it uses a Runtime host connection, Then it cannot open one without Session read access and cannot send a prompt", async () => {
+    it("Given an AppCredential that reads but cannot change Sessions, When it uses a Runtime host connection, Then it cannot open one without Session read access, can still read the Runtime, and cannot send a prompt", async () => {
         const runtime = await connectRuntimeDaemon("app-host-permissions");
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
@@ -3279,6 +3279,12 @@ describe.sequential("Platform Turn submission", () => {
                 once: true,
             });
             host.accept();
+            // Measuring the Runtime needs only Runtime read access, as over HTTP.
+            host.send(JSON.stringify({ kind: "runtime.ping", requestId: "reader-ping" }));
+            expect(decodeServiceToDaemonMessage(await runtime.daemonMessages.next())).toMatchObject({
+                kind: "runtime.ping",
+                requestId: "reader-ping",
+            });
             host.send(
                 encodeSessionPromptCommand(
                     decodeSessionPromptCommand(

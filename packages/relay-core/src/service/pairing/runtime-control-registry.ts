@@ -86,11 +86,11 @@ function lifecycleReply(
 /** Code-owned command policy; callers must still authorize the selected permission. */
 export const runtimeControlRegistry = {
     "runtime.diagnostics.read": {
-        permission: ProjectPermission.SessionWrite,
+        permission: ProjectPermission.RuntimeRead,
         reply: directReply("runtime.diagnostics.result", decodeRuntimeDiagnosticsResult),
     },
     "runtime.ping": {
-        permission: ProjectPermission.SessionWrite,
+        permission: ProjectPermission.RuntimeRead,
         reply: directReply("runtime.pong", decodeRuntimePongEvent),
     },
     "native.session.request": {
