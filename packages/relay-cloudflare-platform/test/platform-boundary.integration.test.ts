@@ -486,6 +486,59 @@ describe.sequential("Platform Session-only boundary", () => {
         expect(unavailableProjects.accessCount).toBe(0);
     });
 
+    it("Given a created Project, When its creation is retried from another location, Then the retry returns the same Project and a different request still conflicts", async () => {
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+            createPlatformGateways,
+            () => clerk.organizationGateway,
+        );
+        const environment = bindings();
+        const tenants = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/tenants`, {
+                    headers: developerHeaders(),
+                }),
+                environment,
+            ),
+            200,
+        );
+        const values = tenants["tenants"];
+        if (!Array.isArray(values) || values.length === 0) {
+            throw new Error("Expected a Platform tenant");
+        }
+        const app = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps`, {
+                    body: JSON.stringify({
+                        displayName: "Retried Project App",
+                        tenantId: text(record(values[0]), "tenantId"),
+                    }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const create = (displayName: string, locationHint: string) =>
+            worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${text(app, "appId")}/projects`, {
+                    body: JSON.stringify({ displayName, idempotencyKey: "retried-project", locationHint }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            );
+
+        const created = await responseJson(await create("Retried Project", "apac"), 201);
+        const retried = await responseJson(await create("Retried Project", "wnam"), 201);
+
+        expect(text(retried, "projectId")).toBe(text(created, "projectId"));
+        expect(await responseJson(await create("Another Project", "apac"), 409)).toMatchObject({
+            error: { code: "idempotency_conflict" },
+        });
+    });
+
     it("Given Recording is not installed, When a developer configures App policy, Then disabled inheritance works, enablement and Project overrides are rejected, and Session policy is unavailable", async () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
