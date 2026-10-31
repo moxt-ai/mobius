@@ -2453,13 +2453,13 @@ async function connectRuntimeDaemon(slug: string, options: { readonly anchorCloc
                 ),
                 environment,
             ),
-        sessionControlRequest: async (path: string, body: unknown) =>
+        sessionControlRequest: async (path: string, body: unknown, credential = text(sessionAccess, "credential")) =>
             await worker.fetch(
                 new Request(
                     `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}${path}`,
                     {
                         method: "POST",
-                        headers: credentialHeaders(text(sessionAccess, "credential")),
+                        headers: credentialHeaders(credential),
                         body: JSON.stringify(body),
                     },
                 ),
@@ -2580,7 +2580,7 @@ async function connectRuntimeDaemon(slug: string, options: { readonly anchorCloc
                 }),
             ),
         runtimeId,
-        issueRuntimeCredential: async (targetRuntimeId: string) =>
+        issueRuntimeCredential: async (targetRuntimeId: string, issuer = appCredential) =>
             text(
                 await responseJson(
                     await worker.fetch(
@@ -2588,7 +2588,7 @@ async function connectRuntimeDaemon(slug: string, options: { readonly anchorCloc
                             `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/access-credentials`,
                             {
                                 method: "POST",
-                                headers: credentialHeaders(appCredential),
+                                headers: credentialHeaders(issuer),
                                 body: JSON.stringify({ expiresInSeconds: 900, runtimeId: targetRuntimeId }),
                             },
                         ),
@@ -2892,11 +2892,19 @@ it("Given Chat reads the Session execution after missing a turn's outcome, When 
 });
 
 describe.sequential("Platform Turn submission", () => {
-    it.each(["app", "session"] as const)(
+    it.each(["app", "session", "write-only session"] as const)(
         "Given %s access cancels a Turn, When the Runtime reports cancellation or prior completion, Then the response reports the Turn's actual stop reason",
         async (access) => {
-            const runtime = await connectRuntimeDaemon(`legacy-queue-cancel-${access}`);
+            const runtime = await connectRuntimeDaemon(`legacy-queue-cancel-${access.replace(" ", "-")}`);
             try {
+                // Cancelling changes the Session, so a Session credential needs only its issuer's write permission.
+                const sessionCredential =
+                    access === "write-only session"
+                        ? await runtime.issueRuntimeCredential(
+                              runtime.runtimeId,
+                              await runtime.issueAppCredential(["session:write"]),
+                          )
+                        : undefined;
                 for (const stopReason of ["cancelled", "end_turn"] as const) {
                     const turnId = `legacy-${stopReason}`;
                     const body = {};
@@ -2904,7 +2912,7 @@ describe.sequential("Platform Turn submission", () => {
                     const response =
                         access === "app"
                             ? runtime.appSessionRequest(path, { method: "POST", body })
-                            : runtime.sessionControlRequest(path, body);
+                            : runtime.sessionControlRequest(path, body, sessionCredential);
                     expect(JSON.parse(await runtime.daemonMessages.next())).toEqual({
                         commandId: turnId,
                         kind: "session.cancel",
