@@ -119,6 +119,10 @@ export class SessionControl {
             // A retried command is answered with where the original command stands.
             return { commandId: result.requestId, state: result.state };
         }
+        if (result.kind === "turn.completed" && result.commandId === command.commandId) {
+            // The command ended before it started, for example when it was cancelled while the Agent was starting.
+            return { commandId: result.commandId, state: "settled" };
+        }
         if (
             (result.kind !== "turn.started" && result.kind !== "turn.queued") ||
             result.commandId !== command.commandId

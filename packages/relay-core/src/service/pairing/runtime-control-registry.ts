@@ -106,10 +106,10 @@ export const runtimeControlRegistry = {
     },
     "session.prompt": {
         permission: ProjectPermission.SessionWrite,
-        // A first submission is answered by its own lifecycle events; a retried command records none, so the
-        // Runtime answers it directly.
+        // A first submission is answered by its own lifecycle events: it starts, or it ends without starting when it
+        // is cancelled first. A retried command records none, so the Runtime answers it directly.
         reply: lifecycleReply(
-            ["prompt.started"],
+            ["prompt.started", "prompt.completed"],
             directReply("session.prompt.accepted", decodeSessionPromptAcceptedEvent),
         ),
     },
