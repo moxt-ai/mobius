@@ -17,6 +17,7 @@ import {
     SessionControl,
     sessionConfigurationRequest,
     sessionRenameRequest,
+    type TurnAdmission,
     turnSteerRequest,
     turnSubmissionRequest,
     type WorkerRuntimeGateways,
@@ -29,6 +30,7 @@ import {
     isDirectoryIdentifier,
     isIdentifier,
     MOBIUS_API_PREFIX,
+    type TurnState,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { type Context, type Handler, Hono } from "hono";
 import * as v from "valibot";
@@ -124,6 +126,25 @@ function authorizedSessionControl(
             ),
         sessionId,
     );
+}
+
+/**
+ * The Turn state a submission reply states, as of `answeredAt`. A retried command that already settled is answered
+ * without how or when it ended, so its Turn is indeterminate rather than running: the command's own lifecycle events,
+ * or the Session execution naming it, carry its outcome.
+ */
+function submittedTurnState(state: TurnAdmission["state"], answeredAt: string): TurnState {
+    switch (state) {
+        case "queued":
+            return { kind: "queued" };
+        case "running":
+            return { kind: "running", startedAt: answeredAt };
+        case "settled":
+            return {
+                kind: "indeterminate",
+                reconciliation: { detectedAt: answeredAt, reason: "dispatch_indeterminate" },
+            };
+    }
 }
 
 const projectApplication = createMobiusApplication();
@@ -425,10 +446,7 @@ export function createPlatformApplication(
                     sessionConfigurations: body.sessionConfigurations,
                 },
                 sessionId,
-                state:
-                    accepted.state === "queued"
-                        ? { kind: "queued" as const }
-                        : { kind: "running" as const, startedAt: acceptedAt },
+                state: submittedTurnState(accepted.state, acceptedAt),
                 turnId: accepted.commandId,
             });
         })

@@ -100,4 +100,4 @@ export {
 } from "./service/channel/local-session-operations.ts";
 export { RuntimeMessageScheduler } from "./service/channel/runtime-message-scheduler.ts";
 export type { RuntimePeers, RuntimeSocket, RuntimeSocketIdentity } from "./service/channel/runtime-service.ts";
-export { type SessionBindingRequest, SessionControl } from "./service/pairing/session-control.ts";
+export { type SessionBindingRequest, SessionControl, type TurnAdmission } from "./service/pairing/session-control.ts";
