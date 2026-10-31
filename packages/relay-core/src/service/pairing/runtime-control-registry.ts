@@ -1,4 +1,8 @@
 import {
+    AGENT_CATALOG_DISCOVER_KIND,
+    AGENT_SETTINGS_DISCOVER_KIND,
+    CONTENT_COMMIT_KIND,
+    CONTENT_WRITE_KIND,
     decodeNativeSessionResult,
     decodeRuntimeDiagnosticsResult,
     decodeRuntimePongEvent,
@@ -15,7 +19,31 @@ import {
     decodeSessionRestoredEvent,
     decodeSessionsListedEvent,
     decodeSessionsQueriedEvent,
+    FILE_READ_KIND,
     type LifecycleMetadata,
+    NATIVE_SESSION_CANCEL_KIND,
+    NATIVE_SESSION_REQUEST_KIND,
+    RUNTIME_HEARTBEAT_ACK_KIND,
+    RUNTIME_LIVENESS_READY_KIND,
+    RUNTIME_PING_KIND,
+    SESSION_CANCEL_BEFORE_START_KIND,
+    SESSION_CANCEL_KIND,
+    SESSION_CLOSE_KIND,
+    SESSION_CONFIG_READ_KIND,
+    SESSION_CONFIGURE_KIND,
+    SESSION_ELICITATION_RESPOND_KIND,
+    SESSION_HISTORY_PAGE_LOAD_KIND,
+    SESSION_LIST_KIND,
+    SESSION_PERMISSION_RESPOND_KIND,
+    SESSION_PREPARE_KIND,
+    SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND,
+    SESSION_PROMPT_DISPOSITION_KIND,
+    SESSION_PROMPT_KIND,
+    SESSION_QUERY_KIND,
+    SESSION_RENAME_KIND,
+    SESSION_RESTORE_KIND,
+    type ServiceToDaemonMessage,
+    WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { ProjectPermission } from "../../entity/authentication/project-authentication.ts";
 import type { RuntimeControlCommand, RuntimeControlResult } from "./runtime-control-request.ts";
@@ -152,4 +180,48 @@ export const runtimeControlRegistry = {
 export function runtimeControlPermission(command: RuntimeControlCommand): ProjectPermission {
     const { permission } = runtimeControlRegistry[command.kind];
     return typeof permission === "function" ? permission(command) : permission;
+}
+
+/**
+ * What a credential must grant to send this message to a Runtime, however it reaches the Relay: an HTTP route and a
+ * host connection apply the same answer. Null for messages only the Relay itself sends to a daemon.
+ */
+export function runtimeCommandPermission(message: ServiceToDaemonMessage): ProjectPermission | null {
+    switch (message.kind) {
+        case "runtime.diagnostics.read":
+        case RUNTIME_PING_KIND:
+        case NATIVE_SESSION_REQUEST_KIND:
+        case SESSION_PREPARE_KIND:
+        case SESSION_CONFIGURE_KIND:
+        case SESSION_CONFIG_READ_KIND:
+        case SESSION_RENAME_KIND:
+        case SESSION_CLOSE_KIND:
+        case SESSION_CANCEL_BEFORE_START_KIND:
+        case SESSION_CANCEL_KIND:
+        case SESSION_PROMPT_DISPOSITION_KIND:
+        case SESSION_PROMPT_KIND:
+        case SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND:
+        case SESSION_HISTORY_PAGE_LOAD_KIND:
+        case SESSION_ELICITATION_RESPOND_KIND:
+        case SESSION_PERMISSION_RESPOND_KIND:
+        case SESSION_LIST_KIND:
+        case SESSION_QUERY_KIND:
+        case SESSION_RESTORE_KIND:
+            return runtimeControlPermission(message);
+        case AGENT_CATALOG_DISCOVER_KIND:
+        case AGENT_SETTINGS_DISCOVER_KIND:
+        case WORKSPACE_LIST_KIND:
+            return ProjectPermission.RuntimeRead;
+        case FILE_READ_KIND:
+            return ProjectPermission.SessionRead;
+        case CONTENT_WRITE_KIND:
+        case CONTENT_COMMIT_KIND:
+        case NATIVE_SESSION_CANCEL_KIND:
+            return ProjectPermission.SessionWrite;
+        case RUNTIME_HEARTBEAT_ACK_KIND:
+        case RUNTIME_LIVENESS_READY_KIND:
+            return null;
+        default:
+            return message satisfies never;
+    }
 }

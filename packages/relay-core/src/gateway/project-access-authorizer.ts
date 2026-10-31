@@ -19,7 +19,7 @@ export interface ProjectCredentialAuthority {
     readonly grants: (
         projectId: string,
         credentialId: string,
-        requiredPermission: ProjectPermission,
+        requiredPermissions: readonly ProjectPermission[],
         signal: AbortSignal,
     ) => Promise<boolean>;
 }

@@ -126,7 +126,7 @@ export class ChannelHostCredential extends VerifiedChannelAccess {
 /**
  * A host connection opened with a project credential. The Relay stores no copy of that authority: the connection
  * names the credential, and every message it sends re-reads whether the credential still grants
- * `PROJECT_HOST_PERMISSION` in the Project.
+ * `PROJECT_HOST_PERMISSIONS` and the message's own permission in the Project.
  */
 export class ProjectCredentialHostAccess extends VerifiedChannelAccess {
     readonly credentialId: string;

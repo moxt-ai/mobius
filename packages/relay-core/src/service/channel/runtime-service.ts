@@ -1,6 +1,7 @@
 import {
     type DaemonToRelayMessage,
     decodeDaemonToRelayMessage,
+    decodeKnownServiceToDaemonMessage,
     encodeRuntimeStatusEvent,
     encodeServiceToDaemonMessage,
     RUNTIME_LIVENESS_READY_KIND,
@@ -8,9 +9,11 @@ import {
     type RuntimeLivenessReadyEvent,
     SESSION_EVENT_KIND,
 } from "@moxt-ai/mobius-sdk/protocol";
+import { ProjectPermission } from "../../entity/authentication/project-authentication.ts";
 import { ProjectScope } from "../../entity/do/session.ts";
 import { type HostCredential, PairingDirectoryError } from "../../entity/pairing/pairing.ts";
 import { logger } from "../../infra/logger.ts";
+import { runtimeCommandPermission } from "../pairing/runtime-control-registry.ts";
 import type { ChannelActor, ChannelPeers, ChannelSocket } from "./channel-actor.ts";
 import type { ChannelCredentialService } from "./channel-credential-service.ts";
 import type { RuntimeConnectionService } from "./runtime-connection-service.ts";
@@ -85,11 +88,15 @@ interface RuntimeContext {
         readonly connections: RuntimeConnectionService;
         readonly credentials: {
             readonly isRuntimeActive: ChannelCredentialService["isRuntimeActive"];
-            /** Whether the credential that opened a host connection still authorizes it. */
-            readonly isHostActive: (
+            /**
+             * Whether the credential that opened a host connection still authorizes it ("revoked" when not) and
+             * grants the permission one message needs ("denied" when not).
+             */
+            readonly authorizeHostMessage: (
                 identity: Extract<RuntimeSocketIdentity, { readonly role: "host" }>,
+                permission: ProjectPermission | null,
                 signal: AbortSignal,
-            ) => Promise<boolean>;
+            ) => Promise<"granted" | "revoked" | "denied">;
         };
         readonly channel: (runtimeId: string, scope: ProjectScope) => ChannelActor;
     };
@@ -408,9 +415,24 @@ export class RuntimeService {
                     socket.close(1008, "A live subscription cannot send commands");
                     return;
                 }
-                if (!(await this.#cx.services.credentials.isHostActive(identity, signal))) {
-                    socket.close(1008, "Channel access revoked");
-                    return;
+                // Content bytes continue an upload, which needs Session write access like the content.write that
+                // started it. An unknown message needs only the connection's own access; the channel skips it.
+                const command = typeof message === "string" ? decodeKnownServiceToDaemonMessage(message) : null;
+                const permission =
+                    typeof message === "string"
+                        ? command === null
+                            ? null
+                            : runtimeCommandPermission(command)
+                        : ProjectPermission.SessionWrite;
+                switch (await this.#cx.services.credentials.authorizeHostMessage(identity, permission, signal)) {
+                    case "revoked":
+                        socket.close(1008, "Channel access revoked");
+                        return;
+                    case "denied":
+                        socket.close(1008, "project_permission_denied");
+                        return;
+                    case "granted":
+                        break;
                 }
                 const channel = this.channel(identity.runtimeId, scope);
                 if (typeof message !== "string") {
