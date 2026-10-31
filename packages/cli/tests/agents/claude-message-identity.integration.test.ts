@@ -1,5 +1,4 @@
 import { addAbortListener } from "node:events";
-import { watch } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,9 +6,9 @@ import { methods, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import { expect, test } from "vitest";
 import { z } from "zod";
 import { createAcpClient } from "../../src/engine/acp/connection/create-client.ts";
-import { getEnvironmentSessionMessages } from "../../src/engine/acp/harness/claude/upstream/dist/environment-session-messages.js";
 import { type ClaudeSessionUpdate, createClaudeAcpApp } from "../../src/engine/acp/harness/claude/upstream/dist/lib.js";
 import { ClaudeFixture } from "../support/agents/claude.ts";
+import { waitForSavedClaudeMessage } from "../support/agents/claude-transcript.ts";
 import { FakeAnthropicProvider } from "../support/llm/anthropic.ts";
 import { fakeProviderPrompts } from "../support/llm/scenarios.ts";
 
@@ -134,37 +133,11 @@ test("Given real Claude streams a message, When its harness emits chunks and rep
             { cancellationSignal: signal },
         );
         expect(confirmation.stopReason).toBe("end_turn");
-        // Prompt completion is a live-output boundary, not a native transcript flush.
-        // Observe native writes rather than assuming the next prompt flushed history.
-        const configDirectory = fixture.environment["CLAUDE_CONFIG_DIR"];
-        if (configDirectory === undefined) {
-            throw new Error("Expected isolated Claude configuration");
-        }
-        type NativeWrite = { readonly kind: "changed" } | { readonly kind: "failed"; readonly cause: Error };
-        let changed = Promise.withResolvers<NativeWrite>();
-        const watcher = watch(configDirectory, { recursive: true }, () => changed.resolve({ kind: "changed" }));
-        watcher.on("error", (cause) => changed.resolve({ kind: "failed", cause }));
-        using _historyAbort = addAbortListener(signal, () => changed.resolve({ kind: "changed" }));
-        try {
-            for (;;) {
-                signal.throwIfAborted();
-                const notification = changed.promise;
-                const saved = await getEnvironmentSessionMessages(environment, sessionId, signal);
-                if (saved.some((message) => message.type === "user" && message.uuid === steering.messageId)) {
-                    expect(saved.filter((message) => message.type === "user")).toEqual(
-                        expect.arrayContaining([expect.objectContaining({ uuid: steering.messageId })]),
-                    );
-                    break;
-                }
-                const event = await notification;
-                if (event.kind === "failed") {
-                    throw event.cause;
-                }
-                changed = Promise.withResolvers<NativeWrite>();
-            }
-        } finally {
-            watcher.close();
-        }
+        // A completed prompt does not mean Claude saved the detached input; wait for its native write.
+        const saved = await waitForSavedClaudeMessage(fixture.environment, sessionId, steering.messageId, signal);
+        expect(saved.filter((message) => message.type === "user")).toEqual(
+            expect.arrayContaining([expect.objectContaining({ uuid: steering.messageId })]),
+        );
     } finally {
         await claude.agent()?.dispose();
         connection.close();
