@@ -733,3 +733,37 @@ it("Given separate Projects, When they use the same pairing idempotency key, The
     expect(await first.pair("same-key")).toEqual(left);
     expect(await second.pair("same-key")).toEqual(right);
 });
+
+it("Given stored Relay control host leases beside other Channel credentials, When the Project upgrades, Then only the leases are removed", async () => {
+    const app = await project();
+    const remaining = await app.storage(async (storage) => {
+        await storage.deleteAll();
+        const database = new DurableObjectSqlDatabase(storage);
+        database.run(
+            "CREATE TABLE project_schema_migrations (name TEXT PRIMARY KEY, applied_at INTEGER NOT NULL) STRICT",
+        );
+        for (const migration of projectDurableObjectMigrations) {
+            if (migration.name === "0008_remove_control_host_leases.sql") {
+                break;
+            }
+            database.run(migration.sql);
+            database.run("INSERT INTO project_schema_migrations (name, applied_at) VALUES (?, ?)", [
+                migration.name,
+                Date.now(),
+            ]);
+        }
+        const credential = (credentialId: string, authority: "owner" | "linked", sourceGrantId: string | null) =>
+            database.run(
+                `INSERT INTO channel_host_credentials
+                    (credential_id, channel_id, token_hash, authority, created_at, last_used_at, source_grant_id)
+                 VALUES (?, 'channel-leases', ?, ?, 1, 1, ?)`,
+                [credentialId, `hash-${credentialId}`, authority, sourceGrantId],
+            );
+        credential("ctl_lease", "linked", null);
+        credential("ctlX_owner", "owner", null);
+        credential("lnk_device", "linked", "grant-device");
+        initializeProjectDurableObjectSchema(database);
+        return database.query("SELECT credential_id FROM channel_host_credentials ORDER BY credential_id");
+    });
+    expect(remaining).toEqual([{ credential_id: "ctlX_owner" }, { credential_id: "lnk_device" }]);
+});

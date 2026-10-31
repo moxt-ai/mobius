@@ -57,6 +57,13 @@
             "when": 1793347672759,
             "tag": "0007_drop_host_credential_overlap",
             "breakpoints": true
+        },
+        {
+            "idx": 8,
+            "version": "6",
+            "when": 1793412835285,
+            "tag": "0008_remove_control_host_leases",
+            "breakpoints": true
         }
     ]
 }

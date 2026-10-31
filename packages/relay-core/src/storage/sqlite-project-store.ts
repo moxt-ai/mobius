@@ -32,26 +32,6 @@ export class SqliteProjectStore implements ProjectStore {
     readonly isHostCredentialActive: ProjectStore["isHostCredentialActive"] = async (identity, signal) =>
         identity.projectId === this.#projectId && (await this.#credentials.readActive(identity, signal));
 
-    readonly openControlHost: ProjectStore["openControlHost"] = async (value, signal) => {
-        const created = await this.#pairings.createProjectControlHost(
-            this.#projectId,
-            value.runtimeId,
-            value.credentialId,
-            value.tokenHash,
-            value.now,
-            signal,
-        );
-        return created?.channel_id ?? null;
-    };
-
-    readonly closeControlHost: ProjectStore["closeControlHost"] = async (channelId, credentialId, signal) => {
-        await this.#pairings.removeControlHost(channelId, credentialId, signal);
-    };
-
-    readonly discardControlHost: ProjectStore["discardControlHost"] = async (credentialId, signal) => {
-        await this.#pairings.removeProjectControlHost(this.#projectId, credentialId, signal);
-    };
-
     readonly listLinkedDevices: ProjectStore["listLinkedDevices"] = async (channelId, signal) =>
         await this.#pairings.listLinked(channelId, signal);
 

@@ -101,46 +101,6 @@ export class PairingStorage {
             .orderBy(desc(channelHostCredential.createdAt), desc(channelHostCredential.credentialId));
     };
 
-    readonly createProjectControlHost = (
-        projectId: string,
-        runtimeId: string,
-        credentialId: string,
-        tokenHash: string,
-        now: number,
-        signal: AbortSignal,
-    ) =>
-        this.#database
-            .prepare(`INSERT INTO channel_host_credentials
-                (credential_id, channel_id, token_hash, authority, created_at, last_used_at)
-                SELECT ?, runtimes.channel_id, ?, 'linked', ?, ? FROM runtimes
-                 INNER JOIN runtime_registrations AS registrations ON registrations.runtime_id = runtimes.runtime_id
-                 WHERE runtimes.project_id = ? AND runtimes.runtime_id = ? AND runtimes.revoked_at IS NULL
-                RETURNING channel_id`)
-            .bind(credentialId, tokenHash, now, now, projectId, runtimeId)
-            .first<{ readonly channel_id: string }>(signal);
-
-    readonly removeControlHost = (channelId: string, credentialId: string, signal: AbortSignal) =>
-        this.#database
-            .prepare(
-                `DELETE FROM channel_host_credentials WHERE channel_id = ? AND credential_id = ? AND source_grant_id IS NULL AND authority = 'linked'`,
-            )
-            .bind(channelId, credentialId)
-            .run(signal);
-
-    readonly removeProjectControlHost = (projectId: string, credentialId: string, signal: AbortSignal) =>
-        this.#database
-            .prepare(
-                `DELETE FROM channel_host_credentials
-                  WHERE credential_id = ? AND source_grant_id IS NULL AND authority = 'linked'
-                    AND EXISTS (
-                        SELECT 1 FROM runtimes
-                         WHERE runtimes.channel_id = channel_host_credentials.channel_id
-                           AND runtimes.project_id = ?
-                    )`,
-            )
-            .bind(credentialId, projectId)
-            .run(signal);
-
     readonly redeemGrant = (
         channelId: string,
         grantId: string,

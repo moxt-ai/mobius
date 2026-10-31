@@ -52,61 +52,6 @@ export interface PairingDirectoryInfrastructure {
 }
 
 export class PairingDirectoryService implements PairingOperations {
-    readonly openControlHost: PairingOperations["openControlHost"] = async (
-        projectId,
-        runtimeId,
-        token,
-        permission,
-        signal,
-    ) => {
-        const access = await this.authorizeProject(projectId, token, permission, signal);
-        const storage = await this.projectStorage(access.scope, signal);
-        return await this.openControlHostForScope(storage, access.scope, runtimeId, signal);
-    };
-
-    readonly openProjectScopeControlHost = async (
-        scope: ProjectScope,
-        runtimeId: string,
-        signal: AbortSignal,
-    ): Promise<ChannelHostCredential> => {
-        const storage = await this.projectStorage(scope, signal);
-        return await this.openControlHostForScope(storage, scope, runtimeId, signal);
-    };
-
-    private readonly openControlHostForScope = async (
-        storage: ProjectStore,
-        scope: ProjectScope,
-        runtimeId: string,
-        signal: AbortSignal,
-    ): Promise<ChannelHostCredential> => {
-        const normalizedRuntimeId = validateIdentifier(runtimeId, "runtime_id");
-        const credentialId = `ctl_${createRandomToken(18)}`;
-        let channelId: string | null;
-        try {
-            channelId = await storage.openControlHost(
-                {
-                    runtimeId: normalizedRuntimeId,
-                    credentialId,
-                    tokenHash: await hashSecret(createRandomToken(32)),
-                    now: Date.now(),
-                },
-                signal,
-            );
-        } catch (cause) {
-            await storage.discardControlHost(credentialId, AbortSignal.timeout(15_000));
-            throw cause;
-        }
-        if (channelId === null) {
-            await this.readProjectRuntime(storage, normalizedRuntimeId, signal);
-            throw new PairingDirectoryError("runtime_unavailable", "The selected Runtime is unavailable");
-        }
-        return new ChannelHostCredential(channelId, normalizedRuntimeId, scope.projectId, credentialId);
-    };
-
-    readonly closeControlHost: PairingOperations["closeControlHost"] = async (access, signal) => {
-        const storage = await this.projectStorage(new ProjectScope(access.projectId), signal);
-        await storage.closeControlHost(access.channelId, access.credentialId, signal);
-    };
     readonly #cx: PairingDirectoryInfrastructure;
 
     constructor(cx: PairingDirectoryInfrastructure) {

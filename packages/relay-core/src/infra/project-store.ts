@@ -13,13 +13,6 @@ import type {
 } from "../entity/pairing/pairing-records.ts";
 import type { ProjectStoragePlacement } from "./project-storage-directory.ts";
 
-export interface OpenControlHost {
-    readonly runtimeId: string;
-    readonly credentialId: string;
-    readonly tokenHash: string;
-    readonly now: number;
-}
-
 export interface CreateAccessGrant {
     readonly grantId: string;
     readonly channelId: string;
@@ -113,11 +106,6 @@ export interface ProjectStore {
         signal: AbortSignal,
     ) => Promise<AuthorizedChannelRow | null>;
     readonly isHostCredentialActive: (identity: ChannelCredentialIdentity, signal: AbortSignal) => Promise<boolean>;
-    /** Issues a linked host credential for a registered, unrevoked Runtime; returns its channel. */
-    readonly openControlHost: (value: OpenControlHost, signal: AbortSignal) => Promise<string | null>;
-    readonly closeControlHost: (channelId: string, credentialId: string, signal: AbortSignal) => Promise<void>;
-    /** Removes a control host credential whose issuance had an unknown outcome. */
-    readonly discardControlHost: (credentialId: string, signal: AbortSignal) => Promise<void>;
     readonly listLinkedDevices: (channelId: string, signal: AbortSignal) => Promise<readonly LinkedDeviceRow[]>;
     /** Revokes a linked device; false when the channel has no such device. Repeating it succeeds. */
     readonly revokeLinkedDevice: (

@@ -177,13 +177,8 @@ export class CloudflareChannelSocket implements RuntimeSocket {
         socket instanceof CloudflareChannelSocket && socket.#socket === this.#socket;
     readonly permitsSessionHistory = (): boolean => {
         const identity = this.identity();
-        // Control hosts read Session history: a project credential's connection, and a Relay-internal control host,
-        // whose stored Channel credential the Relay issues with the `ctl_` prefix.
-        return (
-            identity.role === "relay" ||
-            (identity.role === "host" &&
-                (identity.credential.kind === "project" || identity.credential.credentialId.startsWith("ctl_")))
-        );
+        // Control hosts read Session history: the Relay's own connection and a project credential's connection.
+        return identity.role === "relay" || (identity.role === "host" && identity.credential.kind === "project");
     };
     readonly send = (message: string | ArrayBuffer): void => this.#socket.send(message);
     readonly trackAgentSettingsDiscovery = (requestId: string, agentId: string): "tracked" | "duplicate" | "busy" => {

@@ -19,7 +19,7 @@ import { authorizeSessionContentUpload } from "../http/session-content-upload.ts
 import {
     type ConfiguredPlatformRelayBindings,
     createPlatformAccessServices,
-    createPlatformSocketWorker,
+    createPlatformWorker,
 } from "../platform-worker.ts";
 import { createPlatformDurableObjectContext } from "./platform-durable-object-context.ts";
 
@@ -28,7 +28,7 @@ export class RuntimeRelay extends DurableObject<ConfiguredPlatformRelayBindings>
     readonly #runtime: RuntimeRelayImplementation;
     readonly #context: ReturnType<typeof createPlatformDurableObjectContext>;
     readonly #environment: ConfiguredPlatformRelayBindings;
-    readonly #application = createPlatformSocketWorker(standardWebSocketHost);
+    readonly #application = createPlatformWorker();
     readonly #state: DurableObjectState;
 
     constructor(state: DurableObjectState, environment: ConfiguredPlatformRelayBindings) {
