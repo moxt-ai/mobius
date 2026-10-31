@@ -1141,7 +1141,8 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         requiredPermission: ProjectPermission,
         _actorRef: string,
         signal: AbortSignal,
-    ): Promise<ProjectAccessContext> => await this.#projectAccess.authorize(row, projectId, requiredPermission, signal);
+    ): Promise<ProjectAccessContext> =>
+        await this.#projectAccess.authorize(row, projectId, [requiredPermission], signal);
 
     private readonly authenticatedCredential = async (
         credentialValue: string,

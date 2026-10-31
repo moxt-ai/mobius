@@ -31,7 +31,7 @@ export class AppCredentialProjectAccess implements ProjectCredentialAuthority {
     readonly authorize = async (
         row: CredentialRow,
         projectId: string,
-        requiredPermission: ProjectPermission,
+        requiredPermissions: readonly ProjectPermission[],
         signal: AbortSignal,
     ): Promise<ProjectAccessContext> => {
         const project = await this.#storage.readActiveProjectScope(projectId, signal);
@@ -52,7 +52,7 @@ export class AppCredentialProjectAccess implements ProjectCredentialAuthority {
             }
         }
         const granted = credentialPermissions(row).granted;
-        if (!granted.has(requiredPermission)) {
+        if (!requiredPermissions.every((permission) => granted.has(permission))) {
             throw new ProjectAuthenticationError(
                 "project_permission_denied",
                 "The AppCredential does not grant this Project permission",
@@ -71,7 +71,7 @@ export class AppCredentialProjectAccess implements ProjectCredentialAuthority {
     readonly grants: ProjectCredentialAuthority["grants"] = async (
         projectId,
         credentialId,
-        requiredPermission,
+        requiredPermissions,
         signal,
     ) => {
         const row = await this.#storage.readCredentialById(credentialId, signal);
@@ -79,7 +79,7 @@ export class AppCredentialProjectAccess implements ProjectCredentialAuthority {
             return false;
         }
         try {
-            await this.authorize(row, projectId, requiredPermission, signal);
+            await this.authorize(row, projectId, requiredPermissions, signal);
             return true;
         } catch (cause) {
             if (cause instanceof ProjectAuthenticationError) {

@@ -3244,6 +3244,75 @@ describe.sequential("Platform Turn submission", () => {
         }
     });
 
+    // @no-uc: Security regression; a Runtime host connection must not exceed the permissions of its AppCredential.
+    it("Given an AppCredential that reads but cannot change Sessions, When it uses a Runtime host connection, Then it cannot open one without Session read access and cannot send a prompt", async () => {
+        const runtime = await connectRuntimeDaemon("app-host-permissions");
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+            createPlatformGateways,
+            () => clerk.organizationGateway,
+        );
+        const environment = bindings();
+        const openHost = async (credential: string) =>
+            await worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${runtime.projectId}/runtimes/${runtime.runtimeId}/host?token=${credential}`,
+                    { headers: { Upgrade: "websocket" } },
+                ),
+                environment,
+            );
+        let host: WebSocket | null = null;
+        try {
+            // The connection receives every Session's traffic, which Runtime read access alone does not allow.
+            expect(
+                await responseJson(await openHost(await runtime.issueAppCredential(["runtime:read"])), 403),
+            ).toMatchObject({ error: { code: "project_permission_denied" } });
+
+            const opened = await openHost(await runtime.issueAppCredential(["runtime:read", "session:read"]));
+            expect(opened.status).toBe(101);
+            host = opened.webSocket;
+            if (host === null) {
+                throw new Error("Expected the host socket");
+            }
+            const closed = Promise.withResolvers<{ readonly code: number; readonly reason: string }>();
+            host.addEventListener("close", (event) => closed.resolve({ code: event.code, reason: event.reason }), {
+                once: true,
+            });
+            host.accept();
+            host.send(
+                encodeSessionPromptCommand(
+                    decodeSessionPromptCommand(
+                        JSON.stringify({
+                            additionalDirectoryIds: [],
+                            agentId: "codex",
+                            attachments: [],
+                            bindingId: "workspace",
+                            commandId: "read-only-prompt",
+                            directoryId: "root",
+                            disposition: "reject",
+                            kind: "session.prompt",
+                            prompt: "Sent without Session write access",
+                            sessionConfigurations: [],
+                            sessionId: runtime.sessionId,
+                            targetCommandId: "",
+                        }),
+                    ),
+                ),
+            );
+
+            // Like the same request over HTTP, the prompt needs Session write access; the Runtime never receives it.
+            expect(
+                await Promise.race([
+                    closed.promise.then((close) => ({ kind: "closed", ...close })),
+                    runtime.daemonMessages.next().then((message) => ({ kind: "forwarded", message })),
+                ]),
+            ).toEqual({ kind: "closed", code: 1008, reason: "project_permission_denied" });
+        } finally {
+            host?.close(1000, "Test complete");
+            runtime.daemon.close(1000, "Test complete");
+        }
+    });
+
     // @no-uc: Compatibility; malformed control requests must be distinguishable from retryable server failures.
     it.each([
         {

@@ -1,6 +1,7 @@
 import {
-    PROJECT_HOST_PERMISSION,
+    PROJECT_HOST_PERMISSIONS,
     type ProjectAccessContext,
+    ProjectAuthenticationError,
     ProjectPermission,
     RuntimeAccessContext,
 } from "../../entity/authentication/project-authentication.ts";
@@ -144,7 +145,13 @@ export class PairingDirectoryService implements PairingOperations {
         token,
         signal,
     ) => {
-        const access = await this.authorizeProject(projectId, token, PROJECT_HOST_PERMISSION, signal);
+        const access = await this.authorizeProject(projectId, token, ProjectPermission.RuntimeRead, signal);
+        if (!PROJECT_HOST_PERMISSIONS.every(access.permits)) {
+            throw new ProjectAuthenticationError(
+                "project_permission_denied",
+                "The credential does not grant the permissions a Runtime host connection needs",
+            );
+        }
         const storage = await this.projectStorage(access.scope, signal);
         const runtime = await this.readProjectRuntime(storage, runtimeId, signal);
         return new ProjectCredentialHostAccess(

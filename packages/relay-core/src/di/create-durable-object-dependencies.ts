@@ -1,4 +1,4 @@
-import { PROJECT_HOST_PERMISSION } from "../entity/authentication/project-authentication.ts";
+import { PROJECT_HOST_PERMISSIONS } from "../entity/authentication/project-authentication.ts";
 import { ProjectScope } from "../entity/do/session.ts";
 import type { ProjectCredentialAuthority } from "../gateway/project-access-authorizer.ts";
 import { createRuntimeRoutes } from "../http/do/runtime-routes.ts";
@@ -46,27 +46,44 @@ function createRuntimeRelayDependencies(cx: {
         return new ChannelCredentialService(cx.storages.projectStores.resolve(project.storagePlacement));
     };
     const credentials: RuntimeCredentials = {
-        isHostActive: async (identity, signal) => {
+        authorizeHostMessage: async (identity, permission, signal) => {
             const service = await credentialService(new ProjectScope(identity.projectId), signal);
             if (service === null) {
-                return false;
+                return "revoked";
             }
             switch (identity.credential.kind) {
                 case "channel":
-                    return await service.isActive(
+                    return (await service.isActive(
                         { ...identity, credentialId: identity.credential.credentialId },
                         signal,
-                    );
-                case "project":
-                    return (
-                        (await service.isRuntimeActive(identity, signal)) &&
-                        (await cx.gateways.projectCredentials.grants(
+                    ))
+                        ? "granted"
+                        : "revoked";
+                case "project": {
+                    const { credentialId } = identity.credential;
+                    if (
+                        !(await service.isRuntimeActive(identity, signal)) ||
+                        !(await cx.gateways.projectCredentials.grants(
                             identity.projectId,
-                            identity.credential.credentialId,
-                            PROJECT_HOST_PERMISSION,
+                            credentialId,
+                            PROJECT_HOST_PERMISSIONS,
                             signal,
                         ))
-                    );
+                    ) {
+                        return "revoked";
+                    }
+                    if (permission === null || PROJECT_HOST_PERMISSIONS.includes(permission)) {
+                        return "granted";
+                    }
+                    return (await cx.gateways.projectCredentials.grants(
+                        identity.projectId,
+                        credentialId,
+                        [permission],
+                        signal,
+                    ))
+                        ? "granted"
+                        : "denied";
+                }
             }
         },
         isRuntimeActive: async (identity, signal) => {

@@ -43,8 +43,15 @@ export class ProjectPermission {
     readonly toJSON = (): string => this.value;
 }
 
-/** What a project credential must grant to open a Runtime host connection and to keep using it. */
-export const PROJECT_HOST_PERMISSION = ProjectPermission.RuntimeRead;
+/**
+ * What a project credential must grant to open a Runtime host connection and to keep using it. The connection
+ * receives the Runtime's status and every Session's traffic, so it needs to read both. Each command the connection
+ * sends additionally needs that command's own permission.
+ */
+export const PROJECT_HOST_PERMISSIONS: readonly ProjectPermission[] = Object.freeze([
+    ProjectPermission.RuntimeRead,
+    ProjectPermission.SessionRead,
+]);
 
 export const PROJECT_PERMISSIONS: readonly ProjectPermission[] = Object.freeze(
     PROJECT_PERMISSION_NAMES.map(ProjectPermission.named),
