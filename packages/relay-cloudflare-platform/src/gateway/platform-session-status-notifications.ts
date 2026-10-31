@@ -73,7 +73,7 @@ export class PlatformSessionStatusNotifications implements SessionStatusNotifica
             );
             const publication = this.#messages
                 .run(
-                    JSON.stringify([scope.projectId, scope.runtimeId, sessionId]),
+                    [JSON.stringify([scope.projectId, scope.runtimeId, sessionId])],
                     controller.signal,
                     async () =>
                         await this.#publishTerminalStatus({ ...scope, sessionId }, notification, controller.signal),

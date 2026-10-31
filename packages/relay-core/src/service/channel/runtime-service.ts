@@ -425,7 +425,7 @@ export class RuntimeService {
         }
         if (typeof message !== "string") {
             try {
-                await this.#daemonMessages.run("runtime", signal, async () => {
+                await this.#daemonMessages.run(["runtime"], signal, async () => {
                     signal.throwIfAborted();
                     if (!(await this.authorizeDaemonMessage(identity, socket, signal))) {
                         return;
@@ -453,9 +453,9 @@ export class RuntimeService {
             this.channel(identity.runtimeId, scope).recordSkipped("invalid_daemon_message");
             return;
         }
-        const lane = daemonMessage === null ? "runtime" : this.daemonMessageLane(daemonMessage);
+        const lanes = daemonMessage === null ? ["runtime"] : this.daemonMessageLanes(daemonMessage);
         try {
-            await this.#daemonMessages.run(lane, signal, async () => {
+            await this.#daemonMessages.run(lanes, signal, async () => {
                 signal.throwIfAborted();
                 if (!(await this.authorizeDaemonMessage(identity, socket, signal))) {
                     return;
@@ -513,13 +513,16 @@ export class RuntimeService {
         return socket.isOpen();
     };
 
-    private readonly daemonMessageLane = (message: DaemonToRelayMessage): string => {
+    /**
+     * A Session's events are delivered in the order the daemon sent them. A batch that carries several
+     * Sessions takes its place in each of their lanes, so a later batch for one of them cannot overtake it.
+     */
+    private readonly daemonMessageLanes = (message: DaemonToRelayMessage): readonly string[] => {
         if (message.kind === SESSION_EVENT_KIND) {
-            return message.events.every((event) => event.sessionId === message.events[0]?.sessionId)
-                ? `session:${message.events[0]?.sessionId ?? "unknown"}`
-                : "runtime";
+            const sessionIds = new Set(message.events.map((event) => event.sessionId));
+            return sessionIds.size === 0 ? ["session:unknown"] : [...sessionIds].map((id) => `session:${id}`);
         }
-        return "runtime";
+        return ["runtime"];
     };
 
     private readonly channel = (runtimeId: string, scope: ProjectScope): ChannelActor => {
