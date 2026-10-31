@@ -570,21 +570,25 @@ export type Session = {
      *  the SDK still runs it and emits a result with no uuid we can match. Because
      *  the SDK processes input FIFO, those orphan results arrive (in submission
      *  order) before the next live turn's, so skipping exactly this many leaves
-     *  the genuine head untouched. On CLIs with the interrupt receipt, orphans
-     *  the interrupt dropped (absent from `still_queued`) are uncounted as soon
-     *  as the receipt arrives (see cancel()). Reset to 0 on every activation as
-     *  a backstop against a dropped queued input this can't see (older CLIs, a
-     *  receipt lost to a failed control round-trip). Only used when the CLI does
-     *  NOT emit lifecycle frames (see `orphanCommands` for the msg_lifecycle_v1
+     *  the genuine head untouched. A turn the adapter settles before its result
+     *  (see trackResultOwedBySettledTurn) is counted the same way. On CLIs with
+     *  the interrupt receipt, orphans the interrupt dropped (absent from
+     *  `still_queued`) are uncounted as soon as the receipt arrives (see
+     *  cancel()). Reset to 0 on every activation as a backstop against a
+     *  dropped queued input this can't see (older CLIs, a receipt lost to a
+     *  failed control round-trip). Only used when the CLI does NOT emit
+     *  lifecycle frames (see `orphanCommands` for the msg_lifecycle_v1
      *  lane); a count can't express command coalescing — N queued commands can
      *  fold into ONE turn emitting one result, leaving a stale skip of N-1. */
     pendingOrphanResults?: number;
     /** msg_lifecycle_v1 lane of the orphan accounting (see
      *  `pendingOrphanResults` for the count lane): the uuids of cancelled queued
-     *  turns whose SDK-side command may still produce an unaccounted result,
-     *  keyed to what we know of its fate. "pending" = not seen dispatched; if
-     *  the SDK drops it (interrupt, `cancelled` before "started") no result
-     *  ever comes. "started" = dispatched into a turn whose result is still
+     *  turns — and of turns the adapter settled before their result (see
+     *  trackResultOwedBySettledTurn) — whose SDK-side command may still produce
+     *  an unaccounted result, keyed to what we know of its fate. A result whose
+     *  `user_message_uuid` names an entry is consumed by that key. "pending" =
+     *  not seen dispatched; if the SDK drops it (interrupt, `cancelled` before
+     *  "started") no result ever comes. "started" = dispatched into a turn whose result is still
      *  coming; exactly one terminal lifecycle frame will follow. "zombie" = its
      *  turn was aborted/failed after dispatch with no result seen since
      *  (`cancelled` after "started"); no more lifecycle frames come, but the
@@ -2501,7 +2505,15 @@ export class ClaudeAcpAgent {
                         `(stop_reason=${capturedReason}) but never followed with result or idle; ` +
                         `settling the turn via watchdog after ${RESULT_WATCHDOG_TIMEOUT_MS}ms`,
                 );
+                // A held turn's result already passed (an autonomous followup armed
+                // this); any other turn settled here may still get its result late
+                // (e.g. behind a slow Stop hook), which must not settle the next
+                // prompt.
+                const wasHeld = isHeldOpen(turn);
                 settleOrDefer(turnOutcome(session, capturedReason));
+                if (turn.settled && !wasHeld) {
+                    this.trackResultOwedBySettledTurn(session, turn);
+                }
             }, RESULT_WATCHDOG_TIMEOUT_MS);
         };
         /** The consumer's single send chokepoint: every `sessionUpdate` in this
@@ -2599,12 +2611,26 @@ export class ClaudeAcpAgent {
             resetTurnScratch();
         };
 
-        /** Ensure there is an active turn before a user-turn result that carries no
-         *  echo to activate it, by promoting the queue head. Most turns are
-         *  activated by their replayed user message before their result, but some
-         *  legitimately produce a result with no matching echo: local-only commands
-         *  (e.g. `/context`) and compaction (`/compact`, whose only user messages
-         *  are the generated summary and a `<local-command-stdout>` replay — neither
+        /** Decide which turn a user-turn result belongs to, making it the active
+         *  turn — or report that it is the late result an already-settled turn
+         *  still owes ("owed"), which must not touch any live turn.
+         *
+         *  Keyed lane first. `resultUserMessageUuid` is the result's own join key
+         *  (SDK 0.3.246+ echoes the triggering send's client uuid on results;
+         *  absent on older CLIs, synthetic/meta turns, and session-scoped
+         *  failures). A stamp naming an in-flight turn settles exactly that turn:
+         *  it becomes active (a different active turn is handed off, as its echo
+         *  would have). A stamp naming an orphan entry — a cancelled queued
+         *  command, or a turn settled before its result (see
+         *  trackResultOwedBySettledTurn) — is that dead command's result: it is
+         *  consumed, even while a live turn is active, and never promotes the
+         *  queue head.
+         *
+         *  Positional lane for everything else. Most turns are activated by their
+         *  replayed user message before their result, but some legitimately
+         *  produce a result with no matching echo: local-only commands (e.g.
+         *  `/context`) and compaction (`/compact`, whose only user messages are the
+         *  generated summary and a `<local-command-stdout>` replay — neither
          *  carries the prompt's uuid). Promoting the head settles those.
          *
          *  But an echo-less result can also be an ORPHAN: cancel() settles+removes a
@@ -2614,18 +2640,40 @@ export class ClaudeAcpAgent {
          *  prompt. `session.pendingOrphanResults` counts exactly how many such
          *  orphans are still expected (FIFO, they arrive before any live turn's
          *  result), so we skip those and only promote once the count is drained.
-         *
-         *  `resultUserMessageUuid` is the result's own join key (SDK 0.3.246+
-         *  echoes the triggering send's client uuid on results; absent on older
-         *  CLIs, synthetic/meta turns, and session-scoped failures). When present
-         *  it upgrades the map lane from positional heuristics to an exact match:
-         *  a stamp naming an orphaned command consumes the result outright, and a
-         *  stamp naming anything else positively refutes "this is a dead turn's
-         *  result", so the dup-over-loss one-skip must not eat it. */
-        const ensureActiveTurn = (resultUserMessageUuid?: string) => {
+         *  A stamp naming anything else (e.g. a turn whose commands were folded
+         *  into the active one) positively refutes "this is a dead turn's result",
+         *  so the dup-over-loss one-skip must not eat it. */
+        const ensureActiveTurn = (resultUserMessageUuid?: string): "active" | "owed" => {
+            if (resultUserMessageUuid !== undefined) {
+                const named = findUnsettledTurn(resultUserMessageUuid);
+                if (named !== undefined) {
+                    if (named !== session.activeTurn) {
+                        // The SDK finished the active turn's work and ran the named one.
+                        // handOffActive also closes a held turn's delivery stretch, so
+                        // the named command is judged on its own delivery (issue #453)
+                        // — the caller snapshots the flag AFTER this runs.
+                        handOffActive();
+                        activateTurn(named);
+                    }
+                    return "active";
+                }
+                if (session.orphanCommands?.has(resultUserMessageUuid)) {
+                    // Exact join: the result names an orphaned command. Delete the
+                    // matched entry even when it is still "pending" (its dispatch frame
+                    // was lost). Started/zombie entries are covered by this result too
+                    // (see the map lane below).
+                    for (const [uuid, state] of session.orphanCommands) {
+                        if (state === "started" || state === "zombie") {
+                            session.orphanCommands.delete(uuid);
+                        }
+                    }
+                    session.orphanCommands.delete(resultUserMessageUuid);
+                    return "owed";
+                }
+            }
             if (session.activeTurn) {
                 if (!isHeldOpen(session.activeTurn)) {
-                    return;
+                    return "active";
                 }
                 // A held turn (Turn.deferredSettle) already produced its result, so
                 // this incoming user-turn result cannot be its — it belongs to the
@@ -2640,11 +2688,11 @@ export class ClaudeAcpAgent {
                 // overwrote the held turn's. Orphan lanes below are necessarily
                 // empty while a turn is held: orphans are seeded by cancel(), which
                 // inline-settles a held turn, and activation cleared older ones.
-                // settleActive also closes the held turn's delivery stretch, so the
+                // handOffActive also closes the held turn's delivery stretch, so the
                 // promoted command's own delivery decision is not judged against the
                 // held turn's followup text (issue #453) — the caller snapshots the
                 // flag AFTER this runs.
-                settleActive(session.activeTurn.deferredSettle);
+                handOffActive();
             }
             // Orphan accounting runs BEFORE the head check: an orphan's echo-less
             // result can arrive with an EMPTY queue (the common post-cancel
@@ -2655,10 +2703,10 @@ export class ClaudeAcpAgent {
             // (e.g. /compact) instead.
             if ((session.pendingOrphanResults ?? 0) > 0) {
                 session.pendingOrphanResults = (session.pendingOrphanResults ?? 1) - 1;
-                return;
+                return "owed";
             }
-            // msg_lifecycle_v1 lane. Attribute this echo-less result using the
-            // entries' states — turns run sequentially and frames arrive in stream
+            // msg_lifecycle_v1 lane. Attribute this result using the entries'
+            // states — turns run sequentially and frames arrive in stream
             // order, so at any result: every "zombie" is from an already-dead turn
             // whose own result already passed before the frame that created the
             // newest entry (or never existed), every "started" entry was dispatched
@@ -2674,8 +2722,6 @@ export class ClaudeAcpAgent {
             // double-consume it. The unexpected-transition logging in the frame
             // handler is the tripwire for that class of drift.
             if (session.orphanCommands?.size) {
-                const stampedOrphan =
-                    resultUserMessageUuid !== undefined && session.orphanCommands.has(resultUserMessageUuid);
                 let consumedOrphanResult = false;
                 let oldestPending: string | undefined;
                 // The started/zombie drain applies regardless of the stamp: commands
@@ -2689,13 +2735,6 @@ export class ClaudeAcpAgent {
                         oldestPending ??= uuid;
                     }
                 }
-                if (stampedOrphan && resultUserMessageUuid !== undefined) {
-                    // Exact join: the result names an orphaned command. Delete the
-                    // matched entry even when it is still "pending" (its dispatch frame
-                    // was lost) and consume the result — no promotion.
-                    session.orphanCommands.delete(resultUserMessageUuid);
-                    return;
-                }
                 if (resultUserMessageUuid !== undefined) {
                     // The stamp names a send that is NOT in the orphan map, so this is
                     // a live turn's result: skip both the consumed-return (its folded
@@ -2704,7 +2743,7 @@ export class ClaudeAcpAgent {
                     // through to promote the head.
                 } else {
                     if (consumedOrphanResult) {
-                        return;
+                        return "owed";
                     }
                     if (oldestPending !== undefined) {
                         // No dispatch was seen before this result, so it is very likely a
@@ -2713,15 +2752,15 @@ export class ClaudeAcpAgent {
                         // misattributing a dead turn's outcome to a live prompt). Grant
                         // each pending entry exactly one skip, like the count lane did.
                         session.orphanCommands.delete(oldestPending);
-                        return;
+                        return "owed";
                     }
                 }
             }
             const head = firstUnsettledQueuedTurn();
-            if (!head) {
-                return;
+            if (head) {
+                activateTurn(head);
             }
-            activateTurn(head);
+            return "active";
         };
 
         /** Result-time bookkeeping that must run whether or not the result can be
@@ -2729,13 +2768,14 @@ export class ClaudeAcpAgent {
          *  turn whose command is known dispatched with no terminal frame yet —
          *  the emitting turn is the one it was dispatched (possibly folded) into,
          *  so its result has now passed; a later cancel() must not seed an orphan
-         *  entry that waits for it (see Turn.commandResultSeen). (2) When a turn
-         *  is ACTIVE, the result is attributed to it and never reaches
-         *  ensureActiveTurn — but it still covers the map's started entries
-         *  (commands folded into the active turn share its result) and zombies
-         *  (their late results have already passed or never existed), so drain
-         *  them here or they would zombify/linger and swallow a later live
-         *  echo-less result. */
+         *  entry that waits for it (see Turn.commandResultSeen). (2) When the
+         *  result is attributed to an already-active turn, ensureActiveTurn never
+         *  reaches its map lane — but the result still covers the map's started
+         *  entries (commands folded into the active turn share its result) and
+         *  zombies (their late results have already passed or never existed), so
+         *  drain them here or they would zombify/linger and swallow a later live
+         *  echo-less result. Runs AFTER ensureActiveTurn, whose keyed lane must
+         *  see an owed entry the result names before this drain removes it. */
         const recordResultForOrphanCommands = () => {
             for (const turn of session.turnQueue ?? []) {
                 if (!turn.settled && turn.commandStarted && !turn.commandFinished) {
@@ -2869,6 +2909,66 @@ export class ClaudeAcpAgent {
             turn.reject(error);
         };
 
+        /** Reject the active turn on an assistant-level failure, ahead of the
+         *  result that may still trail it: that result is the failed turn's (see
+         *  trackResultOwedBySettledTurn), not the next prompt's. */
+        const failActiveBeforeResult = (error: unknown) => {
+            const turn = session.activeTurn;
+            if (turn && !turn.settled && !isHeldOpen(turn)) {
+                this.trackResultOwedBySettledTurn(session, turn);
+            }
+            failActive(error);
+        };
+
+        /** Settle the active turn because the SDK has moved on to a later queued
+         *  turn (its echo, or a result naming it, arrived). The caller then
+         *  activates that turn; the remaining output — including a result the
+         *  previous turn's commands were folded into — belongs to it, so a
+         *  hand-off records no owed result. */
+        const handOffActive = () => {
+            if (!session.activeTurn) {
+                return;
+            }
+            // If a cancel is pending for the previous turn (its trailing idle hasn't
+            // arrived yet), settle it "cancelled" per the ACP contract rather than
+            // "end_turn" — otherwise a cancel followed quickly by the next prompt
+            // would report the cancelled turn as a normal completion.
+            if (session.cancelled) {
+                // The interrupt's trailing idle may arrive after the next echo; keep
+                // its previous-turn ownership.
+                session.idleBoundary = {
+                    kind: "accounted",
+                    turn: session.activeTurn ?? null,
+                };
+                // Before activateTurn resets the accumulator, so the usage still
+                // belongs to the cancelled turn.
+                settleActive(turnOutcome(session, "cancelled"));
+            } else if (isHeldOpen(session.activeTurn)) {
+                // A turn held open for its background subagents (see
+                // Turn.deferredSettle) hands off with the real outcome its result
+                // recorded, not a guessed end_turn — the user moving on must not
+                // block behind a long-running subagent, but it must not rewrite the
+                // stop reason either. Its trailing-idle debt stands and is absorbed
+                // when the drain idle eventually arrives.
+                settleActive(session.activeTurn.deferredSettle);
+            } else if (isSteering(session.activeTurn) && session.activeTurn.steeredSettle !== undefined) {
+                // Same for a turn with an open steer (see Turn.steeredEchoes): the
+                // user moving on outranks the steered continuation, but its last
+                // result's stop reason stands. With no result yet it falls through
+                // to the end_turn hand-off below, owing nothing there.
+                //
+                // This hand-off pre-empts idle settlement. Attribute any trailing
+                // idle to the turn being handed off.
+                session.idleBoundary = {
+                    kind: "accounted",
+                    turn: session.activeTurn ?? null,
+                };
+                settleActive(session.activeTurn.steeredSettle);
+            } else {
+                settleActive(turnOutcome(session, "end_turn"));
+            }
+        };
+
         /** Reject every in-flight turn — used when the stream dies. */
         const failAllTurns = (error: unknown) => {
             disarmForceCancel(session);
@@ -2936,38 +3036,7 @@ export class ClaudeAcpAgent {
                     // turn being abandoned. Stale counts self-heal: activation resets
                     // them (see activateTurn).
                     if (session.activeTurn && !session.activeTurn.settled) {
-                        // Seed by what the frames already told us, mirroring cancel()'s
-                        // queued-turn sweep — the consumer may have drained the wedged
-                        // turn's result and/or terminal frame before the backstop fired,
-                        // and an entry seeded for a result or frame that is already
-                        // spent would never drain (it would swallow an unrelated later
-                        // echo-less result instead).
-                        const active = session.activeTurn;
-                        if (
-                            active.commandFinished === "completed" ||
-                            active.commandFinished === "discarded" ||
-                            active.commandFinished === "refused"
-                        ) {
-                            // Finished SDK-side; any result already passed. Nothing to
-                            // track.
-                        } else if (active.commandFinished === "cancelled") {
-                            // Aborted after dispatch: its late result may still come —
-                            // unless it already did.
-                            if (!active.commandResultSeen) {
-                                this.trackOrphanCommand(session, active.promptUuid, "zombie");
-                            }
-                        } else if (active.commandResultSeen) {
-                            // Its result was already consumed (dropped at the cancelled
-                            // guard); only the terminal frame is outstanding, which no-ops
-                            // with no entry. Nothing to track.
-                        } else {
-                            // The wedged turn WAS dispatched (it's active), so track it
-                            // "started": its late result (if the SDK recovers) is skipped
-                            // echo-less, and its terminal frame — or that skip plus
-                            // activation's clear when the frame is lost to the wedge — is
-                            // what drains it.
-                            this.trackOrphanCommand(session, active.promptUuid, "started");
-                        }
+                        this.trackResultOwedBySettledTurn(session, session.activeTurn);
                     }
                     settleActive(turnOutcome(session, "cancelled"));
                     // The cancelled turn's result may never come (that's why the
@@ -3831,13 +3900,16 @@ export class ClaudeAcpAgent {
                             // no user-message echo to promote them, so do it here from the head.
                             // Promote BEFORE accumulating usage, since activation resets the
                             // accumulator — promoting after would discard this result's tokens.
-                            // The orphan bookkeeping runs first: it covers folded/zombie
+                            // A result an already-settled turn owes ("owed") is that dead
+                            // turn's trailer and leaves every live turn alone (see the break
+                            // below). The orphan bookkeeping then covers folded/zombie
                             // commands whose shared or late result this is, even when the
                             // result is the ACTIVE turn's (ensureActiveTurn never looks at
                             // the map in that case).
+                            let isOwedResult = false;
                             if (!isAutonomousResult) {
+                                isOwedResult = ensureActiveTurn(message.user_message_uuid) === "owed";
                                 recordResultForOrphanCommands();
-                                ensureActiveTurn(message.user_message_uuid);
                                 // Once the submitted goal command has produced its own result,
                                 // no older runtime update can still precede it in the ordered
                                 // SDK stream. Stop suppressing updates even when this runtime
@@ -3887,8 +3959,9 @@ export class ClaudeAcpAgent {
                             // usage_update below, and `session.accumulatedUsage` is only reset on
                             // turn activation — so folding an autonomous result that lands
                             // after the next turn is active (but before it settles) would leak
-                            // those tokens into that turn's PromptResponse.usage.
-                            if (!isAutonomousResult) {
+                            // those tokens into that turn's PromptResponse.usage. An owed
+                            // result's tokens are its settled turn's, not a live turn's.
+                            if (!isAutonomousResult && !isOwedResult) {
                                 session.accumulatedUsage.inputTokens += message.usage.input_tokens;
                                 session.accumulatedUsage.outputTokens += message.usage.output_tokens;
                                 session.accumulatedUsage.cachedReadTokens += message.usage.cache_read_input_tokens;
@@ -3907,7 +3980,7 @@ export class ClaudeAcpAgent {
                                 session.lastModelUsageReading ?? {},
                             );
                             session.lastModelUsageReading = modelUsageReading;
-                            if (!isAutonomousResult) {
+                            if (!isAutonomousResult && !isOwedResult) {
                                 session.accumulatedModelUsage = addModelUsage(
                                     session.accumulatedModelUsage ?? {},
                                     resultModelUsage,
@@ -4013,6 +4086,17 @@ export class ClaudeAcpAgent {
                                 if (!session.activeTurn && !firstUnsettledQueuedTurn()) {
                                     session.emittedAssistantText = false;
                                 }
+                                break;
+                            }
+
+                            // The late result of a turn already settled (or a cancelled
+                            // queued command): its outcome was decided when that turn
+                            // settled, and nothing below may settle or fail a live turn
+                            // with it. It still ends the cycle any ExitPlanMode marker
+                            // belongs to, and its `finally` closes the delivery stretch.
+                            if (isOwedResult) {
+                                session.pendingExitPlanModeInterruption = undefined;
+                                session.pendingExitPlanContextReset = undefined;
                                 break;
                             }
 
@@ -4463,52 +4547,7 @@ export class ClaudeAcpAgent {
                                 // turn promoted early (e.g. by a result that preceded its echo)
                                 // must not have its accumulated usage reset by its own echo.
                                 if (session.activeTurn !== queued) {
-                                    if (session.activeTurn) {
-                                        // Hand off the previous turn. If a cancel is pending for it
-                                        // (its trailing idle hasn't arrived yet), settle it
-                                        // "cancelled" per the ACP contract rather than "end_turn" —
-                                        // otherwise a cancel followed quickly by the next prompt
-                                        // would report the cancelled turn as a normal completion.
-                                        if (session.cancelled) {
-                                            // The interrupt's trailing idle may arrive after
-                                            // the next echo; keep its previous-turn ownership.
-                                            session.idleBoundary = {
-                                                kind: "accounted",
-                                                turn: session.activeTurn ?? null,
-                                            };
-                                            // Before activateTurn resets the accumulator, so the
-                                            // usage still belongs to the cancelled turn.
-                                            settleActive(turnOutcome(session, "cancelled"));
-                                        } else if (isHeldOpen(session.activeTurn)) {
-                                            // A turn held open for its background subagents (see
-                                            // Turn.deferredSettle) hands off with the real outcome
-                                            // its result recorded, not a guessed end_turn — the
-                                            // user moving on must not block behind a long-running
-                                            // subagent, but it must not rewrite the stop reason
-                                            // either. Its trailing-idle debt stands and is absorbed
-                                            // when the drain idle eventually arrives.
-                                            settleActive(session.activeTurn.deferredSettle);
-                                        } else if (
-                                            isSteering(session.activeTurn) &&
-                                            session.activeTurn.steeredSettle !== undefined
-                                        ) {
-                                            // Same for a turn with an open steer (see
-                                            // Turn.steeredEchoes): the user moving on outranks the
-                                            // steered continuation, but its last result's stop reason
-                                            // stands. With no result yet it falls through to the
-                                            // end_turn hand-off below, owing nothing there.
-                                            //
-                                            // This hand-off pre-empts idle settlement. Attribute
-                                            // any trailing idle to the turn being handed off.
-                                            session.idleBoundary = {
-                                                kind: "accounted",
-                                                turn: session.activeTurn ?? null,
-                                            };
-                                            settleActive(session.activeTurn.steeredSettle);
-                                        } else {
-                                            settleActive(turnOutcome(session, "end_turn"));
-                                        }
-                                    }
+                                    handOffActive();
                                     // Unlike the no-result teardown lanes, this hand-off must
                                     // NOT clear emittedAssistantText for a NON-held previous
                                     // turn (a held one's settleActive above closes its own
@@ -4634,7 +4673,7 @@ export class ClaudeAcpAgent {
                         }
 
                         if (message.type === "assistant" && message.error === "authentication_failed") {
-                            failActive(RequestError.authRequired(errorKindData(message.error)));
+                            failActiveBeforeResult(RequestError.authRequired(errorKindData(message.error)));
                             break;
                         }
 
@@ -4645,7 +4684,7 @@ export class ClaudeAcpAgent {
                             message.parent_tool_use_id === null &&
                             message.error === "model_not_found"
                         ) {
-                            failActive(
+                            failActiveBeforeResult(
                                 RequestError.internalError(
                                     errorKindData(message.error),
                                     "The selected model is unavailable",
@@ -4898,6 +4937,44 @@ export class ClaudeAcpAgent {
             session.orphanCommands.set(uuid, state);
         } else {
             session.pendingOrphanResults = (session.pendingOrphanResults ?? 0) + 1;
+        }
+    }
+
+    /** Record that a dispatched turn the adapter is settling BEFORE its result
+     *  (force-cancel backstop, result watchdog, an assistant-level failure)
+     *  still owes that result. Its late result is then consumed as this turn's
+     *  trailer — by its `user_message_uuid` when stamped, positionally otherwise
+     *  — instead of settling the next prompt (see ensureActiveTurn). Every
+     *  settle-before-result lane must record through here so the debt has one
+     *  representation: the orphan-accounting lanes.
+     *
+     *  Seeded by what the frames already told us, mirroring cancel()'s
+     *  queued-turn sweep — the consumer may have drained the turn's result
+     *  and/or terminal frame already, and an entry seeded for a result or frame
+     *  that is already spent would never drain (it would swallow an unrelated
+     *  later echo-less result instead). */
+    private trackResultOwedBySettledTurn(session: Session, turn: Turn): void {
+        if (
+            turn.commandFinished === "completed" ||
+            turn.commandFinished === "discarded" ||
+            turn.commandFinished === "refused"
+        ) {
+            // Finished SDK-side; any result already passed. Nothing to track.
+        } else if (turn.commandFinished === "cancelled") {
+            // Aborted after dispatch: its late result may still come — unless it
+            // already did.
+            if (!turn.commandResultSeen) {
+                this.trackOrphanCommand(session, turn.promptUuid, "zombie");
+            }
+        } else if (turn.commandResultSeen) {
+            // Its result was already consumed; only the terminal frame is
+            // outstanding, which no-ops with no entry. Nothing to track.
+        } else {
+            // The turn WAS dispatched (it was active), so track it "started": its
+            // late result is consumed as this turn's, and its terminal frame — or
+            // that consumption plus activation's clear when the frame is lost — is
+            // what drains it.
+            this.trackOrphanCommand(session, turn.promptUuid, "started");
         }
     }
 
