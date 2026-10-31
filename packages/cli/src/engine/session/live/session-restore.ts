@@ -35,7 +35,7 @@ export async function restoreSession(
     if (origin !== undefined) {
         session.setSessionTitle(origin.title);
     }
-    let stored = session.metrics.measureSync("session-state-read", () =>
+    const stored = session.metrics.measureSync("session-state-read", () =>
         origin?.kind === "import"
             ? new FoundStoredSession(
                   new StoredSession(
@@ -50,9 +50,23 @@ export async function restoreSession(
               )
             : session.store.read(session.sessionId),
     );
-    if (stored instanceof FoundStoredSession && !stored.session.prompted) {
+    const sameConversation = (record: StoredSession): boolean =>
+        record.agentId === session.agentId &&
+        record.cwd === session.cwd &&
+        arraysEqual(record.additionalDirectories, session.additionalDirectories);
+    // A prompted Session continues its native conversation. Until its first prompt a Session has none worth
+    // continuing (the Agent may not have kept it), so it opens a new one but keeps its own title and settings,
+    // unless its Agent or workspace changed.
+    const conversation = stored instanceof FoundStoredSession && stored.session.prompted ? stored.session : undefined;
+    const unprompted =
+        origin?.kind !== "fork" &&
+        stored instanceof FoundStoredSession &&
+        !stored.session.prompted &&
+        sameConversation(stored.session)
+            ? stored.session
+            : undefined;
+    if (stored instanceof FoundStoredSession && !stored.session.prompted && unprompted === undefined) {
         session.store.remove(session.sessionId);
-        stored = session.metrics.measureSync("session-state-read", () => session.store.read(session.sessionId));
     }
     // A fork has a new Runtime identity, so its destination has no saved selections.
     // Snapshot the locally tracked source before opening the independent Agent session.
@@ -96,15 +110,10 @@ export async function restoreSession(
             session.startExecutionOnlyCapture();
         }
         opened = forked;
-    } else if (
-        stored instanceof FoundStoredSession &&
-        stored.session.agentId === session.agentId &&
-        stored.session.cwd === session.cwd &&
-        arraysEqual(stored.session.additionalDirectories, session.additionalDirectories)
-    ) {
-        session.selectNativeSession(stored.session.nativeSessionId);
-        session.setPrompted(stored.session.prompted);
-        session.setSessionTitle(stored.session.title);
+    } else if (conversation !== undefined && sameConversation(conversation)) {
+        session.selectNativeSession(conversation.nativeSessionId);
+        session.setPrompted(conversation.prompted);
+        session.setSessionTitle(conversation.title);
         session.setRestored(true);
         if (recovery.kind === "history-required") {
             if (!session.capabilities.loadSession) {
@@ -148,15 +157,15 @@ export async function restoreSession(
             );
         }
     } else {
-        if (stored instanceof FoundStoredSession) {
-            if (stored.session.prompted) {
-                throw new AcpExecutionError(
-                    "The agent or workspace cannot change after a conversation has started",
-                    {},
-                    "session_identity_mismatch",
-                );
-            }
-            session.store.remove(session.sessionId);
+        if (conversation !== undefined) {
+            throw new AcpExecutionError(
+                "The agent or workspace cannot change after a conversation has started",
+                {},
+                "session_identity_mismatch",
+            );
+        }
+        if (unprompted !== undefined) {
+            session.setSessionTitle(unprompted.title);
         }
         const created = await session.metrics.measure("session-new", async () => await session.createSession(signal));
         session.selectNativeSession(created.nativeSessionId);
@@ -169,11 +178,13 @@ export async function restoreSession(
     session.applySessionOpened(opened);
     if (forkSource !== undefined) {
         await session.restoreStoredConfigurations(forkSource, signal, "fork");
-    } else if (stored instanceof FoundStoredSession && session.restored) {
-        await session.restoreStoredConfigurations(stored.session, signal);
+    } else if (conversation !== undefined && session.restored) {
+        await session.restoreStoredConfigurations(conversation, signal);
+    } else if (unprompted !== undefined) {
+        await session.restoreStoredConfigurations(unprompted, signal);
     }
     signal.throwIfAborted();
     session.writeStoredSession(
-        stored instanceof FoundStoredSession && session.restored ? stored.session.updatedAt : new Date().toISOString(),
+        conversation !== undefined && session.restored ? conversation.updatedAt : new Date().toISOString(),
     );
 }
