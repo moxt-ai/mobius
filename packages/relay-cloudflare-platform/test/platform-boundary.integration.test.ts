@@ -3846,6 +3846,23 @@ describe.sequential("Platform Turn submission", () => {
                     400,
                 ),
             ).toMatchObject({ error: { code: "invalid_request" } });
+            // A malformed settings change is the caller's error on the Session surface too.
+            expect(
+                await responseJson(
+                    await worker.fetch(
+                        new Request(
+                            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/configuration`,
+                            {
+                                body: JSON.stringify({ configId: "model", valueType: "select", value: "gpt" }),
+                                headers: credentialHeaders(text(sessionAccess, "credential")),
+                                method: "POST",
+                            },
+                        ),
+                        environment,
+                    ),
+                    400,
+                ),
+            ).toMatchObject({ error: { code: "invalid_request" } });
         } finally {
             daemon.close();
         }

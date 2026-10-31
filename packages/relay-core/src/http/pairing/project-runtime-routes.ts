@@ -26,6 +26,14 @@ import { bodyParser } from "../middleware/body-parser.ts";
 import { errorMiddleware, rethrowHonoError } from "../middleware/error-middleware.ts";
 import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
 import { createProjectRuntimeSessionControlRoutes, sessionControl } from "./project-runtime-session-control-routes.ts";
+import {
+    decodeSessionRequest,
+    sessionBindingEntries,
+    sessionConfigurationRequest,
+    sessionRenameRequest,
+    turnAttachmentsSchema,
+    turnSubmissionEntries,
+} from "./session-requests.ts";
 
 const identifier = v.custom<Identifier>(isIdentifier);
 const sessionIdentitySchema = v.strictObject({
@@ -33,29 +41,13 @@ const sessionIdentitySchema = v.strictObject({
     agentId: identifier,
     directoryId: v.custom<string>(isDirectoryIdentifier),
 });
-/** The binding of an existing Session: each omitted field is the Session's own. */
-const sessionBindingSchema = v.strictObject({
-    additionalDirectoryIds: v.optional(sessionIdentitySchema.entries.additionalDirectoryIds),
-    agentId: v.optional(sessionIdentitySchema.entries.agentId),
-    directoryId: v.optional(sessionIdentitySchema.entries.directoryId),
-});
+const sessionBindingSchema = v.strictObject(sessionBindingEntries);
 const createSessionSchema = v.strictObject({
     ...sessionIdentitySchema.entries,
     bindingId: v.optional(identifier),
     runtimeId: identifier,
     sessionId: identifier,
     title: v.optional(v.pipe(v.string(), v.maxLength(512))),
-});
-const configureSessionSchema = v.strictObject({
-    ...sessionBindingSchema.entries,
-    booleanValue: v.boolean(),
-    configId: identifier,
-    expectedConfigurationRevision: identifier,
-    value: v.string(),
-    valueType: v.picklist(["boolean", "select"]),
-});
-const renameSessionSchema = v.strictObject({
-    title: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(500)),
 });
 const nativeEventsSchema = v.strictObject({
     ...sessionBindingSchema.entries,
@@ -81,25 +73,15 @@ const browserCredentialSchema = v.strictObject({
         v.maxValue(MAX_BROWSER_CREDENTIAL_LIFETIME_MILLISECONDS / 1_000),
     ),
 });
-const submitTurnIdentityEntries = {
-    ...sessionBindingSchema.entries,
-    content: v.string(),
-    disposition: v.picklist(["reject", "queue", "steer"]),
+// The Runtime API also lets a caller choose the Turn's history policy, and accepts the earlier envelope that named
+// images and resources separately.
+const runtimeTurnEntries = {
+    ...turnSubmissionEntries,
     historyPolicy: v.optional(v.picklist(["eager", "execution-only"])),
-    idempotencyKey: identifier,
-    sessionConfigurations: v.array(v.unknown()),
-    targetCommandId: v.string(),
 };
-const submitTurnSchema = v.union([
-    v.strictObject({
-        ...submitTurnIdentityEntries,
-        attachments: v.array(v.unknown()),
-    }),
-    v.strictObject({
-        ...submitTurnIdentityEntries,
-        images: v.array(v.unknown()),
-        resources: v.array(v.unknown()),
-    }),
+const runtimeTurnRequest = v.union([
+    v.strictObject({ ...runtimeTurnEntries, attachments: turnAttachmentsSchema }),
+    v.strictObject({ ...runtimeTurnEntries, images: v.array(v.unknown()), resources: v.array(v.unknown()) }),
 ]);
 
 function validated<TSchema extends v.GenericSchema<unknown, object>>(
@@ -340,7 +322,7 @@ export function createProjectRuntimeRoutes() {
             "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/configuration",
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {
-                const body = validated(configureSessionSchema, context.req.valid("json"));
+                const body = decodeSessionRequest(sessionConfigurationRequest, context.req.valid("json"));
                 const result = await sessionControl(context).configure(body);
                 context.header("Cache-Control", "no-store");
                 return context.json(result);
@@ -350,7 +332,7 @@ export function createProjectRuntimeRoutes() {
             "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/rename",
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {
-                const body = validated(renameSessionSchema, context.req.valid("json"));
+                const body = decodeSessionRequest(sessionRenameRequest, context.req.valid("json"));
                 const result = await sessionControl(context).rename(body.title);
                 context.header("Cache-Control", "no-store");
                 return context.json(result);
@@ -380,7 +362,7 @@ export function createProjectRuntimeRoutes() {
             "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/turns",
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {
-                const body = validated(submitTurnSchema, context.req.valid("json"));
+                const body = decodeSessionRequest(runtimeTurnRequest, context.req.valid("json"));
                 const accepted = await sessionControl(context).submitTurn({
                     ...body,
                     attachments: "attachments" in body ? body.attachments : [],

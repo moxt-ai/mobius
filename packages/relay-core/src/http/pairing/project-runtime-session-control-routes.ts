@@ -7,23 +7,9 @@ import { SessionControl } from "../../service/pairing/session-control.ts";
 import { bodyParser } from "../middleware/body-parser.ts";
 import { errorMiddleware, rethrowHonoError } from "../middleware/error-middleware.ts";
 import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
+import { decodeSessionRequest, interactionResponseRequest, turnSteerRequest } from "./session-requests.ts";
 
 const identifier = v.custom<Identifier>(isIdentifier);
-const disposition = v.strictObject({ disposition: v.literal("steer") });
-const interactionResponse = v.variant("kind", [
-    v.strictObject({
-        kind: v.literal("permission"),
-        optionId: v.pipe(v.string(), v.maxLength(255)),
-        outcome: v.picklist(["cancelled", "selected"]),
-        responderId: identifier,
-    }),
-    v.strictObject({
-        action: v.picklist(["accept", "cancel", "decline"]),
-        content: v.pipe(v.string(), v.maxLength(100_000)),
-        kind: v.literal("elicitation"),
-        responderId: identifier,
-    }),
-]);
 
 function validated<TSchema extends v.GenericSchema>(schema: TSchema, value: unknown): v.InferOutput<TSchema> {
     const result = v.safeParse(schema, value);
@@ -76,7 +62,7 @@ export function createProjectRuntimeSessionControlRoutes() {
             "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/turns/:turnId/disposition",
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {
-                validated(disposition, context.req.valid("json"));
+                decodeSessionRequest(turnSteerRequest, context.req.valid("json"));
                 const turnId = validateIdentifier(context.req.param("turnId"), "turn_id");
                 await sessionControl(context).steerTurn(turnId);
                 context.header("Cache-Control", "no-store");
@@ -87,7 +73,7 @@ export function createProjectRuntimeSessionControlRoutes() {
             "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/interactions/:interactionId/responses",
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {
-                const body = validated(interactionResponse, context.req.valid("json"));
+                const body = decodeSessionRequest(interactionResponseRequest, context.req.valid("json"));
                 const interactionId = validateIdentifier(context.req.param("interactionId"), "interaction_id");
                 await sessionControl(context).respond(interactionId, body);
                 context.header("Cache-Control", "no-store");
