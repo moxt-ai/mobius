@@ -2,10 +2,11 @@ import type { ForkMobiusNativeSessionRequest } from "@moxt-ai/mobius-sdk";
 import {
     decodeNativeSessionRequest,
     decodeNativeSessionResult,
+    decodeSessionQueryCommand,
     decodeSessionRestoreCommand,
     RUNTIME_WORKSPACE_BINDING_ID,
 } from "@moxt-ai/mobius-sdk/protocol";
-import type { ProjectScope } from "../../entity/do/session.ts";
+import { type ProjectScope, RuntimeOperationFailedError } from "../../entity/do/session.ts";
 import { hashSecret, PairingDirectoryError } from "../../entity/pairing/pairing.ts";
 import type { SessionRuntimeOperations } from "../../gateway/session-runtime-operations.ts";
 import type { NativeSessionForkStorage } from "../../storage/native-session-fork-storage.ts";
@@ -119,6 +120,37 @@ export class NativeSessionForks {
             return { source, result };
         } catch (cause) {
             throw unknownOutcome(cause);
+        }
+    }
+
+    /** Whether a Runtime that has finished handling a Fork command holds no Session for its target. */
+    async #targetAbsent(
+        scope: ProjectScope,
+        runtimeId: string,
+        targetSessionId: string,
+        request: SessionRuntimeOperations["requestProjectScopeControl"],
+        signal: AbortSignal,
+    ) {
+        try {
+            const queried = await request(
+                scope,
+                runtimeId,
+                decodeSessionQueryCommand(
+                    JSON.stringify({
+                        kind: "session.query",
+                        requestId: crypto.randomUUID(),
+                        sessionIds: [targetSessionId],
+                    }),
+                ),
+                signal,
+            );
+            return (
+                queried.kind === "session.queried" &&
+                queried.entries.every((entry) => entry.sessionId !== targetSessionId)
+            );
+        } catch {
+            // Without an answer the target may exist, so the Fork outcome stays unknown.
+            return false;
         }
     }
 
@@ -239,6 +271,21 @@ export class NativeSessionForks {
                     this.#storage.complete(scope.projectId, operationId, JSON.stringify(receipt));
                     return receipt;
                 } catch (cause) {
+                    // The Runtime's own failure reply is final only without a target: it can still report an abort
+                    // after committing one. A rejected Fork created no Session, so forget it and let it run again.
+                    if (
+                        cause instanceof RuntimeOperationFailedError &&
+                        (await this.#targetAbsent(
+                            scope,
+                            runtimeId,
+                            command.targetSessionId,
+                            request,
+                            controller.signal,
+                        ))
+                    ) {
+                        this.#storage.abandon(scope.projectId, operationId);
+                        throw cause;
+                    }
                     throw unknownOutcome(cause);
                 }
             } finally {

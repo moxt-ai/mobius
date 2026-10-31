@@ -66,7 +66,7 @@ import {
     type WorkspaceEntriesEvent,
     type WorkspaceListCommand,
 } from "@moxt-ai/mobius-sdk/protocol";
-import { SessionRuntimeError } from "../../entity/do/session.ts";
+import { RuntimeOperationFailedError, SessionRuntimeError } from "../../entity/do/session.ts";
 import { runtimeControlRegistry } from "./runtime-control-registry.ts";
 
 export interface RuntimeReplyConnection {
@@ -686,7 +686,7 @@ export async function requestRuntimeControl(
                         const failed = decodeSessionOperationFailedEvent(event.data);
                         if (failed.requestId === requestId) {
                             reject(
-                                new SessionRuntimeError(failed.code, failed.message, {
+                                new RuntimeOperationFailedError(failed.code, failed.message, {
                                     runtimeTimings: failed.runtimeTimings,
                                 }),
                             );

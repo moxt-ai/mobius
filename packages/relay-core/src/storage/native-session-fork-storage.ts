@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { DoSqlDatabase } from "../infra/do-sql-database.ts";
 import { nativeSessionFork } from "../schema/runtime-connection-do/index.ts";
 
@@ -29,6 +29,20 @@ export class NativeSessionForkStorage {
             .update(nativeSessionFork)
             .set({ resultJson, attemptJson: null })
             .where(and(eq(nativeSessionFork.projectId, projectId), eq(nativeSessionFork.operationId, operationId)))
+            .run();
+    };
+
+    /** Forget an attempt that never completed, so its operation may run again. */
+    readonly abandon = (projectId: string, operationId: string): void => {
+        this.#database.orm
+            .delete(nativeSessionFork)
+            .where(
+                and(
+                    eq(nativeSessionFork.projectId, projectId),
+                    eq(nativeSessionFork.operationId, operationId),
+                    isNull(nativeSessionFork.resultJson),
+                ),
+            )
             .run();
     };
 }

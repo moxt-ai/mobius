@@ -4468,6 +4468,103 @@ it.each(["completed", "interrupted"] as const)(
     },
 );
 
+it("Given the Runtime rejects a Fork, When the same operation is retried, Then the rejection is reported and the retry forks again", async () => {
+    const runtime = await connectRuntimeDaemon("fork-rejected");
+    const input = {
+        agentId: "codex",
+        nativeSessionId: "native-source",
+        directoryId: "default",
+        additionalDirectoryIds: [],
+    };
+    const operationId = "rejected-fork-operation";
+    const forkCommand = async () => {
+        const find = record(JSON.parse(await runtime.daemonMessages.next()));
+        expect(find).toMatchObject({
+            kind: "native.session.request",
+            action: "find",
+            nativeSessionId: "native-source",
+        });
+        runtime.daemon.send(
+            JSON.stringify({
+                kind: "native.session.result",
+                action: "find",
+                requestId: text(find, "requestId"),
+                sessionId: text(find, "sessionId"),
+                entry: {
+                    entryId: "native-entry",
+                    nativeSessionId: "native-source",
+                    mobiusSessionIds: [],
+                    title: "Source",
+                    directoryId: "default",
+                    directoryLabel: "Workspace",
+                    additionalDirectories: [],
+                    updatedAt: null,
+                },
+            }),
+        );
+        const fork = record(JSON.parse(await runtime.daemonMessages.next()));
+        expect(fork).toMatchObject({ kind: "native.session.request", action: "fork", entryId: "native-entry" });
+        return fork;
+    };
+    try {
+        const first = runtime.forkNative(operationId, input);
+        const rejected = await forkCommand();
+        runtime.daemon.send(
+            JSON.stringify({
+                kind: "session.operation.failed",
+                code: "native_session_unsupported",
+                message: "This Agent does not support session forking",
+                requestId: text(rejected, "requestId"),
+                sessionId: text(rejected, "sessionId"),
+            }),
+        );
+        // The rejection is final only when the Runtime holds no target for it.
+        const query = record(JSON.parse(await runtime.daemonMessages.next()));
+        expect(query).toMatchObject({ kind: "session.query", sessionIds: [text(rejected, "targetSessionId")] });
+        runtime.daemon.send(
+            JSON.stringify({ kind: "session.queried", requestId: text(query, "requestId"), entries: [] }),
+        );
+        expect(await responseJson(await first, 503)).toEqual({
+            error: { code: "native_session_unsupported", message: "This Agent does not support session forking" },
+        });
+
+        const retried = runtime.forkNative(operationId, input);
+        const fork = await forkCommand();
+        expect(text(fork, "targetSessionId")).not.toBe(text(rejected, "targetSessionId"));
+        runtime.daemon.send(
+            JSON.stringify({
+                kind: "native.session.result",
+                action: "fork",
+                requestId: text(fork, "requestId"),
+                sessionId: text(fork, "sessionId"),
+                targetSessionId: text(fork, "targetSessionId"),
+                title: "Source (fork 1)",
+                ready: {
+                    kind: "session.ready",
+                    requestId: text(fork, "requestId"),
+                    sessionId: text(fork, "targetSessionId"),
+                    agentId: "codex",
+                    agentName: "Codex",
+                    agentVersion: "1.0.0",
+                    restored: true,
+                    directoryId: "default",
+                    directoryLabel: "Workspace",
+                    configurationRevision: "revision-1",
+                    additionalDirectories: [],
+                    capabilities: readyAgents[0]?.capabilities,
+                    commands: [],
+                    configOptions: [],
+                },
+            }),
+        );
+        const forked = await responseJson(await retried, 200);
+        expect(forked).toMatchObject({ result: { action: "fork", targetSessionId: text(fork, "targetSessionId") } });
+        expect(await responseJson(await runtime.forkNative(operationId, input), 200)).toEqual(forked);
+    } finally {
+        runtime.daemon.close(1000, "Fork rejection scenario completed");
+    }
+});
+
 // @no-uc: Bound a recovery delivery's external Session fanout so late terminal facts are not stranded behind one large write.
 it("Given a recovery frame spans 164 Sessions, When Recording has a bounded per-request fanout, Then every recovered failure is recorded", async () => {
     const runtime = await connectRuntimeDaemon("bulk-recovery-recording");

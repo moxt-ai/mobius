@@ -54,3 +54,9 @@ export class SessionRuntimeError extends Error implements HttpError {
         status: this.httpStatus,
     });
 }
+
+/**
+ * The Runtime answered a control command with its own `session.operation.failed`: it finished handling that command
+ * without a result. Unlike a lost connection, timeout or invalid reply, nothing about the command is still in flight.
+ */
+export class RuntimeOperationFailedError extends SessionRuntimeError {}
