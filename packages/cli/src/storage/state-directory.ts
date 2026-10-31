@@ -5,8 +5,8 @@ import { z } from "zod";
 const stateRootSchema = z.string().brand<"StateRoot">();
 
 /**
- * The directory MOBIUS_STATE_DIRECTORY names. It holds `current-data.txt`, each version's data under `versions/`, and
- * the control installation; an installation directory or a version's data directory is never a state root.
+ * The directory MOBIUS_STATE_DIRECTORY names. It holds the shared data pointer, legacy data containers,
+ * the default workspace, and the control installation. An installation directory is never a state root.
  */
 export type StateRoot = z.infer<typeof stateRootSchema>;
 

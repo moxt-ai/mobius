@@ -1,9 +1,8 @@
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import packageMetadata from "../../package.json" with { type: "json" };
 
 const temporaryDirectories: string[] = [];
 const runningRoots: Readonly<NodeJS.ProcessEnv>[] = [];
@@ -45,7 +44,7 @@ async function runCli(
     return { code, stderr, stdout };
 }
 
-// The daemon of a newer version inherits the current data when it starts; CLI commands only use the current data.
+// Daemons and CLI commands share the data selected by the existing on-disk pointer.
 async function startNewerDaemon(environment: Readonly<NodeJS.ProcessEnv>) {
     runningRoots.push(environment);
     return await runCli(["start"], environment);
@@ -65,37 +64,76 @@ async function rootWithEarlierInstallation() {
         writeFile(join(application, "current.json"), JSON.stringify({ installationId, version: 1 })),
         writeFile(session, '{"type":"session"}\n'),
     ]);
-    const inherited = join(
-        root,
-        "versions",
-        packageMetadata.version,
-        "installations",
-        "dev.mobius.cli",
-        installationId,
-    );
     const environment = { HOME: home, MOBIUS_STATE_DIRECTORY: root, PATH: dirname(process.execPath), TMPDIR: home };
-    return { environment, installation, inherited };
+    return { environment, installation, root };
 }
 
 describe("Mobius version data inheritance", () => {
-    it("Given an earlier version's current data, When a newer daemon first starts, Then it starts with the installation's data", async () => {
-        const { environment, inherited } = await rootWithEarlierInstallation();
+    it("Given an earlier version's current data, When a newer daemon first starts, Then it keeps the same authoritative data without a version copy", async () => {
+        const { environment, installation, root } = await rootWithEarlierInstallation();
 
         const started = await startNewerDaemon(environment);
 
         expect(started.code, started.stderr).toBe(0);
         expect(
-            await readFile(join(inherited, "agents", "pi", "sessions", "workspace-hash", "session.jsonl"), "utf8"),
+            await readFile(join(installation, "agents", "pi", "sessions", "workspace-hash", "session.jsonl"), "utf8"),
         ).toBe('{"type":"session"}\n');
+        expect(await readFile(join(root, "current-data.txt"), "utf8")).toBe(`versions/${earlierVersion}\n`);
+        expect(await readdir(join(root, "versions"))).toEqual([earlierVersion]);
     });
 
-    it("Given a symbolic link inside an earlier version's installation data, When a newer daemon first starts, Then inheritance still refuses it", async () => {
+    it("Given a workspace containing package executable symlinks, When a newer daemon starts, Then the workspace stays usable in place", async () => {
         const { environment, installation } = await rootWithEarlierInstallation();
-        await symlink("/etc/hostname", join(installation, "agents", "pi", "linked"));
+        const workspace = join(installation, "workspace");
+        const bin = join(workspace, "node_modules", ".bin");
+        await mkdir(bin, { recursive: true });
+        await writeFile(join(workspace, "tool.js"), "workspace tool");
+        await symlink("../../tool.js", join(bin, "tool"));
 
         const started = await startNewerDaemon(environment);
 
-        expect(started.code).toBe(1);
-        expect((await runCli(["logs"], environment)).stdout).toContain("The inherited data contains a symbolic link");
+        expect(started.code, started.stderr).toBe(0);
+        expect(await readFile(join(bin, "tool"), "utf8")).toBe("workspace tool");
+    });
+
+    it("Given a pairing copied by earlier releases, When it is removed, Then its credential disappears from every saved copy and user files remain", async () => {
+        const { environment, installation, root } = await rootWithEarlierInstallation();
+        const connectionId = `mcn_${"b".repeat(32)}`;
+        const connections = join(installation, "connections");
+        await mkdir(connections, { recursive: true });
+        await writeFile(
+            join(connections, `${connectionId}.json`),
+            JSON.stringify({
+                activation: "stopped",
+                appId: "app_saved",
+                channelId: "channel_saved",
+                connectionId,
+                defaultWorkspace: installation,
+                installationId,
+                kind: "verified",
+                pairingId: "",
+                relayOrigin: "http://127.0.0.1:1",
+                runtimeCredential: "a".repeat(43),
+                runtimeId: "runtime_saved",
+                version: 6,
+            }),
+        );
+        const historical = join(root, "versions", "0.0.299");
+        await cp(join(root, "versions", earlierVersion), historical, { recursive: true });
+        expect((await runCli(["pair", "list"], environment)).stdout).toContain(connectionId);
+
+        const removed = await runCli(["pair", "remove", "--connection", connectionId], environment);
+
+        expect(removed.code, removed.stderr).toBe(0);
+        expect((await runCli(["pair", "list"], environment)).stdout).not.toContain(connectionId);
+        for (const version of [earlierVersion, "0.0.299"]) {
+            const saved = join(root, "versions", version, "installations", "dev.mobius.cli", installationId);
+            await expect(readFile(join(saved, "connections", `${connectionId}.json`))).rejects.toMatchObject({
+                code: "ENOENT",
+            });
+            expect(
+                await readFile(join(saved, "agents", "pi", "sessions", "workspace-hash", "session.jsonl"), "utf8"),
+            ).toBe('{"type":"session"}\n');
+        }
     });
 });
