@@ -679,6 +679,11 @@ class ProjectionFold {
             }
             case "prompt.completed": {
                 const turn = this.#ensureTurn(payload.commandId, event);
+                if (isTerminal(turn.attempt)) {
+                    // An attempt settles once. The Runtime replays a settled outcome for a retried command as a new
+                    // event; the recorded outcome and its time remain the first ones.
+                    return;
+                }
                 const timing = attemptTiming(turn.attempt);
                 const cancelled = promptCompletion(payload).kind === "cancelled";
                 this.#putTurn({
@@ -700,6 +705,9 @@ class ProjectionFold {
             case "prompt.failed":
             case "prompt.failed-before-start": {
                 const turn = this.#ensureTurn(payload.commandId, event);
+                if (isTerminal(turn.attempt)) {
+                    return;
+                }
                 const { startedAt } = attemptTiming(turn.attempt);
                 this.#putTurn({
                     ...turn,
@@ -1059,9 +1067,11 @@ export class SessionTurnHistory {
             (projection.state.version === 1 ||
                 projection.state.compactionVersion !== 1 ||
                 projection.state.activityVersion !== 1 ||
-                projection.state.toolProgressVersion !== 1)
+                projection.state.toolProgressVersion !== 1 ||
+                projection.state.settlementVersion !== 1)
         ) {
-            // Older projections may contain repeated text or omit compactions and activity. Rebuild
+            // Older projections may contain repeated text, omit compactions and activity, or carry an attempt's
+            // replayed outcome instead of its first one. Rebuild
             // only derived tables from the unchanged raw Recording, using the bounded backfill.
             this.#history.resetProjection();
             return null;

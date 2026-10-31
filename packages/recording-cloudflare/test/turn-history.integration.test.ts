@@ -1192,3 +1192,16 @@ describe("Recording Turn history", () => {
         ).toBe(400);
     });
 });
+
+describe("settled attempts", () => {
+    it("Given a completed Turn, When its outcome is replayed as a new event, Then the Turn keeps its first outcome and time", async () => {
+        await completedTurn("replayed-command", "Prompt", "Answer");
+        const before = (await turnPage()).turns.find((turn) => turn.commandId === "replayed-command");
+        expect(before?.attempt).toMatchObject({ kind: "succeeded", completedAt: "2026-10-15T00:00:04.000Z" });
+
+        await record([completed("replayed-command")]);
+
+        const after = (await turnPage()).turns.find((turn) => turn.commandId === "replayed-command");
+        expect(after?.attempt).toEqual(before?.attempt);
+    });
+});

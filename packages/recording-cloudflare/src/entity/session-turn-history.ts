@@ -113,6 +113,8 @@ export const storedProjectionStateSchema = z
             .nullable(),
         activityVersion: z.literal(1).optional(),
         toolProgressVersion: z.literal(1).optional(),
+        // Missing on a projection that let a replayed terminal event overwrite a settled attempt.
+        settlementVersion: z.literal(1).optional(),
         // Missing on a projection that has not folded compaction lifecycle events yet.
         compactionVersion: z.literal(1).optional(),
         // Generation of the last folded event; a different generation clears the active commands.
@@ -151,6 +153,7 @@ export const emptyProjection: StoredProjection = {
         activeCommands: null,
         activityVersion: 1,
         toolProgressVersion: 1,
+        settlementVersion: 1,
         compactionVersion: 1,
         generationId: null,
         retiredGenerationIds: [],
