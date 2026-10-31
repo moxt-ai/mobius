@@ -8,6 +8,7 @@ import {
 import { and, asc, desc, eq, gt, gte, lt, lte } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/durable-sqlite";
 import {
+    committedDirectoryOperationsSchema,
     type DirectoryChange,
     directoryOperationSchema,
     type PendingDirectoryChange,
@@ -18,6 +19,7 @@ import * as schema from "../schema/session-recording-do/index.ts";
 import {
     pendingDirectoryUpdate,
     recordedSessionEvent,
+    recordingLocation,
     recordingMetadata,
 } from "../schema/session-recording-do/index.ts";
 import { applyDurableObjectMigrations } from "./durable-object-migrations.ts";
@@ -123,6 +125,28 @@ function storedBatches(
     return head === null || tail === null ? null : [...head, ...tail];
 }
 
+export type RecordingLocation = "local" | "legacy";
+
+/**
+ * The Runtime whose history a legacy Session object holds. An object that never recorded has no tables, and this
+ * read leaves it without any, so probing a Session's legacy object does not create one.
+ */
+export function legacyRecordingOwner(storage: DurableObjectStorage): string | null {
+    const created = storage.sql
+        .exec("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'recording_metadata'")
+        .toArray();
+    if (created.length === 0) {
+        return null;
+    }
+    return (
+        drizzle(storage, { schema })
+            .select({ runtimeId: recordingMetadata.runtimeId })
+            .from(recordingMetadata)
+            .where(eq(recordingMetadata.singleton, 1))
+            .all()[0]?.runtimeId ?? null
+    );
+}
+
 interface RecordedSessionHistory {
     readonly events: readonly SessionWireEvent[];
     readonly sessionId: string;
@@ -147,6 +171,20 @@ export class SessionRecordingStorage {
         this.#database = drizzle(storage, { schema, logger: metrics });
         this.#storage = storage;
     }
+
+    /** Where this object's Runtime keeps the Session history, once it has been settled. */
+    readonly location = (): RecordingLocation | null =>
+        this.#database
+            .select({ location: recordingLocation.location })
+            .from(recordingLocation)
+            .where(eq(recordingLocation.singleton, 1))
+            .all()[0]?.location ?? null;
+
+    /** Settles where the history lives; a location settled earlier is kept and returned. */
+    readonly settleLocation = (location: RecordingLocation): RecordingLocation => {
+        this.#database.insert(recordingLocation).values({ singleton: 1, location }).onConflictDoNothing().run();
+        return this.location() ?? location;
+    };
 
     /** Keeps a decoded batch for later readers, evicting the least recently used ones beyond the bounds. */
     readonly #remember = (batch: RecordedBatch, characters: number): void => {
@@ -270,6 +308,8 @@ export class SessionRecordingStorage {
         directory: DirectoryChange,
         project: (ordinal: number, events: readonly SessionWireEvent[], receivedAt: number) => void = () => undefined,
     ): AppendOutcome => {
+        // Validated before the first write, so every committed directory change decodes when the outbox reads it.
+        const directoryOperationsJson = JSON.stringify(directoryOperationSchema.array().parse(directory.operations));
         const appended: { readonly batch: RecordedBatch; readonly characters: number }[] = [];
         const outcome = this.#storage.transactionSync((): AppendOutcome => {
             const [event, ...remainingEvents] = write.envelope.events;
@@ -344,7 +384,7 @@ export class SessionRecordingStorage {
             }
             this.#database
                 .insert(pendingDirectoryUpdate)
-                .values({ operationsJson: JSON.stringify(directory.operations), events: directory.events })
+                .values({ operationsJson: directoryOperationsJson, events: directory.events })
                 .run();
             return { kind: "recorded" };
         });
@@ -383,7 +423,7 @@ export class SessionRecordingStorage {
             .all()
             .map((row) => ({
                 ordinal: row.ordinal,
-                operations: directoryOperationSchema.array().parse(JSON.parse(row.operationsJson)),
+                operations: committedDirectoryOperationsSchema.parse(JSON.parse(row.operationsJson)),
                 events: row.events,
             }));
 

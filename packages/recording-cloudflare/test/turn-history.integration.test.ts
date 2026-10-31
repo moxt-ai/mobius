@@ -219,7 +219,7 @@ describe("Recording Turn history", () => {
             compactions: [{ compactionId: "compact-replay", sequence: 0, status: "completed" }],
             items: [{ kind: "answer", sequence: 1, text: "Retained answer" }],
         });
-        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]));
+        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, runtimeId, sessionId]));
         await runInDurableObject(stub, (_instance, state) => {
             state.storage.sql.exec(
                 "UPDATE recording_projection SET state_json = json_remove(state_json, '$.compactionVersion')",
@@ -294,7 +294,7 @@ describe("Recording Turn history", () => {
         const raw = await worker.fetch(new Request(sessionPath("events")), env);
         expect(await raw.json()).toMatchObject({ events: frames });
 
-        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]));
+        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, runtimeId, sessionId]));
         await runInDurableObject(stub, (_instance, state) => {
             // A deployed projection predates duplicate suppression and may already contain repeated text.
             state.storage.sql.exec("UPDATE recording_projection SET state_json = json_remove(state_json, '$.version')");
@@ -683,7 +683,7 @@ describe("Recording Turn history", () => {
 
     it("Given a Turn folded before the steering anchor was recorded, When a client reads Turns, Then it is read as a prompt no other command was running for", async () => {
         await completedTurn("command-1", "Prompt 1", "Reply 1");
-        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]));
+        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, runtimeId, sessionId]));
         // A Turn folded before the anchor existed carries no such key at all. Reading it must not
         // fail the page it is on: an unplaced prompt is what that Turn is.
         await runInDurableObject(stub, (_instance, state) => {
@@ -699,7 +699,7 @@ describe("Recording Turn history", () => {
         await completedTurn("command-1", "Prompt 1", "Reply 1");
         await completedTurn("command-2", "Prompt 2", "Reply 2");
         const projected = await turnPage();
-        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]));
+        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, runtimeId, sessionId]));
         await runInDurableObject(stub, (_instance, state) => {
             // A deployment that folds Turns differently treats every projection written before it as outdated.
             state.storage.sql.exec(
@@ -719,7 +719,7 @@ describe("Recording Turn history", () => {
         await record([completed("command-1")]);
         await completedTurn("command-2", "Prompt 2", "Reply 2");
         const projected = await turnPage();
-        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]));
+        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, runtimeId, sessionId]));
         await runInDurableObject(stub, (_instance, state) => {
             for (const table of [
                 "recording_projection",
@@ -882,7 +882,7 @@ describe("Recording Turn history", () => {
         // Each of these characters takes three bytes, so the stored part has to end on a whole character.
         await record([thought("€".repeat(350_000))]);
         await record([thought("€".repeat(350_000)), completed("command-1")]);
-        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]));
+        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, runtimeId, sessionId]));
         await runInDurableObject(stub, (_instance, state) => {
             for (const table of [
                 "recording_projection",
@@ -1016,7 +1016,7 @@ describe("Recording Turn history", () => {
 
     it("Given an undecodable projection state, When backfill runs, Then reads report the failure instead of building forever", async () => {
         await completedTurn("command-1", "Prompt 1", "Reply 1");
-        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]));
+        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, runtimeId, sessionId]));
         await runInDurableObject(stub, (_instance, state) => {
             state.storage.sql.exec("UPDATE recording_projection SET state_json = '{}'");
         });
@@ -1031,7 +1031,7 @@ describe("Recording Turn history", () => {
 
     it("Given an undecodable projection state, When a client reads Turns before backfill runs, Then the read reports the failure its own step records", async () => {
         await completedTurn("command-1", "Prompt 1", "Reply 1");
-        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]));
+        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, runtimeId, sessionId]));
         await runInDurableObject(stub, (_instance, state) => {
             state.storage.sql.exec("UPDATE recording_projection SET state_json = '{}'");
         });

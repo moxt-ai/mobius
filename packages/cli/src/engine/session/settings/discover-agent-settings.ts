@@ -17,6 +17,7 @@ import { operationErrorCode } from "../../infra/operation-error.ts";
 import type { AgentSettingsModelEffort, ResolveAgent } from "../api/session-api.ts";
 import type { SessionManager } from "../manager/session-manager.ts";
 import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
+import { isModelOption } from "./configuration-dependencies.ts";
 
 /**
  * Correlation details for a settings-discovery failure, safe for the remote diagnostic log. The
@@ -213,7 +214,7 @@ function withoutUnsupportedModels(
 }
 
 function modelOption(options: readonly SessionConfigOption[]): SessionConfigOption | undefined {
-    return options.find((option) => option.id === "model" || option.category === "model");
+    return options.find(isModelOption);
 }
 
 function effortOption(options: readonly SessionConfigOption[]): SessionConfigOption | undefined {

@@ -14,6 +14,7 @@ import { unsupportedSessionCapabilities } from "../../acp/protocol/session-capab
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../../infra/operation-metrics.ts";
 import type { Timer } from "../../util/timer.ts";
 import { AgentSession } from "../live/agent-session.ts";
+import { replaySessionConfigurations, storedSessionConfiguration } from "../live/session-configurations.ts";
 import { isNativeChatSessionId } from "../native/native-chat-agent.ts";
 import { nativeSessionQuery } from "../native/native-query.ts";
 import type { AgentProcessPool, AgentProcessRetention } from "../process/agent-process-pool.ts";
@@ -24,6 +25,7 @@ import {
     MissingStoredSession,
     type SessionStore,
 } from "../record/session-store.ts";
+import { isModelOption } from "../settings/configuration-dependencies.ts";
 import { ActiveExecutions } from "../turn/active-executions.ts";
 import { RuntimeOperations, waitForSharedOperation } from "./operation-drain.ts";
 
@@ -306,38 +308,21 @@ export class SessionManager {
                     ),
             );
             try {
-                for (const desired of desiredConfigOptions) {
-                    const current = runtime.prepared().configOptions.find((option) => option.id === desired.id);
-                    if (current === undefined || current.type !== desired.type) {
-                        continue;
-                    }
-                    if (desired.type === "boolean") {
-                        if (current.booleanValue !== desired.booleanValue) {
-                            await runtime.applyConfiguration({
-                                ...options,
-                                booleanValue: desired.booleanValue,
-                                configId: desired.id,
-                                requestId: `execution-prepare-${desired.id}`,
-                                value: "",
-                                valueType: "boolean",
-                            });
-                        }
-                        continue;
-                    }
-                    if (
-                        current.currentValue !== desired.currentValue &&
-                        current.values.some((value) => value.value === desired.currentValue)
-                    ) {
+                await replaySessionConfigurations(
+                    desiredConfigOptions.map(storedSessionConfiguration),
+                    () => runtime.prepared().configOptions,
+                    async (desired) => {
                         await runtime.applyConfiguration({
                             ...options,
-                            booleanValue: false,
-                            configId: desired.id,
-                            requestId: `execution-prepare-${desired.id}`,
-                            value: desired.currentValue,
-                            valueType: "select",
+                            booleanValue: desired.type === "boolean" && desired.booleanValue,
+                            configId: desired.configId,
+                            requestId: `execution-prepare-${desired.configId}`,
+                            value: desired.type === "select" ? desired.value : "",
+                            valueType: desired.type,
                         });
-                    }
-                }
+                    },
+                    options.signal,
+                );
             } catch (error) {
                 await this.#retireSessionProcess(options.sessionId, runtime, async () => await runtime.close());
                 throw error;
@@ -501,9 +486,7 @@ export class SessionManager {
                     const prepared = runtime.prepared();
                     const discoveredModelEffort = runtime.agentSettingsModelEffort();
                     const model = options.model;
-                    const modelOption = prepared.configOptions.find(
-                        (option) => option.id === "model" || option.category === "model",
-                    );
+                    const modelOption = prepared.configOptions.find(isModelOption);
                     // A Session cannot switch a model select with a single value, and the
                     // Agent already reported its settings for that current model.
                     const modelIsFixed =

@@ -15,7 +15,6 @@ import { prepareMobiusEngineDataDir, resolveMaxAcpProcesses } from "../config.ts
 import { sendLocalRequest } from "../control/local-client.ts";
 import { serveLocalControl } from "../control/local-server.ts";
 import { openMobiusControlInstallation } from "../pairing/pair-local-machine.ts";
-import { prepareVersionData, recordCurrentData } from "../upgrades/data.ts";
 import { surviveUnhandledRejections, type UnhandledRejectionGuard } from "./unhandled-rejection.ts";
 
 class DaemonRuntimeError extends Error {
@@ -147,7 +146,6 @@ async function runDaemonRuntime(
             }
             deadline.throwIfAborted();
         }
-        await prepareVersionData(version, combined);
         const engineDataDir = await prepareMobiusEngineDataDir(version, combined, process.env);
         const installation = await RuntimeInstallationStore.open(engineDataDir, combined);
         rejectionGuard.bindStateDirectory(control.stateDirectory);
@@ -272,8 +270,6 @@ async function runDaemonRuntime(
         };
         try {
             await reconcile();
-            // CLI mutations follow this pointer as soon as status reports readiness.
-            await recordCurrentData(version, combined);
             lifecycleLog.record(
                 JSON.stringify({
                     kind: "daemon_ready",

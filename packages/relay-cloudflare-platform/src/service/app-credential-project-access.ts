@@ -1,6 +1,5 @@
 import {
     AuditActor,
-    decodeProjectPermissions,
     PerpetualProjectAccessLifetime,
     ProjectAccessContext,
     ProjectAuthenticationError,
@@ -11,21 +10,7 @@ import {
 import { PlatformAuditActorKind } from "../entity/platform-control-plane.ts";
 import type { CredentialRow } from "../entity/platform-records.ts";
 import type { PlatformControlPlaneStorage } from "../storage/platform-control-plane-storage.ts";
-import { appCredentialActive } from "./app-credential-authentication-service.ts";
-
-export function credentialPermissions(encoded: string): ReadonlySet<ProjectPermission> {
-    let value: unknown;
-    try {
-        value = JSON.parse(encoded);
-    } catch (cause) {
-        throw new ProjectAuthenticationError(
-            "project_authorization_record_invalid",
-            "The AppCredential authorization record is invalid",
-            { cause },
-        );
-    }
-    return decodeProjectPermissions(value);
-}
+import { appCredentialActive, credentialPermissions } from "./app-credential-authentication-service.ts";
 
 /**
  * What an authenticated AppCredential may do in a Project. Requests apply it once; a connection the credential
@@ -66,7 +51,7 @@ export class AppCredentialProjectAccess implements ProjectCredentialAuthority {
                 );
             }
         }
-        const granted = credentialPermissions(row.permissions_json);
+        const granted = credentialPermissions(row).granted;
         if (!granted.has(requiredPermission)) {
             throw new ProjectAuthenticationError(
                 "project_permission_denied",

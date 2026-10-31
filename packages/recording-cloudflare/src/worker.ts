@@ -22,15 +22,22 @@ import {
     type SessionRecordingWireWrite,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { type Context, Hono } from "hono";
+import { z } from "zod";
 import { decodeKnownDirectoryUpdate } from "./entity/recording-directory-update.ts";
 import { RecordingSqlMetrics } from "./infra/recording-sql-metrics.ts";
 import { RecordingDirectory } from "./service/recording-directory.ts";
 import { RecordingDirectoryOutbox } from "./service/recording-directory-outbox.ts";
 import { projectDirectoryChange } from "./service/recording-directory-update.ts";
 import { RecordingEventWaiters } from "./service/recording-event-waiters.ts";
+import { resolveRecordingLocation } from "./service/session-recording-location.ts";
 import { SessionTurnHistory, type TurnHistoryRead } from "./service/session-turn-history.ts";
 import { RecordingDirectoryStorage } from "./storage/recording-directory-storage.ts";
-import { type AppendOutcome, type PageRead, SessionRecordingStorage } from "./storage/session-recording-storage.ts";
+import {
+    type AppendOutcome,
+    legacyRecordingOwner,
+    type PageRead,
+    SessionRecordingStorage,
+} from "./storage/session-recording-storage.ts";
 import { SessionTurnHistoryStorage } from "./storage/session-turn-history-storage.ts";
 
 export interface RecordingWorkerBindings {
@@ -546,12 +553,43 @@ async function sessionRecordingFetch(
     query: URLSearchParams,
     path: string,
 ): Promise<Response> {
+    const target = recordingTarget(query);
+    if (target === null) {
+        return errorResponse("not_found", 404);
+    }
     return await durableObjectFetch(
         context.env.SESSION_RECORDING,
-        JSON.stringify([query.get("projectId"), query.get("sessionId")]),
+        sessionRecordingName(target),
         new Request(`https://recording.internal/${path}?${query}`, { signal: context.req.raw.signal }),
     );
 }
+
+interface RecordingTarget {
+    readonly projectId: string;
+    readonly runtimeId: string;
+    readonly sessionId: string;
+}
+
+function recordingTarget(query: URLSearchParams): RecordingTarget | null {
+    const projectId = decodedIdentifier(query.get("projectId") ?? undefined);
+    const runtimeId = decodedIdentifier(query.get("runtimeId") ?? undefined);
+    const sessionId = decodedIdentifier(query.get("sessionId") ?? undefined);
+    return projectId === null || runtimeId === null || sessionId === null ? null : { projectId, runtimeId, sessionId };
+}
+
+/** A Runtime's history of a Session; Runtimes that share a Session never share its history. */
+function sessionRecordingName(target: RecordingTarget): string {
+    return JSON.stringify([target.projectId, target.runtimeId, target.sessionId]);
+}
+
+/** The object a Session's history lived in before Recording was addressed by Runtime; its first writer owns it. */
+function legacySessionRecordingName(target: RecordingTarget): string {
+    return JSON.stringify([target.projectId, target.sessionId]);
+}
+
+/** Requests to this host reach a Session's legacy object on behalf of its owner's history. */
+const legacyRecordingHost = "legacy-recording.internal";
+const legacyOwnerSchema = z.object({ runtimeId: z.string() });
 
 function durableObjectFetch(namespace: DurableObjectNamespace, name: string, request: Request): Promise<Response> {
     return namespace.getByName(name).fetch(request);
@@ -625,10 +663,11 @@ async function recordSessionBatch(
                 let succeeded = false;
                 sessionRequests += 1;
                 try {
+                    const target = { projectId: write.projectId, runtimeId: write.runtimeId, sessionId };
                     const response = await durableObjectFetch(
                         environment.SESSION_RECORDING,
-                        JSON.stringify([write.projectId, sessionId]),
-                        new Request("https://recording.internal/events", {
+                        sessionRecordingName(target),
+                        new Request(`https://recording.internal/events?${new URLSearchParams({ ...target })}`, {
                             method: "POST",
                             body: JSON.stringify({ ...write, envelope: { kind: "session.event.v2", events } }),
                             signal,
@@ -771,18 +810,70 @@ export function createRecordingWorker(): RecordingWorker {
     };
 }
 
+interface OpenedSessionRecording {
+    readonly recording: SessionRecordingStorage;
+    readonly history: SessionTurnHistory;
+    readonly directory: RecordingDirectoryOutbox;
+    readonly routes: Hono<RecordingEnvironment>;
+}
+
 export class SessionRecordingDurableObject extends DurableObject<RecordingWorkerBindings> {
-    readonly #history: SessionTurnHistory;
-    readonly #directory: RecordingDirectoryOutbox;
-    readonly #routes: Hono<RecordingEnvironment>;
     readonly #waiters = new RecordingEventWaiters();
-    constructor(state: DurableObjectState, environment: RecordingWorkerBindings) {
-        super(state, environment);
+    // Opened on first use, so probing a Session's legacy object that never recorded leaves it without storage.
+    #session: OpenedSessionRecording | undefined;
+    override async fetch(request: Request): Promise<Response> {
+        const url = new URL(request.url);
+        if (url.hostname === legacyRecordingHost) {
+            if (url.pathname === "/owner") {
+                const owner = legacyRecordingOwner(this.ctx.storage);
+                return owner === null ? errorResponse("not_found", 404) : Response.json({ runtimeId: owner });
+            }
+            return await this.#opened().routes.fetch(request);
+        }
+        const target = recordingTarget(url.searchParams);
+        if (target === null) {
+            return errorResponse("invalid_target", 400);
+        }
+        const session = this.#opened();
+        const location = await resolveRecordingLocation(session.recording, target.runtimeId, async () => {
+            const response = await durableObjectFetch(
+                this.env.SESSION_RECORDING,
+                legacySessionRecordingName(target),
+                new Request(`https://${legacyRecordingHost}/owner`, { signal: AbortSignal.timeout(10_000) }),
+            );
+            if (response.status === 404) {
+                await response.body?.cancel();
+                return null;
+            }
+            if (!response.ok) {
+                await response.body?.cancel();
+                throw new Error(`The legacy Recording owner could not be read (${response.status})`);
+            }
+            return legacyOwnerSchema.parse(await response.json()).runtimeId;
+        });
+        switch (location) {
+            case "local":
+                return await session.routes.fetch(request);
+            case "legacy": {
+                const legacy = new URL(url);
+                legacy.hostname = legacyRecordingHost;
+                return await durableObjectFetch(
+                    this.env.SESSION_RECORDING,
+                    legacySessionRecordingName(target),
+                    new Request(legacy, request),
+                );
+            }
+        }
+    }
+    readonly #opened = (): OpenedSessionRecording => {
+        if (this.#session !== undefined) {
+            return this.#session;
+        }
         const metrics = new RecordingSqlMetrics();
-        const recording = new SessionRecordingStorage(state.storage, metrics);
-        const historyStorage = new SessionTurnHistoryStorage(state.storage, metrics);
-        this.#history = new SessionTurnHistory(recording, historyStorage);
-        this.#directory = new RecordingDirectoryOutbox(recording, async (update) => {
+        const recording = new SessionRecordingStorage(this.ctx.storage, metrics);
+        const history = new SessionTurnHistory(recording, new SessionTurnHistoryStorage(this.ctx.storage, metrics));
+        const environment = this.env;
+        const directory = new RecordingDirectoryOutbox(recording, async (update) => {
             try {
                 const response = await durableObjectFetch(
                     environment.RECORDING_DIRECTORY,
@@ -806,33 +897,33 @@ export class SessionRecordingDurableObject extends DurableObject<RecordingWorker
                 return false;
             }
         });
-        this.#routes = sessionRecordingRoutes(
+        const routes = sessionRecordingRoutes(
             recording,
-            this.#history,
+            history,
             this.#scheduleBackfill,
             this.#indexDirectory,
             metrics,
             this.#waiters,
         );
-    }
-    override async fetch(request: Request): Promise<Response> {
-        return await this.#routes.fetch(request);
-    }
+        this.#session = { recording, history, directory, routes };
+        return this.#session;
+    };
     /**
      * Folds one bounded step of unprojected Recording batches, assesses inactive executions once caught up, and
      * indexes unconfirmed directory changes, then re-arms for whichever is left.
      */
     override async alarm(): Promise<void> {
+        const { directory, history } = this.#opened();
         const now = new Date();
-        const outcome = this.#history.backfill(now);
-        const indexed = await this.#directory.deliver();
+        const outcome = history.backfill(now);
+        const indexed = await directory.deliver();
         let historyAt: number | null;
         switch (outcome.kind) {
             case "caught_up": {
-                if (this.#history.assessInactivity(now)) {
+                if (history.assessInactivity(now)) {
                     this.#waiters.changed();
                 }
-                const deadline = this.#history.nextInactivityDeadline();
+                const deadline = history.nextInactivityDeadline();
                 historyAt = deadline === null ? null : Math.max(Date.now(), deadline);
                 break;
             }
@@ -854,7 +945,7 @@ export class SessionRecordingDurableObject extends DurableObject<RecordingWorker
     };
     /** Indexes committed directory changes now, and retries later whatever the directory did not confirm. */
     readonly #indexDirectory = async (): Promise<void> => {
-        if (!(await this.#directory.deliver())) {
+        if (!(await this.#opened().directory.deliver())) {
             await this.#scheduleAt(Date.now() + directoryRetryMilliseconds);
         }
     };

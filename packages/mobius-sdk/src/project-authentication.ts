@@ -1,24 +1,8 @@
-import { isIdentifier } from "@moxt-ai/mobius-sdk/protocol";
+import { isIdentifier, PROJECT_PERMISSION_NAMES } from "@moxt-ai/mobius-sdk/protocol";
 import { MobiusProtocolError, MobiusValidationError } from "./errors.ts";
 import type { MobiusCredentialProvider } from "./service-client.ts";
 
-const PROJECT_PERMISSIONS = Object.freeze([
-    "artifact:read",
-    "artifact:write",
-    "identity-binding:manage",
-    "interaction:respond",
-    "owner-credential:manage",
-    "project:event:read",
-    "project:read",
-    "runtime:pair",
-    "runtime:read",
-    "runtime:revoke",
-    "session:delete",
-    "session:read",
-    "session:write",
-]);
-
-export const MOBIUS_PROJECT_PERMISSIONS: readonly string[] = PROJECT_PERMISSIONS;
+export const MOBIUS_PROJECT_PERMISSIONS: readonly string[] = PROJECT_PERMISSION_NAMES;
 
 function text(value: Readonly<Record<string, unknown>>, key: string, name: string, allowEmpty = false): string {
     const field = value[key];

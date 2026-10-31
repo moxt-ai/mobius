@@ -1,5 +1,11 @@
-import { decodeProjectPermissions, hashSecret, ProjectAuthenticationError } from "@moxt-ai/mobius-relay-core";
+import {
+    decodeRecordedProjectPermissions,
+    hashSecret,
+    ProjectAuthenticationError,
+    type RecordedProjectPermissions,
+} from "@moxt-ai/mobius-relay-core";
 import { DatabaseError } from "@moxt-ai/mobius-relay-core/database";
+import { logger } from "@moxt-ai/mobius-relay-core/logging";
 import { type PlatformApplicationIdentity, PlatformControlPlaneError } from "../entity/platform-control-plane.ts";
 import type { CredentialRow } from "../entity/platform-records.ts";
 import type { PlatformControlPlaneStorage } from "../storage/platform-control-plane-storage.ts";
@@ -14,8 +20,7 @@ export class AppCredentialAuthenticationService {
     readonly authenticate = async (credential: string, signal: AbortSignal): Promise<PlatformApplicationIdentity> => {
         try {
             const row = await this.verify(credential, signal);
-            const encoded: unknown = JSON.parse(row.permissions_json);
-            const permissions = decodeProjectPermissions(encoded);
+            const permissions = credentialPermissions(row).granted;
             return {
                 kind: "application",
                 tenantId: row.tenant_id,
@@ -101,6 +106,37 @@ export function appCredentialActive(
         (row.replaced_by_credential_id === null ||
             (typeof row.overlap_ends_at === "number" && row.overlap_ends_at > now))
     );
+}
+
+/**
+ * The permissions an AppCredential record holds. A newer Worker may have recorded permissions this one does not
+ * know; they grant nothing here, but they do not invalidate the credential.
+ */
+export function credentialPermissions(
+    row: Pick<CredentialRow, "credential_id" | "permissions_json">,
+): RecordedProjectPermissions {
+    let value: unknown;
+    try {
+        value = JSON.parse(row.permissions_json);
+    } catch (cause) {
+        throw new ProjectAuthenticationError(
+            "project_authorization_record_invalid",
+            "The AppCredential authorization record is invalid",
+            { cause },
+        );
+    }
+    const permissions = decodeRecordedProjectPermissions(value);
+    if (permissions.unrecognized.length > 0) {
+        logger.warn(
+            {
+                event: "project_permission_unrecognized",
+                credentialId: row.credential_id,
+                permissions: permissions.unrecognized,
+            },
+            "The AppCredential records permissions this Worker does not know",
+        );
+    }
+    return permissions;
 }
 
 function requireActiveCredential(row: CredentialRow, now: number): void {

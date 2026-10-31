@@ -14,7 +14,7 @@ import {
     sessionElicitationRequestedEventSchema,
     sessionPermissionRequestedEventSchema,
 } from "../interactions/index.ts";
-import { recordingCursorSchema } from "./recording.ts";
+import { recordingCursorSchema, SESSION_RECORDING_TITLE_MAX_LENGTH } from "./recording.ts";
 
 /**
  * Turns a caller may request from a Turn history page at most. This bounds the request only: a
@@ -363,7 +363,7 @@ const sessionRecordingTurnPageSchema = z
         sessionId: identifierStringSchema,
         // The Recording cursor at the last event this snapshot includes; live reads continue after it.
         tailCursor: recordingCursorSchema,
-        title: z.string().max(1_000).nullable(),
+        title: z.string().max(SESSION_RECORDING_TITLE_MAX_LENGTH).nullable(),
         turns: z.array(sessionRecordingTurnSchema).max(SESSION_RECORDING_TURN_PAGE_DECODE_MAX_ELEMENTS).readonly(),
         version: z.literal(1),
     })

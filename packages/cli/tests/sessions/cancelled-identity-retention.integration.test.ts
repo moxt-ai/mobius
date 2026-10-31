@@ -1,12 +1,15 @@
+import { randomUUID } from "node:crypto";
 import { copyFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
 import {
     decodeMessageKind,
+    decodeNativeSessionResult,
     decodeSessionEventEnvelope,
     decodeSessionOperationFailedEvent,
     encodeSessionPromptCommand,
+    NATIVE_SESSION_RESULT_KIND,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test, vi } from "vitest";
 import { channelSessionDatabasePaths } from "../../src/engine/storage/sqlite/local-databases.ts";
@@ -63,6 +66,102 @@ async function observe(peer: RealDaemonPeer, ids: readonly string[]) {
     }
     return { started, failures, cancelled, output };
 }
+
+/** Reads the command's delivery the way a reconnecting client recovers an unconfirmed submission. */
+async function readDelivery(peer: RealDaemonPeer, commandId: string) {
+    const requestId = randomUUID();
+    peer.send(
+        JSON.stringify({
+            action: "active-turn",
+            additionalDirectoryIds: [],
+            agentId: "controlled-acp",
+            bindingId: peer.bindingId,
+            deliveryCommandId: commandId,
+            directoryId: "default",
+            kind: "native.session.request",
+            requestId,
+            sessionId: peer.sessionId,
+            targetSessionId: peer.sessionId,
+        }),
+    );
+    for (;;) {
+        const raw = await peer.nextMessage();
+        if (decodeMessageKind(raw) !== NATIVE_SESSION_RESULT_KIND) {
+            continue;
+        }
+        const result = decodeNativeSessionResult(raw);
+        if (result.requestId === requestId && result.action === "active-turn") {
+            return result.command;
+        }
+    }
+}
+
+const promptCommand = (peer: RealDaemonPeer, commandId: string, prompt: string, targetCommandId = "") =>
+    encodeSessionPromptCommand({
+        additionalDirectoryIds: [],
+        agentId: "controlled-acp",
+        attachments: [],
+        bindingId: peer.bindingId,
+        commandId,
+        directoryId: "default",
+        disposition: targetCommandId === "" ? "reject" : "queue",
+        kind: "session.prompt",
+        prompt,
+        sessionId: peer.sessionId,
+        targetCommandId,
+    });
+
+const cancelBeforeStart = (peer: RealDaemonPeer, commandId: string) =>
+    peer.send(JSON.stringify({ kind: "session.cancel-before-start", sessionId: peer.sessionId, commandId }));
+
+test("Given an executed command and a command cancelled before start, When later commands evict both receipts without a restart, Then the cancelled command reads as cancelled rather than expired and cannot execute", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-30T08:00:00Z"));
+    const directory = await mkdtemp(join(tmpdir(), "mobius-cancelled-delivery-"));
+    try {
+        const executable = await writeControlledAcpExecutable(directory);
+        await withControlledDaemon(
+            new ControlledAcpAgentSpecification(),
+            { MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(directory, "agent"), PATH: executable },
+            async (peer) => {
+                // Receipts share one timestamp, so eviction keeps the identifiers that sort last.
+                const executed = promptCommand(peer, "a-executed", "The request completes");
+                peer.send(executed);
+                expect((await observe(peer, ["a-executed"])).started).toEqual(["a-executed"]);
+                cancelBeforeStart(peer, "a-cancelled");
+                expect((await observe(peer, ["a-cancelled"])).cancelled).toEqual(["a-cancelled"]);
+                const pruners = Array.from({ length: 1026 }, (_, index) => `z-prune-${String(index).padStart(4, "0")}`);
+                for (const id of pruners) {
+                    cancelBeforeStart(peer, id);
+                }
+                await observe(peer, pruners);
+
+                expect(await readDelivery(peer, "a-cancelled")).toEqual({
+                    state: "completed",
+                    stopReason: "cancelled",
+                });
+                expect(await readDelivery(peer, "a-executed")).toEqual({ state: "expired" });
+                peer.send(promptCommand(peer, "a-cancelled", "This command was already cancelled"));
+                expect(await observe(peer, ["a-cancelled"])).toEqual({
+                    started: [],
+                    failures: ["command_identity_conflict"],
+                    cancelled: [],
+                    output: "",
+                });
+                peer.send(executed);
+                expect(await observe(peer, ["a-executed"])).toEqual({
+                    started: [],
+                    failures: ["command_result_expired"],
+                    cancelled: [],
+                    output: "",
+                });
+            },
+        );
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+        vi.useRealTimers();
+    }
+}, 90_000);
 
 for (const admission of ["before-admission", "queued"] as const) {
     test(`Given a command was explicitly cancelled ${admission}, When receipts are evicted and the Runtime restarts, Then the command cannot execute again and cancellation remains unstarted`, async () => {

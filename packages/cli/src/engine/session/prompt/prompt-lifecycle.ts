@@ -58,7 +58,7 @@ function promptContent(command: SessionPromptCommand): readonly ContentBlock[] {
 }
 
 /** Whether a command started or settled, as its execution receipt records it. */
-type ExecutionProgress = Pick<ExecutionReceipts, "hasStarted" | "isTerminalExecution">;
+type ExecutionProgress = Pick<ExecutionReceipts, "findUnsettledAttemptId" | "hasStarted" | "isTerminalExecution">;
 
 export class PromptLifecycle {
     readonly #sink: SessionEventSink;
@@ -211,7 +211,11 @@ export class PromptLifecycle {
         }
     };
 
-    /** Settles a failed command; whether it failed before or after starting is its receipt's fact. */
+    /**
+     * Settles a failed command; whether it failed before or after starting is its receipt's fact. The unsettled
+     * receipt, not the queue registration, admits the failure: a turn that ended without recording its terminal
+     * event has already left the queue, and its abandonment must still settle it.
+     */
     readonly failed = async (
         sessionId: string,
         commandId: string,
@@ -219,8 +223,7 @@ export class PromptLifecycle {
         code: string,
         message: string,
     ): Promise<void> => {
-        const request = this.#queued.get(commandId);
-        if (request?.sessionId !== sessionId || this.#executions.isTerminalExecution(commandId, sessionId)) {
+        if (this.#executions.findUnsettledAttemptId(commandId, sessionId) === null) {
             return;
         }
         const recorded = await this.#recordLifecycle(sessionId, {

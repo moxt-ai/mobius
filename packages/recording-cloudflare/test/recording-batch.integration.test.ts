@@ -7,6 +7,7 @@ import {
 import { env } from "cloudflare:workers";
 import {
     decodeSessionRecordingDirectoryV2,
+    decodeSessionRecordingTurnPage,
     encodeSessionRecordingWrite,
     type SessionLiveEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
@@ -107,7 +108,7 @@ describe("Recording multi-Session batches", () => {
         });
     });
 
-    it("Given an identity conflict in one Session, When a mixed batch arrives, Then the healthy Session records and the conflicting history stays unchanged", async () => {
+    it("Given a Session another Runtime recorded, When a mixed batch records it too, Then every Session records and the earlier history stays unchanged", async () => {
         expect((await write("partial-project", "old-runtime", [requested("owned-session")])).status).toBe(201);
         const response = await write("partial-project", "new-runtime", [
             requested("owned-session", 2),
@@ -117,12 +118,9 @@ describe("Recording multi-Session batches", () => {
         expect(response.status).toBe(201);
         expect(await response.json()).toEqual({
             results: [
-                { sessionId: "owned-session", kind: "failed", code: "write_failed" },
+                { sessionId: "owned-session", kind: "recorded" },
                 { sessionId: "healthy-session", kind: "recorded" },
             ],
-        });
-        expect(await directory("partial-project", "new-runtime")).toMatchObject({
-            sessions: [{ sessionId: "healthy-session" }],
         });
         const old = await worker.fetch(
             new Request(
@@ -183,7 +181,9 @@ describe("Recording multi-Session batches", () => {
         expect(await directory(projectId, runtimeId)).toEqual({ sessions: [] });
 
         expect(
-            await runDurableObjectAlarm(env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]))),
+            await runDurableObjectAlarm(
+                env.SESSION_RECORDING.getByName(JSON.stringify([projectId, runtimeId, sessionId])),
+            ),
         ).toBe(true);
 
         expect(await directory(projectId, runtimeId)).toEqual({
@@ -292,6 +292,62 @@ describe("Recording multi-Session batches", () => {
                     updatedAt: "2026-10-21T00:00:00.000Z",
                 },
             ],
+        });
+    });
+
+    it("Given an Agent title longer than a summary title, When it is recorded, Then the directory and history show the same bounded title and later writes still index", async () => {
+        const projectId = "long-title-project";
+        const runtimeId = "long-title-runtime";
+        const id = "long-title-session";
+        const titled: SessionLiveEvent = {
+            ...chunk(id, 2),
+            type: "acp",
+            payload: { sessionUpdate: "session_info_update", title: ` ${"t".repeat(1_500)}` },
+        };
+        const later = { ...chunk(id, 3), recordedAt: "2026-10-21T00:00:05.000Z" };
+
+        for (const events of [[requested(id), titled], [later]]) {
+            const response = await write(projectId, runtimeId, events);
+            expect(await response.json()).toEqual({ results: [{ sessionId: id, kind: "recorded" }] });
+        }
+
+        const title = "t".repeat(1_000);
+        expect(await directory(projectId, runtimeId)).toMatchObject({
+            sessions: [{ sessionId: id, title, updatedAt: "2026-10-21T00:00:05.000Z" }],
+        });
+        const turns = await worker.fetch(
+            new Request(`https://recording.test/v1/projects/${projectId}/runtimes/${runtimeId}/sessions/${id}/turns`),
+            env,
+        );
+        expect(turns.status).toBe(200);
+        expect(decodeSessionRecordingTurnPage(await turns.text()).title).toBe(title);
+    });
+
+    it("Given an unbounded Agent title committed before titles were bounded, When the Session records again, Then the directory indexes it bounded", async () => {
+        const projectId = "committed-title-project";
+        const runtimeId = "committed-title-runtime";
+        const id = "committed-title-session";
+        expect((await write(projectId, runtimeId, [requested(id)])).status).toBe(201);
+        // An earlier deployment committed the Agent's title verbatim with its batch.
+        await runInDurableObject(
+            env.SESSION_RECORDING.getByName(JSON.stringify([projectId, runtimeId, id])),
+            (_, state) => {
+                state.storage.sql.exec(
+                    "INSERT INTO pending_directory_updates (operations_json, events) VALUES (?, 1)",
+                    JSON.stringify([
+                        { kind: "title", title: "t".repeat(1_500), recordedAt: "2026-10-21T00:00:01.000Z" },
+                    ]),
+                );
+            },
+        );
+
+        const response = await write(projectId, runtimeId, [
+            { ...chunk(id, 2), recordedAt: "2026-10-21T00:00:05.000Z" },
+        ]);
+
+        expect(await response.json()).toEqual({ results: [{ sessionId: id, kind: "recorded" }] });
+        expect(await directory(projectId, runtimeId)).toMatchObject({
+            sessions: [{ sessionId: id, title: "t".repeat(1_000), updatedAt: "2026-10-21T00:00:05.000Z" }],
         });
     });
 });

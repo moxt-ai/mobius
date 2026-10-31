@@ -195,6 +195,12 @@ export function readPersistedState(sessionId: string): ControlledSessionState {
     );
 }
 
+/** Like Agents that resume a conversation with their default settings, `--recover-default-settings` keeps only its turns. */
+export function readRecoveredState(sessionId: string): ControlledSessionState {
+    const state = readPersistedState(sessionId);
+    return process.argv.includes("--recover-default-settings") ? new ControlledSessionState(state.turnCount) : state;
+}
+
 export function persistState(sessionId: string, state: ControlledSessionState): void {
     const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
     if (directory === undefined) {
