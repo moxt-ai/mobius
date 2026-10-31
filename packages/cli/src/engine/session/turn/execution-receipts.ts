@@ -304,7 +304,10 @@ export class ExecutionReceipts {
     /**
      * How the Session's most recently admitted turn ended. Admission order survives updates and
      * restarts. Commands that never started (queued, or reserved for cancellation) are not turns,
-     * unless they failed before starting. Undefined while the latest turn runs or none is retained.
+     * unless they failed before starting. A steering command that completed as `steered` joined the
+     * turn it steered, which reports for both; a steer not known to have joined (it failed, or a
+     * restart interrupted it) keeps its own outcome. Undefined while the latest turn runs or none is
+     * retained.
      */
     readonly lastTurn = (sessionId: string): LastTurnOutcome | undefined => {
         let last: string | undefined;
@@ -314,9 +317,14 @@ export class ExecutionReceipts {
                 continue;
             }
             const outcome = this.outcome(commandId);
-            const failedBeforeStart =
-                outcome?.type === "lifecycle-metadata" && outcome.payload.kind === "prompt.failed-before-start";
-            if ((executionStarted(receipt.state) || failedBeforeStart) && receipt.admissionOrder > latestOrder) {
+            const payload = outcome?.type === "lifecycle-metadata" ? outcome.payload : undefined;
+            const failedBeforeStart = payload?.kind === "prompt.failed-before-start";
+            const steered = payload?.kind === "prompt.completed" && promptCompletion(payload).kind === "steered";
+            if (
+                (executionStarted(receipt.state) || failedBeforeStart) &&
+                !steered &&
+                receipt.admissionOrder > latestOrder
+            ) {
                 last = commandId;
                 latestOrder = receipt.admissionOrder;
             }

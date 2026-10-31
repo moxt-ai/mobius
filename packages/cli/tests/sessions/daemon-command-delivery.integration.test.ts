@@ -7,7 +7,10 @@ import {
     decodeNativeSessionResult,
     decodeSessionLiveEvent,
     encodeSessionPromptCommand,
+    encodeSessionPromptDispositionCommand,
+    isPromptTerminal,
     NATIVE_SESSION_RESULT_KIND,
+    SESSION_PROMPT_DISPOSITION_KIND,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test, vi } from "vitest";
@@ -273,3 +276,94 @@ test("Given turns that complete, fail, run or are interrupted by a restart, When
         await rm(directory, { recursive: true, force: true });
     }
 }, 90_000);
+
+// @no-uc: Compatibility; a steering prompt folds into the turn it steers, so that turn's outcome is the last turn.
+test.each([
+    {
+        ending: "completes",
+        instruction: "Apply the steering instruction",
+        live: { state: "completed", stopReason: "end_turn" },
+        restored: { state: "completed", stopReason: "end_turn" },
+    },
+    {
+        ending: "fails",
+        instruction: "fail with model unavailable",
+        live: {
+            state: "failed",
+            code: "acp_agent_error",
+            message: "Internal error: Model unavailable: controlled/test-model",
+        },
+        restored: {
+            state: "failed",
+            code: "acp_agent_error",
+            message: "The local Agent could not complete the request",
+        },
+    },
+])(
+    "Given a running turn steered by a queued prompt, When the turn $ending and a client reads the Session execution, Then it reports how the steered turn ended, also after a restart",
+    async ({ instruction, live, restored }) => {
+        const directory = await mkdtemp(join(tmpdir(), "mobius-last-turn-steered-"));
+        try {
+            const executableDirectory = await writeControlledAcpExecutable(directory);
+            await withControlledDaemon(
+                new ControlledAcpAgentSpecification(),
+                {
+                    MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(directory, "agent"),
+                    PATH: executableDirectory,
+                },
+                async (peer) => {
+                    const turn = randomUUID();
+                    submit(peer, turn, "wait for steering");
+                    await waitForLifecycle(peer, turn, "prompt.started");
+                    const steering = randomUUID();
+                    peer.send(
+                        encodeSessionPromptCommand({
+                            ...identity(peer),
+                            attachments: [],
+                            commandId: steering,
+                            disposition: SessionPromptDisposition.Queue,
+                            kind: "session.prompt",
+                            prompt: instruction,
+                            sessionId: peer.sessionId,
+                            targetCommandId: turn,
+                        }),
+                    );
+                    for (;;) {
+                        const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
+                        if (event.type === "lifecycle-metadata" && event.payload.kind === "session.queue.changed") {
+                            break;
+                        }
+                    }
+                    peer.send(
+                        encodeSessionPromptDispositionCommand({
+                            commandId: steering,
+                            disposition: SessionPromptDisposition.Steer,
+                            kind: SESSION_PROMPT_DISPOSITION_KIND,
+                            sessionId: peer.sessionId,
+                        }),
+                    );
+                    // The steering prompt and the turn it joined settle in either order.
+                    const settled = new Set<string>();
+                    while (!settled.has(turn) || !settled.has(steering)) {
+                        const event = decodeSessionLiveEvent(JSON.parse(await peer.nextEvent()));
+                        if (event.type === "lifecycle-metadata" && isPromptTerminal(event.payload)) {
+                            settled.add(event.payload.commandId);
+                        }
+                    }
+                    expect((await readExecution(peer, steering)).result).toMatchObject({
+                        command: { state: "completed", stopReason: "steered" },
+                        lastTurn: { commandId: turn, ...live },
+                        turn: null,
+                    });
+                    await peer.restart();
+                    expect((await readExecution(peer)).result).toMatchObject({
+                        lastTurn: { commandId: turn, ...restored },
+                    });
+                },
+            );
+        } finally {
+            await rm(directory, { recursive: true, force: true });
+        }
+    },
+    90_000,
+);

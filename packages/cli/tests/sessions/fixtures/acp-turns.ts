@@ -163,6 +163,9 @@ export function registerTurns(agent: ReturnType<typeof acp.agent>) {
                             },
                         });
                         const instruction = await steering.promise;
+                        if (instruction === "fail with model unavailable") {
+                            throw acp.RequestError.internalError(undefined, "Model unavailable: controlled/test-model");
+                        }
                         const text = `Steered: ${instruction}`;
                         await context.client.notify(acp.methods.client.session.update, {
                             sessionId: context.params.sessionId,
