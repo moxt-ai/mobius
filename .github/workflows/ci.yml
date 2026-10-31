@@ -218,9 +218,26 @@ jobs:
           npm install --global --prefer-offline
           --fetch-retries=5 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=30000
           $REAL_AGENT_PACKAGES
-      - run: pnpm test:agent-daemon:real --shard="$TEST_SHARD"
+      - name: Diagnose claude-attachment-replay under load
+        working-directory: packages/cli
         env:
           TEST_SHARD: ${{ matrix.shard }}/4
+        run: |
+          pnpm build
+          touch "$RUNNER_TEMP/load"
+          ( while [ -f "$RUNNER_TEMP/load" ]; do pnpm exec vitest run tests/agents --maxWorkers=1 --shard="$TEST_SHARD" > /dev/null 2>&1; done ) &
+          failures=0
+          for i in $(seq 1 60); do
+            if ! pnpm exec vitest run tests/agents/claude-attachment-replay.integration.test.ts -t "saved links" > "$RUNNER_TEMP/run-$i.log" 2>&1; then
+              failures=$((failures + 1))
+              echo "::group::failure in iteration $i"
+              grep -E "ATTACHMENT_REPLAY_DIAG|FAIL|Error" "$RUNNER_TEMP/run-$i.log" | cut -c1-6000
+              echo "::endgroup::"
+            fi
+          done
+          rm -f "$RUNNER_TEMP/load"
+          echo "failures=$failures of 60"
+          test "$failures" -eq 0
 
   package-versions:
     # Pull requests that raise a package to the same version merge without a conflict,
