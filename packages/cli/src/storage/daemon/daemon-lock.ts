@@ -1,7 +1,25 @@
-import { readFile, unlink, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { InstallationDirectory } from "../../engine/storage/installation/installation-files.ts";
 import { isNodeError } from "../../engine/util/node-error.ts";
+
+/**
+ * Frees the lock name in one step. On Windows a file that is being unlinked stays
+ * in place until the deleting handle closes, and opening or recreating it fails
+ * with EPERM meanwhile; renaming it away first means no reader or acquirer of the
+ * lock name ever sees that state. A failure leaves the file in place, where its
+ * dead owner's PID marks it as stale.
+ */
+async function removeLockFile(path: string): Promise<void> {
+    const released = `${path}.${randomUUID()}.released`;
+    try {
+        await rename(path, released);
+    } catch {
+        return;
+    }
+    await unlink(released).catch(() => undefined);
+}
 
 /**
  * Takes the lock file that makes this process the only daemon. A lock left by a
@@ -15,7 +33,7 @@ export async function acquireDaemonLock(
     for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
             await writeFile(path, `${process.pid.toString()}\n`, { flag: "wx", mode: 0o600 });
-            return async () => await unlink(path).catch(() => undefined);
+            return async () => await removeLockFile(path);
         } catch (cause) {
             if (!isNodeError(cause, "EEXIST")) {
                 throw cause;
@@ -32,7 +50,7 @@ export async function acquireDaemonLock(
                     }
                 }
             }
-            await unlink(path).catch(() => undefined);
+            await removeLockFile(path);
         }
     }
     return null;
@@ -63,6 +81,11 @@ export async function daemonLockExists(
     } catch (cause) {
         if (isNodeError(cause, "ENOENT")) {
             return false;
+        }
+        // Released versions unlink their lock in place. On Windows the file cannot
+        // be opened until that deletion completes, so it still exists.
+        if (isNodeError(cause, "EPERM")) {
+            return true;
         }
         throw cause;
     }

@@ -3,7 +3,7 @@ import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, watch, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, watch, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
@@ -100,16 +100,7 @@ test("Given a released manager, When it upgrades its worker, Then the new releas
         try {
             return await execute(
                 process.execPath,
-                [
-                    npx,
-                    "--yes",
-                    "--prefer-online",
-                    "--package",
-                    version === oldVersion ? `@moxt-ai/mobius@${oldVersion}` : archive,
-                    "--",
-                    "mobius",
-                    ...args,
-                ],
+                [npx, "--yes", "--prefer-online", "--package", `@moxt-ai/mobius@${version}`, "--", "mobius", ...args],
                 {
                     env: environment,
                     cwd: directory,
@@ -135,10 +126,12 @@ test("Given a released manager, When it upgrades its worker, Then the new releas
             await rm(directory, { recursive: true, force: true });
         }
     });
-    // Resolve the released CLI before timing its startup. That old CLI performs
-    // its own private install during start; cold npm downloads must not consume
-    // the startup command's entire deadline before the manager can be launched.
+    // Resolve both releases through the registry before timing any command; npx
+    // reinstalls a local archive on every call but reuses a registry installation.
+    // The old CLI still performs its own private install during start; cold npm
+    // downloads must not consume that command's entire deadline.
     await run(oldVersion, ["--help"]);
+    await run(next.version, ["--help"]);
     await run(oldVersion, ["start"]);
     const control = join(environment.MOBIUS_STATE_DIRECTORY, "installations", "dev.mobius.cli");
     const pointer = JSON.parse(await readFile(join(control, "current.json"), "utf8"));
@@ -218,7 +211,18 @@ test("Given a released manager, When it upgrades its worker, Then the new releas
     assert.match((await run(oldVersion, ["upgrade"])).stdout, /already the newest release/);
     await run(next.version, ["restart"]);
     assert.notEqual(await readFile(join(state, "manager.lock"), "utf8"), manager);
-    await assert.rejects(stat(join(state, "worker.lock")), { code: "ENOENT" });
+    // The released manager force-stops a worker that outlives its shutdown grace
+    // period, leaving that worker's lock behind. A lock whose owner is gone does not
+    // hold the worker role, so restart only guarantees that no owner is alive.
+    const workerOwner = await readFile(join(state, "worker.lock"), "utf8").catch((cause) => {
+        if (cause?.code === "ENOENT") {
+            return null;
+        }
+        throw cause;
+    });
+    if (workerOwner !== null) {
+        assert.throws(() => process.kill(Number(workerOwner.trim()), 0), { code: "ESRCH" });
+    }
     await run(next.version, ["start"]);
     await run(next.version, ["release"]);
     await run(next.version, ["stop"]);
