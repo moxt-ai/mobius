@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, unlinkSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import * as acp from "@agentclientprotocol/sdk";
 import { exitsAfterSessionCreation, persistsEmptySessions } from "../../support/acp-process.ts";
@@ -16,6 +16,17 @@ import {
 } from "./acp-session-state.ts";
 
 let listCommandsAnnounced = false;
+
+/** Like Claude Code, a new session starts with the model its working directory's `.claude/settings.json` names. */
+function projectModel(cwd: string): string | undefined {
+    const path = join(cwd, ".claude", "settings.json");
+    if (!existsSync(path)) {
+        return undefined;
+    }
+    const model: unknown = Reflect.get(JSON.parse(readFileSync(path, "utf8")), "model");
+    return typeof model === "string" ? model : undefined;
+}
+
 export function registerNativeSessions(agent: ReturnType<typeof acp.agent>) {
     return agent
         .onRequest(acp.methods.agent.session.new, async (context) => {
@@ -24,7 +35,7 @@ export function registerNativeSessions(agent: ReturnType<typeof acp.agent>) {
             }
             const sessionId = crypto.randomUUID();
             acquireWriter(sessionId);
-            const state = new ControlledSessionState(0);
+            const state = new ControlledSessionState(0, projectModel(context.params.cwd));
             nativeMetadata.set(sessionId, {
                 cwd: context.params.cwd,
                 additionalDirectories: context.params.additionalDirectories ?? [],

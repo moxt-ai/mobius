@@ -377,13 +377,18 @@ export function createProjectRuntimeRoutes() {
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {
                 const body = context.req.valid("json");
-                if (Object.keys(body).some((key) => key !== "model")) {
+                if (Object.keys(body).some((key) => key !== "model" && key !== "directoryId")) {
                     throw new PairingDirectoryError("invalid_request", "The request fields are invalid");
                 }
                 const model = body["model"] === undefined ? undefined : readString(body, "model", 500);
+                const directoryId =
+                    body["directoryId"] === undefined
+                        ? undefined
+                        : readString(body, "directoryId", MAX_DIRECTORY_IDENTIFIER_LENGTH);
                 const command = decodeAgentSettingsDiscoverCommand(
                     JSON.stringify({
                         agentId: validateIdentifier(context.req.param("agentId"), "agent_id"),
+                        ...(directoryId === undefined ? {} : { directoryId }),
                         kind: "agent.settings.discover",
                         ...(model === undefined ? {} : { model }),
                         requestId: crypto.randomUUID(),

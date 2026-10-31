@@ -66,7 +66,10 @@ export async function discoverAgentSettings(
     signal: AbortSignal,
 ): Promise<AgentSettingsDiscovery> {
     const { agent, adapter: harnessAdapter } = await resolveAgent(command.agentId, signal);
-    const cwd = await directories.resolve(bindingId, "default", signal);
+    // The Agent reads project settings from the directory a Session starts in, so the defaults it reports are those
+    // of the requested directory.
+    const directoryId = command.directoryId ?? "default";
+    const cwd = await directories.resolve(bindingId, directoryId, signal);
     const inspectedBaseSnapshot = await sessions.inspectAgentSettings({
         adapter: harnessAdapter,
         additionalDirectories: [],
@@ -144,6 +147,7 @@ export async function discoverAgentSettings(
             agentId: command.agentId,
             agentName: selectedSnapshot.agentName,
             agentVersion: selectedSnapshot.agentVersion,
+            directoryId,
             kind: AGENT_SETTINGS_DISCOVERED_KIND,
             modelEffort,
             requestId: command.requestId,

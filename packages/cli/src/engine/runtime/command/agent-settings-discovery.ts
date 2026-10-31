@@ -28,6 +28,7 @@ export function createAgentSettingsDiscoveryHandler(dependencies: SettingsDiscov
         string,
         {
             readonly agentId: string;
+            readonly directoryId: string;
             readonly model: string | undefined;
             readonly requestIds: Set<string>;
             readonly controller: AbortController;
@@ -35,8 +36,13 @@ export function createAgentSettingsDiscoveryHandler(dependencies: SettingsDiscov
         }
     >();
     const handle = (command: AgentSettingsDiscoverCommand): void => {
+        // Each directory has its own settings, so one discovery runs per Agent and directory.
+        const directoryId = command.directoryId ?? "default";
         const existing = [...agentSettingsDiscoveries.values()].find(
-            (request) => request.agentId === command.agentId && !request.controller.signal.aborted,
+            (request) =>
+                request.agentId === command.agentId &&
+                request.directoryId === directoryId &&
+                !request.controller.signal.aborted,
         );
         if ([...agentSettingsDiscoveries.values()].some((request) => request.requestIds.has(command.requestId))) {
             if (socket.readyState === WebSocket.OPEN) {
@@ -136,6 +142,7 @@ export function createAgentSettingsDiscoveryHandler(dependencies: SettingsDiscov
         })();
         agentSettingsDiscoveries.set(command.requestId, {
             agentId: command.agentId,
+            directoryId,
             model: command.model,
             requestIds,
             completion,
