@@ -40,13 +40,23 @@ prompt's submission from its execution and completion. A queued prompt has not
 started an Agent turn. Queue, reject and supported steering behavior are daemon
 admission decisions, not guarantees made by ACP's ordinary prompt request.
 
-Queue acknowledgements in HTTP submission replies are advisory. The `session.queue.changed`
-notification is scoped to a Session, carries no command identifier, and can also
-occur when another queued Turn finishes. The relay can therefore return before
-the submitted command has actually entered the queue. A returned Turn identifier
-associates the reply with the request; it does not make the queue notification a
-confirmation for that command. Where the reply includes a queued state, that state
-has the same limitation.
+Queue acknowledgements in HTTP submission replies are command-specific. The daemon
+records `session.queue.changed` with `changedByCommandId`, naming the command whose
+admission to or departure from the queue changed it. The relay answers a
+queue-disposition submission only with a change naming that submission's command
+and ignores changes naming another command. Runtimes released before
+`changedByCommandId` record an unnamed change, which the relay can match only to
+the Session. With such a Runtime the reply can return before the submitted
+command has actually entered the queue, so a queued state in the reply is
+advisory.
+
+A retried submission whose command identifier the daemon already holds records no
+lifecycle event of its own. The daemon answers it directly with
+`session.prompt.accepted`, stating where the original command stands: `queued`,
+`running` or `settled`. For a settled command it also replays the persisted
+outcome for clients that missed it. That answer states neither how nor when the
+command ended or started, so the HTTP reply reports a settled command's Turn as
+`indeterminate` and a running one with the reply time as `startedAt`.
 
 Clients must use the command's own lifecycle events to determine whether it started,
 failed or completed, and the available current-turn recovery view to inspect queued
