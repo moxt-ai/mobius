@@ -4879,4 +4879,36 @@ describe("Runtime prompt acknowledgements", () => {
             runtime.daemon.close(1000, "Test complete");
         }
     }, 30_000);
+    it("Given a submitted prompt whose Agent is still starting, When the Turn is cancelled before it starts, Then the submission is answered by that outcome instead of waiting for its deadline", async () => {
+        const runtime = await connectRuntimeDaemon("cancelled-before-start");
+        try {
+            const submission = runtime.submitTurn("preparing-command");
+            expect(decodeServiceToDaemonMessage(await runtime.daemonMessages.next())).toMatchObject({
+                commandId: "preparing-command",
+                kind: "session.prompt",
+            });
+            const cancel = runtime.sessionControlRequest("/turns/preparing-command/cancel", {});
+            expect(decodeServiceToDaemonMessage(await runtime.daemonMessages.next())).toMatchObject({
+                commandId: "preparing-command",
+                kind: "session.cancel",
+            });
+            // A command cancelled before it starts records only its completion, never prompt.started.
+            runtime.daemon.send(
+                lifecycleFrame(runtime.sessionId, "preparing-cancelled", "1", {
+                    commandId: "preparing-command",
+                    execution: "not-started",
+                    kind: "prompt.completed",
+                    stopReason: "cancelled",
+                }),
+            );
+
+            expect(await responseJson(await cancel, 200)).toMatchObject({ stopReason: "cancelled" });
+            expect(await responseJson(await submission, 200)).toMatchObject({
+                state: { kind: "indeterminate", reconciliation: { reason: "dispatch_indeterminate" } },
+                turnId: "preparing-command",
+            });
+        } finally {
+            runtime.daemon.close(1000, "Test complete");
+        }
+    }, 30_000);
 });
