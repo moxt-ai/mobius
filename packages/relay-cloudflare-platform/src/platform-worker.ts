@@ -3,8 +3,10 @@ import {
     CloudflareChannelRuntime,
     createMobiusApplication,
     createWorkerContext,
+    decodeSessionRequest,
     errorMiddleware,
     instrumentD1Database,
+    interactionResponseRequest,
     PairingDirectoryError,
     ProjectPermission,
     ProjectScope,
@@ -13,6 +15,10 @@ import {
     requestTimeoutMiddleware,
     type SessionBindingRequest,
     SessionControl,
+    sessionConfigurationRequest,
+    sessionRenameRequest,
+    turnSteerRequest,
+    turnSubmissionRequest,
     type WorkerRuntimeGateways,
 } from "@moxt-ai/mobius-relay-core";
 import {
@@ -125,46 +131,6 @@ const scopedProjectApplication = createProjectApplication();
 const controlApplication = createPlatformControlApplication();
 const PLATFORM_REQUEST_TIMEOUT_MILLISECONDS = 30_000;
 const sessionIdentifier = v.custom<Identifier>(isIdentifier);
-const sessionPromptBody = v.strictObject({
-    additionalDirectoryIds: v.optional(v.pipe(v.array(v.string()), v.maxLength(16))),
-    agentId: v.optional(sessionIdentifier),
-    attachments: v.pipe(v.array(v.unknown()), v.maxLength(16)),
-    content: v.pipe(v.string(), v.maxLength(100000)),
-    disposition: v.optional(v.picklist(["reject", "queue", "steer"]), "reject"),
-    directoryId: v.optional(v.custom<string>(isDirectoryIdentifier)),
-    idempotencyKey: sessionIdentifier,
-    sessionConfigurations: v.optional(v.pipe(v.array(v.unknown()), v.maxLength(100)), []),
-    targetCommandId: v.optional(v.string(), ""),
-});
-const sessionPromptDispositionBody = v.strictObject({ disposition: v.literal("steer") });
-const sessionConfigurationBody = v.strictObject({
-    additionalDirectoryIds: v.optional(v.pipe(v.array(v.custom<string>(isDirectoryIdentifier)), v.maxLength(16))),
-    agentId: v.optional(sessionIdentifier),
-    booleanValue: v.boolean(),
-    configId: sessionIdentifier,
-    expectedConfigurationRevision: sessionIdentifier,
-    directoryId: v.optional(v.custom<string>(isDirectoryIdentifier)),
-    value: v.pipe(v.string(), v.maxLength(500)),
-    valueType: v.picklist(["select", "boolean"]),
-});
-const sessionRenameBody = v.strictObject({
-    title: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(500)),
-});
-const sessionInteractionResponseBody = v.variant("kind", [
-    v.strictObject({
-        kind: v.literal("permission"),
-        optionId: v.pipe(v.string(), v.maxLength(255)),
-        outcome: v.picklist(["cancelled", "selected"]),
-        responderId: sessionIdentifier,
-    }),
-    v.strictObject({
-        action: v.picklist(["accept", "cancel", "decline"]),
-        content: v.pipe(v.string(), v.maxLength(100000)),
-        kind: v.literal("elicitation"),
-        responderId: sessionIdentifier,
-    }),
-]);
-
 /**
  * A Session binding stated in a query string. Each omitted field is the Session's own. A query cannot tell an empty
  * list from an omitted one; callers that state the binding send no `additionalDirectoryId` for an empty list, so with
@@ -444,13 +410,7 @@ export function createPlatformApplication(
                 context.req.raw.signal,
             );
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
-            const parsed = v.safeParse(sessionPromptBody, await context.req.json());
-            if (!parsed.success) {
-                throw new PairingDirectoryError("invalid_request", "The Turn request is invalid", {
-                    cause: new v.ValiError(parsed.issues),
-                });
-            }
-            const body = parsed.output;
+            const body = decodeSessionRequest(turnSubmissionRequest, await context.req.json());
             const control = authorizedSessionControl(context, access, sessionId);
             const accepted = await control.submitTurn({ ...body, commandId: body.idempotencyKey });
             const acceptedAt = new Date().toISOString();
@@ -488,7 +448,7 @@ export function createPlatformApplication(
             );
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
             const turnId = v.parse(sessionIdentifier, context.req.param("turnId"));
-            v.parse(sessionPromptDispositionBody, await context.req.json());
+            decodeSessionRequest(turnSteerRequest, await context.req.json());
             const control = authorizedSessionControl(context, access, sessionId);
             await control.steerTurn(turnId);
             context.header("Cache-Control", "no-store");
@@ -596,7 +556,7 @@ export function createPlatformApplication(
                 context.req.raw.signal,
             );
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
-            const body = v.parse(sessionConfigurationBody, await context.req.json());
+            const body = decodeSessionRequest(sessionConfigurationRequest, await context.req.json());
             const control = authorizedSessionControl(context, access, sessionId);
             const result = await control.configure(body);
             context.header("Cache-Control", "no-store");
@@ -617,7 +577,7 @@ export function createPlatformApplication(
                 context.req.raw.signal,
             );
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
-            const body = v.parse(sessionRenameBody, await context.req.json());
+            const body = decodeSessionRequest(sessionRenameRequest, await context.req.json());
             const control = authorizedSessionControl(context, access, sessionId);
             const result = await control.rename(body.title);
             context.header("Cache-Control", "no-store");
@@ -680,7 +640,7 @@ export function createPlatformApplication(
             );
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
             const interactionId = v.parse(sessionIdentifier, context.req.param("interactionId"));
-            const body = v.parse(sessionInteractionResponseBody, await context.req.json());
+            const body = decodeSessionRequest(interactionResponseRequest, await context.req.json());
             const control = authorizedSessionControl(context, access, sessionId);
             await control.respond(interactionId, body);
             context.header("Cache-Control", "no-store");

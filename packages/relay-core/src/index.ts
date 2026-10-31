@@ -47,6 +47,14 @@ export type { ProjectAccessAuthorizer, ProjectCredentialAuthority } from "./gate
 export type { SessionRuntimeOperations } from "./gateway/session-runtime-operations.ts";
 export { errorMiddleware, rethrowHonoError } from "./http/middleware/error-middleware.ts";
 export { requestTimeoutMiddleware } from "./http/middleware/request-timeout-middleware.ts";
+export {
+    decodeSessionRequest,
+    interactionResponseRequest,
+    sessionConfigurationRequest,
+    sessionRenameRequest,
+    turnSteerRequest,
+    turnSubmissionRequest,
+} from "./http/pairing/session-requests.ts";
 export { acceptWebSocketHttpTransport, WebSocketUploadBudget } from "./http/transport/websocket-http-transport.ts";
 export {
     RequestBodyError,
