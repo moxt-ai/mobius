@@ -193,6 +193,20 @@ class StalledRecording implements SessionRecording {
     };
 }
 
+/** Keeps the identifiers of the events Recording is asked to store, storing each batch. */
+class KeptRecording implements SessionRecording {
+    readonly eventIds: string[] = [];
+
+    readonly deliverBatch: SessionRecording["deliverBatch"] = async (_target, envelope, signal) => {
+        signal.throwIfAborted();
+        this.eventIds.push(...envelope.events.map((event) => event.eventId));
+        return [...new Set(envelope.events.map((event) => event.sessionId))].map((sessionId) => ({
+            sessionId,
+            kind: "recorded",
+        }));
+    };
+}
+
 async function throughRelay(
     projectId: string,
     exercise: (
@@ -474,6 +488,51 @@ describe("App Session status webhook delivery", () => {
                 message: "the Agent could not start",
                 outcome: "failed",
             },
+        ]);
+    });
+
+    it("Given a command finished while the next Turn runs, When the Runtime restates its outcome for a retried request, Then neither the webhook nor Recording receives it again", async () => {
+        const { projectId } = await provisionProject("restated-outcome");
+        const recording = new KeptRecording();
+        const finished = { commandId: "finished-command", kind: "prompt.completed", stopReason: "stop" };
+        const transport = await throughRelay(
+            projectId,
+            async (send, flushNotifications) => {
+                await send([
+                    event(1, finished),
+                    event(2, {
+                        attemptId: "next-attempt",
+                        commandId: "next-command",
+                        epoch: "epoch-1",
+                        kind: "prompt.started",
+                    }),
+                ]);
+                await flushNotifications();
+                await send([
+                    {
+                        ...event(3, finished),
+                        mobiusMetadata: { restated: true },
+                        recordedAt: "2026-10-15T00:05:00.000Z",
+                    },
+                ]);
+            },
+            recording,
+        );
+
+        const body = decodeSessionStatusWebhookBody(transport.only());
+        expect(transport.delivered).toHaveLength(1);
+        expect(body.status).toBe("running");
+        expect(body.commands).toStrictEqual([
+            {
+                commandId: "finished-command",
+                completedAt: "2026-10-15T00:00:00.000Z",
+                outcome: "succeeded",
+                stopReason: "stop",
+            },
+        ]);
+        expect(recording.eventIds).toStrictEqual([
+            "session-status-delivery-event-1",
+            "session-status-delivery-event-2",
         ]);
     });
 

@@ -331,8 +331,24 @@ test("Given real Codex streams commentary after a tool, When clients watch and r
             socket.send(
                 encodeSessionPromptCommand({ ...originalCommand, prompt: "Conflicting reuse must not execute" }),
             );
-            for (;;) {
+            // The retry restates the settled outcome without running again; the conflicting reuse is refused.
+            let restated = false;
+            let refused = false;
+            while (!restated || !refused) {
                 const message = await messages.next();
+                if (decodeMessageKind(message) === SESSION_EVENT_KIND) {
+                    for (const event of decodeSessionEventEnvelope(message).events) {
+                        if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.started") {
+                            throw new Error(`A retried command started again: ${JSON.stringify(event)}`);
+                        }
+                        if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
+                            expect(event.payload.commandId).toBe(commandId);
+                            expect(event.mobiusMetadata).toEqual({ restated: true });
+                            restated = true;
+                        }
+                    }
+                    continue;
+                }
                 if (decodeMessageKind(message) !== SESSION_OPERATION_FAILED_KIND) {
                     continue;
                 }
@@ -341,7 +357,7 @@ test("Given real Codex streams commentary after a tool, When clients watch and r
                     sessionId,
                     code: "command_identity_conflict",
                 });
-                break;
+                refused = true;
             }
             socket.send(
                 encodeSessionHistoryPageLoad({

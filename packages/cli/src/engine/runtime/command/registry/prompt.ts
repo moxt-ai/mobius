@@ -36,19 +36,21 @@ export const sessionPromptCommand: RuntimeCommand = {
         }
         if (receipt.kind === "duplicate") {
             // A retry records no lifecycle event of its own, so it is answered directly with where the original
-            // command stands. A settled outcome is also replayed for clients that missed it.
-            const outcome = receipt.outcome;
-            const original = context.sessionTurns.get(message.commandId, message.sessionId);
+            // command stands, as its receipt records it. A settled outcome is also restated for clients that missed it.
             send(context.socket, {
                 kind: "session.prompt.accepted",
                 requestId: message.commandId,
                 sessionId: message.sessionId,
-                state: outcome !== undefined ? "settled" : original?.isQueued() === true ? "queued" : "running",
+                state:
+                    receipt.state === "settled"
+                        ? "settled"
+                        : context.sessionTurns.get(message.commandId, message.sessionId)?.isQueued() === true
+                          ? "queued"
+                          : "running",
             });
+            const outcome = receipt.state === "settled" ? context.operations.outcome(message.commandId) : undefined;
             if (outcome !== undefined) {
-                void context.eventProjection.replayOutcome(message.sessionId, outcome).catch((cause: unknown) => {
-                    console.error("Could not replay the persisted execution outcome", cause);
-                });
+                context.eventProjection.restateOutcome(message.sessionId, outcome);
             }
             return;
         }

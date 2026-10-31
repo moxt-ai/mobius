@@ -53,13 +53,18 @@ export const sessionCancelBeforeStartCommand: RuntimeCommand = {
         }
         const turn = sessionTurns.get(message.commandId, message.sessionId);
         if (turn === undefined) {
-            const outcome = operations.recordCancellationBeforeAdmission(message.commandId, message.sessionId);
+            const cancelled = operations.recordCancellationBeforeAdmission(message.commandId, message.sessionId);
+            const outcome = cancelled.kind === "unavailable" ? undefined : cancelled.outcome;
             if (
                 outcome?.type === "lifecycle-metadata" &&
                 outcome.payload.kind === "prompt.completed" &&
                 promptCompletion(outcome.payload).kind === "cancelled"
             ) {
-                void eventProjection.replayOutcome(message.sessionId, outcome).catch((error: unknown) => {
+                if (cancelled.kind === "restated") {
+                    eventProjection.restateOutcome(message.sessionId, outcome);
+                    return;
+                }
+                void eventProjection.recordOutcome(message.sessionId, outcome).catch((error: unknown) => {
                     reportOperationFailure(socket, message.commandId, message.sessionId, error);
                 });
                 return;

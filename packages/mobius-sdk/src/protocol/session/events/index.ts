@@ -457,12 +457,15 @@ export const sessionEventPayloadSchema = z.discriminatedUnion("type", [
 ]);
 export type SessionEventPayload = z.infer<typeof sessionEventPayloadSchema>;
 const positionSchema = z.string().regex(/^(0|[1-9][0-9]*)$/);
+/**
+ * `restated` marks a lifecycle event that restates an outcome the Runtime already recorded for its command, answering a
+ * retried request about that command. It is not a new fact: it reaches clients and the request it answers, but not
+ * Recording or status notifications.
+ */
+const mobiusMetadataFields = { omitted: z.literal(true).optional(), restated: z.literal(true).optional() };
 const sharedSessionEventFields = {
     eventId: identifier,
-    mobiusMetadata: z
-        .object({ omitted: z.literal(true).optional() })
-        .readonly()
-        .optional(),
+    mobiusMetadata: z.object(mobiusMetadataFields).readonly().optional(),
     recordedAt: z.iso.datetime({ offset: true }),
     sessionGenerationId: identifier,
     sessionId: identifier,
@@ -497,11 +500,7 @@ const wireLifecyclePayloadSchema = z
     .readonly();
 const wireEventFields = {
     ...sessionLiveEventFields,
-    mobiusMetadata: z
-        .object({ omitted: z.literal(true).optional() })
-        .passthrough()
-        .readonly()
-        .optional(),
+    mobiusMetadata: z.object(mobiusMetadataFields).passthrough().readonly().optional(),
 };
 export const sessionWireEventSchema = z.union([
     z
