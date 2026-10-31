@@ -340,28 +340,29 @@ export class NativeSessionService {
         };
     };
 
-    readonly listSessions = async (limit: number, signal: AbortSignal): Promise<readonly SessionMetadata[]> =>
-        await this.describeSessions(this.#sessions.listSessions(limit), signal);
+    readonly listSessions = async (limit: number, signal: AbortSignal): Promise<readonly SessionMetadata[]> => {
+        signal.throwIfAborted();
+        return this.describeSessions(this.#sessions.listSessions(limit));
+    };
 
     readonly querySessions = async (
         sessionIds: readonly string[],
         signal: AbortSignal,
-    ): Promise<readonly SessionMetadata[]> =>
-        await this.describeSessions(this.#sessions.findSessions(sessionIds), signal);
-
-    private readonly describeSessions = async (
-        sessions: readonly StoredSession[],
-        signal: AbortSignal,
     ): Promise<readonly SessionMetadata[]> => {
+        signal.throwIfAborted();
+        return this.describeSessions(this.#sessions.findSessions(sessionIds));
+    };
+
+    private readonly describeSessions = (sessions: readonly StoredSession[]): readonly SessionMetadata[] => {
         const entries: SessionMetadata[] = [];
         for (const session of sessions) {
-            signal.throwIfAborted();
-            const directory = await this.#directories.identify(this.#bindingId, session.cwd, signal);
-            const additionalDirectories = [];
-            for (const path of session.additionalDirectories) {
-                const identified = await this.#directories.identify(this.#bindingId, path, signal);
-                additionalDirectories.push({ directoryId: identified.directoryId, name: identified.name });
-            }
+            // A description reports the directories the Session recorded. Checking that they still exist
+            // would let one deleted or unmounted directory fail every Session in the list.
+            const directory = this.#directories.identifyRecorded(this.#bindingId, session.cwd);
+            const additionalDirectories = session.additionalDirectories.map((path) => {
+                const identified = this.#directories.identifyRecorded(this.#bindingId, path);
+                return { directoryId: identified.directoryId, name: identified.name };
+            });
             entries.push({
                 additionalDirectories,
                 agentId: session.agentId,
