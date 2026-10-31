@@ -213,6 +213,10 @@ export const turnSchema = z.object({
 
 export const turnSteerResponseSchema = z.object({ turnId: boundedText(256) });
 
+// The thread a thread-scoped notification names. One app-server connection carries every thread
+// it has loaded, including the child threads Codex runs its subagents in.
+export const threadNotificationSchema = z.object({ threadId: boundedText(256).min(1) });
+
 export const turnNotificationSchema = z.object({
     thread: z.object({ id: boundedText(256) }).nullish(),
     threadId: boundedText(256),
