@@ -13,17 +13,12 @@ import {
     requestTimeoutMiddleware,
     type SessionBindingRequest,
     SessionControl,
-    standardWebSocketHost,
-    type WebSocketHost,
     type WorkerRuntimeGateways,
 } from "@moxt-ai/mobius-relay-core";
 import {
     CONTENT_WRITE_MAX_BYTES,
     decodeContentWriteCommand,
     decodeFileReadCommand,
-    decodeMessageKind,
-    decodeRuntimeStatusEvent,
-    decodeSessionWireEnvelope,
     type Identifier,
     isDirectoryIdentifier,
     isIdentifier,
@@ -94,13 +89,12 @@ type PlatformApplicationBindings = PlatformRelayBindings | ProjectPlatformRelayB
 
 export interface ConfiguredPlatformRelayBindings extends PlatformRelayBindings, PlatformAuthenticationEnvironment {}
 
-function sessionOperations(context: {
-    readonly env: PlatformApplicationBindings;
-    readonly var: { readonly relay: RelayContext };
-}) {
-    return "MOBIUS_RUNTIME_EXECUTION" in context.env
-        ? context.env.MOBIUS_RUNTIME_EXECUTION.operations
-        : context.var.relay.services.runtimePairings;
+// A request a Session credential authorizes is routed to its Runtime's RuntimeRelay before any Session route runs.
+function sessionOperations(context: { readonly env: PlatformApplicationBindings }) {
+    if (!("MOBIUS_RUNTIME_EXECUTION" in context.env)) {
+        throw new Error("Session operations run only in the Runtime's RuntimeRelay");
+    }
+    return context.env.MOBIUS_RUNTIME_EXECUTION.operations;
 }
 
 /** Session operations on the Runtime a Session credential authorized. */
@@ -257,7 +251,6 @@ export function createPlatformAccessServices(
 export function createPlatformApplication(
     authentication: PlatformAuthenticationConfiguration,
     gateways: (environment: PlatformApplicationBindings) => WorkerRuntimeGateways,
-    socketHost: WebSocketHost,
     organizations: (environment: PlatformRelayBindings) => OrganizationMembershipGateway = (environment) =>
         new ClerkOrganizationGateway(environment.CLERK_SECRET_KEY),
 ): Hono<{ Bindings: PlatformApplicationBindings }> {
@@ -721,69 +714,13 @@ export function createPlatformApplication(
                 context.header("Cache-Control", "no-store");
                 return context.json(events);
             }
-            if ("MOBIUS_RUNTIME_EXECUTION" in context.env) {
-                return await context.env.MOBIUS_RUNTIME_EXECUTION.operations.openPublicSessionEvents(
-                    new ProjectScope(target.projectId),
-                    target.runtimeId,
-                    context.req.param("sessionId"),
-                    target.expiresAtEpochMilliseconds,
-                    context.req.raw.signal,
-                );
-            }
-            const host = await sessionOperations(context).openProjectSessionEventHost(
+            return await sessionOperations(context).openPublicSessionEvents(
                 new ProjectScope(target.projectId),
                 target.runtimeId,
                 context.req.param("sessionId"),
+                target.expiresAtEpochMilliseconds,
                 context.req.raw.signal,
             );
-            const pair = new WebSocketPair();
-            const client = pair[0];
-            const server = pair[1];
-            let closed = false;
-            const expirationTimeout = setTimeout(
-                () => close(),
-                Math.max(0, target.expiresAtEpochMilliseconds - Date.now()),
-            );
-            const close = (): void => {
-                if (closed) {
-                    return;
-                }
-                closed = true;
-                clearTimeout(expirationTimeout);
-                server.close(1000, "V2 Session event subscription closed");
-                void host.close();
-            };
-            socketHost.accept(server, { message: () => undefined, close, error: close });
-            host.socket.addEventListener("message", (event) => {
-                if (closed || typeof event.data !== "string") {
-                    return;
-                }
-                try {
-                    const kind = decodeMessageKind(event.data);
-                    if (kind === "runtime.status") {
-                        if (!decodeRuntimeStatusEvent(event.data).online) {
-                            close();
-                        }
-                        return;
-                    }
-                    if (kind === "session.event.v2") {
-                        const envelope = decodeSessionWireEnvelope(event.data);
-                        const events = envelope.events.filter(
-                            (sessionEvent) => sessionEvent.sessionId === context.req.param("sessionId"),
-                        );
-                        if (events.length > 0) {
-                            server.send(JSON.stringify(events));
-                        }
-                    }
-                } catch {
-                    server.close(1007, "Invalid Runtime event");
-                    void host.close();
-                }
-            });
-            host.socket.addEventListener("close", close, { once: true });
-            host.socket.addEventListener("error", close, { once: true });
-            host.socket.accept();
-            return new Response(null, { status: 101, webSocket: client });
         });
     const projectRoutes = new Hono<DispatchEnvironment>()
         .route("/recording", recordingReadRoutes)
@@ -904,10 +841,6 @@ export function createPlatformGateways(environment: PlatformApplicationBindings)
 }
 
 export function createPlatformWorker() {
-    return createPlatformSocketWorker(standardWebSocketHost);
-}
-
-export function createPlatformSocketWorker(host: WebSocketHost) {
     const configuredApplications = new Map<string, ReturnType<typeof createPlatformApplication>>();
     return {
         fetch: async (
@@ -923,7 +856,6 @@ export function createPlatformSocketWorker(host: WebSocketHost) {
             const created = createPlatformApplication(
                 platformAuthenticationFromEnvironment(environment),
                 createPlatformGateways,
-                host,
             );
             configuredApplications.set(key, created);
             return await created.fetch(request, environment, executionContext);

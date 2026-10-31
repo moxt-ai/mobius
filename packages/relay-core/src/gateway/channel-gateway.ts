@@ -12,11 +12,6 @@ export interface ChannelGateway {
         request: Request,
         signal: AbortSignal,
     ) => Promise<Response>;
-    readonly acceptNativeRequest: (
-        access: ChannelHostCredential,
-        requestId: string,
-        signal: AbortSignal,
-    ) => Promise<Response>;
     readonly disconnectHost: (access: ChannelHostCredential, signal: AbortSignal) => Promise<void>;
     readonly disconnectRuntime: (access: VerifiedChannelAccess, signal: AbortSignal) => Promise<void>;
     readonly readRuntimeStatus: (access: VerifiedChannelAccess, signal: AbortSignal) => Promise<RuntimeStatus>;

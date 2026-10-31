@@ -64,7 +64,8 @@ async function withRuntimeRelay(scenario: (connect: (path: string) => Promise<Ru
                 Upgrade: "websocket",
                 "x-mobius-channel-id": "wire-events-channel",
                 "x-mobius-runtime-id": runtimeId,
-                "x-mobius-host-credential-id": "ctl_close_notice",
+                "x-mobius-host-credential-id": "apc_close_notice",
+                "x-mobius-host-credential-kind": "project",
             },
         });
         expect(response.status).toBe(101);

@@ -94,19 +94,6 @@ class ProjectDurableObjectStore implements PlatformProjectStore {
             signal,
         );
 
-    readonly openControlHost: PlatformProjectStore["openControlHost"] = (value, signal) =>
-        this.call("openControlHost", (stub, projectId) => stub.openControlHost(projectId, value), signal);
-
-    readonly closeControlHost: PlatformProjectStore["closeControlHost"] = (channelId, credentialId, signal) =>
-        this.call(
-            "closeControlHost",
-            (stub, projectId) => stub.closeControlHost(projectId, channelId, credentialId),
-            signal,
-        );
-
-    readonly discardControlHost: PlatformProjectStore["discardControlHost"] = (credentialId, signal) =>
-        this.call("discardControlHost", (stub, projectId) => stub.discardControlHost(projectId, credentialId), signal);
-
     readonly listLinkedDevices: PlatformProjectStore["listLinkedDevices"] = (channelId, signal) =>
         this.call("listLinkedDevices", (stub, projectId) => stub.listLinkedDevices(projectId, channelId), signal);
 

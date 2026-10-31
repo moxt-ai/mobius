@@ -6,12 +6,10 @@ import {
     type CreateBrowserCredential,
     DurableObjectDatabaseAdapter,
     DurableObjectSqlDatabase,
-    type OpenControlHost,
     type RedeemAccessGrant,
     type RequestRuntimePairing,
     type RevokeRuntime,
     type RuntimePairingRequest,
-    standardWebSocketHost,
 } from "@moxt-ai/mobius-relay-core";
 import { logger } from "@moxt-ai/mobius-relay-core/logging";
 import { decodePlatformProjectPlacement } from "../entity/platform-project-id.ts";
@@ -20,7 +18,7 @@ import { decodeProjectDurableObjectPath } from "../entity/project-durable-object
 import type { PlatformProjectStore } from "../infra/platform-project-store.ts";
 import {
     type ConfiguredPlatformRelayBindings,
-    createPlatformSocketWorker,
+    createPlatformWorker,
     type ProjectPlatformRelayBindings,
 } from "../platform-worker.ts";
 import { initializeProjectDurableObjectSchema } from "../storage/project-durable-object-schema.ts";
@@ -37,7 +35,7 @@ const uncancelled = new AbortController().signal;
  * Worker or Durable Object reaches it only through the typed operations below, each executed here as one unit.
  */
 export class ProjectDO extends DurableObject<ConfiguredPlatformRelayBindings> {
-    readonly #application = createPlatformSocketWorker(standardWebSocketHost);
+    readonly #application = createPlatformWorker();
     readonly #database: DurableObjectDatabaseAdapter;
     readonly #sqlite: DurableObjectSqlDatabase;
     readonly #environment: ConfiguredPlatformRelayBindings;
@@ -146,18 +144,6 @@ export class ProjectDO extends DurableObject<ConfiguredPlatformRelayBindings> {
         identity: Parameters<Store["isHostCredentialActive"]>[0],
     ): Promise<boolean> {
         return await this.#operate(projectId).isHostCredentialActive(identity, uncancelled);
-    }
-
-    async openControlHost(projectId: string, value: OpenControlHost): Promise<string | null> {
-        return await this.#operate(projectId).openControlHost(value, uncancelled);
-    }
-
-    async closeControlHost(projectId: string, channelId: string, credentialId: string): Promise<void> {
-        await this.#operate(projectId).closeControlHost(channelId, credentialId, uncancelled);
-    }
-
-    async discardControlHost(projectId: string, credentialId: string): Promise<void> {
-        await this.#operate(projectId).discardControlHost(credentialId, uncancelled);
     }
 
     async listLinkedDevices(projectId: string, channelId: string): Promise<Result<"listLinkedDevices">> {

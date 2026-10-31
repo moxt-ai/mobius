@@ -1,4 +1,4 @@
-import { standardWebSocketHost, VerifiedExternalIdentity } from "@moxt-ai/mobius-relay-core";
+import { VerifiedExternalIdentity } from "@moxt-ai/mobius-relay-core";
 import {
     type ConfiguredPlatformRelayBindings,
     createPlatformApplication,
@@ -31,7 +31,6 @@ const authenticator = {
 const application = createPlatformApplication(
     new PlatformAuthenticationConfiguration(authenticator, new Set(["developer-1"]), new Set(["*"])),
     createPlatformGateways,
-    standardWebSocketHost,
 );
 const transport = createPlatformWorker();
 

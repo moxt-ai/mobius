@@ -46,7 +46,8 @@ it("isolates native query replies from live fanout across hibernation and daemon
                 Upgrade: "websocket",
                 "x-mobius-channel-id": "fanout-channel",
                 "x-mobius-runtime-id": runtimeId,
-                "x-mobius-host-credential-id": "ctl_fanout",
+                "x-mobius-host-credential-id": "apc_fanout",
+                "x-mobius-host-credential-kind": "project",
             },
         });
         expect(response.status).toBe(101);
