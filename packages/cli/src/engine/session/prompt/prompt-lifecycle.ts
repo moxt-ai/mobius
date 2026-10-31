@@ -9,7 +9,7 @@ import type {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { isPromptTerminal, SESSION_CLOSED_ERROR_CODE } from "@moxt-ai/mobius-sdk/protocol";
 import type { SessionEventSink } from "../api/session-api.ts";
-import type { ExecutionReceipts } from "../turn/execution-receipts.ts";
+import type { ExecutionReceipts, RestatedOutcome } from "../turn/execution-receipts.ts";
 import { isTextPromptResourceMediaType } from "./prompt-artifacts.ts";
 
 interface QueuedPromptRequest {
@@ -70,11 +70,11 @@ export class PromptLifecycle {
     readonly #executions: ExecutionProgress;
 
     readonly #recordLifecycle: (sessionId: string, event: SessionEventPayload) => Promise<boolean>;
-    readonly #append: (sessionId: string, event: SessionEventPayload) => SessionLiveEvent;
+    readonly #append: (sessionId: string, event: SessionEventPayload, recordedAt?: string) => SessionLiveEvent;
     constructor(
         sink: SessionEventSink,
         recordLifecycle: (sessionId: string, event: SessionEventPayload) => Promise<boolean>,
-        append: (sessionId: string, event: SessionEventPayload) => SessionLiveEvent,
+        append: (sessionId: string, event: SessionEventPayload, recordedAt?: string) => SessionLiveEvent,
         recordActiveTurn: (event: SessionLiveEvent) => void,
         executions: ExecutionProgress,
     ) {
@@ -189,14 +189,15 @@ export class PromptLifecycle {
     };
 
     /**
-     * Answers a retried request about a command with the outcome its receipt already holds. The restatement is marked,
-     * so Recording and status notifications do not take it for a new outcome, and it does not settle the receipt again.
+     * Publishes again an outcome a receipt already holds, for clients that missed it. The restatement is marked, so
+     * Recording and status notifications do not take it for a new outcome, and it does not settle the receipt again.
+     * It keeps the time the outcome was recorded, which receivers that predate the marker report as when it ended.
      */
-    readonly restateOutcome = (sessionId: string, event: SessionEventPayload): void => {
+    readonly restateOutcome = (sessionId: string, { event, recordedAt }: RestatedOutcome): void => {
         if (event.type !== "lifecycle-metadata" || !("commandId" in event.payload)) {
             return;
         }
-        const restated = this.#append(sessionId, event);
+        const restated = this.#append(sessionId, event, recordedAt);
         this.#publishInOrder({ ...restated, mobiusMetadata: { ...restated.mobiusMetadata, restated: true } });
     };
 

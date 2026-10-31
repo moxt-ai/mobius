@@ -93,18 +93,21 @@ test("Given a completed prompt, When a client retries it before and after a daem
                     throw new Error("Expected the command's outcome");
                 }
                 expect(original.event.mobiusMetadata?.restated).toBeUndefined();
+                // A restatement keeps when the outcome was recorded: receivers that predate the restated marker
+                // report that time as when the command ended.
                 const restatement = {
                     payload: original.event.payload,
                     mobiusMetadata: { restated: true },
+                    recordedAt: original.event.recordedAt,
                 };
 
                 // The same command and payload, as a client retries a submission whose response was lost.
                 expect(await retrySettled(peer, commandId)).toEqual([expect.objectContaining(restatement)]);
 
                 await peer.restart();
-                // A restart publishes each retained outcome once, as a recorded outcome.
+                // A restart publishes each retained outcome once, restated: the previous process recorded it.
                 const recovered = await next(peer, [], completed(commandId));
-                expect(recovered.kind === "event" && recovered.event.mobiusMetadata?.restated).toBeUndefined();
+                expect(recovered).toMatchObject({ kind: "event", event: restatement });
                 expect(await retrySettled(peer, commandId)).toEqual([expect.objectContaining(restatement)]);
             },
         );
