@@ -102,9 +102,9 @@ test("Given a completed prompt, When a client retries it before and after a daem
                 expect(await retrySettled(peer, commandId)).toEqual([expect.objectContaining(restatement)]);
 
                 await peer.restart();
-                // A restart publishes each retained outcome once, as a recorded outcome.
+                // A restart publishes each retained outcome once, restated: the previous process recorded it.
                 const recovered = await next(peer, [], completed(commandId));
-                expect(recovered.kind === "event" && recovered.event.mobiusMetadata?.restated).toBeUndefined();
+                expect(recovered).toMatchObject({ kind: "event", event: restatement });
                 expect(await retrySettled(peer, commandId)).toEqual([expect.objectContaining(restatement)]);
             },
         );

@@ -174,9 +174,17 @@ export function buildSessionLayer(options: SessionLayerOptions) {
         },
     );
     // Outcomes retained across a restart are published once. The sink keeps them until the Relay connects,
-    // and a later reconnect does not replay events it already sent.
-    for (const { sessionId, event, recordedAt } of operations.recover()) {
-        sink.publish(events.append(sessionId, event, recordedAt));
+    // and a later reconnect does not replay events it already sent. An outcome the previous process recorded is
+    // restated, so Recording and status notifications do not take it for a new one.
+    for (const recovered of operations.recover()) {
+        switch (recovered.kind) {
+            case "recorded":
+                sink.publish(events.append(recovered.sessionId, recovered.event, recovered.recordedAt));
+                break;
+            case "restated":
+                eventProjection.restateOutcome(recovered.sessionId, recovered.event);
+                break;
+        }
     }
     return {
         activeSessions,

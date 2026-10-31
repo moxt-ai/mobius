@@ -9,7 +9,6 @@ import {
     type SessionEventPayload,
     type SessionLiveEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
-import { z } from "zod";
 import type {
     CommandCancellationTable,
     PersistedCommandCancellation,
@@ -33,6 +32,19 @@ export type RuntimeExecutionReceipt =
       }>
     | { readonly kind: "conflict" }
     | { readonly kind: "expired" };
+
+/**
+ * An outcome a restart publishes: one the restart itself settles (a command it interrupted or a cancellation it
+ * restores), or one the previous process had already recorded, which is published again for clients that missed it.
+ */
+export type RecoveredOutcome =
+    | {
+          readonly kind: "recorded";
+          readonly sessionId: string;
+          readonly event: SessionEventPayload;
+          readonly recordedAt: string;
+      }
+    | { readonly kind: "restated"; readonly sessionId: string; readonly event: SessionEventPayload };
 
 /** What a cancellation before admission found: a cancellation it recorded, or an outcome recorded earlier. */
 export type CancellationBeforeAdmission =
@@ -461,12 +473,8 @@ export class ExecutionReceipts {
             JSON.stringify({ ...outcome, payload: sanitized }),
         );
     };
-    readonly recover = (): readonly {
-        readonly sessionId: string;
-        readonly event: SessionEventPayload;
-        readonly recordedAt: string;
-    }[] => {
-        const recovered: { sessionId: string; event: SessionEventPayload; recordedAt: string }[] = [];
+    readonly recover = (): readonly RecoveredOutcome[] => {
+        const recovered: RecoveredOutcome[] = [];
         for (const [commandId, receipt] of [...this.#executions]) {
             const outcome = executionOutcome(receipt.state);
             // A cancellation committed without its receipt settles the receipt as that cancellation.
@@ -495,17 +503,17 @@ export class ExecutionReceipts {
             if (event === null) {
                 continue;
             }
-            const recordedAt =
-                restoreCancellation || outcome === null
-                    ? new Date().toISOString()
-                    : z.object({ recordedAt: z.string() }).parse(JSON.parse(outcome)).recordedAt;
-            recovered.push({ sessionId: receipt.sessionId, event, recordedAt });
-            if (restoreCancellation || outcome === null) {
-                this.#save(commandId, {
-                    ...receipt,
-                    state: settledExecution(receipt.state, JSON.stringify({ ...event, recordedAt })),
-                });
+            if (!restoreCancellation && outcome !== null) {
+                // The previous process recorded this outcome; publishing it again restates that fact.
+                recovered.push({ kind: "restated", sessionId: receipt.sessionId, event });
+                continue;
             }
+            const recordedAt = new Date().toISOString();
+            recovered.push({ kind: "recorded", sessionId: receipt.sessionId, event, recordedAt });
+            this.#save(commandId, {
+                ...receipt,
+                state: settledExecution(receipt.state, JSON.stringify({ ...event, recordedAt })),
+            });
         }
         return recovered;
     };
